@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fabric-rlm"
+version = "0.1.9"
+description = "A portable Python subprocess runtime for Recursive Language Models in Fabric notebooks and managed Python environments."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "fabric-rlm contributors" }]
+license = { text = "MIT" }
+dependencies = [
+  "aiohttp>=3.12",
+  "dspy>=3.1.2",
+  "nest_asyncio>=1.6",
+  "pydantic>=2",
+  "typing_extensions>=4.15",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+]
+fabric = [
+  "synapseml",
+]
+analytics = [
+  "duckdb>=1.1",
+  "polars>=1.0",
+]
+
+[project.scripts]
+fabric-rlm = "fabric_rlm.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["fabric_rlm*"]
+
+[tool.setuptools.package-data]
+"fabric_rlm.skills" = ["*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"

@@ -1,0 +1,12 @@
+{
+  "task": "Add the two input numbers and submit the result as answer.",
+  "inputs": {
+    "a": 2,
+    "b": 3
+  },
+  "outputs": ["answer"],
+  "lm": "openai/gpt-4o-mini",
+  "max_turns": 3,
+  "timeout": 60
+}
+
