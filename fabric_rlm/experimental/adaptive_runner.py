@@ -1,0 +1,360 @@
+"""Adaptive meta-controller.
+
+Wraps :class:`fabric_rlm.RLM` with an escalation ladder: when an attempt fails
+its validator, the runner consults a :class:`DifficultySignal` and builds a
+new :class:`AttemptConfig` (more turns / higher reasoning effort / parallel
+rollouts / stronger LM) for the next attempt — bounded by a :class:`Budget`.
+
+Two surfaces:
+
+* ``AdaptiveRunner.run()`` returns an :class:`AdaptiveResult` wrapper for
+  power users (full per-attempt logs as live ``RLMResult`` objects).
+* The ``RLM(engine='adaptive')`` facade (in :mod:`fabric_rlm.runtime`) returns
+  the winning attempt's plain ``RLMResult`` with a compact summary attached at
+  ``result.trajectory.metadata['adaptive']``.
+"""
+
+from __future__ import annotations
+
+import time
+import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from typing import Any, Callable, Mapping
+
+from .adaptive_policy import (
+    AttemptConfig,
+    AttemptRecord,
+    Budget,
+    DifficultyVerdict,
+    LadderPolicy,
+    ValidationVerdict,
+    as_verdict,
+    inject_feedback,
+    select_best_of_n,
+)
+
+
+@dataclass
+class AdaptiveResult:
+    """Power-user return type from :meth:`AdaptiveRunner.run`.
+
+    ``winner`` is the chosen attempt (the one whose ``result`` is what the
+    facade returns to ``RLM(engine='adaptive').run()`` callers).
+    """
+
+    winner: AttemptRecord
+    attempts: list[AttemptRecord]
+    passed: bool
+    stop_reason: str
+    elapsed_seconds: float
+
+    @property
+    def result(self) -> Any:
+        """The winning ``RLMResult``."""
+        return self.winner.result
+
+
+class AdaptiveRunner:
+    """Meta-controller that escalates an underlying ``RLM`` until it passes.
+
+    Parameters
+    ----------
+    rlm_factory
+        Builds an ``RLM`` from an :class:`AttemptConfig`. The factory is
+        invoked once per attempt; reusing one ``RLM`` across attempts is
+        unsafe because ``RLM.run()`` mutates internal state.
+    policy
+        Escalation policy. The default :class:`LadderPolicy` climbs cheap →
+        expensive in cost order.
+    budget
+        Hard limits on attempts/turns/parallelism, plus a best-effort wall
+        clock. See :class:`Budget`.
+    validator
+        Returns ``True``/``False`` or a :class:`ValidationVerdict` for each
+        attempt's ``RLMResult``. Bare ``bool`` is auto-adapted.
+    on_attempt
+        Optional callback invoked after every attempt with the recorded
+        :class:`AttemptRecord`.
+    feedback_injection
+        When True (default), prepends a documented feedback block to the
+        first textual input field of the next attempt when the prior
+        validator returned a ``feedback`` string.
+    """
+
+    def __init__(
+        self,
+        rlm_factory: Callable[[AttemptConfig], Any],
+        *,
+        policy: LadderPolicy | None = None,
+        budget: Budget | None = None,
+        validator: Callable[[Any], Any] | None = None,
+        on_attempt: Callable[[AttemptRecord], None] | None = None,
+        feedback_injection: bool = True,
+    ):
+        self.rlm_factory = rlm_factory
+        self.policy = policy or LadderPolicy()
+        self.budget = budget or Budget()
+        self.validator = validator or _default_validator()
+        self.on_attempt = on_attempt
+        self.feedback_injection = feedback_injection
+
+    def run(self, inputs: Mapping[str, Any] | None = None, **kwargs: Any) -> AdaptiveResult:
+        run_inputs = dict(inputs or {})
+        attempts: list[AttemptRecord] = []
+        turns_used_so_far = 0
+        wall_start = time.perf_counter()
+
+        verdict, next_config = self.policy.next_decision(attempts)
+        stop_reason = ""
+
+        while next_config is not None:
+            if len(attempts) >= self.budget.max_attempts:
+                stop_reason = "budget: max_attempts reached"
+                break
+            if self.budget.max_wall_seconds is not None:
+                if (time.perf_counter() - wall_start) >= self.budget.max_wall_seconds:
+                    stop_reason = "budget: max_wall_seconds reached"
+                    break
+
+            cfg = self._apply_budget(next_config, turns_used_so_far)
+            if cfg.max_turns <= 0:
+                stop_reason = "budget: no turn budget left"
+                break
+
+            this_inputs = self._with_feedback(run_inputs, attempts)
+
+            if cfg.parallel_rollouts > 1:
+                rollout_records = self._run_rollouts(cfg, this_inputs, kwargs)
+                # record every rollout
+                for rec in rollout_records:
+                    attempts.append(rec)
+                    turns_used_so_far += rec.turns_used
+                    if self.on_attempt is not None:
+                        try:
+                            self.on_attempt(rec)
+                        except Exception:
+                            pass
+                # selection — best becomes the "current" tail
+                winner = select_best_of_n(rollout_records)
+                if winner.verdict.passed:
+                    return self._make_result(
+                        winner=winner,
+                        attempts=attempts,
+                        stop_reason="best-of-N rollout passed",
+                        wall_start=wall_start,
+                    )
+            else:
+                rec = self._run_one(cfg, 0, this_inputs, kwargs)
+                attempts.append(rec)
+                turns_used_so_far += rec.turns_used
+                if self.on_attempt is not None:
+                    try:
+                        self.on_attempt(rec)
+                    except Exception:
+                        pass
+                if rec.verdict.passed:
+                    return self._make_result(
+                        winner=rec,
+                        attempts=attempts,
+                        stop_reason="validator passed",
+                        wall_start=wall_start,
+                    )
+
+            verdict, next_config = self.policy.next_decision(attempts)
+            if next_config is None and verdict.action == "stop_pass":
+                # policy says we're done and last attempt passed
+                last_passing = next(
+                    (a for a in reversed(attempts) if a.verdict.passed), None
+                )
+                if last_passing is not None:
+                    return self._make_result(
+                        winner=last_passing,
+                        attempts=attempts,
+                        stop_reason="policy: stop_pass",
+                        wall_start=wall_start,
+                    )
+            if next_config is None:
+                stop_reason = f"policy: {verdict.action} ({verdict.reason})"
+                break
+
+        # Exhausted — return best partial result
+        if not attempts:
+            raise RuntimeError(
+                "AdaptiveRunner.run produced no attempts; check budget and policy"
+            )
+        winner = self._best_partial(attempts)
+        return self._make_result(
+            winner=winner,
+            attempts=attempts,
+            stop_reason=stop_reason or "exhausted without passing",
+            wall_start=wall_start,
+        )
+
+    # ---- internals --------------------------------------------------------
+
+    def _apply_budget(self, cfg: AttemptConfig, turns_used: int) -> AttemptConfig:
+        clamped_turns = self.budget.clamp_turns(cfg.max_turns, turns_used)
+        capped_parallel = self.budget.cap_parallel(cfg.parallel_rollouts)
+        if clamped_turns == cfg.max_turns and capped_parallel == cfg.parallel_rollouts:
+            return cfg
+        # AttemptConfig is frozen — replace via dataclasses.replace pattern
+        from dataclasses import replace
+
+        return replace(
+            cfg,
+            max_turns=clamped_turns,
+            parallel_rollouts=capped_parallel,
+        )
+
+    def _with_feedback(
+        self,
+        inputs: Mapping[str, Any],
+        attempts: list[AttemptRecord],
+    ) -> dict[str, Any]:
+        if not self.feedback_injection or not attempts:
+            return dict(inputs)
+        last = attempts[-1]
+        if last.verdict.feedback is None or last.verdict.passed:
+            return dict(inputs)
+        return inject_feedback(
+            inputs,
+            feedback=last.verdict.feedback,
+            prior_payload=getattr(last.result, "payload", None),
+        )
+
+    def _run_one(
+        self,
+        cfg: AttemptConfig,
+        rollout_index: int,
+        inputs: Mapping[str, Any],
+        run_kwargs: dict[str, Any],
+    ) -> AttemptRecord:
+        from dataclasses import replace
+
+        rollout_cfg = replace(cfg, rollout_index=rollout_index)
+        t0 = time.perf_counter()
+        try:
+            rlm = self.rlm_factory(rollout_cfg)
+            result = rlm.run(inputs, **run_kwargs)
+            verdict = as_verdict(self.validator(result))
+        except Exception as exc:  # noqa: BLE001 — surface every error as failed verdict
+            elapsed = time.perf_counter() - t0
+            return AttemptRecord(
+                rung=rollout_cfg.rung,
+                rollout_index=rollout_index,
+                config=rollout_cfg,
+                result=_FailedResult(reason=repr(exc)),
+                verdict=ValidationVerdict(
+                    passed=False, feedback=f"factory or run raised: {exc!r}"
+                ),
+                elapsed_seconds=elapsed,
+                turns_used=0,
+            )
+        elapsed = time.perf_counter() - t0
+        traj = getattr(result, "trajectory", None)
+        turns_used = len(getattr(traj, "turns", []) or []) if traj is not None else 0
+        return AttemptRecord(
+            rung=rollout_cfg.rung,
+            rollout_index=rollout_index,
+            config=rollout_cfg,
+            result=result,
+            verdict=verdict,
+            elapsed_seconds=elapsed,
+            turns_used=turns_used,
+            prompt_tokens=getattr(result, "total_prompt_tokens", None),
+            completion_tokens=getattr(result, "total_completion_tokens", None),
+        )
+
+    def _run_rollouts(
+        self,
+        cfg: AttemptConfig,
+        inputs: Mapping[str, Any],
+        run_kwargs: dict[str, Any],
+    ) -> list[AttemptRecord]:
+        n = cfg.parallel_rollouts
+        # safety: if user provided pre-resolved lm_instance, downgrade to sequential
+        if cfg.lm_instance is not None and cfg.lm_spec is None and n > 1:
+            warnings.warn(
+                "AdaptiveRunner: lm_instance is not safely shareable across "
+                "rollouts; downgrading parallel_rollouts to sequential. "
+                "Pass lm_spec for parallel best-of-N.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return [self._run_one(cfg, i, inputs, run_kwargs) for i in range(n)]
+
+        records: list[AttemptRecord] = [None] * n  # type: ignore[list-item]
+        with ThreadPoolExecutor(max_workers=n) as ex:
+            futures = {
+                ex.submit(self._run_one, cfg, i, inputs, run_kwargs): i for i in range(n)
+            }
+            for fut in as_completed(futures):
+                idx = futures[fut]
+                records[idx] = fut.result()
+        return records
+
+    def _best_partial(self, attempts: list[AttemptRecord]) -> AttemptRecord:
+        # No passing attempt — pick the most-populated payload, breaking ties
+        # by lowest (rung, rollout_index) for determinism.
+        return select_best_of_n(attempts)
+
+    def _make_result(
+        self,
+        *,
+        winner: AttemptRecord,
+        attempts: list[AttemptRecord],
+        stop_reason: str,
+        wall_start: float,
+    ) -> AdaptiveResult:
+        elapsed = time.perf_counter() - wall_start
+        # attach compact summary to winner.result.trajectory.metadata['adaptive']
+        traj = getattr(winner.result, "trajectory", None)
+        if traj is not None and hasattr(traj, "metadata"):
+            try:
+                traj.metadata["adaptive"] = {
+                    "stop_reason": stop_reason,
+                    "elapsed_seconds": elapsed,
+                    "winner_rung": winner.rung,
+                    "winner_rollout_index": winner.rollout_index,
+                    "attempts": [a.to_summary() for a in attempts],
+                }
+            except Exception:
+                pass
+        return AdaptiveResult(
+            winner=winner,
+            attempts=attempts,
+            passed=winner.verdict.passed,
+            stop_reason=stop_reason,
+            elapsed_seconds=elapsed,
+        )
+
+
+# --- helpers / fallbacks ---------------------------------------------------
+
+
+def _default_validator() -> Callable[[Any], bool]:
+    """Importable shim around :func:`adaptive.universal_validator`."""
+
+    from .adaptive import universal_validator
+
+    return universal_validator()
+
+
+@dataclass
+class _FailedResult:
+    """Sentinel used when the factory or `.run()` raises."""
+
+    reason: str
+    submitted: bool = False
+    payload: Any = None
+    failure_reason: str = field(init=False)
+    trajectory: Any = None
+    total_prompt_tokens: int | None = None
+    total_completion_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        self.failure_reason = self.reason
+
+
+__all__ = ["AdaptiveResult", "AdaptiveRunner"]

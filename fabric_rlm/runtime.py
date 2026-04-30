@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import time
+import warnings
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -227,7 +228,93 @@ class RLM:
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
         halve_max_iter_on_retry: bool = True,
         engine: str = "v6-custom",
+        adaptive: dict | None = None,
+        inner_engine: str = "v6-custom",
     ):
+        # ---- engine validation (early, before any heavy resolution) ---------
+        valid_engines = ("v6-custom", "v7-dspy", "adaptive")
+        if engine not in valid_engines:
+            raise ValueError(
+                f"engine must be one of {valid_engines}, got {engine!r}"
+            )
+        if engine == "adaptive":
+            if inner_engine not in ("v6-custom", "v7-dspy"):
+                raise ValueError(
+                    "inner_engine must be 'v6-custom' or 'v7-dspy' "
+                    f"(got {inner_engine!r}); 'adaptive' cannot be its own inner engine"
+                )
+            warnings.warn(
+                "engine='adaptive' is experimental; API may change before 0.2.x",
+                UserWarning,
+                stacklevel=2,
+            )
+            # Keep the outer wrapper minimal — do not resolve LM, do not load
+            # skills. Each inner attempt builds its own RLM via the factory.
+            self.engine = "adaptive"
+            self.inner_engine = inner_engine
+            self.adaptive_config: dict[str, Any] = dict(adaptive or {})
+            self.signature = signature
+            self.outer_lm = None
+            self.sub_lm_spec = sub_lm if sub_lm is not None else (
+                lm if isinstance(lm, (str, dict)) else None
+            )
+            self.max_turns = max_turns
+            self.timeout = timeout
+            self.verbose = verbose
+            self.skills = list(skills or [])
+            self.enable_skill_autoloading = enable_skill_autoloading
+            self.skill_loader = skill_loader or SkillLoader()
+            self.enable_reflection = enable_reflection
+            self.enable_verifier = enable_verifier
+            self.enable_router = enable_router
+            self.max_active_skills = max(0, int(max_active_skills))
+            self.router_baseline_skills = (
+                list(router_baseline_skills) if router_baseline_skills is not None else None
+            )
+            self.router_candidate_specificities = (
+                list(router_candidate_specificities)
+                if router_candidate_specificities is not None
+                else None
+            )
+            self.router_include_dependencies = bool(router_include_dependencies)
+            self.reserve_finalize_turns = max(0, int(reserve_finalize_turns))
+            self.max_prompt_tokens = max_prompt_tokens
+            self.digest_after_turn = digest_after_turn
+            self.output_validator = output_validator
+            self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
+            self._loaded_skills: list[Skill] = []
+            self._activated_skills: set[str] = set()
+            self._inline_task: str | None = None
+            self._inline_outputs: list[str] | None = None
+            self._inline_inputs: dict[str, Any] = {}
+            # Capture the construction args needed to spin up inner RLMs.
+            # ``lm`` is preserved as the user passed it (spec or instance) so
+            # the inner factory can re-resolve specs in parallel rollouts.
+            self._adaptive_inner_kwargs: dict[str, Any] = dict(
+                signature=signature,
+                lm=lm,
+                sub_lm=sub_lm,
+                timeout=timeout,
+                verbose=verbose,
+                skills=list(skills or []),
+                enable_skill_autoloading=enable_skill_autoloading,
+                skill_loader=skill_loader,
+                enable_reflection=enable_reflection,
+                enable_verifier=enable_verifier,
+                enable_router=enable_router,
+                max_active_skills=max_active_skills,
+                router_baseline_skills=router_baseline_skills,
+                router_candidate_specificities=router_candidate_specificities,
+                router_include_dependencies=router_include_dependencies,
+                reserve_finalize_turns=reserve_finalize_turns,
+                max_prompt_tokens=max_prompt_tokens,
+                digest_after_turn=digest_after_turn,
+                output_validator=output_validator,
+                halve_max_iter_on_retry=halve_max_iter_on_retry,
+            )
+            return
+
+        # ---- legacy v6/v7 path (unchanged below this line) -----------------
         self.signature = signature
         self.outer_lm = resolve_lm(lm)
         self.sub_lm_spec = sub_lm if sub_lm is not None else (lm if isinstance(lm, (str, dict)) else None)
@@ -255,11 +342,9 @@ class RLM:
         self.digest_after_turn = digest_after_turn
         self.output_validator = output_validator
         self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
-        if engine not in ("v6-custom", "v7-dspy"):
-            raise ValueError(
-                f"engine must be 'v6-custom' or 'v7-dspy', got {engine!r}"
-            )
         self.engine = engine
+        self.inner_engine = engine  # for symmetry — non-adaptive RLMs are their own inner
+        self.adaptive_config = None
         self._loaded_skills: list[Skill] = (
             [self.skill_loader.load(name) for name in self.skills]
             if self.enable_verifier
@@ -290,10 +375,98 @@ class RLM:
     def __call__(self, **inputs: Any) -> RLMResult:
         return self.run(inputs or None)
 
+    def _run_adaptive(self, bound_inputs: dict[str, Any]) -> RLMResult:
+        """Route ``run()`` through ``AdaptiveRunner`` for ``engine='adaptive'``.
+
+        Returns the winning attempt's :class:`RLMResult` with the full attempt
+        log attached at ``result.trajectory.metadata['adaptive']``.
+        """
+        # Local import to avoid pulling experimental code into the cold path.
+        from .experimental.adaptive_policy import (
+            Budget,
+            LadderPolicy,
+            ValidationVerdict,
+        )
+        from .experimental.adaptive_runner import AdaptiveRunner
+
+        cfg = self.adaptive_config or {}
+        inner_kwargs = self._adaptive_inner_kwargs
+        inner_engine = self.inner_engine
+        # Skill loader is shared across attempts to avoid re-reading from disk.
+        shared_loader = inner_kwargs.get("skill_loader") or self.skill_loader
+
+        def factory(attempt_cfg):
+            kwargs = dict(inner_kwargs)
+            kwargs["skill_loader"] = shared_loader
+            kwargs["engine"] = inner_engine
+            kwargs["max_turns"] = attempt_cfg.max_turns
+            if attempt_cfg.lm_spec is not None:
+                kwargs["lm"] = attempt_cfg.lm_spec
+            elif attempt_cfg.lm_instance is not None:
+                kwargs["lm"] = attempt_cfg.lm_instance
+            # reasoning_effort is forwarded only when the lm spec is a dict.
+            if attempt_cfg.reasoning_effort and isinstance(kwargs.get("lm"), dict):
+                kwargs["lm"] = {**kwargs["lm"], "reasoning_effort": attempt_cfg.reasoning_effort}
+            return RLM(**kwargs)
+
+        # ---- policy + budget construction from adaptive_config ---------------
+        policy_kwargs = {
+            "base_max_turns": self.max_turns,
+        }
+        if "strong_lm" in cfg:
+            policy_kwargs["strong_lm_spec"] = cfg["strong_lm"]
+        if "parallel_rollouts" in cfg:
+            policy_kwargs["parallel_rollouts"] = int(cfg["parallel_rollouts"])
+        if "feedback_injection" in cfg:
+            policy_kwargs["feedback_injection"] = bool(cfg["feedback_injection"])
+        if "skip_more_turns_when_submitted" in cfg:
+            policy_kwargs["skip_more_turns_when_submitted"] = bool(
+                cfg["skip_more_turns_when_submitted"]
+            )
+        # If the user passed an LM dict with reasoning_effort, seed the policy.
+        if isinstance(self._adaptive_inner_kwargs.get("lm"), dict):
+            eff = self._adaptive_inner_kwargs["lm"].get("reasoning_effort")
+            if eff:
+                policy_kwargs["base_reasoning_effort"] = eff
+        policy = cfg.get("policy") or LadderPolicy(**policy_kwargs)
+
+        budget_kwargs: dict[str, Any] = {}
+        for key in ("max_attempts", "max_total_turns", "max_parallel", "max_wall_seconds"):
+            if key in cfg:
+                budget_kwargs[key] = cfg[key]
+        budget = cfg.get("budget") or Budget(**budget_kwargs)
+
+        validator = cfg.get("validator")
+        if validator is None:
+            warnings.warn(
+                "engine='adaptive' was constructed without an explicit validator; "
+                "the default checks structural validity only, not semantic correctness. "
+                "Pass adaptive={'validator': your_validator} for meaningful escalation.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        runner = AdaptiveRunner(
+            rlm_factory=factory,
+            policy=policy,
+            budget=budget,
+            validator=validator,  # AdaptiveRunner uses its default when None
+            on_attempt=cfg.get("on_attempt"),
+            feedback_injection=policy_kwargs.get("feedback_injection", True),
+        )
+        adaptive_result = runner.run(bound_inputs)
+        # AdaptiveRunner already attaches metadata to the winning trajectory
+        # and returns the underlying RLMResult on .result.
+        return adaptive_result.result
+
     def run(self, inputs: dict[str, Any] | None = None) -> RLMResult:
         bound_inputs = dict(self._inline_inputs)
         if inputs:
             bound_inputs.update(inputs)
+
+        if self.engine == "adaptive":
+            return self._run_adaptive(bound_inputs)
+
         required_output_fields = _required_output_fields(self.signature, self._inline_task, self._inline_outputs)
 
         if self.engine == "v7-dspy":

@@ -44,3 +44,6 @@ include = ["fabric_rlm*"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-q"
+markers = [
+  "experimental: opt-in tests for fabric_rlm.experimental modules",
+]
