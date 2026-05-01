@@ -6,7 +6,7 @@ Pyodide/WASM), and the model iterates until it calls `SUBMIT(...)` with the
 answer. Runs anywhere CPython runs: your laptop, CI, a Fabric notebook, an
 Azure Function.
 
-This is the **slim core** distribution (v0.1.9). It contains the runtime,
+This is the **slim core** distribution (v0.1.10). It contains the runtime,
 interpreter, skill loader/router, LM backends (OpenAI / Anthropic /
 FabricLM), and a small set of always-useful skills:
 
@@ -14,12 +14,18 @@ FabricLM), and a small set of always-useful skills:
 - `data_exploration` — tabular EDA with pandas / polars / duckdb
 - `core`, `validation`, `error_handling` — always-on scaffolding
 
+It also ships an **experimental adaptive engine** that escalates compute
+(more turns → higher reasoning effort → best-of-N → strong LM) when a
+validator rejects an attempt — opt-in via `engine="adaptive"`. See
+`QUICKSTART.md` §4b for the API and §0.1.10 in `CHANGELOG.md` for the
+bench results.
+
 ## Install
 
 ```bash
 pip install fabric-rlm
 # or, from a wheel
-pip install dist/fabric_rlm-0.1.9-py3-none-any.whl
+pip install dist/fabric_rlm-0.1.10-py3-none-any.whl
 ```
 
 ## 30-second example

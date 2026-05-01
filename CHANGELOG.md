@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.1.10 — Experimental `engine="adaptive"`
+
+**Adaptive escalation, opt-in.** When a validator rejects an attempt, an
+outer meta-controller climbs a fixed ladder until either the validator
+passes or a budget is exhausted:
+
+```
+rung 0 → baseline (cheap LM, default turns)
+rung 1 → more_turns
+rung 2 → more_effort         (medium reasoning_effort)
+rung 3 → best_of_N           (parallel rollouts, same cheap LM)
+rung 4 → strong_lm           (escalate to e.g. gpt-5, reasoning_effort=high)
+```
+
+Two surfaces:
+
+- `RLM(engine="adaptive", adaptive={...})` — thin wrapper, headline ergonomics.
+- `from fabric_rlm.experimental import AdaptiveRunner, LadderPolicy, Budget` —
+  power user; gives you the per-attempt `AttemptRecord` log.
+
+Notes:
+
+- Inner engine defaults to `v6-custom`; pass `inner_engine="v7-dspy"` to switch.
+- Emits a `UserWarning("experimental")` once at construction.
+- Per-run summary attached to `result.trajectory.metadata["adaptive"]` with
+  `winner_rung`, `attempts: [{rung, ...}]`, `stop_reason`, `elapsed_seconds`.
+- Bench harness lives at `bench/adaptive/` (4 modes × 3 buckets, including a
+  Spark RCA case). Baseline mechanics verified end-to-end on real LMs:
+  `MFMC_hard_1` failed at gpt-4.1-mini, the ladder escalated through
+  `[0,2,3,3,3,4,4,4]`, and gpt-5 at rung 4 solved it.
+
+**Legacy / deprecated**: nothing removed; the only API surface added is
+`engine="adaptive"` plus the `experimental` submodule. Nothing else is
+behaviourally affected.
+
+**Tests**: 53 passing — 32 policy + 8 runner + 7 runtime + 2 eval + the
+existing 3 legacy + 1 spot-check.
+
 ## 0.1.9 — Slim core release
 
 **Repository slimming.** This release ships `fabric-rlm-core`, a clean

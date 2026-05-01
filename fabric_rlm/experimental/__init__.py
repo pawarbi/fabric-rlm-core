@@ -1,1 +1,27 @@
-"""Experimental, not on the supported path."""
+"""Experimental, not on the supported path.
+
+Public symbols re-exported here are the surface promised by ``QUICKSTART.md``
+§4b for power users of the adaptive engine. Everything in this submodule may
+change in 0.2.x — pin the version if you depend on it directly.
+"""
+
+from fabric_rlm.experimental.adaptive_policy import (
+    AttemptConfig,
+    AttemptRecord,
+    Budget,
+    DifficultyVerdict,
+    LadderPolicy,
+    ValidationVerdict,
+)
+from fabric_rlm.experimental.adaptive_runner import AdaptiveResult, AdaptiveRunner
+
+__all__ = [
+    "AdaptiveResult",
+    "AdaptiveRunner",
+    "AttemptConfig",
+    "AttemptRecord",
+    "Budget",
+    "DifficultyVerdict",
+    "LadderPolicy",
+    "ValidationVerdict",
+]

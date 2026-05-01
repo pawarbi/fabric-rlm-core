@@ -166,6 +166,62 @@ you want around the loop, not for raw capability.
 
 ---
 
+## 4b. `engine="adaptive"` — experimental escalation
+
+**When**: hard problems where a single attempt with the cheap LM sometimes
+fails but a stronger LM (or more attempts) would succeed. The adaptive engine
+is a thin meta-controller around `RLM` that escalates compute when a
+validator rejects an attempt:
+
+| Rung | What it does | Typical use |
+|---|---|---|
+| 0 | baseline cheap LM, default turns | the easy majority |
+| 1 | more_turns | "almost there, ran out of room" |
+| 2 | more_effort (medium reasoning_effort) | needs a bit more thinking |
+| 3 | best_of_N parallel rollouts (same cheap LM) | flaky / temperature-sensitive |
+| 4 | strong_lm (e.g. gpt-5, reasoning_effort=high) | genuinely hard |
+
+```python
+from fabric_rlm import RLM, FabricLM
+
+def my_validator(result) -> bool:
+    return "expected_token" in (result.payload.get("answer") or "")
+
+rlm = RLM(
+    signature="question -> answer",
+    lm=FabricLM("gpt-4.1-mini"),
+    engine="adaptive",                 # outer wrapper
+    inner_engine="v6-custom",           # what each attempt uses (default)
+    adaptive=dict(
+        strong_lm=FabricLM("gpt-5"),    # the rung-4 escalation LM
+        validator=my_validator,         # gates pass/fail per attempt
+        max_attempts=6,                 # ≥6 needed if parallel_rollouts=3
+        parallel_rollouts=3,            # rollouts at rung 3
+    ),
+)
+
+result = rlm.run({"question": "..."})
+print(result.trajectory.metadata["adaptive"])
+# {'winner_rung': 4, 'stop_reason': 'best-of-N rollout passed', ...}
+```
+
+The power-user surface is also available:
+
+```python
+from fabric_rlm.experimental import AdaptiveRunner, LadderPolicy, Budget
+runner = AdaptiveRunner(rlm_factory=lambda cfg: RLM(...), policy=LadderPolicy(...), budget=Budget(...))
+adaptive_result = runner.run({"question": "..."})
+adaptive_result.attempts          # full per-attempt log
+adaptive_result.winner.verdict    # validator's last call on the winner
+```
+
+This API is **experimental** — it emits a `UserWarning("experimental")` once
+at construction. Behaviour, knob names, and metadata layout may change in
+0.2.x. Validator is recommended; without one the runner cannot tell when to
+escalate, and a `UserWarning` is emitted to flag that.
+
+---
+
 ## 5. With a `dspy.Signature` (typed I/O)
 
 Recommended for anything beyond a smoke test — you get free type validation:
