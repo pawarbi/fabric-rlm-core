@@ -138,7 +138,7 @@ def _verify_longcot(example: LongCoTExample):
             result = verify_response(example, answer_text)
         except Exception:
             return False, 0.0
-        passed = bool(result.passed)
+        passed = bool(result.supported and result.correct is True)
         return passed, 1.0 if passed else 0.0
 
     return verify
@@ -246,20 +246,59 @@ class ModeResult:
 
 
 def _extract_answer(result: Any) -> str:
+    """Best-effort extraction of the model's final answer.
+
+    Order:
+      1. Explicit payload field (``answer`` / ``output`` / ``result`` / ``report``)
+      2. Concatenated stdout from all turns. The v6 code agent often calls
+         ``submit()`` with no kwargs and prints intermediate results across
+         multiple turns; for exact-match validators we want to see the union.
+      3. Repr fallback.
+    """
     if result is None:
         return ""
     payload = getattr(result, "payload", None) or {}
     for key in ("answer", "output", "result", "report"):
         if key in payload and payload[key] is not None:
             return str(payload[key])
-    # Fall back to repr of the payload (single-field signatures vary).
-    return str(payload or result)
+    traj = getattr(result, "trajectory", None)
+    turns = getattr(traj, "turns", None) if traj else None
+    if turns:
+        # Concatenate stdout AND response_text — for the v6 code agent the
+        # final answer often appears only in the model's natural-language
+        # response (e.g. just before a no-arg submit()), not in printed code.
+        parts: list[str] = []
+        for t in turns:
+            txt = (getattr(t, "stdout", "") or "").strip()
+            if txt:
+                parts.append(txt)
+            rt = (getattr(t, "response_text", "") or "").strip()
+            if rt:
+                parts.append(rt)
+        joined = "\n".join(parts).strip()
+        if joined:
+            return joined
+    return str(payload or "")
 
 
 def _result_token_metrics(result: Any) -> tuple[int, int]:
-    p = int(getattr(result, "total_prompt_tokens", 0) or 0)
-    c = int(getattr(result, "total_completion_tokens", 0) or 0)
-    return p, c
+    """Sum prompt+completion tokens. Falls back to summing per-turn fields.
+
+    Some LM backends (e.g. dspy.LM via litellm wrapping OpenRouter) drop usage
+    metadata, so the top-level ``total_*_tokens`` fields can be ``None`` even
+    though individual turns recorded them. We sum the trajectory as a fallback.
+    """
+    p = getattr(result, "total_prompt_tokens", None)
+    c = getattr(result, "total_completion_tokens", None)
+    if p is None or c is None:
+        traj = getattr(result, "trajectory", None)
+        turns = getattr(traj, "turns", None) if traj else None
+        if turns:
+            sp = sum(int(getattr(t, "prompt_tokens", None) or 0) for t in turns)
+            sc = sum(int(getattr(t, "completion_tokens", None) or 0) for t in turns)
+            if sp or sc:
+                return sp, sc
+    return int(p or 0), int(c or 0)
 
 
 def _turns_used(result: Any) -> int:
@@ -269,9 +308,35 @@ def _turns_used(result: Any) -> int:
     return len(getattr(traj, "turns", []) or [])
 
 
+_LM_BACKEND = "fabric"  # set by main() from --lm-backend
+
+
 def _resolve_lm_spec(model: str) -> Any:
-    """Pass the spec through unchanged — `fabric/` prefix routes through
-    :func:`fabric_rlm.lm._fabric_factory` automatically."""
+    """Build an LM spec for the active backend.
+
+    - ``fabric``: pass the string through unchanged. Caller is expected to use a
+      ``fabric/<model>`` prefix; routed via :func:`fabric_rlm.lm._fabric_factory`.
+    - ``openrouter``: build a dict spec that targets ``openrouter.ai`` via the
+      OpenAI-compatible API. Strips a leading ``fabric/`` if present so the same
+      ``--cheap-lm fabric/gpt-4.1-mini`` works for both backends.
+    """
+    if _LM_BACKEND == "openrouter":
+        bare = model.split("/", 1)[1] if model.startswith("fabric/") else model
+        # openrouter expects openai/<name> for OpenAI models
+        if "/" not in bare:
+            bare = f"openai/{bare}"
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "lm_backend=openrouter but OPENROUTER_API_KEY is not set"
+            )
+        return {
+            "model": f"openrouter/{bare}" if not bare.startswith("openrouter/") else bare,
+            "api_key": key,
+            "api_base": "https://openrouter.ai/api/v1",
+            "cache": False,
+        }
+    # default: fabric — caller must already prefix correctly
     return model
 
 
@@ -405,15 +470,13 @@ def run_adaptive(
     meta = {}
     if res is not None and getattr(res, "trajectory", None):
         meta = (res.trajectory.metadata or {}).get("adaptive", {}) or {}
-    attempts = int(meta.get("total_attempts") or 1)
-    # Heuristic: cheap rungs use cheap family, strong rung uses strong.
-    used_strong = any(
-        a.get("rung", 0) >= 4
-        for a in (meta.get("attempts") or [])
-    )
+    attempt_list = meta.get("attempts") or []
+    attempts = len(attempt_list) if attempt_list else 1
+    rungs = [a.get("rung", 0) for a in attempt_list]
+    used_strong = any(r >= 4 for r in rungs)
     family = "strong" if used_strong else "cheap"
     passed, score = case.verifier(answer) if answer else (False, 0.0)
-    return ModeResult(
+    result_obj = ModeResult(
         case_id=case.id, bucket=case.bucket, template=case.template,
         mode="adaptive", passed=passed, score=score,
         turns_used=turns_used, wall_seconds=elapsed,
@@ -423,6 +486,13 @@ def run_adaptive(
         answer_preview=str(answer)[:500],
         error=err,
     )
+    # Stash adaptive rung trace into the answer_preview prefix so it shows up
+    # in the JSON without a schema change. (Used by signal-ab analysis.)
+    if rungs:
+        result_obj.answer_preview = (
+            f"[rungs={rungs} stop={meta.get('stop_reason')}] " + result_obj.answer_preview
+        )
+    return result_obj
 
 
 def run_ceiling(case: BenchCase, *, strong_lm: str, inner_engine: str) -> ModeResult:
@@ -613,23 +683,26 @@ def evaluate_win_conditions(agg: dict[str, Any], *, hard_buckets=("longcot", "sp
     # 3: easy non-regression + ≤1 hard regression vs baseline
     easy_base = bb.get("baseline", {}).get("easy", {})
     easy_adapt = bb.get("adaptive", {}).get("easy", {})
-    easy_ok = easy_adapt.get("passed", 0) >= easy_base.get("passed", 0)
-    # Approximate hard regressions as #(baseline pass but adaptive fail) — we
-    # don't have per-case here in agg, so we approximate by the per-bucket gap.
-    res["3_no_regression"] = {
-        "easy_pass_rate_ok": easy_ok,
-        "passed": easy_ok,
-    }
+    if not easy_adapt:
+        res["3_no_regression"] = {"skipped": "adaptive mode not run on easy bucket"}
+    else:
+        easy_ok = easy_adapt.get("passed", 0) >= easy_base.get("passed", 0)
+        res["3_no_regression"] = {
+            "easy_pass_rate_ok": easy_ok,
+            "passed": easy_ok,
+        }
     # 4: easy cost not blown up (median turns / NCU)
-    easy_cost_ok = True
-    if easy_base and easy_adapt:
+    if not easy_adapt or not easy_base:
+        res["4_easy_cost_ok"] = {"skipped": "need both baseline and adaptive on easy"}
+    else:
+        easy_cost_ok = True
         if easy_base.get("turns_median", 1) > 0:
             ratio_turns = easy_adapt.get("turns_median", 0) / easy_base["turns_median"]
             easy_cost_ok = ratio_turns <= 1.25
         if easy_base.get("ncu_total", 1) > 0:
             ratio_ncu = easy_adapt.get("ncu_total", 0) / easy_base["ncu_total"]
             easy_cost_ok = easy_cost_ok and ratio_ncu <= 1.4
-    res["4_easy_cost_ok"] = {"passed": easy_cost_ok}
+        res["4_easy_cost_ok"] = {"passed": easy_cost_ok}
     # 5: cheaper than ceiling at ≤5pt accuracy gap
     if "ceiling" in bb:
         ceil_total_pass = sum(c.get("passed", 0) for c in bb.get("ceiling", {}).values())
@@ -684,6 +757,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--cheap-lm", default="fabric/gpt-4.1-mini")
     parser.add_argument("--strong-lm", default="fabric/gpt-5")
+    parser.add_argument(
+        "--lm-backend",
+        choices=("fabric", "openrouter"),
+        default="fabric",
+        help="fabric uses fabric/<model> via Fabric notebook; openrouter routes "
+        "via OPENROUTER_API_KEY (works on a dev box).",
+    )
     parser.add_argument("--inner-engine", default="v6-custom")
     parser.add_argument(
         "--modes",
@@ -697,10 +777,20 @@ def main(argv: list[str] | None = None) -> int:
         default=["easy", "longcot", "spark"],
         choices=["easy", "longcot", "spark"],
     )
-    parser.add_argument("--max-attempts", type=int, default=4)
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=6,
+        help="LadderPolicy budget. With parallel_rollouts=3 at rung 3, need ≥6 "
+        "for rung 4 (strong LM) to be reachable.",
+    )
     parser.add_argument("--limit", type=int, default=None, help="cap cases per bucket")
     parser.add_argument("--spark-lines", type=int, default=200_000)
     args = parser.parse_args(argv)
+
+    global _LM_BACKEND
+    _LM_BACKEND = args.lm_backend
+    print(f"[run] lm_backend={args.lm_backend}")
 
     cases: list[BenchCase] = []
     if "easy" in args.buckets:
