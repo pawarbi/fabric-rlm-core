@@ -1643,11 +1643,30 @@ def _call_lm_with_meta(
 
     The raw response is returned so callers can extract structured metadata
     such as token usage. ``elapsed_seconds`` is measured around the call.
+
+    For ``dspy.LM`` instances the public ``__call__`` returns only the
+    completion text (a list of strings), so we fall back to peeking at
+    ``lm.history[-1]`` which carries the canonical ``usage`` dict and the
+    underlying litellm response object. This is essential for the adaptive
+    engine's cost accounting.
     """
 
     started = time.monotonic()
+    pre_history_len = 0
+    history = getattr(lm, "history", None)
+    if isinstance(history, list):
+        pre_history_len = len(history)
     response = _call_lm(lm, messages)
     elapsed = time.monotonic() - started
+
+    history = getattr(lm, "history", None)
+    if isinstance(history, list) and len(history) > pre_history_len:
+        # dspy appends one entry per LM call. Use the new entry as the
+        # raw_response so _extract_usage finds the usage dict.
+        new_entry = history[-1]
+        if isinstance(new_entry, dict):
+            return _response_to_text(response), new_entry, elapsed
+
     return _response_to_text(response), response, elapsed
 
 
