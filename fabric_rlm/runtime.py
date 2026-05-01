@@ -456,8 +456,29 @@ class RLM:
         )
         adaptive_result = runner.run(bound_inputs)
         # AdaptiveRunner already attaches metadata to the winning trajectory
-        # and returns the underlying RLMResult on .result.
-        return adaptive_result.result
+        # and returns the underlying RLMResult on .result. If every attempt
+        # raised, the winner is a sentinel ``_FailedResult`` — convert it to
+        # a real RLMResult so callers see a uniform shape.
+        winner = adaptive_result.result
+        from .experimental.adaptive_runner import _FailedResult, _failed_to_rlm_result
+
+        if isinstance(winner, _FailedResult):
+            winner = _failed_to_rlm_result(winner)
+            # Re-attach the adaptive summary on the synthesized trajectory so
+            # downstream tooling can still read ``trajectory.metadata['adaptive']``.
+            if winner.trajectory is not None and hasattr(winner.trajectory, "metadata"):
+                winner.trajectory.metadata.setdefault(
+                    "adaptive",
+                    {
+                        "stop_reason": adaptive_result.stop_reason,
+                        "elapsed_seconds": adaptive_result.elapsed_seconds,
+                        "winner_rung": adaptive_result.winner.rung,
+                        "winner_rollout_index": adaptive_result.winner.rollout_index,
+                        "attempts": [a.to_summary() for a in adaptive_result.attempts],
+                        "all_attempts_failed": True,
+                    },
+                )
+        return winner
 
     def run(self, inputs: dict[str, Any] | None = None) -> RLMResult:
         bound_inputs = dict(self._inline_inputs)

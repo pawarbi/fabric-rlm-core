@@ -343,18 +343,56 @@ def _default_validator() -> Callable[[Any], bool]:
 
 @dataclass
 class _FailedResult:
-    """Sentinel used when the factory or `.run()` raises."""
+    """Sentinel used when the factory or `.run()` raises.
+
+    Mimics the public surface of :class:`fabric_rlm.RLMResult` so it can flow
+    through any code that pattern-matches on attribute access (``.payload``,
+    ``.trajectory``, ``.failure_reason``). Carries a real ``Trajectory`` so
+    that ``_make_result`` can still attach the adaptive metadata block when
+    the winning attempt is itself a failure.
+    """
 
     reason: str
     submitted: bool = False
     payload: Any = None
     failure_reason: str = field(init=False)
-    trajectory: Any = None
+    trajectory: Any = field(default=None)
+    final_state: dict[str, Any] = field(default_factory=dict)
     total_prompt_tokens: int | None = None
     total_completion_tokens: int | None = None
+    reflection_used: bool = False
+    total_lm_seconds: float | None = None
+    total_worker_seconds: float | None = None
 
     def __post_init__(self) -> None:
         self.failure_reason = self.reason
+        if self.trajectory is None:
+            # Lazy import to avoid a circular import at module load.
+            from fabric_rlm.trajectory import Trajectory
+
+            self.trajectory = Trajectory(metadata={"failed": True, "reason": self.reason})
+
+
+def _failed_to_rlm_result(failed: "_FailedResult") -> Any:
+    """Convert a ``_FailedResult`` to a real :class:`RLMResult`.
+
+    Used at the ``RLM(engine='adaptive')`` boundary so callers always get a
+    uniform ``RLMResult`` instance, never the internal sentinel.
+    """
+    from fabric_rlm.runtime import RLMResult
+
+    return RLMResult(
+        submitted=False,
+        payload=None,
+        trajectory=failed.trajectory,
+        final_state=dict(failed.final_state),
+        failure_reason=failed.failure_reason,
+        reflection_used=False,
+        total_prompt_tokens=failed.total_prompt_tokens,
+        total_completion_tokens=failed.total_completion_tokens,
+        total_lm_seconds=failed.total_lm_seconds,
+        total_worker_seconds=failed.total_worker_seconds,
+    )
 
 
 __all__ = ["AdaptiveResult", "AdaptiveRunner"]

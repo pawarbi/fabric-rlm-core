@@ -182,6 +182,23 @@ def build_initial_user_message(inputs: dict[str, Any]) -> str:
     )
 
 
+def _parse_string_signature_outputs(sig: str) -> list[str]:
+    """Extract declared output field names from a ``"a, b -> c, d"`` style string.
+
+    Mirrors dspy's loose convention. Strips type hints (``"answer: int"`` ->
+    ``"answer"``). Returns ``[]`` if the string lacks a ``"->"`` arrow.
+    """
+    if "->" not in sig:
+        return []
+    _, _, rhs = sig.partition("->")
+    out: list[str] = []
+    for chunk in rhs.split(","):
+        name = chunk.strip().split(":", 1)[0].strip()
+        if name and name.isidentifier():
+            out.append(name)
+    return out
+
+
 def _task_and_outputs(
     signature: Any,
     inline_task: str | None,
@@ -189,6 +206,14 @@ def _task_and_outputs(
 ) -> tuple[str | None, list[str]]:
     if signature is None:
         return inline_task, list(inline_outputs or [])
+
+    if isinstance(signature, str):
+        # String signatures of the form ``"inputs -> outputs"`` (dspy convention).
+        # The string itself becomes the task description; we parse out declared
+        # output fields so SUBMIT-payload validation actually fires.
+        extra = (inline_task or "").strip()
+        task_description = f"{signature}\n\n{extra}" if extra else signature
+        return task_description, _parse_string_signature_outputs(signature)
 
     base = inspect.getdoc(signature) or getattr(signature, "__name__", str(signature))
     extra = (inline_task or "").strip()

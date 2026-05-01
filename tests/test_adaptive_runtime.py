@@ -101,6 +101,84 @@ def test_adaptive_routes_run_through_runner(monkeypatch: pytest.MonkeyPatch) -> 
     assert out.payload == {"answer": "stub"}
 
 
+def test_adaptive_failed_result_converted_to_rlmresult(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: when every attempt raises, the runner returns a sentinel
+    ``_FailedResult``. ``RLM(engine='adaptive').run()`` must convert it to a
+    real :class:`RLMResult` so callers can use ``.payload`` / ``.trajectory``
+    without ``AttributeError``."""
+    from fabric_rlm.experimental import adaptive_runner as ar_mod
+    from fabric_rlm.experimental.adaptive_runner import _FailedResult
+    from fabric_rlm.experimental.adaptive_policy import (
+        AttemptConfig,
+        AttemptRecord,
+        ValidationVerdict,
+    )
+    from fabric_rlm.runtime import RLMResult
+
+    failed = _FailedResult(reason="boom")
+    cfg = AttemptConfig(rung=4, max_turns=4, parallel_rollouts=1)
+    rec = AttemptRecord(
+        rung=4,
+        rollout_index=0,
+        config=cfg,
+        result=failed,
+        verdict=ValidationVerdict(passed=False, feedback="boom"),
+        elapsed_seconds=0.1,
+        turns_used=0,
+    )
+
+    class FakeAdaptiveResult:
+        result = failed
+        attempts = [rec]
+        winner = rec
+        passed = False
+        stop_reason = "exhausted: every attempt failed"
+        elapsed_seconds = 1.5
+
+    class FakeRunner:
+        def __init__(self, **_kw):
+            pass
+
+        def run(self, inputs, **_kw):
+            return FakeAdaptiveResult()
+
+    monkeypatch.setattr(ar_mod, "AdaptiveRunner", FakeRunner)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rlm = RLM(
+            signature="q -> a",
+            lm="gpt-4.1-mini",
+            engine="adaptive",
+            adaptive={"validator": lambda r: True},
+        )
+    out = rlm.run({"q": "hi"})
+
+    assert isinstance(out, RLMResult), f"expected RLMResult, got {type(out).__name__}"
+    assert out.submitted is False
+    assert out.payload is None
+    assert out.failure_reason == "boom"
+    assert out.trajectory is not None
+    adaptive_meta = out.trajectory.metadata.get("adaptive", {})
+    assert adaptive_meta.get("all_attempts_failed") is True
+    assert adaptive_meta.get("winner_rung") == 4
+    assert adaptive_meta.get("stop_reason") == "exhausted: every attempt failed"
+
+
+def test_failed_result_carries_trajectory() -> None:
+    """``_FailedResult`` should always have a usable ``trajectory`` so
+    ``_make_result`` can attach the adaptive metadata block, and downstream
+    callers can read ``result.trajectory.metadata`` without ``AttributeError``.
+    """
+    from fabric_rlm.experimental.adaptive_runner import _FailedResult
+
+    fr = _FailedResult(reason="oops")
+    assert fr.payload is None
+    assert fr.failure_reason == "oops"
+    assert fr.submitted is False
+    assert fr.trajectory is not None
+    assert fr.trajectory.metadata["failed"] is True
+
+
 def test_adaptive_warns_on_missing_validator(monkeypatch: pytest.MonkeyPatch) -> None:
     from fabric_rlm.experimental import adaptive_runner as ar_mod
 
