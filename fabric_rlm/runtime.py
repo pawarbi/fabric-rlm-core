@@ -404,9 +404,22 @@ class RLM:
                 kwargs["lm"] = attempt_cfg.lm_spec
             elif attempt_cfg.lm_instance is not None:
                 kwargs["lm"] = attempt_cfg.lm_instance
-            # reasoning_effort is forwarded only when the lm spec is a dict.
-            if attempt_cfg.reasoning_effort and isinstance(kwargs.get("lm"), dict):
-                kwargs["lm"] = {**kwargs["lm"], "reasoning_effort": attempt_cfg.reasoning_effort}
+            # reasoning_effort is forwarded into the inner RLM. When the lm
+            # spec is a dict, merge in-place. When it's a dspy.LM-like
+            # instance with .copy(), clone it so the original isn't mutated
+            # (callers commonly pass a single FabricLM instance shared
+            # across attempts and across tasks).
+            if attempt_cfg.reasoning_effort:
+                lm_obj = kwargs.get("lm")
+                if isinstance(lm_obj, dict):
+                    kwargs["lm"] = {**lm_obj, "reasoning_effort": attempt_cfg.reasoning_effort}
+                elif lm_obj is not None and hasattr(lm_obj, "copy"):
+                    try:
+                        kwargs["lm"] = lm_obj.copy(reasoning_effort=attempt_cfg.reasoning_effort)
+                    except Exception:
+                        # If the LM doesn't accept reasoning_effort via copy(),
+                        # leave it alone — non-reasoning chat models will reject it.
+                        pass
             return RLM(**kwargs)
 
         # ---- policy + budget construction from adaptive_config ---------------
@@ -423,11 +436,18 @@ class RLM:
             policy_kwargs["skip_more_turns_when_submitted"] = bool(
                 cfg["skip_more_turns_when_submitted"]
             )
-        # If the user passed an LM dict with reasoning_effort, seed the policy.
-        if isinstance(self._adaptive_inner_kwargs.get("lm"), dict):
-            eff = self._adaptive_inner_kwargs["lm"].get("reasoning_effort")
-            if eff:
-                policy_kwargs["base_reasoning_effort"] = eff
+        # If the user passed an LM with reasoning_effort already set, seed
+        # the policy so its rung-0 baseline matches the user's intent. Works
+        # for both dict specs and dspy.LM instances (which carry .kwargs).
+        lm_obj = self._adaptive_inner_kwargs.get("lm")
+        if isinstance(lm_obj, dict):
+            eff = lm_obj.get("reasoning_effort")
+        elif lm_obj is not None and hasattr(lm_obj, "kwargs"):
+            eff = lm_obj.kwargs.get("reasoning_effort") if isinstance(lm_obj.kwargs, dict) else None
+        else:
+            eff = None
+        if eff:
+            policy_kwargs["base_reasoning_effort"] = eff
         policy = cfg.get("policy") or LadderPolicy(**policy_kwargs)
 
         budget_kwargs: dict[str, Any] = {}
@@ -435,6 +455,24 @@ class RLM:
             if key in cfg:
                 budget_kwargs[key] = cfg[key]
         budget = cfg.get("budget") or Budget(**budget_kwargs)
+
+        # Warn if the user's max_attempts can't reach the policy's top rung.
+        # Common footgun: bumping max_rung without bumping max_attempts means
+        # the top rungs are silently unreachable. We don't auto-bump (would
+        # surprise users who explicitly capped attempts) — just be loud.
+        try:
+            policy_max_rung = int(getattr(policy, "max_rung"))
+        except (AttributeError, TypeError, ValueError):
+            policy_max_rung = -1
+        if policy_max_rung >= 0 and budget.max_attempts < policy_max_rung + 1:
+            warnings.warn(
+                f"adaptive: budget.max_attempts={budget.max_attempts} cannot "
+                f"reach policy.max_rung={policy_max_rung} (need at least "
+                f"{policy_max_rung + 1}). Top rungs will not be tried. "
+                f"Pass adaptive={{'max_attempts': {policy_max_rung + 1}}} to fix.",
+                UserWarning,
+                stacklevel=3,
+            )
 
         validator = cfg.get("validator")
         if validator is None:
@@ -1643,11 +1681,30 @@ def _call_lm_with_meta(
 
     The raw response is returned so callers can extract structured metadata
     such as token usage. ``elapsed_seconds`` is measured around the call.
+
+    For ``dspy.LM`` instances the public ``__call__`` returns only the
+    completion text (a list of strings), so we fall back to peeking at
+    ``lm.history[-1]`` which carries the canonical ``usage`` dict and the
+    underlying litellm response object. This is essential for the adaptive
+    engine's cost accounting.
     """
 
     started = time.monotonic()
+    pre_history_len = 0
+    history = getattr(lm, "history", None)
+    if isinstance(history, list):
+        pre_history_len = len(history)
     response = _call_lm(lm, messages)
     elapsed = time.monotonic() - started
+
+    history = getattr(lm, "history", None)
+    if isinstance(history, list) and len(history) > pre_history_len:
+        # dspy appends one entry per LM call. Use the new entry as the
+        # raw_response so _extract_usage finds the usage dict.
+        new_entry = history[-1]
+        if isinstance(new_entry, dict):
+            return _response_to_text(response), new_entry, elapsed
+
     return _response_to_text(response), response, elapsed
 
 

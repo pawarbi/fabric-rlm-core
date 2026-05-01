@@ -14,14 +14,25 @@ from fabric_rlm.experimental.adaptive_policy import (
     ValidationVerdict,
 )
 from fabric_rlm.experimental.adaptive_runner import AdaptiveResult, AdaptiveRunner
+from fabric_rlm.experimental.bandit_policy import BanditPolicy, BanditState
+from fabric_rlm.experimental.effort_ladder_policy import (
+    EFFORT_RUNG_COST,
+    EffortBanditPolicy,
+    EffortLadderPolicy,
+)
 
 __all__ = [
     "AdaptiveResult",
     "AdaptiveRunner",
     "AttemptConfig",
     "AttemptRecord",
+    "BanditPolicy",
+    "BanditState",
     "Budget",
     "DifficultyVerdict",
+    "EFFORT_RUNG_COST",
+    "EffortBanditPolicy",
+    "EffortLadderPolicy",
     "LadderPolicy",
     "ValidationVerdict",
 ]
