@@ -436,6 +436,24 @@ class RLM:
                 budget_kwargs[key] = cfg[key]
         budget = cfg.get("budget") or Budget(**budget_kwargs)
 
+        # Warn if the user's max_attempts can't reach the policy's top rung.
+        # Common footgun: bumping max_rung without bumping max_attempts means
+        # the top rungs are silently unreachable. We don't auto-bump (would
+        # surprise users who explicitly capped attempts) — just be loud.
+        try:
+            policy_max_rung = int(getattr(policy, "max_rung"))
+        except (AttributeError, TypeError, ValueError):
+            policy_max_rung = -1
+        if policy_max_rung >= 0 and budget.max_attempts < policy_max_rung + 1:
+            warnings.warn(
+                f"adaptive: budget.max_attempts={budget.max_attempts} cannot "
+                f"reach policy.max_rung={policy_max_rung} (need at least "
+                f"{policy_max_rung + 1}). Top rungs will not be tried. "
+                f"Pass adaptive={{'max_attempts': {policy_max_rung + 1}}} to fix.",
+                UserWarning,
+                stacklevel=3,
+            )
+
         validator = cfg.get("validator")
         if validator is None:
             warnings.warn(
