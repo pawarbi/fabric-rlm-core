@@ -404,9 +404,22 @@ class RLM:
                 kwargs["lm"] = attempt_cfg.lm_spec
             elif attempt_cfg.lm_instance is not None:
                 kwargs["lm"] = attempt_cfg.lm_instance
-            # reasoning_effort is forwarded only when the lm spec is a dict.
-            if attempt_cfg.reasoning_effort and isinstance(kwargs.get("lm"), dict):
-                kwargs["lm"] = {**kwargs["lm"], "reasoning_effort": attempt_cfg.reasoning_effort}
+            # reasoning_effort is forwarded into the inner RLM. When the lm
+            # spec is a dict, merge in-place. When it's a dspy.LM-like
+            # instance with .copy(), clone it so the original isn't mutated
+            # (callers commonly pass a single FabricLM instance shared
+            # across attempts and across tasks).
+            if attempt_cfg.reasoning_effort:
+                lm_obj = kwargs.get("lm")
+                if isinstance(lm_obj, dict):
+                    kwargs["lm"] = {**lm_obj, "reasoning_effort": attempt_cfg.reasoning_effort}
+                elif lm_obj is not None and hasattr(lm_obj, "copy"):
+                    try:
+                        kwargs["lm"] = lm_obj.copy(reasoning_effort=attempt_cfg.reasoning_effort)
+                    except Exception:
+                        # If the LM doesn't accept reasoning_effort via copy(),
+                        # leave it alone — non-reasoning chat models will reject it.
+                        pass
             return RLM(**kwargs)
 
         # ---- policy + budget construction from adaptive_config ---------------
@@ -423,11 +436,18 @@ class RLM:
             policy_kwargs["skip_more_turns_when_submitted"] = bool(
                 cfg["skip_more_turns_when_submitted"]
             )
-        # If the user passed an LM dict with reasoning_effort, seed the policy.
-        if isinstance(self._adaptive_inner_kwargs.get("lm"), dict):
-            eff = self._adaptive_inner_kwargs["lm"].get("reasoning_effort")
-            if eff:
-                policy_kwargs["base_reasoning_effort"] = eff
+        # If the user passed an LM with reasoning_effort already set, seed
+        # the policy so its rung-0 baseline matches the user's intent. Works
+        # for both dict specs and dspy.LM instances (which carry .kwargs).
+        lm_obj = self._adaptive_inner_kwargs.get("lm")
+        if isinstance(lm_obj, dict):
+            eff = lm_obj.get("reasoning_effort")
+        elif lm_obj is not None and hasattr(lm_obj, "kwargs"):
+            eff = lm_obj.kwargs.get("reasoning_effort") if isinstance(lm_obj.kwargs, dict) else None
+        else:
+            eff = None
+        if eff:
+            policy_kwargs["base_reasoning_effort"] = eff
         policy = cfg.get("policy") or LadderPolicy(**policy_kwargs)
 
         budget_kwargs: dict[str, Any] = {}
