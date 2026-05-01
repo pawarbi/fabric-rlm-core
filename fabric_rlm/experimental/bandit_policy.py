@@ -42,16 +42,28 @@ from .adaptive_policy import (
 )
 
 
-# Relative cost of each rung, used to break ties between Thompson samples.
-# Rough order-of-magnitude — actual numbers depend on the cheap/strong LM
-# pair, but the *order* is what matters and this is the order the LadderPolicy
-# itself encodes.
+# Default rung costs reflect the standard cross-model LadderPolicy:
+# rungs 0-3 are cheap-LM, rung 4 is strong-LM (~30× cheap-LM cost).
+# For an effort-climbing ladder (single LM, varying reasoning_effort) the
+# costs differ — pass ``rung_cost`` to :class:`BanditPolicy` to override.
 _RUNG_COST: dict[int, float] = {
     0: 1.0,
     1: 2.0,
     2: 3.0,
     3: 6.0,   # parallel rollouts ×N (default N=3)
     4: 30.0,  # strong LM
+}
+
+
+# Approx cost ratios for an effort-only ladder on a reasoning model like
+# gpt-5: each effort step roughly 3× the previous. Rung 4 is high+parallel-N
+# (default N=3). Use with :class:`EffortLadderPolicy`.
+_EFFORT_RUNG_COST: dict[int, float] = {
+    0: 1.0,    # minimal
+    1: 3.0,    # low (or base + retry)
+    2: 8.0,    # medium
+    3: 25.0,   # high
+    4: 75.0,   # high × N parallel
 }
 
 
@@ -168,6 +180,15 @@ class BanditPolicy(LadderPolicy):
     task_key: str = ""
     warmup: int = 2
     rng: random.Random = field(default_factory=random.Random)
+    # Override per-rung cost map to match the underlying ladder. ``None``
+    # uses the cross-model default in :data:`_RUNG_COST`. For an effort-only
+    # ladder pass :data:`_EFFORT_RUNG_COST` (or any custom dict).
+    rung_cost: dict[int, float] | None = None
+
+    def _cost_for(self, rung: int) -> float:
+        if self.rung_cost is not None:
+            return self.rung_cost.get(rung, 1.0 + rung)
+        return _rung_cost(rung)
 
     def _bandit_should_drive(self) -> bool:
         if self.state is None or not self.task_key:
@@ -202,7 +223,7 @@ class BanditPolicy(LadderPolicy):
         # Then among rungs within epsilon of the best, prefer cheapest
         tied = [(r, p) for r, p in candidates if (best_p - p) <= epsilon]
         if tied:
-            best_rung, best_p = min(tied, key=lambda rp: _rung_cost(rp[0]))
+            best_rung, best_p = min(tied, key=lambda rp: self._cost_for(rp[0]))
         return best_rung, best_p
 
     def next_decision(
