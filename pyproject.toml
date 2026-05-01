@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fabric-rlm"
-version = "0.1.10"
+version = "0.1.11.dev0"
 description = "A portable Python subprocess runtime for Recursive Language Models in Fabric notebooks and managed Python environments."
 readme = "README.md"
 requires-python = ">=3.10"
