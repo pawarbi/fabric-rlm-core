@@ -12,6 +12,7 @@ the broader adaptive runtime is still being validated against real benchmarks
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Protocol, runtime_checkable
@@ -135,7 +136,39 @@ class AttemptRecord:
             "reasoning_effort": self.config.reasoning_effort,
             "parallel_rollouts": self.config.parallel_rollouts,
             "payload_preview": preview,
+            **(
+                {"turns": _capture_turns(self.result)}
+                if os.environ.get("FABRIC_RLM_CAPTURE_TURNS", "").lower()
+                in {"1", "true", "yes", "on"}
+                else {}
+            ),
         }
+
+
+def _capture_turns(result: Any) -> list[dict[str, Any]]:
+    """Compact per-turn capture for offline analysis (PVR PLAN/VERIFY/REFLECT)."""
+
+    traj = getattr(result, "trajectory", None)
+    turns = getattr(traj, "turns", None) if traj is not None else None
+    if not turns:
+        return []
+    out: list[dict[str, Any]] = []
+    for t in turns:
+        rt = getattr(t, "response_text", "") or ""
+        code = getattr(t, "code", "") or ""
+        stdout = getattr(t, "stdout", "") or ""
+        out.append(
+            {
+                "turn": getattr(t, "turn", None),
+                "turn_type": getattr(t, "turn_type", "normal"),
+                "submitted": bool(getattr(t, "submitted", False)),
+                "has_error": bool(getattr(t, "error", None)),
+                "response_text": (rt[:1500] + "…") if len(rt) > 1500 else rt,
+                "code": (code[:800] + "…") if len(code) > 800 else code,
+                "stdout": (stdout[:400] + "…") if len(stdout) > 400 else stdout,
+            }
+        )
+    return out
 
 
 # ----------------------------------------------------------------------------

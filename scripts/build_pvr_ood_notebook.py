@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-WHEEL = "fabric_rlm-0.1.11.dev2-py3-none-any.whl"
+WHEEL = "fabric_rlm-0.1.11.dev4-py3-none-any.whl"
 WHEEL_PATH = f"/lakehouse/default/Files/fabric_rlm_longcot/wheels/{WHEEL}"
 
 cells = [
@@ -123,6 +123,7 @@ cells = [
         "from fabric_rlm import RLM, FabricLM\n",
         "from fabric_rlm.experimental import BanditState, EffortBanditPolicy\n",
         "\n",
+        "os.environ['FABRIC_RLM_CAPTURE_TURNS'] = '1'  # capture per-attempt turns\n",
         "base_lm = FabricLM('gpt-5', reasoning_effort='minimal', cache=False)\n",
         "stage('lm_built', base='gpt-5', start_effort='minimal')\n",
         "\n",
@@ -165,7 +166,24 @@ cells = [
         "                'total_prompt_tokens': sum(a.get('prompt_tokens') or 0 for a in attempts),\n",
         "                'total_completion_tokens': sum(a.get('completion_tokens') or 0 for a in attempts),\n",
         "                'final_answer_preview': (str((result.payload or {}).get('answer'))[:400]) if result.payload else None,\n",
+        "                'attempts_summary': [\n",
+        "                    {'rung': a.get('rung'), 'passed': a.get('passed'),\n",
+        "                     'submitted': a.get('submitted'), 'turns_used': a.get('turns_used'),\n",
+        "                     'failure_reason': a.get('failure_reason'),\n",
+        "                     'feedback': (a.get('feedback') or '')[:300],\n",
+        "                     'answer_preview': str(((a.get('payload_preview') or {}).get('answer')) or '')[:200]}\n",
+        "                    for a in attempts\n",
+        "                ],\n",
         "            }\n",
+        "            traj_path = RUN_ROOT / f\"trajectory_{case['id']}_{cond_name}.jsonl\"\n",
+        "            with traj_path.open('w', encoding='utf-8') as fh:\n",
+        "                for ai, a in enumerate(attempts):\n",
+        "                    fh.write(json.dumps({'attempt_index': ai, 'rung': a.get('rung'),\n",
+        "                                         'passed': a.get('passed'), 'submitted': a.get('submitted'),\n",
+        "                                         'failure_reason': a.get('failure_reason'),\n",
+        "                                         'feedback': a.get('feedback'),\n",
+        "                                         'turns': a.get('turns', [])}, ensure_ascii=False) + '\\n')\n",
+        "            cond_record['trajectory_jsonl'] = str(traj_path.relative_to(FILES_ROOT))\n",
         "        except Exception as exc:\n",
         "            cond_record = {'passed': False, 'error': repr(exc), 'traceback': traceback.format_exc()}\n",
         "        case_record['conditions'][cond_name] = cond_record; write_summary()\n",

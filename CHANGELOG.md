@@ -45,6 +45,39 @@ nail cold. Correctness is preserved (always passes eventually), but the cost can
 PVR is **on by default**. Disable with `FABRIC_RLM_PVR=0` for token-
 sensitive batch workloads on known-trivial tasks.
 
+### 0.1.11.dev4 — Trajectory capture + diagnostic finding on PVR mechanism
+
+Added opt-in turn capture (`FABRIC_RLM_CAPTURE_TURNS=1`) on
+`AttemptRecord.to_summary()` so notebooks can persist per-turn
+`response_text` / `code` / `stdout` for offline analysis. The OOD
+ablation notebook now writes per-condition trajectory JSONL files into
+the run directory.
+
+**Diagnostic finding (important; informs how PVR is described):**
+captured trajectories show the model emits **zero** `## PLAN` /
+`## VERIFY` markers across every turn of every attempt at
+`reasoning_effort='minimal'`, even when the skill prompt is delivered
+verbatim. Strengthening the skill rules with explicit "MUST",
+"contract violation" language, and worked code examples did **not**
+make the model comply (verified on `pvr_ood_ablation` run
+`20260502-150436-6b9f67`).
+
+The measurable wins from PVR (Backprop -50% attempts / -16% tokens; RFP
+-74% tokens) therefore come from the **inter-attempt REFLECT injection**
+in `AdaptiveRunner._with_feedback` (the `[ADAPTIVE: prior attempt
+rejected]` block fed into retries) and the runtime's post-SUBMIT
+reflection turn — *not* from PLAN/VERIFY scaffolding in the skill
+prompt. The PLAN/VERIFY rules in `core.md` are kept as-is for higher
+reasoning-effort runs (where the model may still honor them) but the
+operative contract today is REFLECT. A future change should either (a)
+add a runtime check that re-prompts when `## PLAN` / `## VERIFY`
+markers are missing, or (b) rename the documentation to "REFLECT
+contract" and drop the PLAN/VERIFY claims.
+
+Also fixed a `TypeError: unhashable type: 'slice'` crash in the OOD
+notebook's `attempts_summary` cell when an attempt's `answer` payload
+is a dict instead of a string.
+
 ## 0.1.10 — Experimental `engine="adaptive"`
 
 **Adaptive escalation, opt-in.** When a validator rejects an attempt, an

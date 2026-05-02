@@ -35,6 +35,12 @@ pytestmark = pytest.mark.experimental
 @dataclass
 class StubTurn:
     error: str | None = None
+    turn: int = 0
+    turn_type: str = "normal"
+    submitted: bool = False
+    response_text: str = ""
+    code: str = ""
+    stdout: str = ""
 
 
 @dataclass
@@ -411,3 +417,46 @@ def test_attempt_record_summary_truncates_long_strings() -> None:
     assert s["payload_preview"]["evidence"] == "short"
     assert s["payload_preview"]["answer"].endswith("…")
     assert len(s["payload_preview"]["answer"]) <= 220
+
+
+def test_attempt_record_summary_omits_turns_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("FABRIC_RLM_CAPTURE_TURNS", raising=False)
+    rec = _record(2, passed=True, payload={"answer": "ok"})
+    s = rec.to_summary()
+    assert "turns" not in s
+
+
+def test_attempt_record_summary_captures_turns_when_env_set(monkeypatch) -> None:
+    monkeypatch.setenv("FABRIC_RLM_CAPTURE_TURNS", "1")
+    cfg = AttemptConfig(rung=2)
+    long_text = "PLAN " * 600  # 3000 chars
+    turn = StubTurn(
+        turn=1,
+        turn_type="normal",
+        submitted=True,
+        response_text=long_text,
+        code="print('hi')",
+        stdout="hi",
+    )
+    rec = AttemptRecord(
+        rung=2,
+        rollout_index=0,
+        config=cfg,
+        result=StubResult(
+            submitted=True,
+            payload={"answer": "ok"},
+            trajectory=StubTrajectory(turns=[turn]),
+        ),
+        verdict=ValidationVerdict(passed=True),
+        elapsed_seconds=0.1,
+        turns_used=1,
+    )
+    s = rec.to_summary()
+    assert isinstance(s["turns"], list) and len(s["turns"]) == 1
+    t = s["turns"][0]
+    assert t["turn"] == 1
+    assert t["submitted"] is True
+    assert t["response_text"].endswith("…")  # truncated
+    assert len(t["response_text"]) <= 1501
+    assert t["code"] == "print('hi')"
+    assert t["stdout"] == "hi"
