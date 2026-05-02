@@ -165,3 +165,26 @@ Both bugs are confirmed *current-codebase* bugs, not legacy issues — the `Traj
 4'. **`fabric_ladder` (E) now actually escalates.** With `Trajectory.__bool__` and the `base_lm_instance` wiring fixed, the ladder climbs minimal → low → medium and the per-attempt metadata is preserved end-to-end. On this hard holdout it solves 3/25 — slightly better than C/D at 0/25, all wins at the medium rung, at the cost of ~2.3× more attempts and ~10 turns/question.
 
 Fix-run artifacts (results + per-question traces): `Files/fabric_rlm_adaptive_validation/comparison_5way/fix-20260502-140800/`
+
+### Why did REFLECT (D) work in earlier benchmarks but score 0/25 here?
+
+REFLECT didn't regress — the 5-way stripped away the two things that make it useful.
+
+Earlier wins (CHANGELOG `0.1.11.dev4` and PVR ablations):
+
+| Case | Result | Mechanism |
+|---|---|---|
+| `Backprop_hard` (REFLECT off → on, adaptive ladder) | 7 attempts → **3**, 1.28M → 413K tokens (-68%) | Model could already solve at rung 3 (`medium`); REFLECT removed wasted retries |
+| `rfp-extract` (REFLECT off → on, adaptive ladder) | 2 → **1** attempt, -74% tokens | Same — capable at higher effort, REFLECT pruned retries |
+
+Each win required (i) the model being **inside the capability ceiling** and (ii) a runner that actually retries (the **adaptive ladder**, which feeds the prior failure into `AdaptiveRunner._with_feedback`).
+
+In the 5-way, strategy D (`fabric_custom-loop_reflect`) had **neither**:
+
+1. **No ladder, no escalation.** D ran a single attempt at fixed `reasoning_effort='minimal'`. The `[ADAPTIVE: prior attempt rejected]` REFLECT block lives in the adaptive runner; D never invokes it.
+2. **PLAN/VERIFY scaffold is a no-op at minimal effort.** Per the `dev4` diagnostic finding (CHANGELOG line 58–65), gpt-5 at minimal effort emits **zero** `## PLAN` / `## VERIFY` markers regardless of how forcefully the skill prompt demands them.
+3. **Dataset is above the capability ceiling at minimal effort.** A direct (no scaffold), C full-PVR, and D reflect-only all scored 0/25 — confirming the holdout is out of reach at this effort tier, independent of REFLECT.
+
+The only condition that scored above noise (E, 3/25) is also the only one that escalated to `medium` effort via `EffortLadderPolicy`. All 3 of E's wins were at rung 2, never at rung 0 (`minimal`) or rung 1 (`low`). This matches the earlier pattern exactly: REFLECT helps once the model has enough effort to be competent, not before.
+
+**Implication:** D is the wrong condition to test REFLECT on a hard dataset. A meaningful D rerun would either use `reasoning_effort='medium'+` or wrap reflect-only in the adaptive ladder (which collapses it into a slimmer variant of E).
