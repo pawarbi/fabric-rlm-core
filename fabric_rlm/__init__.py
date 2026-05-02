@@ -58,4 +58,4 @@ __all__ = [
     "signature_validator",
 ]
 
-__version__ = "0.1.11.dev1"
+__version__ = "0.1.11.dev2"
