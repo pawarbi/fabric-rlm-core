@@ -2,6 +2,8 @@
 
 ## 0.1.11 (unreleased) — PLAN / VERIFY / REFLECT (PVR) contract
 
+**Bug fix (dev6):** `Trajectory.__bool__` now explicitly returns `True`. Previously a `Trajectory` with zero turns evaluated as falsy because `__len__` was defined and Python falls back to it for truthiness, causing downstream `if traj: ...` guards (in benchmarks and result-collection helpers) to silently discard the trajectory's metadata — including the entire `adaptive` payload. Found while diagnosing a 5-way comparison where `EffortLadderPolicy` appeared to record 0 attempts on every question.
+
 The default `core` skill now ships with an explicit **PLAN / VERIFY /
 REFLECT** contract, and the adaptive engine injects synthesized REFLECT
 context on every failed attempt (not only validator rejections).

@@ -121,3 +121,32 @@ Headline pass rate is meaningless if a strategy didn't actually execute. This ta
 - Strategy E uses a 3-rung effort ladder (minimal → low → medium) with `max_attempts=3, parallel_rollouts=1`. Bandit was excluded for hangs (see above).
 
 - Full per-question traces (prompts, turns, outputs, payload) are persisted under `Files/fabric_rlm_adaptive_validation/comparison_5way/full-20260502-110000/traces_*/`.
+
+---
+
+## Addendum (run `fix-20260502-140800`, wheel `0.1.11.dev6`)
+
+After the initial run we performed a forensic investigation of the two strategies that didn't execute cleanly (B and E) and reran them with the fixed wheel. Strategies A/C/D were not rerun — their original numbers stand.
+
+### Root causes found
+
+1. **B `dspy_rlm` — Fabric runtime ships an obsolete `pathlib` PyPI backport.** The Fabric Spark Python 3.11 image still has the abandoned (~2014) `pathlib` package installed in `site-packages/pathlib.py`. That backport contains `from collections import Sequence`, removed in Python 3.10+. The v7-dspy worker subprocess imports site-packages `pathlib` before stdlib `pathlib` and dies during startup with `ImportError: cannot import name 'Sequence' from 'collections'`. C/D were not affected because v6-custom runs in-process (no subprocess re-bootstrap). Fix: notebook setup cell now runs `pip uninstall -y -q pathlib` before installing the wheel (no-op when not present, safe everywhere).
+
+2. **E `fabric_ladder` — `Trajectory` was implicitly falsy when empty.** `Trajectory` defines `__len__` (turn count) but not `__bool__`. Python falls back to `__len__` for truthiness, so a freshly-created trajectory with zero turns evaluated as `False`. The 5-way generator did `meta = traj.metadata if traj else {}`, which silently discarded the entire `adaptive` metadata payload (and the per-attempt records inside it). Combined with a separate wiring bug in the generator that passed `EffortLadderPolicy(base_lm_spec="azure/gpt-5", ...)` instead of `base_lm_instance=base_lm` — overriding the FabricLM auth with an unauthenticated string and causing every inner attempt to fail in ~3s. Fixes: `Trajectory.__bool__` now returns `True` (committed in `fabric_rlm/trajectory.py`); generator now passes the `base_lm` instance through and uses `is not None` guards for trajectories.
+
+### Rerun results
+
+| Strategy | Original | Fix run | Effective ladder behaviour |
+|---|---|---|---|
+| B `dspy_rlm` | 0/25 (worker dead, refusals) | **2/25** (MCM only) | Worker now starts, dspy executes 4–5 turns/question, but model still wrong on hard CS puzzles |
+| E `fabric_ladder` | 0/25 (0 attempts captured) | **3/25** (MCM:2, MFMC:1) | Ladder climbs correctly; all 3 wins occurred at rung 2 (`medium` effort), and 22/25 exhausted all 3 rungs. Avg 2.32 attempts/question, 9.68 turns/question |
+
+Both bugs are confirmed *current-codebase* bugs, not legacy issues — the `Trajectory.__bool__` fix is in the production library and the pathlib/lm-instance fixes are in the comparison generator. The remaining low pass rates are consistent with findings #1 and #2 of the original run: this is `gpt-5` at minimal/low/medium effort vs deliberately-hard CS holdout questions, not a scaffolding bug.
+
+### Updated Findings #3 and #4
+
+3'. **`dspy_rlm` (v7-dspy) is now usable on Fabric** if you `pip uninstall -y pathlib` before installing the wheel. With that fix the v7 worker boots and executes turns; results on the hard holdout (2/25, MCM only) are still poor, comparable to A direct, suggesting the v7-dspy engine doesn't add measurable value over a direct call on this dataset.
+
+4'. **`fabric_ladder` (E) now actually escalates.** With `Trajectory.__bool__` and the `base_lm_instance` wiring fixed, the ladder climbs minimal → low → medium and the per-attempt metadata is preserved end-to-end. On this hard holdout it solves 3/25 — slightly better than C/D at 0/25, all wins at the medium rung, at the cost of ~2.3× more attempts and ~10 turns/question.
+
+Fix-run artifacts (results + per-question traces): `Files/fabric_rlm_adaptive_validation/comparison_5way/fix-20260502-140800/`

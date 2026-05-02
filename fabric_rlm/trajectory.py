@@ -51,6 +51,13 @@ class Trajectory:
     def __len__(self) -> int:
         return len(self.turns)
 
+    def __bool__(self) -> bool:
+        # Always truthy. Without this, an empty-turns trajectory would test
+        # falsy due to ``__len__`` falling back as Python's truthiness source,
+        # which masks adaptive metadata, error reasons, and other fields that
+        # downstream code reads via ``if traj: ...`` patterns.
+        return True
+
     def __getitem__(self, index: int) -> TurnRecord:
         return self.turns[index]
 

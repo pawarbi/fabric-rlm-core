@@ -17,7 +17,7 @@ import argparse
 import json
 from pathlib import Path
 
-WHEEL = "fabric_rlm-0.1.11.dev5-py3-none-any.whl"
+WHEEL = "fabric_rlm-0.1.11.dev6-py3-none-any.whl"
 WHEEL_PATH = f"/lakehouse/default/Files/fabric_rlm_longcot/wheels/{WHEEL}"
 DATASET_PATH = "/lakehouse/default/Files/fabric_rlm_longcot/datasets/longcot_cs_hard_holdout25.jsonl"
 
@@ -95,6 +95,13 @@ def stage(name, **info):
     write_summary(); print("[stage]", name, info)
 
 stage("setup", run_root=str(RUN_ROOT))
+# Workaround: Fabric runtime sometimes ships the abandoned `pathlib` PyPI
+# backport in site-packages, which shadows stdlib pathlib and crashes any
+# subprocess on Python 3.10+ with ImportError on collections.Sequence.
+# Worker processes (e.g., v7-dspy) are the typical victim. Uninstalling
+# is a no-op when the bad package isn't present.
+subprocess.call(["pip","uninstall","-y","-q","pathlib"])
+stage("pathlib_purge", done=True)
 subprocess.check_call(["pip","install","--quiet","--force-reinstall","--no-deps", WHEEL_PATH])
 stage("pip_wheel", done=True)
 subprocess.check_call(["pip","install","--quiet","dspy>=3.0.4"])
@@ -252,7 +259,7 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
             elapsed = time.perf_counter() - t0
             ans = (result.payload or {{}}).get("answer") if result.payload else None
             traj = result.trajectory
-            turn_records = list(getattr(traj, "turns", []) or []) if traj else []
+            turn_records = list(getattr(traj, "turns", []) or []) if traj is not None else []
             turns = [t.to_dict() if hasattr(t, "to_dict") else t for t in turn_records]
             prompt_tok = sum((getattr(t, "prompt_tokens", None) or 0) for t in turn_records)
             completion_tok = sum((getattr(t, "completion_tokens", None) or 0) for t in turn_records)
@@ -267,7 +274,7 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
             trace = {{"strategy": STRATEGY_LABEL, "question_id": qid, "template": tpl,
                      "prompt": row["prompt"], "answer": str(ans) if ans is not None else None,
                      "submitted": result.submitted, "passed": rec["passed"],
-                     "turns": turns, "metadata": traj.metadata if traj else None}}
+                     "turns": turns, "metadata": traj.metadata if traj is not None else None}}
             (TRACES_DIR / f"trace_{{qid}}.json").write_text(json.dumps(trace, default=str, indent=2), encoding="utf-8")
         except Exception as exc:
             rec.update({{"passed": False, "error": repr(exc),
@@ -294,7 +301,7 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
                 ans = result.payload.get("answer")
                 return ans is not None and grade(_tpl, _gold, ans)
             policy = EffortLadderPolicy(
-                base_lm_spec="azure/gpt-5",
+                base_lm_instance=base_lm,
                 base_reasoning_effort="minimal",
                 parallel_rollouts=1,
                 effort_ladder=("minimal", "low", "medium"),
@@ -308,7 +315,7 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
             elapsed = time.perf_counter() - t0
             ans = (result.payload or {}).get("answer") if result.payload else None
             traj = result.trajectory
-            meta = (traj.metadata or {}).get("adaptive", {}) if traj else {}
+            meta = (traj.metadata or {}).get("adaptive", {}) if traj is not None else {}
             attempts = meta.get("attempts", [])
             passed = bool(result.submitted) and grade(tpl, gold, ans) if ans is not None else False
             rec.update({
