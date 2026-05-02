@@ -3,11 +3,13 @@
 Usage:
     python scripts/build_comparison_5way_notebook.py <strategy> [--smoke N]
 
-strategy: A, C, D, or E
+strategy: A, B, C, D, E, or F
   A = direct LLM via dspy.Predict
+  B = fabric_rlm v7-dspy engine
   C = fabric_rlm v6-custom + skills + full PVR
   D = fabric_rlm v6-custom + reflect_only
-  E = fabric_rlm v6-custom + bandit adaptive
+  E = fabric_rlm v6-custom + EffortLadder (deterministic ladder)
+  F = fabric_rlm v6-custom + EffortBandit (Thompson-sampled ladder)
 
 --smoke N : only run first N questions (default = all 25)
 """
@@ -31,6 +33,7 @@ STRATEGY_INFO = {
     "C": {"label": "fabric_full", "title": "C — Fabric RLM (v6-custom, full PVR)"},
     "D": {"label": "fabric_reflect", "title": "D — Fabric RLM (v6-custom, reflect_only)"},
     "E": {"label": "fabric_ladder", "title": "E — Fabric RLM + EffortLadder (v6-custom, adaptive, deterministic minimal->low->medium)"},
+    "F": {"label": "fabric_bandit", "title": "F — Fabric RLM + EffortBandit (v6-custom, adaptive, Thompson-sampled minimal->low->medium with per-template Beta posteriors)"},
 }
 
 
@@ -334,6 +337,106 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
                      "prompt": row["prompt"], "answer": str(ans) if ans is not None else None,
                      "submitted": result.submitted, "passed": rec["passed"],
                      "winner_rung": rec["winner_rung"], "starting_rung": rec["starting_rung"],
+                     "attempts": [
+                         {"rung": a.get("rung"), "passed": a.get("passed"),
+                          "submitted": a.get("submitted"),
+                          "turns_used": a.get("turns_used"),
+                          "failure_reason": a.get("failure_reason"),
+                          "feedback": a.get("feedback"),
+                          "answer_preview": str(((a.get("payload_preview") or {}).get("answer")) or "")[:500],
+                          "turns": a.get("turns", [])}
+                         for a in attempts]}
+            (TRACES_DIR / f"trace_{qid}.json").write_text(json.dumps(trace, default=str, indent=2), encoding="utf-8")
+        except Exception as exc:
+            rec.update({"passed": False, "error": repr(exc),
+                        "traceback": traceback.format_exc()})
+        out_fh.write(json.dumps(rec, default=str) + "\\n"); out_fh.flush()
+        stage("q_done", idx=idx+1, qid=qid, passed=rec.get("passed"),
+              elapsed=round(rec.get("elapsed_seconds") or 0, 1),
+              tokens=(rec.get("prompt_tokens",0) or 0)+(rec.get("completion_tokens",0) or 0))
+'''
+    elif strategy == "F":
+        run_cell = '''os.environ["FABRIC_RLM_PVR_MODE"] = "full"
+os.environ.pop("FABRIC_RLM_PVR", None)
+from fabric_rlm.experimental import EffortBanditPolicy, BanditState, EFFORT_RUNG_COST
+stage("pvr_mode_set", mode=os.environ["FABRIC_RLM_PVR_MODE"])
+
+# Persistent bandit state for the run; per-template (task_key=template) so the
+# bandit accumulates Beta(alpha,beta) posteriors per template across the 25-question sweep.
+BANDIT_STATE_PATH = RUN_ROOT / "bandit_state.json"
+bandit_state = BanditState.from_path(BANDIT_STATE_PATH)
+stage("bandit_state_loaded", path=str(BANDIT_STATE_PATH),
+      n_keys=len(bandit_state.priors))
+
+with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
+    for idx, row in enumerate(rows):
+        qid = row["question_id"]; tpl = row["template"]; gold = row.get("answer")
+        rec = {"strategy": STRATEGY_LABEL, "question_id": qid, "template": tpl,
+               "started_at": time.time()}
+        try:
+            def _validator(result, _gold=gold, _tpl=tpl):
+                if not result.submitted or not result.payload: return False
+                ans = result.payload.get("answer")
+                return ans is not None and grade(_tpl, _gold, ans)
+            policy = EffortBanditPolicy(
+                base_lm_instance=base_lm,
+                base_reasoning_effort="minimal",
+                parallel_rollouts=1,
+                effort_ladder=("minimal", "low", "medium"),
+                state=bandit_state,
+                task_key=tpl,
+                warmup=2,
+                rung_cost=EFFORT_RUNG_COST,
+            )
+            # Capture the bandit's pre-decision posterior snapshot for this template
+            pre_obs = bandit_state.total_observations(tpl)
+            pre_betas = {r: bandit_state.beta_for(tpl, r) for r in (0, 1, 2)}
+            rlm = RLM(signature="question -> answer", lm=base_lm,
+                      engine="adaptive",
+                      adaptive=dict(policy=policy, validator=_validator,
+                                    max_attempts=3, parallel_rollouts=1))
+            t0 = time.perf_counter()
+            result = rlm.run({"question": row["prompt"]})
+            elapsed = time.perf_counter() - t0
+            ans = (result.payload or {}).get("answer") if result.payload else None
+            traj = result.trajectory
+            meta = (traj.metadata or {}).get("adaptive", {}) if traj is not None else {}
+            attempts = meta.get("attempts", [])
+            passed = bool(result.submitted) and grade(tpl, gold, ans) if ans is not None else False
+            # Record outcomes back into the bandit state so the next question
+            # for the same template benefits from the signal.
+            for a in attempts:
+                rung_i = a.get("rung")
+                if rung_i is None:
+                    continue
+                bandit_state.record(tpl, int(rung_i), bool(a.get("passed")))
+            try:
+                bandit_state.save()
+            except Exception as _se:
+                stage("bandit_save_warn", err=repr(_se))
+            post_betas = {r: bandit_state.beta_for(tpl, r) for r in (0, 1, 2)}
+            rec.update({
+                "passed": bool(passed), "submitted": result.submitted,
+                "elapsed_seconds": elapsed,
+                "starting_rung": attempts[0].get("rung") if attempts else None,
+                "winner_rung": meta.get("winner_rung"),
+                "stop_reason": meta.get("stop_reason"),
+                "n_attempts": len(attempts),
+                "n_turns": sum(a.get("turns_used") or 0 for a in attempts),
+                "prompt_tokens": sum(a.get("prompt_tokens") or 0 for a in attempts),
+                "completion_tokens": sum(a.get("completion_tokens") or 0 for a in attempts),
+                "answer_preview": (str(ans)[:1000] if ans is not None else None),
+                "bandit_pre_observations": pre_obs,
+                "bandit_pre_betas": pre_betas,
+                "bandit_post_betas": post_betas,
+                "bandit_warmup_active": pre_obs < 2,
+            })
+            trace = {"strategy": STRATEGY_LABEL, "question_id": qid, "template": tpl,
+                     "prompt": row["prompt"], "answer": str(ans) if ans is not None else None,
+                     "submitted": result.submitted, "passed": rec["passed"],
+                     "winner_rung": rec["winner_rung"], "starting_rung": rec["starting_rung"],
+                     "bandit_pre_observations": pre_obs,
+                     "bandit_pre_betas": pre_betas, "bandit_post_betas": post_betas,
                      "attempts": [
                          {"rung": a.get("rung"), "passed": a.get("passed"),
                           "submitted": a.get("submitted"),
