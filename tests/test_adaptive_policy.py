@@ -306,16 +306,41 @@ def test_ladder_propagates_stop_pass() -> None:
 
 def test_render_feedback_block_marks_with_sentinel() -> None:
     block = render_feedback_block("X is wrong", {"answer": "X"})
-    assert block.startswith("[ADAPTIVE: prior attempt rejected]")
-    assert block.rstrip().endswith("[/ADAPTIVE]")
+    assert block.startswith("## PRIOR_ATTEMPT_FEEDBACK")
+    assert block.rstrip().endswith("## END_PRIOR_ATTEMPT_FEEDBACK")
     assert "X is wrong" in block
+
+
+def test_render_feedback_block_includes_attempt_metadata() -> None:
+    block = render_feedback_block(
+        "X is wrong",
+        {"answer": "X"},
+        rung=2,
+        reasoning_effort="medium",
+        submitted=True,
+    )
+    assert "rung=2" in block
+    assert "effort=medium" in block
+    assert "submitted=True" in block
+
+
+def test_render_feedback_block_handles_no_payload() -> None:
+    block = render_feedback_block(
+        "worker_timeout",
+        None,
+        rung=0,
+        reasoning_effort="minimal",
+        submitted=False,
+    )
+    assert "<no payload" in block
+    assert "submitted=False" in block
 
 
 def test_inject_feedback_prepends_to_first_text_field() -> None:
     inputs = {"question": "what is X?", "max_rows": 100}
     out = inject_feedback(inputs, "wrong", {"answer": "X"})
     assert out["max_rows"] == 100
-    assert out["question"].startswith("[ADAPTIVE: prior attempt rejected]")
+    assert out["question"].startswith("## PRIOR_ATTEMPT_FEEDBACK")
     assert "what is X?" in out["question"]
 
 

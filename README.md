@@ -20,6 +20,16 @@ validator rejects an attempt — opt-in via `engine="adaptive"`. See
 `QUICKSTART.md` §4b for the API and §0.1.10 in `CHANGELOG.md` for the
 bench results.
 
+The default `core` skill ships with a **PLAN / VERIFY / REFLECT (PVR)**
+contract: PLAN forces decomposition before any worker code runs, VERIFY
+is a self-check before SUBMIT, and REFLECT carries prior-attempt failure
+context into retries (helpful when paired with the adaptive engine's
+escalation policy). PVR is **on by default** and is universally safe on
+easy single-step tasks (no outcome regression, ~30-65% extra prompt
+tokens) and materially improves recovery on hard-but-solvable
+multi-step tasks. Disable with the `FABRIC_RLM_PVR=0` environment
+variable for token-sensitive batch workloads on known-trivial tasks.
+
 ## Install
 
 ```bash

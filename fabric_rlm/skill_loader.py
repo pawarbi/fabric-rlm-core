@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from importlib import resources
@@ -66,6 +67,8 @@ class SkillLoader:
     def load(self, name: str) -> Skill:
         safe_name = normalize_skill_name(name)
         content = self._read_skill_text(safe_name)
+        if safe_name == "core" and os.environ.get("FABRIC_RLM_PVR", "1") == "0":
+            content = _strip_pvr_clauses(content)
         frontmatter, body_after_fm = _split_frontmatter(content)
         title, summary, legacy_deps = _parse_metadata(safe_name, body_after_fm)
         verifier_source = extract_verifier_source(content)
@@ -185,6 +188,22 @@ def normalize_skill_name(name: str) -> str:
 
 def _is_safe_skill_name(name: str) -> bool:
     return bool(_SAFE_SKILL_NAME.fullmatch(name)) and ".." not in name
+
+
+_PVR_CLAUSE_RE = re.compile(
+    r"^\d+\.\s+\*\*(?:PLAN before action|VERIFY before SUBMIT|"
+    r"Honor PRIOR_ATTEMPT_FEEDBACK[^*]*?)\.?\*\*.*?(?=^\d+\.\s+\*\*|^## |\Z)",
+    re.DOTALL | re.MULTILINE,
+)
+
+
+def _strip_pvr_clauses(content: str) -> str:
+    """Remove the PLAN/VERIFY/REFLECT clauses from core.md when PVR is disabled.
+
+    Used by the FABRIC_RLM_PVR=0 ablation switch — the rest of the skill
+    body (single-SUBMIT, no-echo-prompt, advice-not-output) stays in place.
+    """
+    return _PVR_CLAUSE_RE.sub("", content)
 
 
 def extract_verifier_source(content: str) -> Optional[str]:

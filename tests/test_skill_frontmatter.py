@@ -155,3 +155,23 @@ def test_string_keywords_split_on_comma(tmp_path) -> None:
     )
     skill = SkillLoader(skill_dir=tmp_path).load("csv")
     assert skill.applies_when_keywords == ("alpha", "beta", "gamma")
+
+def test_pvr_env_var_strips_clauses_when_disabled(monkeypatch) -> None:
+    from fabric_rlm.skill_loader import SkillLoader
+    monkeypatch.setenv('FABRIC_RLM_PVR', '0')
+    s = SkillLoader().load('core')
+    assert 'PLAN before action' not in s.content
+    assert 'VERIFY before SUBMIT' not in s.content
+    assert 'Honor PRIOR_ATTEMPT_FEEDBACK' not in s.content
+    # other clauses must remain
+    assert 'Single SUBMIT' in s.content
+    assert 'Skill bodies are advice' in s.content
+
+
+def test_pvr_env_var_preserves_clauses_by_default(monkeypatch) -> None:
+    from fabric_rlm.skill_loader import SkillLoader
+    monkeypatch.delenv('FABRIC_RLM_PVR', raising=False)
+    s = SkillLoader().load('core')
+    assert 'PLAN before action' in s.content
+    assert 'VERIFY before SUBMIT' in s.content
+    assert 'Honor PRIOR_ATTEMPT_FEEDBACK' in s.content

@@ -592,20 +592,30 @@ class Budget:
 # ----------------------------------------------------------------------------
 
 
-FEEDBACK_BLOCK_HEADER = "[ADAPTIVE: prior attempt rejected]"
-FEEDBACK_BLOCK_FOOTER = "[/ADAPTIVE]"
+FEEDBACK_BLOCK_HEADER = "## PRIOR_ATTEMPT_FEEDBACK"
+FEEDBACK_BLOCK_FOOTER = "## END_PRIOR_ATTEMPT_FEEDBACK"
 
 
-def render_feedback_block(feedback: str, prior_payload: Any) -> str:
-    """Build the marker block prepended to the next attempt's input.
+def render_feedback_block(
+    feedback: str,
+    prior_payload: Any,
+    *,
+    rung: int | None = None,
+    reasoning_effort: str | None = None,
+    submitted: bool | None = None,
+) -> str:
+    """Build the REFLECT block prepended to the next attempt's input.
 
-    Documented sentinel that users can grep for or strip. Keeps the prior
-    payload preview short to avoid blowing up the prompt.
+    Recognised by the always-on ``core.md`` skill. Includes prior-attempt
+    metadata (rung, effort, submission status) so the model can reason
+    about what changed between attempts. Payload preview is truncated.
     """
 
     preview: str
     try:
-        if isinstance(prior_payload, Mapping):
+        if prior_payload is None:
+            preview = "<no payload — attempt did not submit>"
+        elif isinstance(prior_payload, Mapping):
             items = list(prior_payload.items())[:5]
             preview = "; ".join(
                 f"{k}={_short(v)}" for k, v in items
@@ -614,11 +624,23 @@ def render_feedback_block(feedback: str, prior_payload: Any) -> str:
             preview = _short(prior_payload)
     except Exception:
         preview = "<unserializable>"
+
+    meta_bits: list[str] = []
+    if rung is not None:
+        meta_bits.append(f"rung={rung}")
+    if reasoning_effort:
+        meta_bits.append(f"effort={reasoning_effort}")
+    if submitted is not None:
+        meta_bits.append(f"submitted={submitted}")
+    meta_line = (" (" + ", ".join(meta_bits) + ")") if meta_bits else ""
+
     return (
         f"{FEEDBACK_BLOCK_HEADER}\n"
-        f"Reason: {feedback}\n"
-        f"Submitted answer (rejected): {preview}\n"
-        f"Try again. Do not repeat the same approach.\n"
+        f"A previous attempt{meta_line} failed. Use this to choose a different approach.\n"
+        f"- Reason: {feedback}\n"
+        f"- Submitted payload: {preview}\n"
+        f"- Guidance: Do not repeat the same payload or the same line of reasoning. "
+        f"Re-decompose in your PLAN block; address the failure reason directly.\n"
         f"{FEEDBACK_BLOCK_FOOTER}\n\n"
     )
 
@@ -634,13 +656,23 @@ def inject_feedback(
     inputs: Mapping[str, Any],
     feedback: str,
     prior_payload: Any,
+    *,
+    rung: int | None = None,
+    reasoning_effort: str | None = None,
+    submitted: bool | None = None,
 ) -> dict[str, Any]:
     """Return a new inputs dict with a feedback block prepended to the first
     text-typed input field. If no text field exists, the block is added under a
     new ``_adaptive_feedback`` key.
     """
 
-    block = render_feedback_block(feedback, prior_payload)
+    block = render_feedback_block(
+        feedback,
+        prior_payload,
+        rung=rung,
+        reasoning_effort=reasoning_effort,
+        submitted=submitted,
+    )
     out: dict[str, Any] = dict(inputs)
     text_key: str | None = None
     for k, v in out.items():

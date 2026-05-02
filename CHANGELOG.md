@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.1.11 (unreleased) — PLAN / VERIFY / REFLECT (PVR) contract
+
+The default `core` skill now ships with an explicit **PLAN / VERIFY /
+REFLECT** contract, and the adaptive engine injects synthesized REFLECT
+context on every failed attempt (not only validator rejections).
+
+- **PLAN** — model decomposes the task before writing worker code.
+- **VERIFY** — model self-checks the answer against task constraints
+  before calling `SUBMIT(...)`.
+- **REFLECT** — when an attempt fails (validator rejection, worker
+  error, timeout), the next attempt receives a structured
+  `PRIOR_ATTEMPT_FEEDBACK` block containing the failure reason and the
+  prior answer to consider.
+
+**Generalization ablation** (4 cases × 2 conditions, fresh bandit state):
+
+| case | OFF pass | ON pass | OFF→ON attempts | OFF→ON tokens |
+|---|---|---|---|---|
+| easy-math, easy-csv | ✅ | ✅ | 1→1 | small overhead, no regression |
+| Backprop_hard (solvable, multi-step) | ❌ ladder exhausted | ✅ rung 3 | 7→3 | 1.28M→413K (-68%) |
+| VLIW_hard (capability ceiling) | ❌ | ❌ | 6→6 | 294K→242K (-18%) |
+
+**OOD ablation** (structured extraction outside training distribution):
+
+| case | OFF pass | ON pass | OFF→ON attempts | OFF→ON tokens | OFF→ON elapsed |
+|---|---|---|---|---|---|
+| rfp-extract (4 fields from RFP PDF text 100KB) | ✅ | ✅ | 2→1 | 18K→4.9K (-74%) | 60.6s→7.9s |
+| spark-extract (5 fields from Spark log JSON 200KB) | ✅ | ✅ | 1→**3** | 6K→40K (+528%) | 10.1s→176s |
+
+The Spark-log case revealed a new failure mode: PVR's VERIFY clause can spuriously
+self-reject a correct first answer, amplifying retries on tasks the model would otherwise
+nail cold. Correctness is preserved (always passes eventually), but the cost can be 10×+.
+
+**Refined heuristic — when to enable PVR**:
+
+| profile | PVR? |
+|---|---|
+| Easy single-step the model nails cold (Spark log triage, simple lookups) | optional/off — VERIFY can spuriously self-reject |
+| Multi-field extraction with strict format (RFP) | **on** — PLAN/VERIFY enforces completeness |
+| Multi-step reasoning, derivations, code synthesis | **on** — REFLECT prevents brute-force-and-fail |
+| Capability ceiling | optional — fails marginally cheaper but doesn't rescue |
+
+PVR is **on by default**. Disable with `FABRIC_RLM_PVR=0` for token-
+sensitive batch workloads on known-trivial tasks.
+
 ## 0.1.10 — Experimental `engine="adaptive"`
 
 **Adaptive escalation, opt-in.** When a validator rejects an attempt, an

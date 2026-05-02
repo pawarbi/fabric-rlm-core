@@ -16,6 +16,7 @@ Two surfaces:
 
 from __future__ import annotations
 
+import os
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -214,13 +215,40 @@ class AdaptiveRunner:
     ) -> dict[str, Any]:
         if not self.feedback_injection or not attempts:
             return dict(inputs)
+        # Ablation switch: when PVR is disabled, fall back to the legacy
+        # "validator-feedback only" behavior so the A/B comparison is clean.
+        pvr_enabled = os.environ.get("FABRIC_RLM_PVR", "1") == "1"
         last = attempts[-1]
-        if last.verdict.feedback is None or last.verdict.passed:
+        if last.verdict.passed:
             return dict(inputs)
+
+        # REFLECT: synthesize feedback even for non-validator failures (worker
+        # timeout, exception, no-submit) so the next attempt sees what went
+        # wrong rather than starting blind. Disabled when FABRIC_RLM_PVR=0.
+        feedback = last.verdict.feedback
+        if not feedback:
+            if not pvr_enabled:
+                return dict(inputs)
+            payload = getattr(last.result, "payload", None)
+            failure_reason = getattr(last.result, "failure_reason", None)
+            submitted = bool(payload)
+            if not submitted and failure_reason:
+                feedback = f"Previous attempt did not submit (reason: {failure_reason})."
+            elif not submitted:
+                feedback = "Previous attempt did not submit a payload."
+            elif failure_reason:
+                feedback = f"Previous attempt was rejected (reason: {failure_reason})."
+            else:
+                feedback = "Previous attempt was rejected by the validator."
+
+        prior_payload = getattr(last.result, "payload", None)
         return inject_feedback(
             inputs,
-            feedback=last.verdict.feedback,
-            prior_payload=getattr(last.result, "payload", None),
+            feedback=feedback,
+            prior_payload=prior_payload,
+            rung=last.rung,
+            reasoning_effort=getattr(last.config, "reasoning_effort", None),
+            submitted=bool(prior_payload),
         )
 
     def _run_one(

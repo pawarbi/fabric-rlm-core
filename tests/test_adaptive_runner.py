@@ -326,9 +326,52 @@ def test_feedback_injection_appends_to_inputs() -> None:
         validator=verdict_validator,
     )
     runner.run({"question": "what?"})
-    assert "[ADAPTIVE: prior attempt rejected]" not in seen_inputs[0]["question"]
-    assert "[ADAPTIVE: prior attempt rejected]" in seen_inputs[1]["question"]
+    assert "## PRIOR_ATTEMPT_FEEDBACK" not in seen_inputs[0]["question"]
+    assert "## PRIOR_ATTEMPT_FEEDBACK" in seen_inputs[1]["question"]
     assert "what?" in seen_inputs[1]["question"]
+
+
+def test_feedback_injection_fires_on_no_submit_failure() -> None:
+    """REFLECT: synthesize feedback even when validator never ran."""
+    seen_inputs: list[dict] = []
+    seq = iter([False, True])
+
+    def responder(cfg, inputs):
+        seen_inputs.append(dict(inputs))
+        if next(seq):
+            return (
+                StubResult(
+                    submitted=True,
+                    payload={
+                        "answer": "x",
+                        "_verdict": ValidationVerdict(passed=True),
+                    },
+                    trajectory=StubTrajectory(turns=[StubTurn()]),
+                ),
+                None,
+            )
+        # First attempt: no submit, no validator feedback at all
+        return (
+            StubResult(
+                submitted=False,
+                payload=None,
+                trajectory=StubTrajectory(turns=[StubTurn()]),
+                failure_reason="worker_timeout",
+            ),
+            None,
+        )
+
+    runner = AdaptiveRunner(
+        rlm_factory=make_factory(responder),
+        policy=LadderPolicy(base_max_turns=5),
+        validator=verdict_validator,
+    )
+    runner.run({"question": "what?"})
+    # second attempt should have the REFLECT block synthesized from
+    # failure_reason rather than from the (absent) validator feedback
+    assert "## PRIOR_ATTEMPT_FEEDBACK" in seen_inputs[1]["question"]
+    assert "worker_timeout" in seen_inputs[1]["question"]
+    assert "submitted=False" in seen_inputs[1]["question"]
 
 
 # --- 7. Factory exception is captured as failed verdict, not propagated ----
