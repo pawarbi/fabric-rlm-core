@@ -9,13 +9,17 @@
 
 ## Strategies
 
-- **A `direct`** — Direct LLM (gpt-5 minimal)
-- **B `dspy_rlm`** — Fabric RLM + v7-dspy engine
-- **C `fabric_full`** — Fabric RLM + v6-custom (PVR full)
-- **D `fabric_reflect`** — Fabric RLM + v6-custom (PVR reflect_only)
-- **E `fabric_ladder`** — Fabric RLM + v6-custom + EffortLadder (minimal->low->medium)
+- **A `direct`** — `dspy.Predict` only — no RLM scaffold of any kind (this is the only non-`fabric_rlm` row)
+- **B `fabric_rlm_v7dspy`** (originally labeled `dspy_rlm`) — `fabric_rlm` with `inner_engine='v7-dspy'`. **Not** real `dspy.RLM` — DSPy ships no public `rlm` module. The v7-dspy engine is a DSPy-style executor *inside* `fabric_rlm`.
+- **C `fabric_full`** — `fabric_rlm` + `inner_engine='v6-custom'` + full PVR scaffold
+- **D `fabric_reflect`** — `fabric_rlm` + v6-custom + PVR reflect_only
+- **E `fabric_ladder`** — `fabric_rlm` + v6-custom + `EffortLadderPolicy` (minimal→low→medium)
 
-> Note: "DSPy RLM" in the user request was interpreted as fabric_rlm with `inner_engine='v7-dspy'` because DSPy itself ships no `rlm` module. Strategy E originally targeted `EffortBanditPolicy`, but the bandit hung repeatedly during smoke testing on first-question warmup; we substituted the deterministic `EffortLadderPolicy` (minimal→low→medium) which exercises the same adaptive escalation code path with predictable behavior.
+So B/C/D/E are **all `fabric_rlm`**, differing only in inner engine and orchestration. A is the only baseline outside `fabric_rlm`.
+
+> Note: actual `dspy.RLM` (which uses Pyodide/WASM in-browser) was **not** benchmarked here — the Fabric Spark image has no WASM runtime, and a local-only `dspy.RLM` row was never wired up. Treat B as "fabric_rlm using its DSPy-style inner engine," not as a real DSPy comparison.
+
+> Strategy E originally targeted `EffortBanditPolicy`, but the bandit hung repeatedly during smoke testing on first-question warmup; we substituted the deterministic `EffortLadderPolicy` (minimal→low→medium) which exercises the same adaptive escalation code path with predictable behavior.
 
 
 ## Run health check
