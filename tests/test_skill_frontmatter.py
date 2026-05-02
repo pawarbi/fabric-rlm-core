@@ -171,6 +171,37 @@ def test_pvr_env_var_strips_clauses_when_disabled(monkeypatch) -> None:
 def test_pvr_env_var_preserves_clauses_by_default(monkeypatch) -> None:
     from fabric_rlm.skill_loader import SkillLoader
     monkeypatch.delenv('FABRIC_RLM_PVR', raising=False)
+    monkeypatch.delenv('FABRIC_RLM_PVR_MODE', raising=False)
+    s = SkillLoader().load('core')
+    assert 'PLAN before action' in s.content
+    assert 'VERIFY before SUBMIT' in s.content
+    assert 'Honor PRIOR_ATTEMPT_FEEDBACK' in s.content
+
+
+def test_pvr_mode_reflect_only_keeps_feedback_clause(monkeypatch) -> None:
+    from fabric_rlm.skill_loader import SkillLoader
+    monkeypatch.setenv('FABRIC_RLM_PVR_MODE', 'reflect_only')
+    monkeypatch.delenv('FABRIC_RLM_PVR', raising=False)
+    s = SkillLoader().load('core')
+    assert 'PLAN before action' not in s.content
+    assert 'VERIFY before SUBMIT' not in s.content
+    # The point of reflect_only: keep the Honor-feedback clause.
+    assert 'Honor PRIOR_ATTEMPT_FEEDBACK' in s.content
+    assert 'Single SUBMIT' in s.content
+
+
+def test_pvr_mode_off_overrides_legacy_var(monkeypatch) -> None:
+    from fabric_rlm.skill_loader import SkillLoader
+    monkeypatch.setenv('FABRIC_RLM_PVR_MODE', 'off')
+    monkeypatch.setenv('FABRIC_RLM_PVR', '1')  # legacy says full; new says off
+    s = SkillLoader().load('core')
+    assert 'Honor PRIOR_ATTEMPT_FEEDBACK' not in s.content
+
+
+def test_pvr_mode_full_explicit(monkeypatch) -> None:
+    from fabric_rlm.skill_loader import SkillLoader
+    monkeypatch.setenv('FABRIC_RLM_PVR_MODE', 'full')
+    monkeypatch.setenv('FABRIC_RLM_PVR', '0')  # legacy says off; new says full wins
     s = SkillLoader().load('core')
     assert 'PLAN before action' in s.content
     assert 'VERIFY before SUBMIT' in s.content

@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-WHEEL = "fabric_rlm-0.1.11.dev4-py3-none-any.whl"
+WHEEL = "fabric_rlm-0.1.11.dev5-py3-none-any.whl"
 WHEEL_PATH = f"/lakehouse/default/Files/fabric_rlm_longcot/wheels/{WHEEL}"
 
 cells = [
@@ -11,10 +11,13 @@ cells = [
         '{"vCores": 4, "defaultLakehouse": {"name": "diagnostic", "id": "9d10bce5-1edc-4875-83c4-ac0a98a02775", "workspaceId": "82ad2591-974a-4ad4-ace6-e24879274a4b"}}',
     ]},
     {"cell_type":"markdown","metadata":{},"source":[
-        "# fabric-rlm 0.1.11.dev2 — **PVR OOD ablation** (RFP extraction + Spark log triage)\n",
+        "# fabric-rlm 0.1.11.dev5 — **3-way PVR ablation** (off vs reflect_only vs full)\n",
         "\n",
-        "Two structured multi-field extraction tasks well outside the math/CS-hard training distribution.\n",
-        "Each runs **OFF** (`FABRIC_RLM_PVR=0`) and **ON** with **fresh bandit state**.\n",
+        "Tests whether dropping PLAN/VERIFY skill scaffolding while keeping the\n",
+        "REFLECT mechanism (Honor PRIOR_ATTEMPT_FEEDBACK + `_with_feedback`\n",
+        "synthesis + runtime reflection turn) preserves the PVR wins. Each case\n",
+        "runs under `FABRIC_RLM_PVR_MODE` ∈ {off, reflect_only, full} with **fresh\n",
+        "bandit state** per condition.\n",
     ]},
     {"cell_type":"code","metadata":{},"execution_count":None,"outputs":[],"source":[
         "import os, sys, json, time, traceback, uuid, platform as _platform, subprocess\n",
@@ -127,15 +130,16 @@ cells = [
         "base_lm = FabricLM('gpt-5', reasoning_effort='minimal', cache=False)\n",
         "stage('lm_built', base='gpt-5', start_effort='minimal')\n",
         "\n",
-        "CONDITIONS = [('off','0'), ('on','1')]\n",
+        "CONDITIONS = [('off','off'), ('reflect_only','reflect_only'), ('on','full')]\n",
         "ablation = summary['ablation']\n",
         "\n",
         "for case in CASES:\n",
         "    case_record = {'id': case['id'], 'template': case['template'],\n",
         "                   'difficulty': case['difficulty'], 'conditions': {}}\n",
         "    ablation['cases'].append(case_record); write_summary()\n",
-        "    for cond_name, env_val in CONDITIONS:\n",
-        "        os.environ['FABRIC_RLM_PVR'] = env_val\n",
+        "    for cond_name, mode_val in CONDITIONS:\n",
+        "        os.environ['FABRIC_RLM_PVR_MODE'] = mode_val\n",
+        "        os.environ.pop('FABRIC_RLM_PVR', None)\n",
         "        state = BanditState()\n",
         "        try:\n",
         "            validator = make_validator(case)\n",
@@ -196,14 +200,14 @@ cells = [
         "\n",
         "ab_table = []\n",
         "for c in ablation['cases']:\n",
-        "    off = c['conditions'].get('off', {}); on = c['conditions'].get('on', {})\n",
-        "    ab_table.append({'case': c['id'], 'difficulty': c['difficulty'],\n",
-        "        'off_passed': off.get('passed'), 'on_passed': on.get('passed'),\n",
-        "        'off_attempts': off.get('n_attempts'), 'on_attempts': on.get('n_attempts'),\n",
-        "        'off_elapsed': round(off.get('elapsed_seconds') or 0, 1),\n",
-        "        'on_elapsed': round(on.get('elapsed_seconds') or 0, 1),\n",
-        "        'off_tokens': off.get('total_prompt_tokens',0)+off.get('total_completion_tokens',0),\n",
-        "        'on_tokens':  on.get('total_prompt_tokens',0)+on.get('total_completion_tokens',0)})\n",
+        "    row = {'case': c['id'], 'difficulty': c['difficulty']}\n",
+        "    for cond_name in ('off','reflect_only','on'):\n",
+        "        cd = c['conditions'].get(cond_name, {})\n",
+        "        row[cond_name+'_passed'] = cd.get('passed')\n",
+        "        row[cond_name+'_attempts'] = cd.get('n_attempts')\n",
+        "        row[cond_name+'_elapsed'] = round(cd.get('elapsed_seconds') or 0, 1)\n",
+        "        row[cond_name+'_tokens'] = (cd.get('total_prompt_tokens',0) or 0) + (cd.get('total_completion_tokens',0) or 0)\n",
+        "    ab_table.append(row)\n",
         "summary['ab_table'] = ab_table; write_summary()\n",
         "stage('ablation_done', cases=len(ab_table))\n",
         "for r in ab_table: print(r)\n",

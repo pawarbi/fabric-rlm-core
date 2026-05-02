@@ -217,7 +217,12 @@ class AdaptiveRunner:
             return dict(inputs)
         # Ablation switch: when PVR is disabled, fall back to the legacy
         # "validator-feedback only" behavior so the A/B comparison is clean.
-        pvr_enabled = os.environ.get("FABRIC_RLM_PVR", "1") == "1"
+        # In `reflect_only` mode we keep synthesis ON (that *is* the point).
+        mode = os.environ.get("FABRIC_RLM_PVR_MODE", "").strip().lower()
+        if mode in ("full", "off", "reflect_only"):
+            pvr_enabled = mode != "off"
+        else:
+            pvr_enabled = os.environ.get("FABRIC_RLM_PVR", "1") == "1"
         last = attempts[-1]
         if last.verdict.passed:
             return dict(inputs)

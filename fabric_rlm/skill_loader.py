@@ -67,8 +67,12 @@ class SkillLoader:
     def load(self, name: str) -> Skill:
         safe_name = normalize_skill_name(name)
         content = self._read_skill_text(safe_name)
-        if safe_name == "core" and os.environ.get("FABRIC_RLM_PVR", "1") == "0":
-            content = _strip_pvr_clauses(content)
+        if safe_name == "core":
+            mode = _resolve_pvr_mode()
+            if mode == "off":
+                content = _strip_pvr_clauses(content)
+            elif mode == "reflect_only":
+                content = _strip_plan_verify_clauses(content)
         frontmatter, body_after_fm = _split_frontmatter(content)
         title, summary, legacy_deps = _parse_metadata(safe_name, body_after_fm)
         verifier_source = extract_verifier_source(content)
@@ -197,6 +201,30 @@ _PVR_CLAUSE_RE = re.compile(
 )
 
 
+_PLAN_VERIFY_CLAUSE_RE = re.compile(
+    r"^\d+\.\s+\*\*(?:PLAN before action|VERIFY before SUBMIT)\.?\*\*"
+    r".*?(?=^\d+\.\s+\*\*|^## |\Z)",
+    re.DOTALL | re.MULTILINE,
+)
+
+
+_VALID_PVR_MODES = ("full", "off", "reflect_only")
+
+
+def _resolve_pvr_mode() -> str:
+    """Resolve effective PVR mode from env vars.
+
+    Reads ``FABRIC_RLM_PVR_MODE`` first (full|off|reflect_only). Falls back
+    to legacy ``FABRIC_RLM_PVR`` (0=off, 1=full) for backwards compatibility.
+    Defaults to ``full``.
+    """
+    mode = os.environ.get("FABRIC_RLM_PVR_MODE", "").strip().lower()
+    if mode in _VALID_PVR_MODES:
+        return mode
+    legacy = os.environ.get("FABRIC_RLM_PVR", "1").strip()
+    return "off" if legacy == "0" else "full"
+
+
 def _strip_pvr_clauses(content: str) -> str:
     """Remove the PLAN/VERIFY/REFLECT clauses from core.md when PVR is disabled.
 
@@ -204,6 +232,16 @@ def _strip_pvr_clauses(content: str) -> str:
     body (single-SUBMIT, no-echo-prompt, advice-not-output) stays in place.
     """
     return _PVR_CLAUSE_RE.sub("", content)
+
+
+def _strip_plan_verify_clauses(content: str) -> str:
+    """Remove only the PLAN/VERIFY clauses, keeping ``Honor PRIOR_ATTEMPT_FEEDBACK``.
+
+    Used by the ``reflect_only`` ablation mode to test whether REFLECT
+    alone delivers the PVR wins without the PLAN/VERIFY scaffolding the
+    model ignores at minimal reasoning effort.
+    """
+    return _PLAN_VERIFY_CLAUSE_RE.sub("", content)
 
 
 def extract_verifier_source(content: str) -> Optional[str]:
