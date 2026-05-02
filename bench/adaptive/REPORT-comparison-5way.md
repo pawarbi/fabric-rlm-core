@@ -9,17 +9,28 @@
 
 ## Strategies
 
-- **A `direct`** — `dspy.Predict` only — no RLM scaffold of any kind (this is the only non-`fabric_rlm` row)
-- **B `fabric_rlm_v7dspy`** (originally labeled `dspy_rlm`) — `fabric_rlm` with `inner_engine='v7-dspy'`. **Not** real `dspy.RLM` — DSPy ships no public `rlm` module. The v7-dspy engine is a DSPy-style executor *inside* `fabric_rlm`.
-- **C `fabric_full`** — `fabric_rlm` + `inner_engine='v6-custom'` + full PVR scaffold
-- **D `fabric_reflect`** — `fabric_rlm` + v6-custom + PVR reflect_only
-- **E `fabric_ladder`** — `fabric_rlm` + v6-custom + `EffortLadderPolicy` (minimal→low→medium)
+`fabric_rlm` ships **two inner executors** that drive the LLM-loop for a question. The names `v6-custom` and `v7-dspy` are the public-API string identifiers (`engine=` / `inner_engine=` on `RLM(...)`); friendlier shorthand below in **bold**:
 
-So B/C/D/E are **all `fabric_rlm`**, differing only in inner engine and orchestration. A is the only baseline outside `fabric_rlm`.
+- **`v6-custom`** → call this **`custom-loop`**. Native `fabric_rlm` REPL + skills + PVR scaffold; runs in-process; no subprocess, no WASM.
+- **`v7-dspy`** → call this **`dspy-loop`**. `fabric_rlm`'s DSPy-style executor; spawns a Python worker subprocess that uses `dspy.Predict` + DSPy signatures. Still **not** the same as `dspy.RLM` (which runs in Pyodide/WASM and is not benchmarked here).
 
-> Note: actual `dspy.RLM` (which uses Pyodide/WASM in-browser) was **not** benchmarked here — the Fabric Spark image has no WASM runtime, and a local-only `dspy.RLM` row was never wired up. Treat B as "fabric_rlm using its DSPy-style inner engine," not as a real DSPy comparison.
+The 5 conditions:
+
+| # | Friendly label | Engine | Wrapper | Description |
+|---|---|---|---|---|
+| A | `direct-dspy` | (none) | none | Single `dspy.Predict` call. The only non-`fabric_rlm` row. |
+| B | `fabric_dspy-loop` | `v7-dspy` | full PVR | `fabric_rlm` running its dspy-loop executor (not real `dspy.RLM`) |
+| C | `fabric_custom-loop_full` | `v6-custom` | full PVR | `fabric_rlm` native loop with full Plan/Verify/Reflect |
+| D | `fabric_custom-loop_reflect` | `v6-custom` | reflect-only | `fabric_rlm` native loop, reflect-only scaffold |
+| E | `fabric_custom-loop_ladder` | `v6-custom` | EffortLadder | `fabric_rlm` native loop wrapped in `EffortLadderPolicy` (minimal→low→medium) |
+
+So B/C/D/E are **all `fabric_rlm`**, differing only in inner executor (`dspy-loop` vs `custom-loop`) and orchestration scaffold. A is the only baseline outside `fabric_rlm`.
+
+> Note: real `dspy.RLM` (Pyodide/WASM in-browser) was **not** benchmarked — the Fabric Spark image has no WASM runtime, and a local-only `dspy.RLM` row was never wired up. Treat B as "`fabric_rlm` using its `dspy-loop` executor," not as a real DSPy-RLM comparison.
 
 > Strategy E originally targeted `EffortBanditPolicy`, but the bandit hung repeatedly during smoke testing on first-question warmup; we substituted the deterministic `EffortLadderPolicy` (minimal→low→medium) which exercises the same adaptive escalation code path with predictable behavior.
+
+> The legacy `v6-custom`/`v7-dspy` strings remain the public-API names (used wherever `engine=` or `inner_engine=` appears in `fabric_rlm`); the **friendly labels above are documentation-only** to make this report easier to read. The library name change is deferred to a future major version because it is a breaking API change.
 
 
 ## Run health check
