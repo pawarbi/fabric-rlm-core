@@ -396,6 +396,32 @@ class RLM:
         shared_loader = inner_kwargs.get("skill_loader") or self.skill_loader
 
         def factory(attempt_cfg):
+            # Decompose-phase rungs bypass the standard inner RLM loop entirely
+            # — they run a depth-1 decompose -> parallel sub-solve -> synthesize
+            # pipeline. Universal building block; works on any prompt key.
+            if getattr(attempt_cfg, "decompose_phase", False):
+                from .experimental.decompose_engine import DecomposeRLMAdapter
+
+                # Resolve the LM the same way the standard branch would.
+                lm_for_decompose = (
+                    attempt_cfg.lm_instance
+                    if attempt_cfg.lm_instance is not None
+                    else attempt_cfg.lm_spec
+                )
+                # Honor reasoning_effort if the LM supports .copy(...)
+                if attempt_cfg.reasoning_effort and hasattr(lm_for_decompose, "copy"):
+                    try:
+                        lm_for_decompose = lm_for_decompose.copy(
+                            reasoning_effort=attempt_cfg.reasoning_effort
+                        )
+                    except Exception:
+                        pass
+                return DecomposeRLMAdapter(
+                    lm=lm_for_decompose,
+                    sub_lm=lm_for_decompose,
+                    max_subs=getattr(attempt_cfg, "decompose_max_subs", 6),
+                )
+
             kwargs = dict(inner_kwargs)
             kwargs["skill_loader"] = shared_loader
             kwargs["engine"] = inner_engine

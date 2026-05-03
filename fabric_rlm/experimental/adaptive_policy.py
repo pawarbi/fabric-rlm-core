@@ -79,6 +79,11 @@ class AttemptConfig:
     parallel_rollouts: int = 1
     inner_engine: str = "v6-custom"
     failure_feedback: str | None = None
+    # When True, runtime should bypass the standard inner RLM loop and
+    # invoke decompose_then_synthesize against the raw question instead.
+    # Universal building block — task-agnostic — see SPEC-decompose-rung.md.
+    decompose_phase: bool = False
+    decompose_max_subs: int = 6
 
 
 # ----------------------------------------------------------------------------
