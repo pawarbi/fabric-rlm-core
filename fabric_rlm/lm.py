@@ -221,6 +221,21 @@ class _RefreshingLM:
     def kwargs(self) -> dict[str, Any]:
         return self._inner.kwargs
 
+    def copy(self, **overrides: Any) -> "_RefreshingLM":
+        """Return a new wrapper around `self._inner.copy(**overrides)`.
+
+        The runtime calls ``lm.copy(reasoning_effort=...)`` to clone an LM
+        per attempt without mutating the shared instance. If we let this
+        fall through to ``__getattr__`` it would return a plain ``dspy.LM``
+        and silently strip our auth-refresh capability — long Fabric runs
+        would then start failing with 401 around the AAD token expiry.
+        """
+        new = _RefreshingLM.__new__(_RefreshingLM)
+        new._inner = self._inner.copy(**overrides)
+        new._token_provider = self._token_provider
+        new._token_header = self._token_header
+        return new
+
     def _refresh(self) -> bool:
         if self._token_provider is None:
             return False

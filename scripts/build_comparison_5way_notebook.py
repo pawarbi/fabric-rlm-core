@@ -19,7 +19,7 @@ import argparse
 import json
 from pathlib import Path
 
-WHEEL = "fabric_rlm-0.1.11.dev7+integration-py3-none-any.whl"
+WHEEL = "fabric_rlm-0.1.11.dev8+integration-py3-none-any.whl"
 WHEEL_PATH = f"/lakehouse/default/Files/fabric_rlm_longcot/wheels/{WHEEL}"
 DATASET_PATH = "/lakehouse/default/Files/fabric_rlm_longcot/datasets/longcot_cs_hard_holdout25.jsonl"
 

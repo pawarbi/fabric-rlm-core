@@ -177,3 +177,35 @@ def test_auth_detection_ignores_unrelated_401_in_message() -> None:
     with pytest.raises(RuntimeError):
         lm("hi")
     assert refresh_calls == []  # not detected as auth — class name didn't match
+
+
+def test_copy_preserves_wrapper_and_refresh_capability() -> None:
+    """REGRESSION: lm.copy(reasoning_effort=...) must NOT strip the auth-refresh wrapper.
+
+    Pre-fix bug: `_RefreshingLM.copy()` fell through `__getattr__` to
+    `self._inner.copy(...)`, returning a plain `dspy.LM`. The runtime
+    calls `lm.copy(reasoning_effort=...)` per attempt to clone the LM
+    without mutating the shared instance — losing the wrapper meant
+    long-running Fabric jobs (>1 hour) silently lost AAD-refresh and
+    started failing with 401 around the token's natural expiry.
+    """
+    refresh_calls: list[int] = []
+
+    def provider() -> str:
+        refresh_calls.append(1)
+        return f"Bearer fresh-{len(refresh_calls)}"
+
+    err = _FakeAuthError("AuthException - Error code: 401 - User Aad Token is expired")
+    lm = _ScriptedLM(
+        script=[err, ["recovered"]],
+        token_provider=provider,
+        extra_headers={"Authorization": "Bearer stale"},
+    )
+    cloned = lm.copy(temperature=1.0)
+    assert isinstance(cloned, _RefreshingLM), \
+        f"copy() returned {type(cloned).__name__}, expected _RefreshingLM"
+    # Cloned wrapper carries the same provider + header config
+    assert cloned._token_provider is provider
+    assert cloned._token_header == "Authorization"
+    # And the inner LM was actually copied (not the same instance)
+    assert cloned._inner is not lm._inner
