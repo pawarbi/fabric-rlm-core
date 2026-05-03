@@ -195,3 +195,38 @@ Coverage target: ≥85% on `decompose_rung.py`.
 - **Phase 4 (Implement, conditional on micro-bench)**: TDD per
   `.github/skills/test-driven-development/SKILL.md`. **STOP at micro-bench
   failure and write the negative-result report.**
+
+## Generalization
+
+Decompose-then-synthesize is a general reasoning pattern; the rung
+implementation must not bake in CS-hard assumptions:
+
+- **Decomposition prompt is shape-agnostic.** The rung-5 prompt asks the
+  model to "list independent sub-problems and an aggregator instruction"
+  — no mention of "solution = [...]", JSON, integer lists, or any other
+  task-specific shape. The model invents the sub-problem shape from the
+  parent prompt context.
+- **`sub_lm` is the same LM as the parent.** No special-cased model per
+  task family. Same `FabricLM` instance, same effort, same skills.
+  Generalisation is a side-effect of using a general-purpose LM.
+- **Synthesis prompt is task-blind.** The aggregator prompt is the
+  generic "given these N partial solutions and the original question,
+  produce the final answer" — it does not parse partials, does not
+  template-match, does not assume their shape.
+- **Validator stays pluggable.** Rung 5 uses whatever `validator=`
+  callable the caller passed to `RLM(adaptive=dict(validator=...))`,
+  exactly like rungs 0–4. No bespoke "decompose validator". This is what
+  makes the rung work for arbitrary downstream tasks (Spark log RCA,
+  multi-doc QA, planning, etc.) — not just CS-hard.
+- **Micro-bench gate uses a synthetic compositional task** (e.g.,
+  multi-step arithmetic chains generated programmatically) rather than
+  a hand-picked CS-hard subset. This protects against the rung being
+  over-fit to one template's structure. If the synthetic micro-bench
+  passes, then we run the CS-hard validation as a secondary check.
+- **Cost-vector update applies to any task.** The bandit's `_RUNG_COST`
+  vector is extended by one entry — it does not learn per-template cost
+  weights for rung 5. Same prior arms across all tasks.
+- **Disable switch.** Strategy H (rung 5 enabled) ships behind the
+  existing `effort_ladder=` constructor arg, so any user on any task
+  family can opt out by passing the original 5-rung tuple.
+
