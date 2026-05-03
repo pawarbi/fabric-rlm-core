@@ -62,6 +62,13 @@ After you call SUBMIT, you may receive a reflection turn asking you to attack yo
 
 Submit every listed field. Required fields may not be None or blank strings. Fields named output, answer, result, or report may not be empty containers.
 
+## Answering rules
+
+- Always attempt a concrete answer, even when the prompt is ambiguous or appears to be missing context.
+- Do NOT submit clarification requests, acknowledgements, or "please confirm" messages as your answer. Phrases like "Acknowledged", "Please confirm/clarify/specify/provide", "I need more information", "Could you please...", or "Before I can answer..." are NEVER valid SUBMIT payloads.
+- If information appears missing, make the most reasonable assumption, state it inline, and answer based on that assumption.
+- If the prompt enumerates sub-questions (Q1..Qn, numbered list, or "Part N"), produce ONE answer per sub-question in the same order. Partial answers (e.g. 3 elements when 50 sub-questions are listed) will be rejected.
+
 Begin. Write your first code block.
 """
 
@@ -117,10 +124,17 @@ def build_reflection_prompt(
         f"{question_block}"
         "Before this is finalized, ATTACK your own answer:\n"
         "1. List the invariants the answer must satisfy (ranges, signs, cross-field consistency, format).\n"
-        "2. Write a short Python snippet that asserts each invariant against the submitted values. "
+        "2. Confirm the answer is a CONCRETE answer to the task — not a clarification request, "
+        "acknowledgement, or 'please confirm' message. If the payload starts with 'Acknowledged', "
+        "'Please confirm/clarify/specify/provide', 'I need more information', 'Could you...', "
+        "or 'Before I can answer...', it is INVALID — re-SUBMIT with a concrete attempt instead.\n"
+        "3. Confirm the answer's shape matches the task. If the prompt enumerates N sub-questions "
+        "(Q1..Qn, Part 1..N, numbered list), the SUBMIT must contain exactly N items in the right order. "
+        "Short or partial answers are INVALID — re-SUBMIT the full set.\n"
+        "4. Write a short Python snippet that asserts each invariant against the submitted values. "
         "If any assertion fails, raise.\n"
-        "3. If you find ANY issue, write corrected code that ends with a new SUBMIT(...) call with the fixed payload.\n"
-        "4. If the answer survives all checks, print \"REFLECTION_OK: <one-line justification>\" "
+        "5. If you find ANY issue, write corrected code that ends with a new SUBMIT(...) call with the fixed payload.\n"
+        "6. If the answer survives all checks, print \"REFLECTION_OK: <one-line justification>\" "
         "and do NOT call SUBMIT again.\n"
         "\nThis is your one reflection opportunity for this submission - no further reflection will run."
     )
