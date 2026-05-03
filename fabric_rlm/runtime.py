@@ -510,6 +510,34 @@ class RLM:
                 stacklevel=3,
             )
 
+        # Optional task classifier — one-shot pre-run hook seeds bandit priors
+        # from a single low-effort LM call so the bandit doesn't waste its
+        # cold-start observations on rung 0 for obviously-hard questions.
+        # Universal: works on any prompt; classifier output classes are
+        # reasoning-shape, not domain. Best-effort — failure degrades to
+        # ordinary cold-start behaviour.
+        pre_run_hook = None
+        if cfg.get("enable_task_classifier"):
+            try:
+                from .experimental.task_classifier import make_classifier_pre_run
+
+                classifier_lm = cfg.get("task_classifier_lm")
+                if classifier_lm is None:
+                    # Fall back to the same LM the inner engine uses
+                    classifier_lm = self._adaptive_inner_kwargs.get("lm")
+                if classifier_lm is not None:
+                    pre_run_hook = make_classifier_pre_run(
+                        classifier_lm=classifier_lm,
+                        question_input_key=cfg.get("task_classifier_input_key"),
+                        prior_table=cfg.get("task_classifier_prior_table"),
+                        overwrite_existing=bool(
+                            cfg.get("task_classifier_overwrite_existing", False)
+                        ),
+                        on_classify=cfg.get("on_classify"),
+                    )
+            except Exception:
+                pre_run_hook = None
+
         runner = AdaptiveRunner(
             rlm_factory=factory,
             policy=policy,
@@ -517,6 +545,7 @@ class RLM:
             validator=validator,  # AdaptiveRunner uses its default when None
             on_attempt=cfg.get("on_attempt"),
             feedback_injection=policy_kwargs.get("feedback_injection", True),
+            pre_run=pre_run_hook,
         )
         adaptive_result = runner.run(bound_inputs)
         # AdaptiveRunner already attaches metadata to the winning trajectory

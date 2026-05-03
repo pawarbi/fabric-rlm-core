@@ -92,6 +92,7 @@ class AdaptiveRunner:
         validator: Callable[[Any], Any] | None = None,
         on_attempt: Callable[[AttemptRecord], None] | None = None,
         feedback_injection: bool = True,
+        pre_run: Callable[[Mapping[str, Any], "AdaptiveRunner"], None] | None = None,
     ):
         self.rlm_factory = rlm_factory
         self.policy = policy or LadderPolicy()
@@ -99,12 +100,23 @@ class AdaptiveRunner:
         self.validator = validator or _default_validator()
         self.on_attempt = on_attempt
         self.feedback_injection = feedback_injection
+        # One-shot hook fired before the first decision. Used by the task
+        # classifier integration to seed bandit priors from a single LM call,
+        # but generic — any caller can plug in custom warm-up logic.
+        self.pre_run = pre_run
 
     def run(self, inputs: Mapping[str, Any] | None = None, **kwargs: Any) -> AdaptiveResult:
         run_inputs = dict(inputs or {})
         attempts: list[AttemptRecord] = []
         turns_used_so_far = 0
         wall_start = time.perf_counter()
+
+        if self.pre_run is not None:
+            try:
+                self.pre_run(run_inputs, self)
+            except Exception:
+                # pre_run is best-effort — failures must not derail the run
+                pass
 
         verdict, next_config = self.policy.next_decision(attempts)
         stop_reason = ""
