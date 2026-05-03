@@ -189,9 +189,97 @@ def seed_priors(
     return True
 
 
+def make_classifier_pre_run(
+    *,
+    classifier_lm: Any,
+    question_input_key: str | None = None,
+    prior_table: dict["TaskClass", dict[int, tuple[float, float]]] | None = None,
+    overwrite_existing: bool = False,
+    on_classify: Any | None = None,
+) -> Any:
+    """Build an :class:`AdaptiveRunner` ``pre_run`` hook that seeds priors.
+
+    Universal — extracts question text via duck-typed key probing
+    (question/input/prompt/task/query/problem), classifies it with one
+    low-effort LM call, then writes per-rung Beta priors into the bandit
+    state under the policy's existing ``task_key``.
+
+    Behaviour:
+
+    * The hook is **best-effort**: any exception is swallowed by
+      :class:`AdaptiveRunner.run`, so a failing classifier degrades to
+      ordinary cold-start ``Beta(1, 1)`` behaviour rather than crashing
+      the run.
+    * **Idempotent**: ``seed_priors`` only writes when the bandit has no
+      prior observations for the task_key (unless ``overwrite_existing``).
+      Safe to attach to a runner that's reused across tasks.
+    * **Decoupled from the bandit**: the hook reads ``runner.policy.task_key``
+      and ``runner.policy.state``. Policies that don't expose those
+      attributes (vanilla :class:`LadderPolicy`) are simply skipped.
+    * If ``on_classify`` is provided it receives ``(task_class, task_key)``
+      after a successful classify — useful for logging.
+
+    Returns a callable suitable for ``AdaptiveRunner(pre_run=...)``.
+    """
+
+    # Same probe order as decompose_engine — keep consistent for callers.
+    _DEFAULT_KEYS = (
+        "question",
+        "input",
+        "prompt",
+        "task",
+        "query",
+        "problem",
+    )
+
+    def _extract(inputs: Any) -> str:
+        if not inputs:
+            return ""
+        if question_input_key and question_input_key in inputs and isinstance(
+            inputs[question_input_key], str
+        ):
+            return inputs[question_input_key]
+        for k in _DEFAULT_KEYS:
+            v = inputs.get(k) if hasattr(inputs, "get") else None
+            if isinstance(v, str) and v.strip():
+                return v
+        for v in (inputs.values() if hasattr(inputs, "values") else ()):
+            if isinstance(v, str) and v.strip():
+                return v
+        return ""
+
+    def hook(inputs: Any, runner: Any) -> None:
+        policy = getattr(runner, "policy", None)
+        if policy is None:
+            return
+        task_key = getattr(policy, "task_key", "")
+        state = getattr(policy, "state", None)
+        if not task_key or state is None:
+            return
+        question = _extract(inputs)
+        if not question:
+            return
+        task_class = classify(question, classifier_lm)
+        seed_priors(
+            state,
+            task_key,
+            task_class,
+            prior_table=prior_table,
+            overwrite_existing=overwrite_existing,
+        )
+        if on_classify is not None:
+            try:
+                on_classify(task_class, task_key)
+            except Exception:
+                pass
+
+    return hook
+
+
 __all__ = [
     "TaskClass",
     "DEFAULT_CLASS_PRIORS",
     "classify",
     "seed_priors",
+    "make_classifier_pre_run",
 ]
