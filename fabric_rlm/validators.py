@@ -253,6 +253,157 @@ def assert_predicate(predicate: Callable[[Mapping[str, Any]], bool],
     return v
 
 
+# ---------------------------------------------------------------------------
+# Universal multi-part question guards
+# ---------------------------------------------------------------------------
+# These primitives target a class of failure that recurs across any task
+# family with enumerated sub-questions (CS-hard benchmarks, RFP responses,
+# multi-section reports, code-review checklists, etc.): the model "answers"
+# a 50-part question with a 3-element list and the validator passes it.
+
+_ENUM_PATTERNS = (
+    # Q1, Q2, ..., Qn (case-insensitive)
+    re.compile(r"\bQ\s*(\d+)\s*[:.\)]", re.IGNORECASE),
+    # 1., 2., ... at line start (markdown / numbered lists)
+    re.compile(r"(?m)^\s*(\d+)[.\)]\s+\S"),
+    # Question 1, Question 2, ...
+    re.compile(r"\bQuestion\s+(\d+)\b", re.IGNORECASE),
+    # Part 1, Part 2, ...
+    re.compile(r"\bPart\s+(\d+)\b", re.IGNORECASE),
+    # Step 1, Step 2, ...
+    re.compile(r"\bStep\s+(\d+)\b", re.IGNORECASE),
+)
+
+
+def infer_subquestion_count(question_text: str) -> int:
+    """Infer how many sub-questions a prompt enumerates.
+
+    Universal heuristic — works for any task that uses Q1..Qn / 1. 2. 3. /
+    Question N / Part N / Step N enumeration. Returns 0 when no enumeration
+    is detected (caller should treat 0 as "unknown shape, no guard").
+
+    Picks the *largest* contiguous run starting at 1 across all detected
+    schemes — so "Q1..Q50" wins over a stray "Step 3" elsewhere in the
+    prompt.
+    """
+    if not question_text:
+        return 0
+    best = 0
+    for rx in _ENUM_PATTERNS:
+        nums = sorted({int(m) for m in rx.findall(question_text)})
+        if not nums or nums[0] != 1:
+            continue
+        run = 1
+        for prev, cur in zip(nums, nums[1:]):
+            if cur == prev + 1:
+                run += 1
+            else:
+                break
+        if run > best:
+            best = run
+    return best
+
+
+def assert_answers_all_subquestions(
+    key: str,
+    question_text: str,
+    *,
+    min_count: int | None = None,
+) -> Validator | None:
+    """Reject submissions that under-answer an enumerated multi-part prompt.
+
+    Inspects ``question_text`` for enumeration (Q1..Qn, 1./2./3., Question N,
+    Part N, Step N) and, when at least ``min_count`` (default 3) sub-parts
+    are detected, builds a validator that rejects ``payload[key]`` when it
+    is a list/tuple/dict shorter than the inferred count.
+
+    Returns ``None`` (silently no-op) when no enumeration is detected — so
+    you can chain it unconditionally:
+
+        validator = chain(
+            signature_validator(Sig),
+            assert_answers_all_subquestions("answer", question_text=q),
+        )
+
+    Universal: no template names, no hard-coded counts. The actual count
+    comes from the prompt itself.
+    """
+    threshold = 3 if min_count is None else min_count
+    expected = infer_subquestion_count(question_text or "")
+    if expected < threshold:
+        return None
+
+    def v(payload: Mapping[str, Any]) -> None:
+        val = _resolve(payload, key)
+        if val is _MISSING or val is None:
+            return  # let other validators report missing-key
+        # We can size lists, tuples, dicts, and parsable JSON strings.
+        if isinstance(val, str):
+            try:
+                import json as _json
+                parsed = _json.loads(val)
+                if isinstance(parsed, (list, tuple, dict)):
+                    val = parsed
+            except (ValueError, TypeError):
+                pass
+        if isinstance(val, (list, tuple)):
+            actual = len(val)
+        elif isinstance(val, dict):
+            actual = len(val)
+        else:
+            return  # scalar — no shape to check
+        assert actual >= expected, (
+            f"'{key}' contains {actual} items but the prompt enumerates "
+            f"{expected} sub-questions. Submit one answer per sub-question "
+            f"(in order), not a partial or summary list."
+        )
+
+    return v
+
+
+_CLARIFICATION_OPENERS = (
+    re.compile(r"^\s*acknowledg", re.IGNORECASE),
+    re.compile(r"^\s*please\s+(confirm|clarify|provide|share|specify)", re.IGNORECASE),
+    re.compile(r"^\s*(could|can|would)\s+you\s+(please\s+)?(confirm|clarify|provide|share|specify)", re.IGNORECASE),
+    re.compile(r"^\s*i\s+(need|require|would\s+need|would\s+require)\s+(more|additional|further|the)\s+", re.IGNORECASE),
+    re.compile(r"^\s*to\s+(answer|proceed|continue)[, ].{0,40}\bplease\b", re.IGNORECASE),
+    re.compile(r"^\s*before\s+(i\s+)?(can\s+)?(answer|proceed|begin)", re.IGNORECASE),
+)
+
+
+def assert_not_clarification_request(key: str) -> Validator:
+    """Reject submissions whose answer is actually a clarification request.
+
+    Universal: looks at the *opening* of the answer string for canonical
+    "I need more information" / "Please confirm" / "Acknowledged. ..."
+    patterns. Anything matching is rejected so the verifier loop can
+    re-prompt with "produce a concrete answer".
+
+    Catches the rung-0 failure mode where the model defers the question
+    instead of attempting it. Works for any task family — chatbot, code
+    gen, data extraction — because clarification openers are
+    domain-agnostic English.
+    """
+    def v(payload: Mapping[str, Any]) -> None:
+        val = _resolve(payload, key)
+        if val is _MISSING or val is None:
+            return
+        if not isinstance(val, str):
+            return
+        text = val.strip()
+        if not text:
+            return
+        for rx in _CLARIFICATION_OPENERS:
+            if rx.search(text[:200]):
+                assert False, (
+                    f"'{key}' looks like a clarification request, not an "
+                    f"answer ({text[:80]!r}...). Provide a concrete answer; "
+                    f"if information is missing, make a reasonable assumption "
+                    f"and state it inline."
+                )
+    return v
+
+
 __all__ = [
     "Validator",
     "chain",
@@ -263,4 +414,7 @@ __all__ = [
     "assert_in_range",
     "assert_matches_regex",
     "assert_predicate",
+    "assert_answers_all_subquestions",
+    "assert_not_clarification_request",
+    "infer_subquestion_count",
 ]
