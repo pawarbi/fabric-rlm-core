@@ -133,7 +133,15 @@ class EffortLadderPolicy(LadderPolicy):
             max_turns=max_turns,
             reasoning_effort=reasoning_effort,
             lm_spec=cfg.lm_spec,
-            lm_instance=cfg.lm_instance if rung == 0 else None,
+            # EffortLadderPolicy never swaps LMs — it only varies
+            # reasoning_effort. The runtime needs an LM at every rung
+            # (including when the bandit's warm-state hops directly to a
+            # high rung without seeing rung 0 first), so the lm_instance
+            # must propagate. The cross-model LadderPolicy zeroes
+            # lm_instance at rung >= 1 because it switches to
+            # strong_lm_spec at rung 4 and re-resolves from a dict spec;
+            # that doesn't apply here.
+            lm_instance=cfg.lm_instance,
             inner_engine=cfg.inner_engine,
             parallel_rollouts=parallel,
             failure_feedback=feedback,
