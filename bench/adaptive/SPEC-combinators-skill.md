@@ -156,3 +156,34 @@ Coverage target: 100% on `_combinators.py` (it's small and pure).
 - **Phase 3 (Tasks)**: ≤5-file tasks per `spec-driven-development` skill.
 - **Phase 4 (Implement)**: one task at a time with TDD per
   `.github/skills/test-driven-development/SKILL.md`.
+
+## Generalization
+
+This skill must be **task-agnostic**. It is being scoped against Spark-RCA
+because that's our cleanest validation surface, but the design constraints
+below apply to every task family (CS-hard, Spark-RCA, free-form Q&A,
+code-gen, multi-doc QA, agentic tool use):
+
+- **No template-specific code.** The 7 primitives operate on generic Python
+  values (sequences, predicates, callables). They take no `template=` kwarg,
+  raise no template-specific errors, and import nothing from
+  `bench/adaptive/longcot_adapter.py` or any other dataset module.
+- **No prompt-shape assumptions.** `peek` truncates by token count of the
+  string passed in; it does not parse for `<question>`, `solution =`, or
+  any other marker. Callers (the model, via the skill playbook) decide what
+  to peek at.
+- **Deterministic, side-effect-free.** Every primitive is a pure function so
+  it composes safely in any task's solver. The only "side effect" is `peek`
+  reporting to the subprocess cost tracker — a piece of infra that already
+  exists for every task.
+- **Validation surface is dual.** Success criterion #4 (Spark-RCA bench)
+  proves the primitives help on a structured-data task. Success criterion
+  #5 (CS-hard zero regression) proves they don't *hurt* a task family they
+  weren't designed for. A future task family added to `bench/` should
+  inherit the same dual treatment automatically — the skill loader already
+  works for any `RLM(skills=["combinators"])` regardless of task.
+- **Documentation discipline.** The `combinators.md` playbook MUST include
+  one worked example per task pattern (sequence-reduce, search, batch-map),
+  not per benchmark name. If a future task family needs a new pattern, add
+  it to the playbook — never branch on dataset name.
+
