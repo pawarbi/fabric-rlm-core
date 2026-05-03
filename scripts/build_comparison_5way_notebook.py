@@ -19,7 +19,7 @@ import argparse
 import json
 from pathlib import Path
 
-WHEEL = "fabric_rlm-0.1.11.dev6-py3-none-any.whl"
+WHEEL = "fabric_rlm-0.1.11.dev7+integration-py3-none-any.whl"
 WHEEL_PATH = f"/lakehouse/default/Files/fabric_rlm_longcot/wheels/{WHEEL}"
 DATASET_PATH = "/lakehouse/default/Files/fabric_rlm_longcot/datasets/longcot_cs_hard_holdout25.jsonl"
 
@@ -33,7 +33,7 @@ STRATEGY_INFO = {
     "C": {"label": "fabric_full", "title": "C — Fabric RLM (v6-custom, full PVR)"},
     "D": {"label": "fabric_reflect", "title": "D — Fabric RLM (v6-custom, reflect_only)"},
     "E": {"label": "fabric_ladder", "title": "E — Fabric RLM + EffortLadder (v6-custom, adaptive, deterministic minimal->low->medium)"},
-    "F": {"label": "fabric_bandit", "title": "F — Fabric RLM + EffortBandit (v6-custom, adaptive, Thompson-sampled minimal->low->medium with per-template Beta posteriors)"},
+    "F": {"label": "fabric_bandit", "title": "F — Fabric RLM + EffortBandit (v6-custom, adaptive, Thompson-sampled minimal->low->medium->high with per-template Beta posteriors, 4-rung ladder)"},
 }
 
 
@@ -382,7 +382,7 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
                 base_lm_instance=base_lm,
                 base_reasoning_effort="minimal",
                 parallel_rollouts=1,
-                effort_ladder=("minimal", "low", "medium"),
+                effort_ladder=("minimal", "low", "medium", "high"),
                 state=bandit_state,
                 task_key=tpl,
                 warmup=2,
@@ -390,11 +390,11 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
             )
             # Capture the bandit's pre-decision posterior snapshot for this template
             pre_obs = bandit_state.total_observations(tpl)
-            pre_betas = {r: bandit_state.beta_for(tpl, r) for r in (0, 1, 2)}
+            pre_betas = {r: bandit_state.beta_for(tpl, r) for r in (0, 1, 2, 3)}
             rlm = RLM(signature="question -> answer", lm=base_lm,
                       engine="adaptive",
                       adaptive=dict(policy=policy, validator=_validator,
-                                    max_attempts=3, parallel_rollouts=1))
+                                    max_attempts=4, parallel_rollouts=1))
             t0 = time.perf_counter()
             result = rlm.run({"question": row["prompt"]})
             elapsed = time.perf_counter() - t0
@@ -414,7 +414,7 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
                 bandit_state.save()
             except Exception as _se:
                 stage("bandit_save_warn", err=repr(_se))
-            post_betas = {r: bandit_state.beta_for(tpl, r) for r in (0, 1, 2)}
+            post_betas = {r: bandit_state.beta_for(tpl, r) for r in (0, 1, 2, 3)}
             rec.update({
                 "passed": bool(passed), "submitted": result.submitted,
                 "elapsed_seconds": elapsed,
