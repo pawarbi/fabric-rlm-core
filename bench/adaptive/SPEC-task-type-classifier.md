@@ -171,3 +171,38 @@ Coverage target: ≥90% on `task_classifier.py` and the new `BanditState` branch
 - **Phase 3 (Tasks)**: classifier impl → BanditState extension → Strategy G
   generator → validation run.
 - **Phase 4 (Implement)**: TDD per `.github/skills/test-driven-development/SKILL.md`.
+
+## Generalization
+
+The classifier must operate on **arbitrary tasks**, not just LongCoT
+CS-hard. Constraints:
+
+- **Class taxonomy is universal, not benchmark-specific.** The 5 classes
+  (LOCAL, GLOBAL_REDUCE, MULTI_HOP, FORMAT, REFUSAL) come from λ-RLM and
+  describe reasoning shape, not domain. They must apply equally to a Spark
+  log analysis (often GLOBAL_REDUCE), a multi-step math word problem
+  (MULTI_HOP), an SQL question (FORMAT), and an ambiguous spec (REFUSAL).
+  No CS-hard template names appear anywhere in the classifier code or
+  prompts.
+- **Classifier input is the prompt only.** No metadata fields like
+  `template`, `domain`, `difficulty`, or `dataset`. If a deployment lacks
+  those fields (every production user), the classifier still runs.
+- **Beta-prior table is keyed by class, not by template.** The bandit's
+  per-template state (`BanditState.template_state[tpl]`) stays as-is for
+  backward compatibility, but the classifier seeds `class_priors[cls]`
+  which works for any task that produces a class label, including tasks
+  the bandit has never seen.
+- **Cold-start fallback.** When the classifier returns UNKNOWN (low
+  confidence, novel task), the bandit MUST fall through to its
+  template-free prior — same behaviour as today's bandit on a brand-new
+  template. No new failure mode introduced.
+- **Validation is two-tier.** Headline metric (Strategy G ≥ F + 2 on
+  CS-hard) proves the seeding helps on the studied family. A
+  `tests/test_classifier_robustness.py` adds 20 hand-written prompts from
+  unrelated domains (Spark, SQL, code-review, free-form) and asserts the
+  classifier doesn't crash and returns a non-UNKNOWN class for ≥80% of
+  them — proving generalisation.
+- **Audit hook.** Classifier emits a `task_class` label into every
+  trace's `metadata` so post-hoc analysis works on any future dataset
+  without harness changes.
+
