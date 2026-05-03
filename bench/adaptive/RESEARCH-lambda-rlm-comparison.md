@@ -150,6 +150,45 @@ isolation (with `sub_lm`), then synthesize. This is structurally what humans do
 on Backprop_hard_1 / VLIW_hard_1 — the templates the current bandit can't crack
 at any pure-effort rung.
 
+## 4. Failure-mode audit on the bandit run (added after the 6/25 run)
+
+We re-graded all 25 traces from `comparison_5way_bandit-full-20260502-161343/`
+against the dataset's ground truth. The original 6/25 (24%) is **correct** —
+no validator false negatives. But the 19 failures decompose into modes that
+have very different fixes, and **at least 7 are infrastructure issues, not
+model failures**:
+
+| Mode | Count | Fix is task-agnostic? |
+|---|---|---|
+| `wrong_shape_or_format` (e.g. model emits `Q1: ... Q2: ...` when truth is `[a, b, c]`) | 8 | YES — generic answer-shape negotiation, not template-specific |
+| `auth_token_expired` (Azure AAD token expiry mid-run) | 4 | YES — `fabric-lm-token-refresh` todo, applies to every long Fabric job |
+| `model_refused` ("prompt is truncated, cannot solve") | 3 | YES — dataset loader truncation bug, applies to any large-prompt task |
+| `wrong_all_terms` (genuinely wrong) | 2 | n/a — this is what the SPEC branches target |
+| `near_miss` (1–2 of 3 terms off) | 2 | n/a — this is what higher rungs / decompose target |
+
+Conclusions for the SPEC branches:
+
+- **The score ceiling is not 6/25.** Fixing the 4 auth + 3 truncation cases
+  alone could lift the headline to ~13/25 (52%) with no model/policy changes.
+  Filed as separate todos (`fabric-lm-token-refresh`, `dataset-prompt-truncation`).
+- **`wrong_shape_or_format` (8 cases) motivates a generalization rule**: any
+  validator/grader logic added by the SPEC branches must be **shape-tolerant
+  by default** — i.e. accept any of `[a, b, c]`, `solution = [a, b, c]`,
+  `{"final_capacities": [a, b, c]}`, or `Q1: a\nQ2: b\nQ3: c` and let the
+  *task* decide which is canonical, rather than baking template-specific
+  parsers into the harness. The current `scripts/build_comparison_5way_notebook.py:168`
+  `grade()` function violates this by hard-coding template name → parser.
+- **`auth_token_expired` is the cheapest single-bug fix** in the entire
+  experiment: 4 of 5 VLIW questions were lost to it, suppressing template-level
+  pass rate from a possible 1–2/5 down to 0/5.
+- **None of the 3 SPEC branches change** based on this audit, but each must
+  carry an explicit *Generalization* section spelling out how it behaves on
+  task families outside CS-hard (Spark-RCA, free-form Q&A, code-gen, etc.).
+
+Audit script: `~/.copilot/.../files/audit_validator.py` (re-grades traces against
+truth) and `~/.copilot/.../files/categorize_failures.py` (mode breakdown).
+
+
 **Caveat**: real research bet. If the model can't emit a useful decomposition,
 the rung is just expensive. Validate on the prior-fail set first
 (`bench/adaptive/longcot_cs_hard_pilot20.jsonl` subset where rung 4 failed).
