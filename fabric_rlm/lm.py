@@ -80,12 +80,12 @@ def resolve_lm(spec: Any) -> Any:
 
 
 def _fabric_factory(model_name: str, **overrides: Any) -> Any:
-    import dspy
     from synapse.ml.fabric.service_discovery import get_fabric_env_config
     from synapse.ml.fabric.token_utils import TokenUtils
 
     env = get_fabric_env_config().fabric_env_config
-    auth_header = TokenUtils().get_openai_auth_header()
+    token_provider = lambda: TokenUtils().get_openai_auth_header()  # noqa: E731
+    auth_header = token_provider()
     base = f"{env.ml_workload_endpoint}cognitive/openai"
     model = model_name.split("/", 1)[-1]
     kwargs = {
@@ -101,7 +101,7 @@ def _fabric_factory(model_name: str, **overrides: Any) -> Any:
     # intent is "I want low randomness" which is a no-op for these models).
     if is_reasoning_model(model) and kwargs.get("temperature") not in (None, 1.0):
         kwargs.pop("temperature")
-    return dspy.LM(f"azure/{model}", **kwargs)
+    return _RefreshingLM(f"azure/{model}", token_provider=token_provider, **kwargs)
 
 
 def FabricLM(model: str, **kwargs: Any) -> Any:
@@ -111,6 +111,12 @@ def FabricLM(model: str, **kwargs: Any) -> Any:
       - Reasoning (gpt-5, o1/o3/o4 family): max_tokens=16000, no temperature.
         Pass `reasoning_effort="minimal"|"low"|"medium"|"high"` to control depth.
       - Chat (gpt-4.1, gpt-4o, etc.): temperature=1.0, max_tokens=16000.
+
+    The returned LM transparently refreshes its Azure AAD bearer token on
+    401 (`AuthenticationError` from litellm) by calling Fabric's
+    `TokenUtils().get_openai_auth_header()` and retrying once. Long-running
+    Fabric jobs (>= ~1 hour) no longer fail mid-run when the AAD token
+    expires.
 
     Examples
     --------
@@ -141,6 +147,106 @@ def AnthropicLM(model: str, **kwargs: Any) -> Any:
         **kwargs,
     }
     return dspy.LM(f"anthropic/{model}", **merged)
+
+
+def _is_auth_expired(exc: BaseException) -> bool:
+    """Detect whether an exception means 'bearer token rejected, refresh needed'.
+
+    Recognised by:
+      1. Class name contains 'AuthenticationError' (litellm.AuthenticationError,
+         azure.core.exceptions.ClientAuthenticationError, etc.), AND
+      2. Message contains a recognised expiry/401 marker.
+
+    The class-name guard avoids false positives like a generic RuntimeError
+    that happens to mention 401 (e.g. timing values, unrelated codes).
+    """
+    cls = type(exc).__name__
+    if "AuthenticationError" not in cls:
+        return False
+    msg = str(exc).lower()
+    return (
+        "401" in msg
+        or "expired" in msg
+        or "customer_unauthorized" in msg
+        or "unauthorized" in msg
+    )
+
+
+class _RefreshingLM:
+    """Wraps `dspy.LM` and retries once on bearer-token expiry.
+
+    Provider-agnostic: works for any short-lived bearer auth (Azure AAD,
+    GCP IAM, AWS IAM, custom OIDC) by accepting a `token_provider`
+    callable. On `AuthenticationError`, calls `token_provider()`, replaces
+    the configured header (default `Authorization`), and retries once.
+
+    The class is intentionally not a `dspy.LM` subclass — composing rather
+    than inheriting keeps the wrapper safe across dspy versions where
+    `__init__` / `__call__` signatures may shift.
+
+    Parameters
+    ----------
+    model
+        Same as `dspy.LM(model, ...)`.
+    token_provider
+        Zero-arg callable returning a fresh bearer header value. When
+        `None`, the wrapper degrades to plain `dspy.LM` behaviour.
+    token_header
+        Name of the header to update (default `"Authorization"`). Set to
+        `"X-Api-Key"` etc. for non-bearer providers.
+    **kwargs
+        Forwarded to `dspy.LM(...)`.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        token_provider: Callable[[], str] | None = None,
+        token_header: str = "Authorization",
+        **kwargs: Any,
+    ) -> None:
+        import dspy
+
+        self._inner = dspy.LM(model, **kwargs)
+        self._token_provider = token_provider
+        self._token_header = token_header
+
+    # Forward attribute access for everything we don't own (model, kwargs,
+    # history, callbacks, etc.) — keeps duck-typing with dspy.LM intact.
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    @property
+    def kwargs(self) -> dict[str, Any]:
+        return self._inner.kwargs
+
+    def _refresh(self) -> bool:
+        if self._token_provider is None:
+            return False
+        try:
+            new_value = self._token_provider()
+        except Exception:  # provider failure — let the original error surface
+            return False
+        hdrs = dict(self._inner.kwargs.get("extra_headers") or {})
+        hdrs[self._token_header] = new_value
+        self._inner.kwargs["extra_headers"] = hdrs
+        return True
+
+    def _do_call(self, *args: Any, **kwargs: Any) -> Any:
+        """Hook for tests and subclasses. Production path delegates to dspy.LM."""
+        return self._inner(*args, **kwargs)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return self._do_call(*args, **kwargs)
+        except Exception as exc:
+            if not _is_auth_expired(exc):
+                raise
+            if not self._refresh():
+                raise
+            # one retry, then surface whatever happens
+            return self._do_call(*args, **kwargs)
 
 
 register_backend("fabric/", _fabric_factory)

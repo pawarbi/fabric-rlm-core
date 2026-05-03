@@ -1,0 +1,179 @@
+"""Tests for `_RefreshingLM` — the wrapper that retries once on auth-expiry.
+
+The wrapper must be provider-agnostic: it works for any short-lived bearer
+token (Azure AAD, GCP IAM, AWS IAM, custom OIDC) by accepting a
+`token_provider: Callable[[], str]` and re-applying it on 401.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from fabric_rlm.lm import _RefreshingLM
+
+
+class _FakeAuthError(Exception):
+    """Mimics litellm.AuthenticationError shape (class name + message)."""
+
+    def __init__(self, msg: str) -> None:
+        super().__init__(msg)
+
+
+# Force the class name to match what litellm raises
+_FakeAuthError.__name__ = "AuthenticationError"
+
+
+class _ScriptedLM(_RefreshingLM):
+    """Test double: replays a scripted sequence of return values / exceptions."""
+
+    def __init__(self, script: list[Any], **kwargs: Any) -> None:
+        # Avoid hitting any real network — supply a no-op model and api_key
+        super().__init__("openai/gpt-4o", api_key="dummy", cache=False, **kwargs)
+        self._script = list(script)
+        self.call_count = 0
+
+    # Override the underlying call (dspy.LM.__call__) so we don't hit litellm.
+    # dspy's __call__ delegates to forward → request → litellm; we short-circuit
+    # by overriding the bottom-most thing _RefreshingLM.__call__ delegates to.
+    def _do_call(self, *args: Any, **kwargs: Any) -> Any:
+        self.call_count += 1
+        if not self._script:
+            raise RuntimeError("script exhausted")
+        item = self._script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+def test_refresh_on_auth_error_succeeds() -> None:
+    """First call raises 401, refresh runs, second call succeeds."""
+    refresh_calls: list[int] = []
+
+    def provider() -> str:
+        refresh_calls.append(1)
+        return f"Bearer fresh-{len(refresh_calls)}"
+
+    err = _FakeAuthError("AuthException - Error code: 401 - User Aad Token is expired")
+    lm = _ScriptedLM(
+        script=[err, ["ok"]],
+        token_provider=provider,
+        extra_headers={"Authorization": "Bearer stale"},
+    )
+    out = lm("hello")
+    assert out == ["ok"]
+    assert lm.call_count == 2
+    assert len(refresh_calls) == 1
+    assert lm.kwargs["extra_headers"]["Authorization"] == "Bearer fresh-1"
+
+
+def test_non_auth_error_propagates_no_refresh() -> None:
+    """A non-auth error (rate limit, 5xx, etc.) is NOT retried."""
+    refresh_calls: list[int] = []
+
+    def provider() -> str:
+        refresh_calls.append(1)
+        return "Bearer x"
+
+    err = RuntimeError("rate limited 429")
+    lm = _ScriptedLM(script=[err], token_provider=provider)
+    with pytest.raises(RuntimeError, match="rate limited"):
+        lm("hi")
+    assert lm.call_count == 1
+    assert refresh_calls == []  # provider was NOT called
+
+
+def test_double_auth_error_propagates_after_one_retry() -> None:
+    """If the refresh-then-retry also returns 401, surface the error — no loop."""
+    err1 = _FakeAuthError("401 expired")
+    err2 = _FakeAuthError("401 still expired")
+    refresh_calls: list[int] = []
+
+    def provider() -> str:
+        refresh_calls.append(1)
+        return "Bearer fresh"
+
+    lm = _ScriptedLM(script=[err1, err2], token_provider=provider)
+    with pytest.raises(Exception) as exc_info:
+        lm("hi")
+    assert "AuthenticationError" in type(exc_info.value).__name__
+    assert lm.call_count == 2
+    assert len(refresh_calls) == 1
+
+
+def test_no_token_provider_propagates_immediately() -> None:
+    """When no provider is set, behave like plain dspy.LM (no retry)."""
+    err = _FakeAuthError("401 expired")
+    lm = _ScriptedLM(script=[err], token_provider=None)
+    with pytest.raises(Exception) as exc_info:
+        lm("hi")
+    assert "AuthenticationError" in type(exc_info.value).__name__
+    assert lm.call_count == 1
+
+
+def test_token_provider_failure_does_not_mask_original_error() -> None:
+    """If the provider itself raises, the ORIGINAL auth error must surface."""
+    err = _FakeAuthError("401 expired")
+
+    def provider() -> str:
+        raise RuntimeError("token endpoint unreachable")
+
+    lm = _ScriptedLM(script=[err], token_provider=provider)
+    with pytest.raises(Exception) as exc_info:
+        lm("hi")
+    # Caller sees the auth error (or chained), not just the provider failure.
+    msg = str(exc_info.value) + " | " + str(getattr(exc_info.value, "__cause__", ""))
+    assert "401" in msg or "AuthenticationError" in type(exc_info.value).__name__ or "expired" in msg.lower()
+    assert lm.call_count == 1  # we did not retry because refresh failed
+
+
+def test_custom_token_header() -> None:
+    """Header name is configurable (e.g. X-Api-Key for non-Azure providers)."""
+    def provider() -> str:
+        return "new-key"
+
+    err = _FakeAuthError("401 expired")
+    lm = _ScriptedLM(
+        script=[err, ["ok"]],
+        token_provider=provider,
+        token_header="X-Api-Key",
+        extra_headers={"X-Api-Key": "old-key"},
+    )
+    out = lm("hi")
+    assert out == ["ok"]
+    assert lm.kwargs["extra_headers"]["X-Api-Key"] == "new-key"
+
+
+def test_auth_detection_recognizes_aad_message() -> None:
+    """The exact litellm/Azure error string from production traces is detected."""
+    msg = (
+        "litellm.AuthenticationError: AzureException AuthenticationError - "
+        "Error code: 401 - {'Message': 'User Aad Token is expired.', "
+        "'Source': 'GENERAL', 'error_code': 'CUSTOMER_UNAUTHORIZED'}"
+    )
+    err = _FakeAuthError(msg)
+    refresh_calls: list[int] = []
+
+    def provider() -> str:
+        refresh_calls.append(1)
+        return "Bearer fresh"
+
+    lm = _ScriptedLM(script=[err, ["ok"]], token_provider=provider)
+    assert lm("hi") == ["ok"]
+    assert refresh_calls == [1]
+
+
+def test_auth_detection_ignores_unrelated_401_in_message() -> None:
+    """A '401' substring in a non-AuthenticationError type is NOT treated as auth."""
+    err = RuntimeError("Connection failed after 401 milliseconds")
+    refresh_calls: list[int] = []
+
+    def provider() -> str:
+        refresh_calls.append(1)
+        return "x"
+
+    lm = _ScriptedLM(script=[err], token_provider=provider)
+    with pytest.raises(RuntimeError):
+        lm("hi")
+    assert refresh_calls == []  # not detected as auth — class name didn't match
