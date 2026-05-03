@@ -66,3 +66,15 @@ keys, no renames, no nesting tricks.
    previous attempt produced and why it failed. Use it to choose a
    different approach for this attempt — do not repeat the prior payload
    or the same line of reasoning.
+
+7. **Do not refuse based on perceived truncation.** Ellipsis characters
+   (`...` or `…`) inside set, sequence, or range notation — for example
+   `{1, ..., n}`, `{1,...,5}`, `[a_1, ..., a_k]`, `r in {1,...,d}`, `i =
+   1, 2, ..., N` — are **mathematical notation**, not signs that the
+   prompt was cut off. The same applies to ellipses inside English
+   enumerations like "for layers 1, 2, ..., L". Treat the prompt as
+   complete and attempt the problem. Refuse only when an explicit data
+   field is genuinely missing (e.g. an empty matrix literal, an
+   unreplaced `<PLACEHOLDER>`, or text that ends mid-sentence with no
+   closing punctuation). When in doubt, attempt and verify.
+

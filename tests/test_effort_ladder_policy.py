@@ -209,3 +209,50 @@ def test_effort_bandit_falls_back_to_ladder_when_warmup_unmet(base_policy_kwargs
     # Should land on rung 0 (the standard ladder cold-start)
     assert cfg is not None and cfg.rung == 0
     assert cfg.reasoning_effort == "minimal"
+
+
+# ---- Regression: lm_instance must propagate to all rungs ------------------
+# (rung-skip bug: when bandit warm-state hops directly to rung 3 with a
+#  single-LM EffortLadderPolicy that was built with a base_lm_instance, the
+#  config was emitted with both lm_spec=None and lm_instance=None, so the
+#  runtime had no LM to construct → KeyError(max_tokens) downstream.
+#  EffortLadderPolicy never swaps LMs, so lm_instance must always carry
+#  through, regardless of rung.)
+
+
+class _FakeLM:
+    """Minimal stand-in for dspy.LM/FabricLM — has a .copy() that returns
+    self with merged kwargs, and stores .kwargs as a dict."""
+    def __init__(self, **kw):
+        self.kwargs = dict(kw)
+    def copy(self, **overrides):
+        merged = {**self.kwargs, **overrides}
+        return _FakeLM(**merged)
+
+
+@pytest.mark.parametrize("rung", [0, 1, 2, 3, 4])
+def test_lm_instance_propagates_to_all_rungs(rung):
+    fake = _FakeLM(model="azure/gpt-5", max_tokens=16000)
+    policy = EffortLadderPolicy(
+        base_lm_instance=fake,
+        base_reasoning_effort="minimal",
+        parallel_rollouts=3,
+    )
+    cfg = policy._build_config(rung)
+    # At every rung — including the rung-skip case the bandit triggers when
+    # warm state says "go straight to rung 3" — the runtime must receive an
+    # LM. EffortLadderPolicy does not swap LMs, so lm_instance must remain.
+    assert cfg.lm_instance is fake or cfg.lm_spec is not None, (
+        f"rung {rung} produced cfg with both lm_spec=None and lm_instance=None"
+    )
+
+
+@pytest.mark.parametrize("rung", [0, 1, 2, 3, 4])
+def test_lm_spec_propagates_to_all_rungs(rung):
+    policy = EffortLadderPolicy(
+        base_lm_spec="azure/gpt-5",
+        base_reasoning_effort="minimal",
+        parallel_rollouts=3,
+    )
+    cfg = policy._build_config(rung)
+    assert cfg.lm_spec == "azure/gpt-5", f"rung {rung} dropped lm_spec"

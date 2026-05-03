@@ -547,6 +547,195 @@ def parse_csv_ints(text: str) -> list[int] | None:
     return [int(part) for part in parts]
 
 
+# --- Shape-tolerant generic grader ----------------------------------------
+# Template-agnostic: works on any (expected, response) pair, no LongCoT /
+# template / dataset literals. See SPEC-shape-tolerant-grader.md.
+
+_UNWRAP_KEYS = ("answer", "solution", "result", "output", "value", "final", "final_answer")
+_FENCE_RE = re.compile(r"```(?:json|JSON)?\s*(.+?)```", re.DOTALL)
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_BOXED_RE = re.compile(r"\\boxed\{([^{}]*)\}")
+_BOLD_RE = re.compile(r"\*{1,3}([^*]+)\*{1,3}")
+_QNUM_LINE_RE = re.compile(r"^\s*Q?\s*(\d+)\s*[:.\)]\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
+_KV_ANSWER_RE = re.compile(
+    r"\b(?:final[\s_-]*answer|answer|solution|result|output)\s*[:=]\s*(.+?)(?:\n|$)",
+    re.IGNORECASE,
+)
+
+
+def _strip_response_noise(text: str) -> str:
+    text = _THINK_RE.sub(" ", text)
+    text = _BOXED_RE.sub(r"\1", text)
+    text = _BOLD_RE.sub(r"\1", text)
+    return text
+
+
+def _norm_scalar(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else value
+    if isinstance(value, str):
+        s = value.strip().strip(".,;:!").strip().strip('"').strip("'")
+        if re.fullmatch(r"-?\d+", s):
+            return int(s)
+        try:
+            f = float(s)
+            return int(f) if f.is_integer() else f
+        except (ValueError, TypeError):
+            return s
+    return value
+
+
+def _structurally_equal(expected: Any, candidate: Any) -> bool:
+    if expected is None and candidate is None:
+        return True
+    if isinstance(expected, dict):
+        if not isinstance(candidate, dict):
+            return False
+        if set(expected.keys()) != set(candidate.keys()):
+            return False
+        return all(_structurally_equal(expected[k], candidate[k]) for k in expected)
+    if isinstance(expected, list):
+        if not isinstance(candidate, list) or len(expected) != len(candidate):
+            return False
+        return all(_structurally_equal(e, c) for e, c in zip(expected, candidate))
+    if isinstance(expected, tuple):
+        return _structurally_equal(list(expected), candidate)
+    return _norm_scalar(expected) == _norm_scalar(candidate)
+
+
+def _unwrap_single_key(value: Any, expected: Any) -> Any:
+    """If expected is non-dict and value is a 1-key dict with a known answer
+    key, return the inner value; else return value unchanged."""
+    if isinstance(expected, dict) or not isinstance(value, dict):
+        return value
+    if len(value) != 1:
+        return value
+    only_key = next(iter(value.keys()))
+    if str(only_key).strip().lower() in _UNWRAP_KEYS:
+        return value[only_key]
+    return value
+
+
+def _candidate_values(text: str, expected: Any) -> list[Any]:
+    """Generate candidate parsed values from response text. The first
+    candidate to structurally equal expected wins."""
+
+    cands: list[Any] = []
+    seen_repr: set[str] = set()
+
+    def _push(val: Any) -> None:
+        if val is None:
+            return
+        try:
+            key = repr(val)
+        except Exception:
+            return
+        if key in seen_repr:
+            return
+        seen_repr.add(key)
+        cands.append(val)
+
+    # 1. fenced code blocks
+    for m in _FENCE_RE.finditer(text):
+        body = m.group(1).strip()
+        parsed = parse_answer(body)
+        _push(_unwrap_single_key(parsed, expected))
+
+    # 2. last balanced JSON object / array
+    obj = extract_balanced_object(text, use_last=True)
+    if obj:
+        _push(_unwrap_single_key(parse_answer(obj), expected))
+    arr = extract_balanced_list(text, use_last=True)
+    if arr:
+        _push(parse_answer(arr))
+
+    # 3. all balanced lists / objects (not just last)
+    obj_first = extract_balanced_object(text, use_last=False)
+    if obj_first and obj_first != obj:
+        _push(_unwrap_single_key(parse_answer(obj_first), expected))
+    arr_first = extract_balanced_list(text, use_last=False)
+    if arr_first and arr_first != arr:
+        _push(parse_answer(arr_first))
+
+    # 4. "answer = X" / "solution: X" patterns
+    for m in _KV_ANSWER_RE.finditer(text):
+        body = m.group(1).strip().rstrip(".;,")
+        parsed = parse_answer(body)
+        _push(_unwrap_single_key(parsed, expected))
+
+    # 5. Q-numbered lines → ordered list
+    qhits = _QNUM_LINE_RE.findall(text)
+    if qhits and isinstance(expected, list):
+        try:
+            ordered = [parse_answer(value.strip()) for _, value in
+                       sorted(qhits, key=lambda t: int(t[0]))]
+            _push(ordered)
+        except (ValueError, TypeError):
+            pass
+
+    # 6. CSV of ints (only meaningful for list expected)
+    if isinstance(expected, list):
+        csv_match = INT_CSV_PATTERN.search(text)
+        if csv_match:
+            csv_parsed = parse_csv_ints(csv_match.group(0))
+            if csv_parsed is not None:
+                _push(csv_parsed)
+
+    # 7. raw-text scalar (only meaningful for non-collection expected)
+    if not isinstance(expected, (dict, list, tuple)):
+        stripped = text.strip()
+        if stripped:
+            _push(parse_answer(stripped))
+            _push(stripped)
+
+    # 8. last integer in text (only for int expected)
+    if isinstance(expected, int) and not isinstance(expected, bool):
+        ints = INT_PATTERN.findall(text)
+        if ints:
+            _push(int(ints[-1]))
+            _push(int(ints[0]))
+
+    return cands
+
+
+def verify_shape_tolerant(expected: Any, response_text: Any) -> bool:
+    """Generic, template-agnostic equivalence check.
+
+    Returns True iff some extracted candidate from `response_text` is
+    structurally equal to `expected` after normalization. Designed as a
+    safety-net fallback after stricter per-template matchers.
+
+    Behaviour:
+      * Strips <think>...</think>, \\boxed{...}, **bold** markers.
+      * Tries fenced code, balanced JSON, "answer = X", Q-numbered
+        lines, CSV ints, raw text.
+      * Unwraps single-key dicts whose key is in the well-known
+        answer-key set, but only when expected is non-dict.
+      * Dict comparison requires identical key sets (no extra keys).
+      * int / str-of-int / float-with-zero-fraction are interchangeable.
+    """
+    if isinstance(expected, str):
+        expected_value = parse_answer(expected)
+    else:
+        expected_value = expected
+
+    if response_text is None:
+        return expected_value is None and False  # None expected matches only "" text below
+    text = response_to_text(response_text)
+    if not text and expected_value is None:
+        return True
+    text = _strip_response_noise(text)
+
+    for cand in _candidate_values(text, expected_value):
+        if _structurally_equal(expected_value, cand):
+            return True
+    return False
+
+
 def run_longcot_subset(
     examples: Iterable[LongCoTExample],
     runner: Callable[[LongCoTExample], Any],
