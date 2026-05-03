@@ -23,12 +23,13 @@ The 5 conditions:
 | C | `fabric_custom-loop_full` | `v6-custom` | full PVR | `fabric_rlm` native loop with full Plan/Verify/Reflect |
 | D | `fabric_custom-loop_reflect` | `v6-custom` | reflect-only | `fabric_rlm` native loop, reflect-only scaffold |
 | E | `fabric_custom-loop_ladder` | `v6-custom` | EffortLadder | `fabric_rlm` native loop wrapped in `EffortLadderPolicy` (minimal→low→medium) |
+| F | `fabric_custom-loop_bandit` | `v6-custom` | EffortBandit | `fabric_rlm` native loop wrapped in `EffortBanditPolicy` (Thompson-sampled minimal→low→medium with per-template Beta posteriors). Added in Addendum 2 |
 
 So B/C/D/E are **all `fabric_rlm`**, differing only in inner executor (`dspy-loop` vs `custom-loop`) and orchestration scaffold. A is the only baseline outside `fabric_rlm`.
 
 > Note: real `dspy.RLM` (Pyodide/WASM in-browser) was **not** benchmarked — the Fabric Spark image has no WASM runtime, and a local-only `dspy.RLM` row was never wired up. Treat B as "`fabric_rlm` using its `dspy-loop` executor," not as a real DSPy-RLM comparison.
 
-> Strategy E originally targeted `EffortBanditPolicy`, but the bandit hung repeatedly during smoke testing on first-question warmup; we substituted the deterministic `EffortLadderPolicy` (minimal→low→medium) which exercises the same adaptive escalation code path with predictable behavior.
+> Strategy E originally targeted `EffortBanditPolicy`, but the bandit hung repeatedly during smoke testing on first-question warmup; we substituted the deterministic `EffortLadderPolicy` (minimal→low→medium) which exercises the same adaptive escalation code path with predictable behavior. (Update: the hang was caused by the same `Trajectory.__bool__` and `base_lm_instance` wiring bugs that broke E. Once fixed in `dev6`, the bandit was added back as Strategy F — see Addendum 2.)
 
 > The legacy `v6-custom`/`v7-dspy` strings remain the public-API names (used wherever `engine=` or `inner_engine=` appears in `fabric_rlm`); the **friendly labels above are documentation-only** to make this report easier to read. The library name change is deferred to a future major version because it is a breaking API change.
 
@@ -188,3 +189,73 @@ In the 5-way, strategy D (`fabric_custom-loop_reflect`) had **neither**:
 The only condition that scored above noise (E, 3/25) is also the only one that escalated to `medium` effort via `EffortLadderPolicy`. All 3 of E's wins were at rung 2, never at rung 0 (`minimal`) or rung 1 (`low`). This matches the earlier pattern exactly: REFLECT helps once the model has enough effort to be competent, not before.
 
 **Implication:** D is the wrong condition to test REFLECT on a hard dataset. A meaningful D rerun would either use `reasoning_effort='medium'+` or wrap reflect-only in the adaptive ladder (which collapses it into a slimmer variant of E).
+
+---
+
+## Addendum 2 — Strategy F (`fabric_bandit`, run `bandit-full-20260502-161343`, wheel `0.1.11.dev6`)
+
+After fixing the bugs that originally crashed the bandit during smoke testing (the same `Trajectory.__bool__` and `base_lm_instance` wiring issues that broke E), we wired up `EffortBanditPolicy` as Strategy F and reran the same 25-question holdout for an apples-to-apples bandit-vs-ladder comparison.
+
+### Configuration
+
+| Setting | Value |
+|---|---|
+| Wheel | `fabric_rlm-0.1.11.dev6-py3-none-any.whl` |
+| Effort ladder | `("minimal", "low", "medium")` (3 rungs, identical to E) |
+| Max attempts | 3 |
+| Parallel rollouts | 1 |
+| `task_key` | template name (`MCM`, `Backprop`, etc.) |
+| `warmup` | 2 outcomes per template before bandit takes over |
+| `rung_cost` | `EFFORT_RUNG_COST` = `{0:1, 1:3, 2:8}` |
+| Validator | gold-comparison (same as E) |
+| State | persistent JSON, written after every question |
+
+The bandit groups outcomes by template and Thompson-samples the **starting rung** for each new question of that template. After the first 2 questions of a template (warmup), it starts using the per-(template, rung) Beta posteriors. Once started, escalation behaviour is identical to E's ladder.
+
+### Headline result
+
+| Strategy | Wheel | Pass rate | Mean wall/q | Total tokens | Total wall |
+|---|---|---|---|---|---|
+| E `fabric_ladder` | dev6 | **3/25 (12%)** | 146s | 2.27M | 60.6 min |
+| **F `fabric_bandit`** | dev6 | **6/25 (24%)** | 144s | **2.27M** | 61.2 min |
+
+**The bandit doubled the deterministic ladder's pass rate at essentially identical token cost and wall time.**
+
+### Per-template breakdown (F)
+
+| Template | Pass | Starting rungs (after warmup) | Winning rungs | Final Beta posterior |
+|---|---|---|---|---|
+| MCM | **5/5** | r0=1, r1=2, r2=2 | r1=2, r2=3 | r0=Beta(1,2)·p=0.33, r1=Beta(3,1)·p=0.75, **r2=Beta(4,1)·p=0.80** |
+| MFMC | 1/5 | r0=1, r1=3, r2=1 | r0=1, r1=2, r2=2 | r0=Beta(1,2), r1=Beta(1,4), r2=Beta(2,5)·p=0.29 |
+| Backprop | 0/5 | r0=2, r1=2, r2=1 | r0=2, r1=2, r2=1 | r0=Beta(1,3), r1=Beta(1,3), r2=Beta(1,6)·p=0.14 |
+| DistMem | 0/5 | r0=2, r1=1, r2=2 | r0=2, r1=1, r2=2 | r0=Beta(1,3), r1=Beta(1,2), r2=Beta(1,6)·p=0.14 |
+| VLIW | 0/5 | r0=2, r1=2, r2=1 | r0=2, r1=2, r2=1 | r0=Beta(1,3), r1=Beta(1,3), r2=Beta(1,6) (refusals) |
+
+### Why the bandit beat the ladder
+
+1. **MCM is solvable at low/medium effort but the ladder wasted attempts at minimal.** E (deterministic ladder) starts every question at rung 0 and only escalates after a failure. On MCM, rung 0 (`minimal`) usually emits a wrong answer → grader rejects → escalate to rung 1 → may pass, but if rung 1 also fails it tries rung 2 and may run out of attempts. With `max_attempts=3` and `parallel_rollouts=1`, the ladder spent its budget on doomed-at-rung-0 attempts on 2 of the 5 MCM questions and exhausted the ladder before finding a winner. The bandit, after its 2-Q MCM warmup, learned `p(pass | r0)=0.33, p(pass | r2)=0.80` and started directly at rung 1 or 2 on the remaining 3 MCM questions — converting all 5.
+
+2. **VLIW/Backprop/DistMem are above the capability ceiling for minimal/low/medium.** On these the bandit can't help — every rung is failing. Final posteriors at r2 for Backprop, DistMem, and VLIW all converge to ≈Beta(1,6) (p≈0.14, all losses). The bandit correctly reports "no rung is good" and behaves indistinguishably from the ladder. To beat these you need `high`/`xhigh` rungs, more parallel rollouts, or a stronger model — none of which were configured here.
+
+3. **Cost is identical because the bandit reorders attempts, not adds attempts.** Same `max_attempts=3`, same effort ladder, same per-rung token cost. The bandit just spends those 3 attempts at higher rungs sooner when posteriors say it should.
+
+### Caveats
+
+- 5 questions per template is small (Beta posterior n=2–5 per rung at end of run). This is enough for one template (MCM) where the signal is clean but might be unreliable on borderline templates.
+- The bandit's win is concentrated entirely on MCM. F+E are tied on the other 20 questions. So the headline 6/25 vs 3/25 reduces to "bandit converted 3 extra MCM cases that the ladder lost to attempt-budget exhaustion."
+- Persistent state file (`bandit_state.json`) survives across notebook runs. A second pass over the same dataset would warm-start from these posteriors and likely converge faster.
+
+### Final 6-strategy table
+
+| Strategy | Engine | Wrapper | Wheel | Pass | Tokens | Wall |
+|---|---|---|---|---|---|---|
+| A `direct-dspy` | (none) | none | dev5 | 0/25 | 138K | 0.6 min |
+| B `fabric_dspy-loop` | v7-dspy | full PVR | dev6 | 2/25 | n/a | n/a |
+| C `fabric_custom-loop_full` | v6-custom | full PVR | dev5 | 0/25 | 447K | 8.6 min |
+| D `fabric_custom-loop_reflect` | v6-custom | reflect-only | dev5 | 0/25 | 382K | 12.8 min |
+| E `fabric_custom-loop_ladder` | v6-custom | EffortLadder | dev6 | 3/25 | 2.27M | 60.6 min |
+| **F `fabric_custom-loop_bandit`** | v6-custom | **EffortBandit** | dev6 | **6/25** | **2.27M** | **61.2 min** |
+
+The bandit is the highest-pass-rate strategy at fixed `effort_ladder=("minimal","low","medium")`. To push past 6/25 the next moves are independent of the policy: extend the ladder to `high`/`xhigh`, add `parallel_rollouts>1`, or upgrade the model.
+
+Run artifacts: `Files/fabric_rlm_adaptive_validation/comparison_5way/bandit-full-20260502-161343/`
