@@ -894,6 +894,7 @@ class RLM:
                         reasoning_tokens=reasoning_tokens,
                         lm_call_seconds=lm_call_seconds,
                         worker_execute_seconds=worker_execute_seconds,
+                        submit_payload=result.submit_payload if result.submitted else None,
                     )
                 )
 
@@ -1052,6 +1053,7 @@ class RLM:
                             reasoning_tokens=reflect_reasoning_tokens,
                             lm_call_seconds=reflect_lm_seconds,
                             worker_execute_seconds=reflect_worker_seconds,
+                            submit_payload=reflect_result.submit_payload if reflect_result.submitted else None,
                         )
                     )
 
