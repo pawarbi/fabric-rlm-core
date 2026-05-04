@@ -223,6 +223,7 @@ def test_verifier_passes_then_reflection_fires(monkeypatch) -> None:
         timeout=5,
         skills=["mcm_stub"],
         skill_loader=loader,
+        enable_reflection=True,
     )
 
     result = rlm.run()
@@ -274,6 +275,7 @@ def test_verifier_fails_triggers_repair_turn(monkeypatch) -> None:
         timeout=5,
         skills=["mcm_stub"],
         skill_loader=loader,
+        enable_reflection=True,
     )
 
     result = rlm.run()
@@ -319,6 +321,7 @@ def test_skill_without_verifier_no_change(monkeypatch) -> None:
         timeout=5,
         skills=["plain"],
         skill_loader=loader,
+        enable_reflection=True,
     )
 
     result = rlm.run()
@@ -362,6 +365,7 @@ def test_buggy_verifier_logs_and_accepts(monkeypatch, caplog) -> None:
         timeout=5,
         skills=["buggy"],
         skill_loader=loader,
+        enable_reflection=True,
     )
 
     with caplog.at_level("WARNING", logger="fabric_rlm.runtime"):

@@ -94,7 +94,7 @@ def test_reflection_confirms_submit(monkeypatch) -> None:
             "```python\nprint('REFLECTION_OK: looks good')\n```",
         ]
     )
-    rlm = RLM.from_task("Return 42.", outputs=["output"], lm=lm, max_turns=4, timeout=5)
+    rlm = RLM.from_task("Return 42.", outputs=["output"], lm=lm, max_turns=4, timeout=5, enable_reflection=True)
 
     result = rlm.run()
 
@@ -132,7 +132,7 @@ def test_reflection_corrects_submit(monkeypatch) -> None:
             "```python\nSUBMIT(output=43)\n```",
         ]
     )
-    rlm = RLM.from_task("Return the right number.", outputs=["output"], lm=lm, max_turns=4, timeout=5)
+    rlm = RLM.from_task("Return the right number.", outputs=["output"], lm=lm, max_turns=4, timeout=5, enable_reflection=True)
 
     result = rlm.run()
 
@@ -168,7 +168,7 @@ def test_reflection_raises_triggers_repair(monkeypatch) -> None:
             "```python\nSUBMIT(output=7)\n```",
         ]
     )
-    rlm = RLM.from_task("Return a non-negative number.", outputs=["output"], lm=lm, max_turns=5, timeout=5)
+    rlm = RLM.from_task("Return a non-negative number.", outputs=["output"], lm=lm, max_turns=5, timeout=5, enable_reflection=True)
 
     result = rlm.run()
 
@@ -242,7 +242,7 @@ def test_reflection_hard_cap(monkeypatch) -> None:
             "```python\nSUBMIT(output=100)\n```",  # repair turn
         ]
     )
-    rlm = RLM.from_task("Return a non-blank value.", outputs=["output"], lm=lm, max_turns=5, timeout=5)
+    rlm = RLM.from_task("Return a non-blank value.", outputs=["output"], lm=lm, max_turns=5, timeout=5, enable_reflection=True)
 
     result = rlm.run()
 

@@ -70,6 +70,7 @@ def test_reflection_sees_verifier_history(monkeypatch) -> None:
         timeout=5,
         skills=["mcm_stub"],
         skill_loader=loader,
+        enable_reflection=True,
     )
 
     result = rlm.run()
@@ -117,6 +118,7 @@ def test_reflection_no_history_when_first_submit_passes(monkeypatch) -> None:
         timeout=5,
         skills=["mcm_stub"],
         skill_loader=loader,
+        enable_reflection=True,
     )
 
     result = rlm.run()
@@ -165,6 +167,7 @@ def test_history_preserved_across_multiple_rejections(monkeypatch) -> None:
         timeout=5,
         skills=["mcm_stub"],
         skill_loader=loader,
+        enable_reflection=True,
     )
 
     result = rlm.run()

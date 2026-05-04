@@ -204,7 +204,7 @@ class RLM:
     Parameters
     ----------
     enable_reflection:
-        When True (default), the runtime injects one reflection turn after each
+        When True, the runtime injects one reflection turn after each
         validated SUBMIT, asking the model to attack its own answer. The
         reflection turn may either (a) print ``REFLECTION_OK`` to confirm the
         original payload, (b) emit a corrected ``SUBMIT(...)`` call, or (c)
@@ -212,6 +212,17 @@ class RLM:
         validation/repair feedback loop. At most one reflection turn ever runs
         per ``run()``; subsequent SUBMITs (e.g. from validation/repair after a
         reflection) are accepted without re-reflecting.
+
+        **Default: False (advisory deprecated as of 0.1.11+reflectionv2).**
+        The 4-arm A/B run ``reflection-ab-3arm-20260504-095812``
+        (longcot_cs_hard_holdout25, n=25 per arm, plain RLM, no bandit/decompose)
+        showed reflection adds zero accuracy at medium effort:
+        v1-prompt arm = v2-prompt arm = OFF arm = 5/25 (20%). At high effort,
+        v2 was 4/25 vs the dev11 v1 baseline of 6/25 — a slight regression
+        within ±1 noise. The feature remains opt-in for users who want to
+        experiment with custom reflection prompts; flip to True at construction
+        time. See ``RESEARCH-reflection-v2-ab.md`` and the
+        ``reflection_v2_AB_arm_*`` notebooks for the full evaluation.
     """
 
     def __init__(
@@ -226,7 +237,7 @@ class RLM:
         skills: list[str] | None = None,
         enable_skill_autoloading: bool = False,
         skill_loader: SkillLoader | None = None,
-        enable_reflection: bool = True,
+        enable_reflection: bool = False,
         enable_verifier: bool = True,
         enable_router: bool = False,
         max_active_skills: int = 2,

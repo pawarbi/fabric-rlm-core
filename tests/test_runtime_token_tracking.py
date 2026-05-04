@@ -91,7 +91,7 @@ def test_tokens_captured_when_lm_returns_usage(monkeypatch) -> None:
             ),
         ]
     )
-    rlm = RLM.from_task("Return one.", outputs=["answer"], lm=lm, max_turns=3, timeout=5)
+    rlm = RLM.from_task("Return one.", outputs=["answer"], lm=lm, max_turns=3, timeout=5, enable_reflection=True)
 
     result = rlm.run()
 
