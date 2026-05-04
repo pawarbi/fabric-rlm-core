@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import inspect
-import re
-from typing import Any, Mapping, Sequence
+from typing import Any
 
-
-REFLECTION_HISTORY_HEADER = "PREVIOUS VERIFIER REJECTIONS"
-_MAX_REFLECTION_HISTORY_ENTRIES = 5
 
 SYSTEM_PROMPT_TEMPLATE = """You are an RLM (Recursive Language Model) running in a Python REPL.
 
@@ -22,8 +18,6 @@ turns. Build your answer incrementally.
 `await predict(signature, instructions=None, pydantic_schemas=None, **kwargs)` calls the configured sub-LM.
 Use instructions for task-specific guidance, pydantic_schemas for typed outputs, and dspy.Image input fields for images.
 `SUBMIT(**fields)` finishes the task. You MUST call SUBMIT once ready.
-
-After you call SUBMIT, you may receive one short reflection turn that runs two narrow checks (placeholder/non-answer, and obvious count mismatch on enumerated sub-questions). If both checks pass, print REFLECTION_OK; otherwise re-SUBMIT with the *minimum* edit that fixes the violation.
 {skill_section}
 
 ## Code style - critical
@@ -96,124 +90,6 @@ def build_system_prompt(
             skill_index, preloaded_skills, skill_cards=skill_cards, router_active=router_active
         ),
     )
-
-
-def build_reflection_prompt(
-    submitted_payload: Any,
-    original_question: str | None = None,
-    verifier_repair_history: Sequence[Mapping[str, Any]] | None = None,
-) -> str:
-    """Build the reflection-turn user message.
-
-    v2 design (post-dev11): default-approve, two narrow checks only.
-
-    Dev11 evidence showed the v1 prompt (six "attack-your-answer" steps) caused
-    the model to over-revise — 72% of reflections rewrote the SUBMIT, and the
-    revised branch had a 14% pass rate vs 18% for the confirmed branch (i.e.,
-    revising hurt). One observed failure mode was the model rewriting a working
-    ``SUBMIT(answer="\\n".join(out_lines))`` as a hand-typed inline string and
-    corrupting itself.
-
-    v2 keeps only the two demonstrably-useful guards:
-
-      (A) Placeholder / clarification-request detection — the model sometimes
-          submits "Acknowledged" / "Please confirm" instead of a real answer.
-      (B) Count mismatch on enumerated sub-questions — when the prompt lists
-          Q1..Qn, the SUBMIT must contain exactly N items.
-
-    Everything else is dropped: no invariant attack, no Python assertions, no
-    speculative re-derivation. Default direction is APPROVE (the validator
-    already accepted this SUBMIT). Revisions are gated to "concrete obvious
-    violation" of (A) or (B) and constrained to *minimum edit* — preserving
-    the existing payload structure rather than rewriting from scratch.
-
-    When ``verifier_repair_history`` is non-empty, prepends a section listing
-    each prior runtime-verifier rejection so the model's check is aware of
-    failures the runtime previously caught. Capped at the most recent
-    ``_MAX_REFLECTION_HISTORY_ENTRIES`` entries to avoid prompt bloat.
-    """
-    payload_text = repr(submitted_payload)
-    if len(payload_text) > 4000:
-        payload_text = payload_text[:3997] + "..."
-    history_block = _format_verifier_history(verifier_repair_history)
-    return (
-        f"{history_block}"
-        "Final gate before this SUBMIT is finalized. The validator already "
-        "accepted it — your job is NOT to re-solve, only to catch two narrow "
-        "invalid-answer patterns.\n\n"
-        "Submitted payload:\n"
-        f"<payload>\n{payload_text}\n</payload>\n\n"
-        "Check ONLY these two:\n"
-        "  (A) Is the payload a concrete answer? It is INVALID if it starts with "
-        "or consists of: 'Acknowledged', 'Please confirm/clarify/specify/provide', "
-        "'I need more information', 'Could you...', 'Before I can answer...', or "
-        "any other clarification-request / placeholder phrase.\n"
-        "  (B) If the original task explicitly enumerates N sub-questions "
-        "(Q1..Qn, Part 1..N, numbered list of N items), does the payload contain "
-        "exactly N items in the right order? Use the original task in the prior "
-        "messages above to check N.\n\n"
-        "DEFAULT: approve. If neither (A) nor (B) is concretely violated, output "
-        "exactly this and nothing else:\n"
-        "```python\n"
-        "print(\"REFLECTION_OK\")\n"
-        "```\n\n"
-        "Only re-SUBMIT if (A) or (B) is obviously violated. When you re-SUBMIT:\n"
-        "  - Make the SMALLEST possible change. Preserve all unchanged values.\n"
-        "  - Reuse existing variables and computed values from prior turns.\n"
-        "  - Do NOT rewrite a generated programmatic answer (e.g. "
-        "``\"\\n\".join(out_lines)``) as a hand-typed inline string.\n"
-        "  - Do NOT change answers based on uncertainty alone — only on a "
-        "concrete violation of (A) or (B).\n\n"
-        "This is your one reflection opportunity for this submission."
-    )
-
-
-def _format_verifier_history(
-    history: Sequence[Mapping[str, Any]] | None,
-) -> str:
-    if not history:
-        return ""
-    recent = list(history)[-_MAX_REFLECTION_HISTORY_ENTRIES:]
-    lines = [
-        f"{REFLECTION_HISTORY_HEADER} (your current SUBMIT must not reintroduce these):"
-    ]
-    for idx, entry in enumerate(recent, start=1):
-        skill = entry.get("skill", "?")
-        assertion = entry.get("assertion", "") or ""
-        rejected = entry.get("rejected_payload")
-        summary = _summarize_rejected_payload(rejected, assertion)
-        lines.append(f"{idx}. Skill `{skill}` rejected `{summary}` because: {assertion}")
-    lines.append("")
-    lines.append(
-        "Confirm none of the above invariants is violated in your current SUBMIT. "
-        "If any past rejection looks structurally similar to your current answer, raise an error to retry."
-    )
-    return "\n".join(lines) + "\n\n"
-
-
-_FIELD_TOKEN_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b")
-
-
-def _summarize_rejected_payload(
-    rejected_payload: Any, assertion_message: str
-) -> str:
-    """Show only the offending field from the rejected payload when we can parse it.
-
-    Looks for the first identifier in the assertion message that is also a
-    key in the payload (e.g. ``"Q5 must equal..."`` -> show ``Q5=<value>``).
-    Falls back to a 200-char truncation of ``repr(payload)`` if parsing fails.
-    """
-    if isinstance(rejected_payload, Mapping) and assertion_message:
-        for token in _FIELD_TOKEN_RE.findall(assertion_message):
-            if token in rejected_payload:
-                value_repr = repr(rejected_payload[token])
-                if len(value_repr) > 80:
-                    value_repr = value_repr[:77] + "..."
-                return f"{token}={value_repr}"
-    text = repr(rejected_payload)
-    if len(text) > 200:
-        text = text[:197] + "..."
-    return text
 
 
 def build_initial_user_message(inputs: dict[str, Any]) -> str:

@@ -36,9 +36,7 @@ class TurnRecord:
     lm_call_seconds: float | None = None
     worker_execute_seconds: float | None = None
     # Populated when the worker called SUBMIT(...) on this turn — the literal
-    # payload that was submitted. Used by reflection A/B analysis to compare
-    # pre-reflection vs post-reflection answers without needing to parse the
-    # SUBMIT(...) call out of the model's code. ``None`` for non-submit turns.
+    # payload that was submitted. ``None`` for non-submit turns.
     submit_payload: dict[str, Any] | None = None
 
     @property

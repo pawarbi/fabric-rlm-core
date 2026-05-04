@@ -409,7 +409,6 @@ class _FailedResult:
     total_completion_tokens: int | None = None
     total_cached_tokens: int | None = None
     total_reasoning_tokens: int | None = None
-    reflection_used: bool = False
     total_lm_seconds: float | None = None
     total_worker_seconds: float | None = None
 
@@ -436,7 +435,6 @@ def _failed_to_rlm_result(failed: "_FailedResult") -> Any:
         trajectory=failed.trajectory,
         final_state=dict(failed.final_state),
         failure_reason=failed.failure_reason,
-        reflection_used=False,
         total_prompt_tokens=failed.total_prompt_tokens,
         total_completion_tokens=failed.total_completion_tokens,
         total_cached_tokens=failed.total_cached_tokens,

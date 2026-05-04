@@ -446,7 +446,6 @@ See `_mfmc_validator_eval/VALIDATOR_DESIGN.md` for the design rationale.
 | `timeout` | 300.0 | Subprocess timeout (seconds) |
 | `enable_router` | False | Turn on skill router |
 | `max_active_skills` | 2 | Max skills the router activates |
-| `enable_reflection` | True | Self-reflection between turns (v6 only) |
 | `enable_verifier` | True | Skill verifier blocks (v6 only) |
 | `output_validator` | None | Your callable; raise `AssertionError` to reject |
 | `halve_max_iter_on_retry` | True | If False, retries keep full `max_iterations` |

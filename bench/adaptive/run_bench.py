@@ -351,7 +351,6 @@ def run_baseline(case: BenchCase, *, lm_spec: str, inner_engine: str) -> ModeRes
         enable_router=False,
         enable_verifier=False,
         enable_skill_autoloading=False,
-        enable_reflection=False,
     )
     return _run_single(case, rlm, mode="baseline", family="cheap")
 
@@ -383,7 +382,6 @@ def run_retry_only(
                 enable_router=False,
                 enable_verifier=False,
                 enable_skill_autoloading=False,
-                enable_reflection=False,
             )
             res = rlm.run(case.inputs)
             ans = _extract_answer(res)
@@ -448,7 +446,6 @@ def run_adaptive(
             enable_router=False,
             enable_verifier=False,
             enable_skill_autoloading=False,
-            enable_reflection=False,
             adaptive=dict(
                 strong_lm=_resolve_lm_spec(strong_lm),
                 max_attempts=max_attempts,
@@ -513,7 +510,6 @@ def run_ceiling(case: BenchCase, *, strong_lm: str, inner_engine: str) -> ModeRe
         enable_router=False,
         enable_verifier=False,
         enable_skill_autoloading=False,
-        enable_reflection=False,
     )
     return _run_single(case, rlm, mode="ceiling", family="strong")
 

@@ -123,7 +123,7 @@ def test_full_stdout_preserved_in_trajectory(monkeypatch) -> None:
         ]
     )
     rlm = RLM.from_task(
-        "Return 1.", outputs=["answer"], lm=lm, max_turns=3, timeout=5, enable_reflection=False
+        "Return 1.", outputs=["answer"], lm=lm, max_turns=3, timeout=5
     )
     result = rlm.run()
 
@@ -165,7 +165,7 @@ def test_stderr_same_treatment(monkeypatch) -> None:
         ]
     )
     rlm = RLM.from_task(
-        "Return 1.", outputs=["answer"], lm=lm, max_turns=3, timeout=5, enable_reflection=False
+        "Return 1.", outputs=["answer"], lm=lm, max_turns=3, timeout=5
     )
     result = rlm.run()
 

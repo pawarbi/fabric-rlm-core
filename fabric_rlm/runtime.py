@@ -17,7 +17,6 @@ from .lm import resolve_lm
 from .prompts import (
     _task_and_outputs,
     build_initial_user_message,
-    build_reflection_prompt,
     build_system_prompt,
 )
 from .skill_loader import Skill, SkillLoader, compose_skills
@@ -135,7 +134,6 @@ class RLMResult:
     trajectory: Trajectory
     final_state: dict[str, Any]
     failure_reason: str | None = None
-    reflection_used: bool = False
     total_prompt_tokens: int | None = None
     total_completion_tokens: int | None = None
     # Sub-fields of the totals above. Cached prompt tokens are billed at a
@@ -157,7 +155,6 @@ class RLMResult:
             "payload": self.payload,
             "final_state": self.final_state,
             "failure_reason": self.failure_reason,
-            "reflection_used": self.reflection_used,
             "total_prompt_tokens": self.total_prompt_tokens,
             "total_completion_tokens": self.total_completion_tokens,
             "total_cached_tokens": self.total_cached_tokens,
@@ -199,31 +196,7 @@ def _aggregate_trajectory_metrics(trajectory: Trajectory) -> dict[str, Any]:
 
 
 class RLM:
-    """LM-driven Python REPL loop with persistent worker state.
-
-    Parameters
-    ----------
-    enable_reflection:
-        When True, the runtime injects one reflection turn after each
-        validated SUBMIT, asking the model to attack its own answer. The
-        reflection turn may either (a) print ``REFLECTION_OK`` to confirm the
-        original payload, (b) emit a corrected ``SUBMIT(...)`` call, or (c)
-        raise — in which case the runtime falls through to the existing
-        validation/repair feedback loop. At most one reflection turn ever runs
-        per ``run()``; subsequent SUBMITs (e.g. from validation/repair after a
-        reflection) are accepted without re-reflecting.
-
-        **Default: False (advisory deprecated as of 0.1.11+reflectionv2).**
-        The 4-arm A/B run ``reflection-ab-3arm-20260504-095812``
-        (longcot_cs_hard_holdout25, n=25 per arm, plain RLM, no bandit/decompose)
-        showed reflection adds zero accuracy at medium effort:
-        v1-prompt arm = v2-prompt arm = OFF arm = 5/25 (20%). At high effort,
-        v2 was 4/25 vs the dev11 v1 baseline of 6/25 — a slight regression
-        within ±1 noise. The feature remains opt-in for users who want to
-        experiment with custom reflection prompts; flip to True at construction
-        time. See ``RESEARCH-reflection-v2-ab.md`` and the
-        ``reflection_v2_AB_arm_*`` notebooks for the full evaluation.
-    """
+    """LM-driven Python REPL loop with persistent worker state."""
 
     def __init__(
         self,
@@ -237,7 +210,6 @@ class RLM:
         skills: list[str] | None = None,
         enable_skill_autoloading: bool = False,
         skill_loader: SkillLoader | None = None,
-        enable_reflection: bool = False,
         enable_verifier: bool = True,
         enable_router: bool = False,
         max_active_skills: int = 2,
@@ -286,7 +258,6 @@ class RLM:
             self.skills = list(skills or [])
             self.enable_skill_autoloading = enable_skill_autoloading
             self.skill_loader = skill_loader or SkillLoader()
-            self.enable_reflection = enable_reflection
             self.enable_verifier = enable_verifier
             self.enable_router = enable_router
             self.max_active_skills = max(0, int(max_active_skills))
@@ -321,7 +292,6 @@ class RLM:
                 skills=list(skills or []),
                 enable_skill_autoloading=enable_skill_autoloading,
                 skill_loader=skill_loader,
-                enable_reflection=enable_reflection,
                 enable_verifier=enable_verifier,
                 enable_router=enable_router,
                 max_active_skills=max_active_skills,
@@ -346,7 +316,6 @@ class RLM:
         self.skills = list(skills or [])
         self.enable_skill_autoloading = enable_skill_autoloading
         self.skill_loader = skill_loader or SkillLoader()
-        self.enable_reflection = enable_reflection
         self.enable_verifier = enable_verifier
         self.enable_router = enable_router
         self.max_active_skills = max(0, int(max_active_skills))
@@ -703,7 +672,6 @@ class RLM:
                 interpreter.set_inputs(bound_inputs)
 
             turn_counter = 0
-            reflection_done = False
             next_turn_type = "normal"
             reached_max = False
             verifier_repair_history: list[dict[str, Any]] = []
@@ -817,7 +785,6 @@ class RLM:
                         trajectory=trajectory,
                         final_state=final_state,
                         failure_reason="worker_timeout",
-                        reflection_used=reflection_done,
                         **_aggregate_trajectory_metrics(trajectory),
                     )
                 except Exception as exc:
@@ -854,7 +821,6 @@ class RLM:
                         trajectory=trajectory,
                         final_state=final_state,
                         failure_reason="worker_error",
-                        reflection_used=reflection_done,
                         **_aggregate_trajectory_metrics(trajectory),
                     )
                 worker_execute_seconds = time.monotonic() - worker_started
@@ -949,177 +915,11 @@ class RLM:
                             reached_max = True
                         continue
 
-                    if not (self.enable_reflection and not reflection_done):
-                        return RLMResult(
-                            submitted=True,
-                            payload=result.submit_payload,
-                            trajectory=trajectory,
-                            final_state=result.state,
-                            reflection_used=reflection_done,
-                            **_aggregate_trajectory_metrics(trajectory),
-                        )
-
-                    # Run a single inline reflection turn.
-                    reflection_done = True
-                    original_payload = result.submit_payload
-                    original_state = result.state
-                    messages.append({"role": "assistant", "content": response_text})
-                    reflection_prompt = build_reflection_prompt(
-                        original_payload,
-                        task_description,
-                        verifier_repair_history=verifier_repair_history,
-                    )
-                    messages.append({"role": "user", "content": reflection_prompt})
-
-                    (
-                        reflect_response_text,
-                        reflect_raw_response,
-                        reflect_lm_seconds,
-                    ) = _call_lm_with_meta(self.outer_lm, messages)
-                    reflect_usage = _extract_usage(reflect_raw_response)
-                    reflect_prompt_tokens = _usage_field(reflect_usage, "prompt_tokens")
-                    reflect_completion_tokens = _usage_field(reflect_usage, "completion_tokens")
-                    reflect_total_tokens = _usage_field(reflect_usage, "total_tokens")
-                    reflect_cached_tokens = _usage_nested_field(reflect_usage, "prompt_tokens_details", "cached_tokens")
-                    reflect_reasoning_tokens = _usage_nested_field(reflect_usage, "completion_tokens_details", "reasoning_tokens")
-                    turn_counter += 1
-                    reflect_code = _extract_code(reflect_response_text)
-                    self._log(
-                        f"\n=== Turn {turn_counter}/{self.max_turns} (reflection) ===\n{reflect_code}"
-                    )
-                    reflect_started = time.perf_counter()
-                    reflect_worker_started = time.monotonic()
-                    try:
-                        reflect_result = interpreter.execute(reflect_code)
-                    except (WorkerTimeout, Exception) as exc:  # noqa: BLE001 - capture all worker failures uniformly
-                        reflect_worker_seconds = time.monotonic() - reflect_worker_started
-                        reflect_duration = time.perf_counter() - reflect_started
-                        trajectory.append(
-                            TurnRecord(
-                                turn=turn_counter,
-                                code=reflect_code,
-                                stdout="",
-                                stderr="",
-                                error=f"{type(exc).__name__}: {exc}",
-                                submitted=False,
-                                state=dict(final_state),
-                                response_text=reflect_response_text,
-                                duration_s=reflect_duration,
-                                token_usage=reflect_usage,
-                                validation_errors=[],
-                                turn_type="reflection",
-                                prompt_tokens=reflect_prompt_tokens,
-                                completion_tokens=reflect_completion_tokens,
-                                total_tokens=reflect_total_tokens,
-                                cached_tokens=reflect_cached_tokens,
-                                reasoning_tokens=reflect_reasoning_tokens,
-                                lm_call_seconds=reflect_lm_seconds,
-                                worker_execute_seconds=reflect_worker_seconds,
-                            )
-                        )
-                        # Fall through to repair: feed the reflection error back to the LM.
-                        messages.append({"role": "assistant", "content": reflect_response_text})
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    f"Reflection turn raised {type(exc).__name__}: {exc}\n"
-                                    f"The earlier SUBMIT payload preview: {_preview_payload(original_payload)}\n"
-                                    "Write a recovery turn that diagnoses the issue and re-calls SUBMIT(...) "
-                                    "with a corrected payload."
-                                ),
-                            }
-                        )
-                        next_turn_type = "validation_repair"
-                        if turn_counter >= self.max_turns:
-                            reached_max = True
-                        continue
-
-                    reflect_worker_seconds = time.monotonic() - reflect_worker_started
-                    reflect_duration = time.perf_counter() - reflect_started
-                    final_state = reflect_result.state
-                    reflect_validation = (
-                        validate_submit_payload(reflect_result.submit_payload, required_output_fields)
-                        if reflect_result.submitted
-                        else OutputValidationResult()
-                    )
-                    trajectory.append(
-                        TurnRecord(
-                            turn=turn_counter,
-                            code=reflect_code,
-                            stdout=reflect_result.stdout,
-                            stderr=reflect_result.stderr,
-                            error=reflect_result.error,
-                            submitted=reflect_result.submitted,
-                            state=reflect_result.state,
-                            response_text=reflect_response_text,
-                            duration_s=reflect_duration,
-                            token_usage=reflect_usage,
-                            validation_errors=list(reflect_validation.errors),
-                            turn_type="reflection",
-                            prompt_tokens=reflect_prompt_tokens,
-                            completion_tokens=reflect_completion_tokens,
-                            total_tokens=reflect_total_tokens,
-                            cached_tokens=reflect_cached_tokens,
-                            reasoning_tokens=reflect_reasoning_tokens,
-                            lm_call_seconds=reflect_lm_seconds,
-                            worker_execute_seconds=reflect_worker_seconds,
-                            submit_payload=reflect_result.submit_payload if reflect_result.submitted else None,
-                        )
-                    )
-
-                    if reflect_result.submitted:
-                        if not reflect_validation.ok:
-                            # Reflection produced a structurally bad SUBMIT; defer to validation/repair
-                            # without recursing into another reflection.
-                            messages.append({"role": "assistant", "content": reflect_response_text})
-                            messages.append(
-                                {
-                                    "role": "user",
-                                    "content": self._format_validation_feedback(
-                                        reflect_result, turn_counter, reflect_validation
-                                    ),
-                                }
-                            )
-                            next_turn_type = "validation_repair"
-                            if turn_counter >= self.max_turns:
-                                reached_max = True
-                            continue
-                        return RLMResult(
-                            submitted=True,
-                            payload=reflect_result.submit_payload,
-                            trajectory=trajectory,
-                            final_state=reflect_result.state,
-                            reflection_used=True,
-                            **_aggregate_trajectory_metrics(trajectory),
-                        )
-
-                    if reflect_result.error:
-                        # Worker reported an error (e.g. assertion) but didn't raise to the host —
-                        # treat the same as an exception: feed back and let repair run.
-                        messages.append({"role": "assistant", "content": reflect_response_text})
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    f"Reflection turn errored:\n{(reflect_result.error or '')[:2000]}\n"
-                                    f"Earlier SUBMIT payload preview: {_preview_payload(original_payload)}\n"
-                                    "Write a recovery turn and re-call SUBMIT(...) with a corrected payload."
-                                ),
-                            }
-                        )
-                        next_turn_type = "validation_repair"
-                        if turn_counter >= self.max_turns:
-                            reached_max = True
-                        continue
-
-                    # Reflection survived without a new SUBMIT and without an error -> accept original.
                     return RLMResult(
                         submitted=True,
-                        payload=original_payload,
+                        payload=result.submit_payload,
                         trajectory=trajectory,
-                        final_state=original_state,
-                        reflection_used=True,
+                        final_state=result.state,
                         **_aggregate_trajectory_metrics(trajectory),
                     )
 
@@ -1139,7 +939,6 @@ class RLM:
                 if trajectory.turns and trajectory.turns[-1].validation_errors
                 else "max_turns"
             ),
-            reflection_used=reflection_done,
             **_aggregate_trajectory_metrics(trajectory),
         )
 
@@ -1207,7 +1006,7 @@ class RLM:
         triggers a ``verifier_repair`` turn. ``history_entry`` is a dict with
         ``skill``, ``rejected_payload``, and ``assertion`` keys (or ``None`` if
         the rejection couldn't be summarized) so the caller can thread it into
-        the eventual reflection prompt. Non-AssertionError failures are logged
+        verifier-repair feedback metadata. Non-AssertionError failures are logged
         and skipped to avoid blocking valid answers behind a buggy verifier.
         """
 
