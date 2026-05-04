@@ -166,3 +166,31 @@ to reflection via `git stash` earlier this session.
 - [ ] Analyze with `analyze_reflection*.py` (extend for 3-arm)
 - [ ] Apply decision rule → merge v2 / flip default OFF / consider gating
 - [ ] Commit + merge or revert
+
+---
+
+## Final Result: FLIP_OFF
+
+**Run:** `reflection-ab-3arm-20260504-095812` (Fabric, gpt-5, n=25/arm, longcot_cs_hard_holdout25.jsonl)
+
+| Arm | Effort | Reflection | Pass | Avg turns |
+|-----|--------|------------|------|-----------|
+| A   | medium | v1 (original) | 5/25 (20%) | 6.72 |
+| B   | medium | v2 (default-approve, two checks) | 5/25 (20%) | 5.84 |
+| C   | medium | OFF | 5/25 (20%) | 5.48 |
+| B-hi | high  | v2 | 4/25 (16%) | 6.76 |
+
+**Pre-registered rule applied:** `pass_C >= pass_B AND pass_C >= pass_A` => **FLIP_OFF**.
+
+Reflection added zero measurable accuracy on this benchmark while costing
+~1 extra turn (~25% wall-time per question on the v1 arm). v2's two-question
+default-approve prompt did reduce overhead vs v1 but still added cost without
+benefit.
+
+**Action taken** (commit a0f1f22 on `experiment/reflection-v2`):
+- `enable_reflection` default flipped True -> False in `fabric_rlm/runtime.py`.
+- Docstring carries advisory-deprecation notice citing this A/B run id.
+- Reflection code path retained; opt-in via `enable_reflection=True`.
+- Existing reflection tests now pass the flag explicitly so coverage is preserved.
+
+This mirrors the decompose-top-rung deprecation after the dev11 hard-CS bench.
