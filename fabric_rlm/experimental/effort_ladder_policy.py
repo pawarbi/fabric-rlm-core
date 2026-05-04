@@ -43,6 +43,7 @@ Example
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 from .adaptive_policy import (
@@ -96,8 +97,27 @@ class EffortLadderPolicy(LadderPolicy):
     # synthesize (Phase A: 1 LM call breaks problem into 2..max_subs sub-
     # problems; Phase B: parallel sub-solves; Phase C: 1 LM call merges).
     # Universal — works for any prompt, no task-specific config.
+    #
+    # ADVISORY DEPRECATION (dev11, 2026-05): showed 0/16 wins on hard-only
+    # single-shot CS-template suite. Not a fair test of decomposition (those
+    # tasks need sequential reasoning, not parallel split), but until a
+    # workload shows ≥2 positive wins, do NOT enable for production benches.
+    # See ``decompose_rung.py`` module docstring. Slated for removal 2026-Q4
+    # if no positive evidence accumulates.
     enable_decompose_top_rung: bool = False
     decompose_max_subs: int = 6
+
+    def __post_init__(self) -> None:
+        if self.enable_decompose_top_rung:
+            warnings.warn(
+                "enable_decompose_top_rung=True: this rung showed 0/16 wins on the "
+                "dev11 hard-CS bench (single-shot deep reasoning) and is currently on "
+                "advisory deprecation. It may still help on multi-step planning / "
+                "multi-doc workloads — re-enable only with a measurement plan. "
+                "See fabric_rlm/experimental/decompose_rung.py module docstring.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
     @property
     def max_rung(self) -> int:
@@ -202,6 +222,8 @@ class EffortBanditPolicy(BanditPolicy, EffortLadderPolicy):
         # override (BanditPolicy alone would use the cheap-vs-strong map).
         if self.rung_cost is None:
             self.rung_cost = EFFORT_RUNG_COST
+        # Inherit the EffortLadderPolicy advisory-deprecation warning.
+        super().__post_init__()
 
     def _bandit_eligible_rungs(self) -> list[int]:
         all_rungs = list(range(self.max_rung + 1))

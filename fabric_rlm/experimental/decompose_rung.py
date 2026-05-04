@@ -26,6 +26,15 @@ log RCA, multi-doc QA, planning, code review, etc.
 Speculative. See ``bench/adaptive/SPEC-decompose-rung.md`` for the gating
 plan: a 5-trial micro-bench on a synthetic compositional task family must
 show 0 → ≥2 wins on at least one task before the full-bench is wired in.
+
+Status (dev11, 2026-05): **0/16 wins** on a hard-only single-shot CS-template
+suite (Backprop, DistMem, MFMC, VLIW). That benchmark class is *not* a fair
+test of decomposition — those problems need deep sequential reasoning, not
+parallelisable sub-problem split. Do **not** re-enable on similar workloads.
+The rung remains here for multi-step planning / multi-doc workloads where
+decomposition has plausible structural value, but it is **opt-in only**
+(``EffortLadderPolicy.enable_decompose_top_rung`` defaults to ``False``).
+Remove the modules entirely if no positive evidence accumulates by 2026-Q4.
 """
 
 from __future__ import annotations
