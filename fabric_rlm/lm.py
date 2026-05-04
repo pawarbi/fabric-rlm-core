@@ -211,6 +211,15 @@ class _RefreshingLM:
         self._inner = dspy.LM(model, **kwargs)
         self._token_provider = token_provider
         self._token_header = token_header
+        # dspy 3.2 reasoning-model branch stores the cap as
+        # ``max_completion_tokens`` (lm.py L77) but its truncation log
+        # path indexes ``self.kwargs['max_tokens']`` (L301), raising
+        # ``KeyError('max_tokens')`` whenever a long-prompt response is
+        # truncated (e.g. the synthesize call in decompose_rung). Mirror
+        # the value into both keys so the format string finds it.
+        inner_kwargs = self._inner.kwargs
+        if "max_tokens" not in inner_kwargs and "max_completion_tokens" in inner_kwargs:
+            inner_kwargs["max_tokens"] = inner_kwargs["max_completion_tokens"]
 
     # Forward attribute access for everything we don't own (model, kwargs,
     # history, callbacks, etc.) — keeps duck-typing with dspy.LM intact.
@@ -234,6 +243,9 @@ class _RefreshingLM:
         new._inner = self._inner.copy(**overrides)
         new._token_provider = self._token_provider
         new._token_header = self._token_header
+        inner_kwargs = new._inner.kwargs
+        if "max_tokens" not in inner_kwargs and "max_completion_tokens" in inner_kwargs:
+            inner_kwargs["max_tokens"] = inner_kwargs["max_completion_tokens"]
         return new
 
     def _refresh(self) -> bool:

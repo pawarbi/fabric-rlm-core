@@ -92,12 +92,21 @@ class EffortLadderPolicy(LadderPolicy):
 
     effort_ladder: tuple[ReasoningEffort, ...] = _EFFORT_LADDER
     parallel_at_rung: int | None = None  # None -> max_rung
+    # When True, an extra top rung is appended that runs decompose-then-
+    # synthesize (Phase A: 1 LM call breaks problem into 2..max_subs sub-
+    # problems; Phase B: parallel sub-solves; Phase C: 1 LM call merges).
+    # Universal — works for any prompt, no task-specific config.
+    enable_decompose_top_rung: bool = False
+    decompose_max_subs: int = 6
 
     @property
     def max_rung(self) -> int:
         # Independent of strong_lm_spec — driven by the effort_ladder length.
         # Always at least 4 by default (matching the canonical 5-rung ladder).
-        return max(0, len(self.effort_ladder) - 1)
+        base = max(0, len(self.effort_ladder) - 1)
+        if self.enable_decompose_top_rung:
+            base += 1
+        return base
 
     def _build_config(
         self,
@@ -108,6 +117,24 @@ class EffortLadderPolicy(LadderPolicy):
     ) -> AttemptConfig:
         cfg = self.baseline_config()
         max_turns = cfg.max_turns
+
+        # Top rung is decompose-phase when enabled — it bypasses the turn
+        # loop entirely (handled by the runtime factory). Effort is set to
+        # the highest available so synthesize/decompose calls reason hard.
+        if self.enable_decompose_top_rung and rung == self.max_rung:
+            return AttemptConfig(
+                rung=rung,
+                max_turns=max_turns,  # ignored by adapter, kept for logging
+                reasoning_effort=self.effort_ladder[-1],
+                lm_spec=cfg.lm_spec,
+                lm_instance=cfg.lm_instance,
+                inner_engine=cfg.inner_engine,
+                parallel_rollouts=1,
+                failure_feedback=feedback,
+                decompose_phase=True,
+                decompose_max_subs=self.decompose_max_subs,
+            )
+
         # Pick the effort for this rung from the ladder, clamped to
         # the available steps. Falls back to "high" if the ladder is
         # shorter than max_rung+1.
@@ -124,8 +151,11 @@ class EffortLadderPolicy(LadderPolicy):
 
         # Parallel rollouts kick in at parallel_at_rung (default: top rung)
         parallel = 1
-        threshold = self.parallel_at_rung if self.parallel_at_rung is not None else self.max_rung
-        if rung >= threshold:
+        # When decompose-top is on, the "parallel-eligible" top is the
+        # rung *below* decompose, since decompose itself is single-rollout.
+        effective_top = self.max_rung - (1 if self.enable_decompose_top_rung else 0)
+        threshold = self.parallel_at_rung if self.parallel_at_rung is not None else effective_top
+        if rung >= threshold and rung != self.max_rung or (rung == self.max_rung and not self.enable_decompose_top_rung):
             parallel = max(rollouts, self.parallel_rollouts)
 
         return AttemptConfig(
@@ -155,13 +185,38 @@ class EffortBanditPolicy(BanditPolicy, EffortLadderPolicy):
     Equivalent to writing your own subclass of both — but supplies
     :data:`EFFORT_RUNG_COST` as the default ``rung_cost`` so the bandit's
     tie-break math is calibrated for the effort axis (each step ~3×).
+
+    When ``enable_decompose_top_rung`` is True, the appended decompose
+    rung is gated behind ``decompose_min_lower_obs`` observations on the
+    next-lower rung. Until that floor is met the bandit only samples
+    from rungs 0..N-1, preventing uniform-prior exploration from picking
+    the most expensive (and potentially broken) new rung first. This is
+    a universal pattern: any newly-introduced top rung benefits from
+    waiting for evidence to accumulate on the cheaper rungs first.
     """
+
+    decompose_min_lower_obs: int = 3
 
     def __post_init__(self) -> None:
         # Default rung_cost to the effort cost map if the caller didn't
         # override (BanditPolicy alone would use the cheap-vs-strong map).
         if self.rung_cost is None:
             self.rung_cost = EFFORT_RUNG_COST
+
+    def _bandit_eligible_rungs(self) -> list[int]:
+        all_rungs = list(range(self.max_rung + 1))
+        if not self.enable_decompose_top_rung or self.state is None:
+            return all_rungs
+        decompose_rung = self.max_rung
+        lower_rung = decompose_rung - 1
+        if lower_rung < 0:
+            return all_rungs
+        alpha, beta = self.state.beta_for(self.task_key, lower_rung)
+        # Beta(1,1) is the uniform prior — observations are (alpha-1)+(beta-1).
+        lower_obs = max(0, int(alpha) - 1) + max(0, int(beta) - 1)
+        if lower_obs < self.decompose_min_lower_obs:
+            return [r for r in all_rungs if r != decompose_rung]
+        return all_rungs
 
 
 __all__ = [

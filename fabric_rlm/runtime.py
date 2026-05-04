@@ -396,6 +396,32 @@ class RLM:
         shared_loader = inner_kwargs.get("skill_loader") or self.skill_loader
 
         def factory(attempt_cfg):
+            # Decompose-phase rungs bypass the standard inner RLM loop entirely
+            # — they run a depth-1 decompose -> parallel sub-solve -> synthesize
+            # pipeline. Universal building block; works on any prompt key.
+            if getattr(attempt_cfg, "decompose_phase", False):
+                from .experimental.decompose_engine import DecomposeRLMAdapter
+
+                # Resolve the LM the same way the standard branch would.
+                lm_for_decompose = (
+                    attempt_cfg.lm_instance
+                    if attempt_cfg.lm_instance is not None
+                    else attempt_cfg.lm_spec
+                )
+                # Honor reasoning_effort if the LM supports .copy(...)
+                if attempt_cfg.reasoning_effort and hasattr(lm_for_decompose, "copy"):
+                    try:
+                        lm_for_decompose = lm_for_decompose.copy(
+                            reasoning_effort=attempt_cfg.reasoning_effort
+                        )
+                    except Exception:
+                        pass
+                return DecomposeRLMAdapter(
+                    lm=lm_for_decompose,
+                    sub_lm=lm_for_decompose,
+                    max_subs=getattr(attempt_cfg, "decompose_max_subs", 6),
+                )
+
             kwargs = dict(inner_kwargs)
             kwargs["skill_loader"] = shared_loader
             kwargs["engine"] = inner_engine
@@ -484,6 +510,34 @@ class RLM:
                 stacklevel=3,
             )
 
+        # Optional task classifier — one-shot pre-run hook seeds bandit priors
+        # from a single low-effort LM call so the bandit doesn't waste its
+        # cold-start observations on rung 0 for obviously-hard questions.
+        # Universal: works on any prompt; classifier output classes are
+        # reasoning-shape, not domain. Best-effort — failure degrades to
+        # ordinary cold-start behaviour.
+        pre_run_hook = None
+        if cfg.get("enable_task_classifier"):
+            try:
+                from .experimental.task_classifier import make_classifier_pre_run
+
+                classifier_lm = cfg.get("task_classifier_lm")
+                if classifier_lm is None:
+                    # Fall back to the same LM the inner engine uses
+                    classifier_lm = self._adaptive_inner_kwargs.get("lm")
+                if classifier_lm is not None:
+                    pre_run_hook = make_classifier_pre_run(
+                        classifier_lm=classifier_lm,
+                        question_input_key=cfg.get("task_classifier_input_key"),
+                        prior_table=cfg.get("task_classifier_prior_table"),
+                        overwrite_existing=bool(
+                            cfg.get("task_classifier_overwrite_existing", False)
+                        ),
+                        on_classify=cfg.get("on_classify"),
+                    )
+            except Exception:
+                pre_run_hook = None
+
         runner = AdaptiveRunner(
             rlm_factory=factory,
             policy=policy,
@@ -491,6 +545,7 @@ class RLM:
             validator=validator,  # AdaptiveRunner uses its default when None
             on_attempt=cfg.get("on_attempt"),
             feedback_injection=policy_kwargs.get("feedback_injection", True),
+            pre_run=pre_run_hook,
         )
         adaptive_result = runner.run(bound_inputs)
         # AdaptiveRunner already attaches metadata to the winning trajectory

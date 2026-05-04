@@ -69,7 +69,18 @@ class DecomposeResult:
     error: str | None = None
 
 
+_NO_CLARIFICATION_RULE = (
+    "Answering rules:\n"
+    "- Do NOT ask clarifying questions or request more context.\n"
+    "- Do NOT respond with phrases like 'Please provide ...', 'I need ...', "
+    "'Could you ...', 'I am missing ...', or 'Acknowledged ...'.\n"
+    "- If information is missing, make a reasonable assumption, state it "
+    "briefly, and produce the best possible answer.\n"
+    "- Always end with a concrete answer.\n\n"
+)
+
 _DECOMPOSE_PROMPT = (
+    _NO_CLARIFICATION_RULE +
     "Break the following problem into between 2 and {max_subs} INDEPENDENT "
     "sub-problems whose individual answers can be combined to answer the "
     "original. Each sub-problem must be self-contained (no references to "
@@ -80,6 +91,7 @@ _DECOMPOSE_PROMPT = (
 )
 
 _SYNTH_PROMPT = (
+    _NO_CLARIFICATION_RULE +
     "Below is the original problem followed by the partial answers to a set "
     "of sub-problems that someone broke it into. Combine the partial answers "
     "into the final answer to the ORIGINAL problem.\n\n"
@@ -92,16 +104,20 @@ _SYNTH_PROMPT = (
 def _invoke_lm(lm: Any, prompt: str) -> str:
     """Call ``lm`` accommodating several common signatures; return a string.
 
-    Mirrors the duck-typing in :mod:`task_classifier` so any LM the rest of
-    the project accepts works here too.
+    Order matters: dspy.LM (and FabricLM by inheritance) accepts a positional
+    string but its internal ``forward()`` indexes ``kwargs["max_tokens"]`` in
+    a way that raises ``KeyError('max_tokens')`` for some adapter paths. The
+    safe path is to send a messages list, which is what ``runtime._call_lm``
+    uses in production. Probe ``messages=`` first, fall back to positional
+    only for non-dspy LM duck-types.
     """
 
     result: Any
     try:
-        result = lm(prompt)
+        result = lm(messages=[{"role": "user", "content": prompt}])
     except TypeError:
         try:
-            result = lm(messages=[{"role": "user", "content": prompt}])
+            result = lm(prompt)
         except TypeError:
             for attr in ("complete", "generate", "predict"):
                 fn = getattr(lm, attr, None)
@@ -230,7 +246,7 @@ def decompose_then_synthesize(
 
     def _solve_one(sub: str) -> str:
         try:
-            return _invoke_lm(sub_lm, sub)
+            return _invoke_lm(sub_lm, _NO_CLARIFICATION_RULE + sub)
         except Exception as exc:
             return f"<sub-solve error: {exc}>"
 

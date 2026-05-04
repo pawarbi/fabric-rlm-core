@@ -209,3 +209,50 @@ def test_copy_preserves_wrapper_and_refresh_capability() -> None:
     assert cloned._token_header == "Authorization"
     # And the inner LM was actually copied (not the same instance)
     assert cloned._inner is not lm._inner
+
+
+def test_max_tokens_mirrored_for_reasoning_models() -> None:
+    """REGRESSION: dspy 3.2 stores cap as `max_completion_tokens` for
+    reasoning models (lm.py L77) but its truncation log path indexes
+    `self.kwargs['max_tokens']` (L301), raising `KeyError('max_tokens')`
+    on every truncated response. `_RefreshingLM` mirrors the value into
+    both keys so dspy's broken format string finds it.
+
+    Real-world impact: ~16% of dev10 bench questions failed with
+    `synthesize call failed: 'max_tokens'` because long sub-answer
+    concatenations triggered truncation in the synthesize call.
+    """
+    lm = _RefreshingLM(
+        "openai/gpt-5",
+        api_key="dummy",
+        cache=False,
+        temperature=1.0,
+        max_tokens=16000,
+    )
+    # Both keys present and equal — guards against dspy's KeyError site
+    assert lm.kwargs["max_tokens"] == 16000
+    assert lm.kwargs["max_completion_tokens"] == 16000
+
+    # And the mirror survives copy()
+    cloned = lm.copy(temperature=1.0)
+    assert cloned.kwargs["max_tokens"] == 16000
+    assert cloned.kwargs["max_completion_tokens"] == 16000
+
+
+def test_max_tokens_not_mirrored_for_non_reasoning_models() -> None:
+    """For non-reasoning models dspy already stores `max_tokens` directly
+    (lm.py L81) so we MUST NOT clobber or duplicate it — only mirror when
+    the bugged-key (`max_tokens`) is missing AND `max_completion_tokens`
+    exists. This guards future-us from accidentally introducing the
+    inverse bug.
+    """
+    lm = _RefreshingLM(
+        "openai/gpt-4o",
+        api_key="dummy",
+        cache=False,
+        temperature=0.0,
+        max_tokens=4000,
+    )
+    assert lm.kwargs["max_tokens"] == 4000
+    # Non-reasoning branch never sets max_completion_tokens — leave alone
+    assert "max_completion_tokens" not in lm.kwargs
