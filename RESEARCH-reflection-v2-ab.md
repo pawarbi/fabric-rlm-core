@@ -39,10 +39,22 @@ approval signal (`REFLECTION_OK`) is buried at step 6.
 
 System-prompt teaser (line 26) updated to match the v2 contract.
 
-## A/B design — 3 arms
+## A/B design — 3 arms at medium + 1 sanity arm at high
 
 Per rubber-duck critique, the critical comparison is **B vs C**, not B vs A.
 v2 could beat v1 while still being worse than no-reflection.
+
+**Effort tier choice — medium, not high.** Reflection's value proposition is
+"catch mistakes the model would otherwise ship." At `gpt-5` high effort the
+model already gets most hard-CS questions right, so there are very few wrong
+SUBMITs for reflection to genuinely catch — over-revision noise dominates
+the signal. Dev11 (60 reflection turns, 72% revise rate, no lift) is partly
+a high-effort artifact: most revisions were unnecessary because the original
+was already correct. Medium effort produces a lower base pass rate, more
+genuine errors, and a cleaner read on whether (A) placeholder and (B) count
+checks fire on real failures rather than phantom ones.
+
+### Primary A/B (medium)
 
 | Arm | Condition                     | Implementation                                         |
 |-----|-------------------------------|--------------------------------------------------------|
@@ -52,9 +64,19 @@ v2 could beat v1 while still being worse than no-reflection.
 
 All arms:
 - Same wheel, same dataset (`bench/adaptive/longcot_cs_hard_holdout25.jsonl`),
-  same `gpt-5` w/ `reasoning_effort='high'`, same seed/run-id shape.
+  same `gpt-5` w/ `reasoning_effort='medium'`, same seed/run-id shape.
 - Same trajectory capture (`FABRIC_RLM_CAPTURE_TURNS=1`).
 - 25 questions × 3 arms = 75 runs.
+
+### High-effort sanity arm (cheap add-on)
+
+| Arm | Condition                     | Purpose                                                |
+|-----|-------------------------------|--------------------------------------------------------|
+| B-hi| v2 prompt @ high effort       | Confirm v2 doesn't worsen what strong-model case wins  |
+
+- 25 runs.
+- Compared against the dev11 v1-at-high baseline already on disk
+  (`comparison_5way_local/accuracy-lift-dev11-20260504-023212/`).
 
 `enable_reflection=False` already exists in `RLM.__init__`, so arm C needs
 no code change — just a notebook flag.
@@ -79,19 +101,25 @@ reflection contains the SUBMIT, turn after contains the revised one).
 
 ## Decision rule (pre-registered, conservative)
 
-Let `pass_X` = pass@final for arm X.
+Let `pass_X` = pass@final for arm X (medium-effort primary unless noted).
+
+At medium effort the base pass rate is lower → more headroom → if reflection
+adds value at all, it should show up here. The bar for "reflection earns
+its keep" is therefore *stricter* than at high.
 
 **Ship v2 (default `enable_reflection=True` with v2 prompt) iff ALL of:**
 
-1. `pass_B >= pass_C - 1` (non-inferior to off, n=25 → 1-question slack)
+1. `pass_B > pass_C` (strictly beats off — at medium, ties go to off)
 2. `pass_B >= pass_A` (no regression vs current shipped)
 3. `harmful_revisions_B < harmful_revisions_A` (corruption mode reduced)
 4. `placeholder_catches_B + count_catches_B >= 1` (the gate earned its keep)
+5. `pass_B-hi >= pass_A-hi - 1` (high-effort sanity: v2 didn't break the
+   strong-model case beyond a 1-question slack)
 
 **Flip default OFF (`enable_reflection=False`) iff:**
 
-- `pass_C > pass_B` AND `pass_C > pass_A`, OR
-- `pass_B == pass_A == pass_C` (no value-add from any reflection variant)
+- `pass_C >= pass_B` AND `pass_C >= pass_A` (off is at least as good as any
+  reflection variant — even at the tier most favorable to reflection)
 
 In the OFF case, mirror the decompose pattern in
 `fabric_rlm/experimental/effort_ladder_policy.py:99-114` — keep the code
@@ -114,8 +142,10 @@ Fabric runner pattern: clone
 `comparison_reflection_AB_3arm.ipynb`, three cells (one per arm), shared
 preamble.
 
-Cost estimate: 75 runs × ~3-5 min × gpt-5-high ≈ 4–6 hours wall, similar
-$ to the dev11 run.
+Cost estimate: 75 medium-effort runs + 25 high-effort sanity runs.
+Medium runs are roughly 1/3 the reasoning-token cost of high, so total $
+should land at ~50-60% of the dev11 run despite running more arms.
+Wall time ~3-5 hours.
 
 ## Pre-existing test failures (unrelated, do not block A/B)
 
@@ -131,7 +161,7 @@ to reflection via `git stash` earlier this session.
 - [x] v2 prompt designed + committed (0b45c09 on `experiment/reflection-v2`)
 - [x] Tests updated + new v2-contract tests added (9/9 pass; full suite green)
 - [x] A/B plan documented + decision rule pre-registered
-- [ ] Build 3-arm runner (script or notebook)
+- [x] Build 3-arm runner notebook (medium primary + high sanity)
 - [ ] Execute A/B (likely user-side on Fabric due to cost)
 - [ ] Analyze with `analyze_reflection*.py` (extend for 3-arm)
 - [ ] Apply decision rule → merge v2 / flip default OFF / consider gating
