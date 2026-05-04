@@ -256,3 +256,65 @@ def test_lm_spec_propagates_to_all_rungs(rung):
     )
     cfg = policy._build_config(rung)
     assert cfg.lm_spec == "azure/gpt-5", f"rung {rung} dropped lm_spec"
+
+
+
+# ---- Decompose-rung evidence gate (regression: MCM_hard_13 in dev9 run) ----
+
+
+def test_decompose_top_rung_gated_until_lower_has_evidence(base_policy_kwargs):
+    """With enable_decompose_top_rung, the decompose rung is excluded until
+    the next-lower rung has observations.
+
+    Reproduces the MCM_hard_13 regression in the dev9 Fabric run: bandit
+    sampled the new (uniform-prior) decompose rung first and wasted budget.
+    """
+    state = BanditState()
+    # Many observations on rung 0, but rung 4 (the next-lower rung when
+    # decompose-top is enabled => decompose=rung 5) has zero evidence.
+    for _ in range(20):
+        state.record("X", 0, False)
+    rng = random.Random(0)
+    policy = EffortBanditPolicy(
+        state=state,
+        task_key="X",
+        rng=rng,
+        enable_decompose_top_rung=True,
+        decompose_min_lower_obs=3,
+        **base_policy_kwargs,
+    )
+    decompose_rung = policy.max_rung  # 5 with default effort_ladder
+    eligible = policy._bandit_eligible_rungs()
+    assert decompose_rung not in eligible
+    assert eligible == list(range(decompose_rung))
+
+
+def test_decompose_top_rung_eligible_after_lower_has_evidence(base_policy_kwargs):
+    """Once the next-lower rung has >= decompose_min_lower_obs obs, decompose unlocks."""
+    state = BanditState()
+    rng = random.Random(0)
+    policy = EffortBanditPolicy(
+        state=state,
+        task_key="X",
+        rng=rng,
+        enable_decompose_top_rung=True,
+        decompose_min_lower_obs=3,
+        **base_policy_kwargs,
+    )
+    lower = policy.max_rung - 1
+    for _ in range(3):
+        state.record("X", lower, False)
+    eligible = policy._bandit_eligible_rungs()
+    assert policy.max_rung in eligible
+    assert eligible == list(range(policy.max_rung + 1))
+
+
+def test_decompose_top_rung_disabled_means_no_gate(base_policy_kwargs):
+    """Without enable_decompose_top_rung, every rung is eligible regardless."""
+    state = BanditState()
+    rng = random.Random(0)
+    policy = EffortBanditPolicy(
+        state=state, task_key="X", rng=rng, **base_policy_kwargs
+    )
+    eligible = policy._bandit_eligible_rungs()
+    assert eligible == list(range(policy.max_rung + 1))

@@ -124,17 +124,24 @@ def classify(question: str, lm: Any | None) -> TaskClass:
 
 
 def _invoke(lm: Any, prompt: str) -> Any:
-    """Call ``lm`` with several common signatures so we don't bind to one shape."""
+    """Call ``lm`` with several common signatures so we don't bind to one shape.
 
-    # dspy.LM signature: lm(prompt: str) -> list[str]
+    Probe ``messages=`` first: dspy.LM/FabricLM accept a positional string but
+    can raise ``KeyError('max_tokens')`` inside their internal forward pass
+    on some adapter paths. The ``messages=`` form mirrors what
+    ``runtime._call_lm`` uses in production and is exercised by every Fabric
+    bench run.
+    """
+
+    # messages-style first - the production-safe path for dspy.LM / FabricLM.
     try:
-        return lm(prompt)
+        return lm(messages=[{"role": "user", "content": prompt}])
     except TypeError:
         pass
 
-    # messages-style:  lm(messages=[{"role":"user","content":...}])
+    # Positional - non-dspy LMs (callable-with-string).
     try:
-        return lm(messages=[{"role": "user", "content": prompt}])
+        return lm(prompt)
     except TypeError:
         pass
 

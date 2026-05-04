@@ -195,6 +195,16 @@ class BanditPolicy(LadderPolicy):
             return False
         return self.state.total_observations(self.task_key) >= self.warmup
 
+    def _bandit_eligible_rungs(self) -> list[int]:
+        """Return rungs eligible for Thompson sampling.
+
+        Default: every rung is eligible. Subclasses can override to gate
+        expensive new rungs behind evidence on cheaper ones (prevents
+        uniform-prior exploration from torching budget on a broken or
+        very expensive new rung before any evidence accumulates).
+        """
+        return list(range(self.max_rung + 1))
+
     def _bandit_starting_rung(self) -> tuple[int, float]:
         """Thompson-sample a rung, with cost only used as a small tie-breaker.
 
@@ -213,8 +223,11 @@ class BanditPolicy(LadderPolicy):
 
         assert self.state is not None
         epsilon = 0.05  # 5% absolute difference is the tie-window
+        eligible = self._bandit_eligible_rungs()
+        if not eligible:
+            eligible = list(range(self.max_rung + 1))
         candidates: list[tuple[int, float]] = []
-        for rung in range(self.max_rung + 1):
+        for rung in eligible:
             alpha, beta = self.state.beta_for(self.task_key, rung)
             candidates.append((rung, _beta_sample(alpha, beta, self.rng)))
 

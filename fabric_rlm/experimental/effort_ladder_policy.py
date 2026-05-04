@@ -185,13 +185,38 @@ class EffortBanditPolicy(BanditPolicy, EffortLadderPolicy):
     Equivalent to writing your own subclass of both — but supplies
     :data:`EFFORT_RUNG_COST` as the default ``rung_cost`` so the bandit's
     tie-break math is calibrated for the effort axis (each step ~3×).
+
+    When ``enable_decompose_top_rung`` is True, the appended decompose
+    rung is gated behind ``decompose_min_lower_obs`` observations on the
+    next-lower rung. Until that floor is met the bandit only samples
+    from rungs 0..N-1, preventing uniform-prior exploration from picking
+    the most expensive (and potentially broken) new rung first. This is
+    a universal pattern: any newly-introduced top rung benefits from
+    waiting for evidence to accumulate on the cheaper rungs first.
     """
+
+    decompose_min_lower_obs: int = 3
 
     def __post_init__(self) -> None:
         # Default rung_cost to the effort cost map if the caller didn't
         # override (BanditPolicy alone would use the cheap-vs-strong map).
         if self.rung_cost is None:
             self.rung_cost = EFFORT_RUNG_COST
+
+    def _bandit_eligible_rungs(self) -> list[int]:
+        all_rungs = list(range(self.max_rung + 1))
+        if not self.enable_decompose_top_rung or self.state is None:
+            return all_rungs
+        decompose_rung = self.max_rung
+        lower_rung = decompose_rung - 1
+        if lower_rung < 0:
+            return all_rungs
+        alpha, beta = self.state.beta_for(self.task_key, lower_rung)
+        # Beta(1,1) is the uniform prior — observations are (alpha-1)+(beta-1).
+        lower_obs = max(0, int(alpha) - 1) + max(0, int(beta) - 1)
+        if lower_obs < self.decompose_min_lower_obs:
+            return [r for r in all_rungs if r != decompose_rung]
+        return all_rungs
 
 
 __all__ = [
