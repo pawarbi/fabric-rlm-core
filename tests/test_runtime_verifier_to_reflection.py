@@ -26,7 +26,7 @@ def _reflection_prompt_text(lm: ScriptedLM) -> str:
     """
     for messages in lm.messages:
         last_user = messages[-1]
-        if last_user["role"] == "user" and "ATTACK your own answer" in last_user["content"]:
+        if last_user["role"] == "user" and "Final gate before this SUBMIT is finalized" in last_user["content"]:
             return last_user["content"]
     raise AssertionError("No reflection-turn LM call captured")
 

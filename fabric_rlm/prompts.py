@@ -23,7 +23,7 @@ turns. Build your answer incrementally.
 Use instructions for task-specific guidance, pydantic_schemas for typed outputs, and dspy.Image input fields for images.
 `SUBMIT(**fields)` finishes the task. You MUST call SUBMIT once ready.
 
-After you call SUBMIT, you may receive a reflection turn asking you to attack your own answer. Treat it as required: verify invariants, then either re-SUBMIT the corrected payload or print REFLECTION_OK.
+After you call SUBMIT, you may receive one short reflection turn that runs two narrow checks (placeholder/non-answer, and obvious count mismatch on enumerated sub-questions). If both checks pass, print REFLECTION_OK; otherwise re-SUBMIT with the *minimum* edit that fixes the violation.
 {skill_section}
 
 ## Code style - critical
@@ -103,40 +103,68 @@ def build_reflection_prompt(
     original_question: str | None = None,
     verifier_repair_history: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
-    """Build the reflection-turn user message that asks the LM to attack its own SUBMIT.
+    """Build the reflection-turn user message.
+
+    v2 design (post-dev11): default-approve, two narrow checks only.
+
+    Dev11 evidence showed the v1 prompt (six "attack-your-answer" steps) caused
+    the model to over-revise — 72% of reflections rewrote the SUBMIT, and the
+    revised branch had a 14% pass rate vs 18% for the confirmed branch (i.e.,
+    revising hurt). One observed failure mode was the model rewriting a working
+    ``SUBMIT(answer="\\n".join(out_lines))`` as a hand-typed inline string and
+    corrupting itself.
+
+    v2 keeps only the two demonstrably-useful guards:
+
+      (A) Placeholder / clarification-request detection — the model sometimes
+          submits "Acknowledged" / "Please confirm" instead of a real answer.
+      (B) Count mismatch on enumerated sub-questions — when the prompt lists
+          Q1..Qn, the SUBMIT must contain exactly N items.
+
+    Everything else is dropped: no invariant attack, no Python assertions, no
+    speculative re-derivation. Default direction is APPROVE (the validator
+    already accepted this SUBMIT). Revisions are gated to "concrete obvious
+    violation" of (A) or (B) and constrained to *minimum edit* — preserving
+    the existing payload structure rather than rewriting from scratch.
 
     When ``verifier_repair_history`` is non-empty, prepends a section listing
-    each prior runtime-verifier rejection so the model's self-check is aware
-    of failures the runtime previously caught. Capped at the most recent
+    each prior runtime-verifier rejection so the model's check is aware of
+    failures the runtime previously caught. Capped at the most recent
     ``_MAX_REFLECTION_HISTORY_ENTRIES`` entries to avoid prompt bloat.
     """
     payload_text = repr(submitted_payload)
     if len(payload_text) > 4000:
         payload_text = payload_text[:3997] + "..."
-    question_block = (
-        f"Original task:\n{original_question}\n\n" if original_question else ""
-    )
     history_block = _format_verifier_history(verifier_repair_history)
     return (
         f"{history_block}"
-        "You are about to submit the following answer:\n"
+        "Final gate before this SUBMIT is finalized. The validator already "
+        "accepted it — your job is NOT to re-solve, only to catch two narrow "
+        "invalid-answer patterns.\n\n"
+        "Submitted payload:\n"
         f"<payload>\n{payload_text}\n</payload>\n\n"
-        f"{question_block}"
-        "Before this is finalized, ATTACK your own answer:\n"
-        "1. List the invariants the answer must satisfy (ranges, signs, cross-field consistency, format).\n"
-        "2. Confirm the answer is a CONCRETE answer to the task — not a clarification request, "
-        "acknowledgement, or 'please confirm' message. If the payload starts with 'Acknowledged', "
-        "'Please confirm/clarify/specify/provide', 'I need more information', 'Could you...', "
-        "or 'Before I can answer...', it is INVALID — re-SUBMIT with a concrete attempt instead.\n"
-        "3. Confirm the answer's shape matches the task. If the prompt enumerates N sub-questions "
-        "(Q1..Qn, Part 1..N, numbered list), the SUBMIT must contain exactly N items in the right order. "
-        "Short or partial answers are INVALID — re-SUBMIT the full set.\n"
-        "4. Write a short Python snippet that asserts each invariant against the submitted values. "
-        "If any assertion fails, raise.\n"
-        "5. If you find ANY issue, write corrected code that ends with a new SUBMIT(...) call with the fixed payload.\n"
-        "6. If the answer survives all checks, print \"REFLECTION_OK: <one-line justification>\" "
-        "and do NOT call SUBMIT again.\n"
-        "\nThis is your one reflection opportunity for this submission - no further reflection will run."
+        "Check ONLY these two:\n"
+        "  (A) Is the payload a concrete answer? It is INVALID if it starts with "
+        "or consists of: 'Acknowledged', 'Please confirm/clarify/specify/provide', "
+        "'I need more information', 'Could you...', 'Before I can answer...', or "
+        "any other clarification-request / placeholder phrase.\n"
+        "  (B) If the original task explicitly enumerates N sub-questions "
+        "(Q1..Qn, Part 1..N, numbered list of N items), does the payload contain "
+        "exactly N items in the right order? Use the original task in the prior "
+        "messages above to check N.\n\n"
+        "DEFAULT: approve. If neither (A) nor (B) is concretely violated, output "
+        "exactly this and nothing else:\n"
+        "```python\n"
+        "print(\"REFLECTION_OK\")\n"
+        "```\n\n"
+        "Only re-SUBMIT if (A) or (B) is obviously violated. When you re-SUBMIT:\n"
+        "  - Make the SMALLEST possible change. Preserve all unchanged values.\n"
+        "  - Reuse existing variables and computed values from prior turns.\n"
+        "  - Do NOT rewrite a generated programmatic answer (e.g. "
+        "``\"\\n\".join(out_lines)``) as a hand-typed inline string.\n"
+        "  - Do NOT change answers based on uncertainty alone — only on a "
+        "concrete violation of (A) or (B).\n\n"
+        "This is your one reflection opportunity for this submission."
     )
 
 

@@ -111,7 +111,7 @@ def test_reflection_confirms_submit(monkeypatch) -> None:
     # The reflection prompt should have been delivered to the LM on the second call.
     second_messages = lm.messages[1]
     assert any(
-        "ATTACK your own answer" in m["content"]
+        "Final gate before this SUBMIT is finalized" in m["content"]
         for m in second_messages
         if m["role"] == "user"
     )

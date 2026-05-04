@@ -64,10 +64,11 @@ def test_reflection_prompt_includes_clarification_check():
         submitted_payload={"answer": "ok"},
         original_question="Q1: a Q2: b Q3: c",
     )
-    assert "clarification request" in prompt
+    assert "clarification-request" in prompt
     assert "Acknowledged" in prompt
     assert "Please confirm" in prompt
-    assert "INVALID — re-SUBMIT" in prompt
+    assert "INVALID" in prompt
+    assert "re-SUBMIT" in prompt
 
 
 def test_reflection_prompt_includes_shape_check():
@@ -77,21 +78,18 @@ def test_reflection_prompt_includes_shape_check():
     )
     assert "enumerates N sub-questions" in prompt
     assert "exactly N items" in prompt
-    assert "Short or partial answers" in prompt
 
 
 def test_reflection_prompt_keeps_existing_structure():
-    """Backward compat: existing instructions still rendered."""
+    """v2 contract: payload echoed, REFLECTION_OK approval form, default-approve, minimal-edit."""
     prompt = build_reflection_prompt(
         submitted_payload={"answer": "x"},
         original_question="solve",
     )
     assert "REFLECTION_OK" in prompt
     assert "<payload>" in prompt
-    assert "invariants" in prompt
-    # Numbered steps preserved
-    assert "1." in prompt
-    assert "5." in prompt or "6." in prompt
+    assert "DEFAULT: approve" in prompt
+    assert "SMALLEST possible change" in prompt
 
 
 def test_reflection_prompt_repro_canonical_failure_case():
@@ -106,5 +104,38 @@ def test_reflection_prompt_repro_canonical_failure_case():
     # Guidance to recognise this exact pattern
     assert "Acknowledged" in prompt
     assert "Please confirm" in prompt
-    # And what to do about it
-    assert "concrete attempt" in prompt
+    # And what to do about it: re-SUBMIT (v2 wording)
+    assert "re-SUBMIT" in prompt
+
+
+def test_reflection_prompt_v2_default_approve_contract():
+    """v2 design (post-dev11): default-approve, two narrow checks, minimal-edit."""
+    prompt = build_reflection_prompt(
+        submitted_payload={"answer": "x"},
+        original_question="solve",
+    )
+    # Default direction is approve
+    assert "DEFAULT: approve" in prompt
+    # Approval signal is executable Python (not a NameError-prone bare token)
+    assert 'print("REFLECTION_OK")' in prompt
+    # Minimal-edit constraint protects against the dev11 corruption mode
+    assert "SMALLEST possible change" in prompt
+    assert "Reuse existing variables" in prompt
+    # Only two narrow checks (A) and (B); v1's invariants/attack steps are gone
+    assert "(A)" in prompt
+    assert "(B)" in prompt
+    assert "ATTACK" not in prompt
+    assert "invariants the answer must satisfy" not in prompt
+    # Explicit anti-pattern from dev11 trace
+    assert '"\\n".join' in prompt or "join(out_lines)" in prompt
+
+
+def test_reflection_prompt_v2_does_not_re_solve():
+    """v2 must not push the model to re-derive ? it's a gate, not a solver."""
+    prompt = build_reflection_prompt(
+        submitted_payload={"answer": 42},
+        original_question="compute X",
+    )
+    assert "NOT to re-solve" in prompt
+    # No invitation to write assertion harnesses
+    assert "snippet that asserts" not in prompt
