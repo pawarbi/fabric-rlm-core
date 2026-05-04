@@ -138,6 +138,11 @@ class RLMResult:
     reflection_used: bool = False
     total_prompt_tokens: int | None = None
     total_completion_tokens: int | None = None
+    # Sub-fields of the totals above. Cached prompt tokens are billed at a
+    # ~10x discount on gpt-5; reasoning tokens dominate completion cost on
+    # reasoning models. Both ``None`` when no turn reported them.
+    total_cached_tokens: int | None = None
+    total_reasoning_tokens: int | None = None
     total_lm_seconds: float | None = None
     total_worker_seconds: float | None = None
 
@@ -155,6 +160,8 @@ class RLMResult:
             "reflection_used": self.reflection_used,
             "total_prompt_tokens": self.total_prompt_tokens,
             "total_completion_tokens": self.total_completion_tokens,
+            "total_cached_tokens": self.total_cached_tokens,
+            "total_reasoning_tokens": self.total_reasoning_tokens,
             "total_lm_seconds": self.total_lm_seconds,
             "total_worker_seconds": self.total_worker_seconds,
             "trajectory": self.trajectory.to_dict(),
@@ -177,11 +184,15 @@ def _aggregate_trajectory_metrics(trajectory: Trajectory) -> dict[str, Any]:
 
     prompts = [t.prompt_tokens for t in trajectory.turns]
     completions = [t.completion_tokens for t in trajectory.turns]
+    cached = [t.cached_tokens for t in trajectory.turns]
+    reasoning = [t.reasoning_tokens for t in trajectory.turns]
     lm_secs = [t.lm_call_seconds for t in trajectory.turns]
     worker_secs = [t.worker_execute_seconds for t in trajectory.turns]
     return {
         "total_prompt_tokens": _sum_optional(prompts),
         "total_completion_tokens": _sum_optional(completions),
+        "total_cached_tokens": _sum_optional(cached),
+        "total_reasoning_tokens": _sum_optional(reasoning),
         "total_lm_seconds": _sum_optional(lm_secs),
         "total_worker_seconds": _sum_optional(worker_secs),
     }
@@ -734,6 +745,8 @@ class RLM:
                 prompt_tokens = _usage_field(usage, "prompt_tokens")
                 completion_tokens = _usage_field(usage, "completion_tokens")
                 total_tokens = _usage_field(usage, "total_tokens")
+                cached_tokens = _usage_nested_field(usage, "prompt_tokens_details", "cached_tokens")
+                reasoning_tokens = _usage_nested_field(usage, "completion_tokens_details", "reasoning_tokens")
                 if _looks_truncated(response_text):
                     messages.append({"role": "assistant", "content": response_text})
                     messages.append(
@@ -781,6 +794,8 @@ class RLM:
                             prompt_tokens=prompt_tokens,
                             completion_tokens=completion_tokens,
                             total_tokens=total_tokens,
+                            cached_tokens=cached_tokens,
+                            reasoning_tokens=reasoning_tokens,
                             lm_call_seconds=lm_call_seconds,
                             worker_execute_seconds=worker_execute_seconds,
                         )
@@ -816,6 +831,8 @@ class RLM:
                             prompt_tokens=prompt_tokens,
                             completion_tokens=completion_tokens,
                             total_tokens=total_tokens,
+                            cached_tokens=cached_tokens,
+                            reasoning_tokens=reasoning_tokens,
                             lm_call_seconds=lm_call_seconds,
                             worker_execute_seconds=worker_execute_seconds,
                         )
@@ -873,6 +890,8 @@ class RLM:
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
                         total_tokens=total_tokens,
+                        cached_tokens=cached_tokens,
+                        reasoning_tokens=reasoning_tokens,
                         lm_call_seconds=lm_call_seconds,
                         worker_execute_seconds=worker_execute_seconds,
                     )
@@ -949,6 +968,8 @@ class RLM:
                     reflect_prompt_tokens = _usage_field(reflect_usage, "prompt_tokens")
                     reflect_completion_tokens = _usage_field(reflect_usage, "completion_tokens")
                     reflect_total_tokens = _usage_field(reflect_usage, "total_tokens")
+                    reflect_cached_tokens = _usage_nested_field(reflect_usage, "prompt_tokens_details", "cached_tokens")
+                    reflect_reasoning_tokens = _usage_nested_field(reflect_usage, "completion_tokens_details", "reasoning_tokens")
                     turn_counter += 1
                     reflect_code = _extract_code(reflect_response_text)
                     self._log(
@@ -978,6 +999,8 @@ class RLM:
                                 prompt_tokens=reflect_prompt_tokens,
                                 completion_tokens=reflect_completion_tokens,
                                 total_tokens=reflect_total_tokens,
+                                cached_tokens=reflect_cached_tokens,
+                                reasoning_tokens=reflect_reasoning_tokens,
                                 lm_call_seconds=reflect_lm_seconds,
                                 worker_execute_seconds=reflect_worker_seconds,
                             )
@@ -1025,6 +1048,8 @@ class RLM:
                             prompt_tokens=reflect_prompt_tokens,
                             completion_tokens=reflect_completion_tokens,
                             total_tokens=reflect_total_tokens,
+                            cached_tokens=reflect_cached_tokens,
+                            reasoning_tokens=reflect_reasoning_tokens,
                             lm_call_seconds=reflect_lm_seconds,
                             worker_execute_seconds=reflect_worker_seconds,
                         )
@@ -1802,6 +1827,10 @@ def _extract_usage(response: Any) -> dict[str, Any]:
     Looks at common shapes: an object with a ``usage`` attribute, a dict with a
     ``"usage"`` key, or a list/tuple whose first element carries usage. Returns
     an empty dict when nothing usable is found.
+
+    Nested ``prompt_tokens_details`` / ``completion_tokens_details`` blocks are
+    preserved so callers can read ``cached_tokens`` and ``reasoning_tokens`` for
+    cost analysis.
     """
 
     if response is None:
@@ -1815,11 +1844,32 @@ def _extract_usage(response: Any) -> dict[str, Any]:
     if isinstance(usage, dict):
         return dict(usage)
     if usage is not None and not isinstance(usage, (str, int, float, bool)):
-        return {
+        out: dict[str, Any] = {
             key: getattr(usage, key)
             for key in ("prompt_tokens", "completion_tokens", "total_tokens")
             if getattr(usage, key, None) is not None
         }
+        for nested_key in ("prompt_tokens_details", "completion_tokens_details"):
+            nested = getattr(usage, nested_key, None)
+            if nested is None:
+                continue
+            if isinstance(nested, dict):
+                out[nested_key] = dict(nested)
+            else:
+                # OpenAI/litellm SDK objects expose attributes for each child.
+                child_keys = (
+                    ("cached_tokens", "audio_tokens")
+                    if nested_key == "prompt_tokens_details"
+                    else ("reasoning_tokens", "audio_tokens", "accepted_prediction_tokens", "rejected_prediction_tokens")
+                )
+                child = {
+                    k: getattr(nested, k)
+                    for k in child_keys
+                    if getattr(nested, k, None) is not None
+                }
+                if child:
+                    out[nested_key] = child
+        return out
     return {}
 
 
@@ -1832,4 +1882,18 @@ def _usage_field(usage: dict[str, Any], key: str) -> int | None:
     if isinstance(value, float):
         return int(value)
     return None
+
+
+def _usage_nested_field(usage: dict[str, Any], parent: str, child: str) -> int | None:
+    """Read a nested integer from ``usage[parent][child]`` safely.
+
+    Used for OpenAI's ``prompt_tokens_details.cached_tokens`` and
+    ``completion_tokens_details.reasoning_tokens``. Returns ``None`` when the
+    parent is missing, not a mapping, or the child is absent / non-numeric.
+    """
+
+    nested = usage.get(parent)
+    if not isinstance(nested, dict):
+        return None
+    return _usage_field(nested, child)
 

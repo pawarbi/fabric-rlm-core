@@ -26,6 +26,13 @@ class TurnRecord:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    # Nested usage details from OpenAI-style responses. ``cached_tokens`` is a
+    # subset of ``prompt_tokens`` billed at the cached-input rate (~10x cheaper
+    # for gpt-5). ``reasoning_tokens`` is a subset of ``completion_tokens`` and
+    # is the dominant cost driver for reasoning models. Both are optional and
+    # default to ``None`` so older trajectories remain readable.
+    cached_tokens: int | None = None
+    reasoning_tokens: int | None = None
     lm_call_seconds: float | None = None
     worker_execute_seconds: float | None = None
 

@@ -309,6 +309,8 @@ class AdaptiveRunner:
             turns_used=turns_used,
             prompt_tokens=getattr(result, "total_prompt_tokens", None),
             completion_tokens=getattr(result, "total_completion_tokens", None),
+            cached_tokens=getattr(result, "total_cached_tokens", None),
+            reasoning_tokens=getattr(result, "total_reasoning_tokens", None),
         )
 
     def _run_rollouts(
@@ -405,6 +407,8 @@ class _FailedResult:
     final_state: dict[str, Any] = field(default_factory=dict)
     total_prompt_tokens: int | None = None
     total_completion_tokens: int | None = None
+    total_cached_tokens: int | None = None
+    total_reasoning_tokens: int | None = None
     reflection_used: bool = False
     total_lm_seconds: float | None = None
     total_worker_seconds: float | None = None
@@ -435,6 +439,8 @@ def _failed_to_rlm_result(failed: "_FailedResult") -> Any:
         reflection_used=False,
         total_prompt_tokens=failed.total_prompt_tokens,
         total_completion_tokens=failed.total_completion_tokens,
+        total_cached_tokens=failed.total_cached_tokens,
+        total_reasoning_tokens=failed.total_reasoning_tokens,
         total_lm_seconds=failed.total_lm_seconds,
         total_worker_seconds=failed.total_worker_seconds,
     )

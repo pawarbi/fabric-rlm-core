@@ -110,6 +110,8 @@ class AttemptRecord:
     turns_used: int
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    cached_tokens: int | None = None
+    reasoning_tokens: int | None = None
 
     def to_summary(self) -> dict[str, Any]:
         """JSON-serializable summary, safe for trajectory metadata."""
@@ -137,6 +139,8 @@ class AttemptRecord:
             "elapsed_seconds": self.elapsed_seconds,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "cached_tokens": self.cached_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
             "max_turns": self.config.max_turns,
             "reasoning_effort": self.config.reasoning_effort,
             "parallel_rollouts": self.config.parallel_rollouts,
