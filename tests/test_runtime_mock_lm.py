@@ -21,7 +21,7 @@ def test_rlm_recovers_after_worker_error_and_submits() -> None:
             "```python\nvalue = 42\nSUBMIT(answer=value)\n```",
         ]
     )
-    rlm = RLM.from_task("Return 42.", outputs=["answer"], lm=lm, max_turns=3, timeout=5, enable_reflection=False)
+    rlm = RLM.from_task("Return 42.", outputs=["answer"], lm=lm, max_turns=3, timeout=5)
 
     result = rlm.run()
 
@@ -39,7 +39,7 @@ def test_rlm_requests_rewrite_for_truncated_code_fence() -> None:
             "```python\nSUBMIT(answer=1)\n```",
         ]
     )
-    rlm = RLM.from_task("Return one.", outputs=["answer"], lm=lm, max_turns=3, timeout=5, enable_reflection=False)
+    rlm = RLM.from_task("Return one.", outputs=["answer"], lm=lm, max_turns=3, timeout=5)
 
     result = rlm.run()
 
@@ -67,7 +67,7 @@ def test_submit_validation_repairs_blank_required_answer() -> None:
             "```python\nSUBMIT(answer='repaired')\n```",
         ]
     )
-    rlm = RLM.from_task("Return a non-blank answer.", outputs=["answer"], lm=lm, max_turns=2, timeout=5, enable_reflection=False)
+    rlm = RLM.from_task("Return a non-blank answer.", outputs=["answer"], lm=lm, max_turns=2, timeout=5)
 
     result = rlm.run()
 
@@ -92,7 +92,7 @@ def test_submit_validation_rejects_missing_required_field_at_max_turns() -> None
 
 def test_submit_validation_allows_empty_specific_collection_outputs() -> None:
     lm = ScriptedLM(["```python\nSUBMIT(citations=[])\n```"])
-    rlm = RLM.from_task("Return citations, possibly empty.", outputs=["citations"], lm=lm, max_turns=1, timeout=5, enable_reflection=False)
+    rlm = RLM.from_task("Return citations, possibly empty.", outputs=["citations"], lm=lm, max_turns=1, timeout=5)
 
     result = rlm.run()
 

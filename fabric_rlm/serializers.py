@@ -8,7 +8,7 @@ import types
 from pathlib import Path
 from typing import Any, Mapping
 
-DEFAULT_INJECTED_NAMES = {"File", "SUBMIT", "predict", "load_skill", "activate_skill", "list_skills"}
+DEFAULT_INJECTED_NAMES = {"File", "SUBMIT", "predict", "predict_sync", "load_skill", "activate_skill", "list_skills"}
 
 
 def freeze(

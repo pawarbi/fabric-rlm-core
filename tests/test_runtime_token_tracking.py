@@ -84,11 +84,6 @@ def test_tokens_captured_when_lm_returns_usage(monkeypatch) -> None:
                 "```python\nSUBMIT(answer=1)\n```",
                 {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
             ),
-            # Reflection turn
-            (
-                "REFLECTION_OK",
-                {"prompt_tokens": 30, "completion_tokens": 5, "total_tokens": 35},
-            ),
         ]
     )
     rlm = RLM.from_task("Return one.", outputs=["answer"], lm=lm, max_turns=3, timeout=5)
@@ -96,18 +91,14 @@ def test_tokens_captured_when_lm_returns_usage(monkeypatch) -> None:
     result = rlm.run()
 
     assert result.submitted
-    assert len(result.trajectory) == 2
+    assert len(result.trajectory) == 1
     first = result.trajectory[0]
     assert first.prompt_tokens == 100
     assert first.completion_tokens == 50
     assert first.total_tokens == 150
     assert first.token_usage == {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
-    second = result.trajectory[1]
-    assert second.prompt_tokens == 30
-    assert second.completion_tokens == 5
-    assert second.total_tokens == 35
-    assert result.total_prompt_tokens == 130
-    assert result.total_completion_tokens == 55
+    assert result.total_prompt_tokens == 100
+    assert result.total_completion_tokens == 50
 
 
 def test_tokens_none_when_lm_omits_usage(monkeypatch) -> None:
@@ -146,7 +137,6 @@ def test_timing_split_recorded(monkeypatch) -> None:
         lm=lm,
         max_turns=2,
         timeout=5,
-        enable_reflection=False,
     )
 
     result = rlm.run()

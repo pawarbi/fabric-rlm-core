@@ -192,8 +192,8 @@ def test_skill_loader_extracts_verifier_source(tmp_path) -> None:
     assert without_verifier.verifier_source is None
 
 
-def test_verifier_passes_then_reflection_fires(monkeypatch) -> None:
-    """Valid SUBMIT -> verifier passes -> reflection runs once -> accept."""
+def test_verifier_passes_then_submit_returns(monkeypatch) -> None:
+    """Valid SUBMIT -> verifier passes -> accept (no reflection turn)."""
 
     skill = _make_skill(
         "mcm_stub",
@@ -205,14 +205,12 @@ def test_verifier_passes_then_reflection_fires(monkeypatch) -> None:
         monkeypatch,
         results=[
             _submit({"Q1": "(M_1*M_2)", "Q2": 10, "Q3": 1, "Q4": 2, "Q5": 10}),
-            _ran("REFLECTION_OK"),
         ],
         verifier_results=[_verifier_pass()],
     )
     lm = ScriptedLM(
         [
             "```python\nSUBMIT(Q1='(M_1*M_2)', Q2=10, Q3=1, Q4=2, Q5=10)\n```",
-            "```python\nprint('REFLECTION_OK')\n```",
         ]
     )
     rlm = RLM.from_task(
@@ -229,9 +227,8 @@ def test_verifier_passes_then_reflection_fires(monkeypatch) -> None:
 
     assert result.submitted is True
     assert result.payload == {"Q1": "(M_1*M_2)", "Q2": 10, "Q3": 1, "Q4": 2, "Q5": 10}
-    assert result.reflection_used is True
     turn_types = [t.turn_type for t in result.trajectory]
-    assert turn_types == ["normal", "reflection"]
+    assert turn_types == ["normal"]
     assert "verifier_repair" not in turn_types
     # The runtime ran exactly one verifier execution.
     assert len(fake.verifier_executed) == 1
@@ -252,7 +249,6 @@ def test_verifier_fails_triggers_repair_turn(monkeypatch) -> None:
         results=[
             _submit({"Q1": "(M_1*M_2)", "Q2": 10, "Q3": 1, "Q4": 2, "Q5": -99999}),
             _submit({"Q1": "(M_1*M_2)", "Q2": 10, "Q3": 1, "Q4": 2, "Q5": 10}),
-            _ran("REFLECTION_OK"),
         ],
         verifier_results=[
             _verifier_assert("Q5 must equal (Q4-Q3)*Q2 = 10, got -99999"),
@@ -263,7 +259,6 @@ def test_verifier_fails_triggers_repair_turn(monkeypatch) -> None:
         [
             "```python\nSUBMIT(Q1='(M_1*M_2)', Q2=10, Q3=1, Q4=2, Q5=-99999)\n```",
             "```python\nSUBMIT(Q1='(M_1*M_2)', Q2=10, Q3=1, Q4=2, Q5=10)\n```",
-            "```python\nprint('REFLECTION_OK')\n```",
         ]
     )
     rlm = RLM.from_task(
@@ -281,7 +276,7 @@ def test_verifier_fails_triggers_repair_turn(monkeypatch) -> None:
     assert result.submitted is True
     assert result.payload["Q5"] == 10
     turn_types = [t.turn_type for t in result.trajectory]
-    assert turn_types == ["normal", "verifier_repair", "reflection"]
+    assert turn_types == ["normal", "verifier_repair"]
     # Repair feedback should reach the LM with the assertion message.
     second_call_messages = lm.messages[1]
     feedback = second_call_messages[-1]["content"]
@@ -302,13 +297,11 @@ def test_skill_without_verifier_no_change(monkeypatch) -> None:
         monkeypatch,
         results=[
             _submit({"answer": 7}),
-            _ran("REFLECTION_OK"),
         ],
     )
     lm = ScriptedLM(
         [
             "```python\nSUBMIT(answer=7)\n```",
-            "```python\nprint('REFLECTION_OK')\n```",
         ]
     )
     rlm = RLM.from_task(
@@ -326,7 +319,7 @@ def test_skill_without_verifier_no_change(monkeypatch) -> None:
     assert result.submitted is True
     assert result.payload == {"answer": 7}
     turn_types = [t.turn_type for t in result.trajectory]
-    assert turn_types == ["normal", "reflection"]
+    assert turn_types == ["normal"]
     # No verifier code was ever executed.
     assert fake.verifier_executed == []
 
@@ -344,14 +337,12 @@ def test_buggy_verifier_logs_and_accepts(monkeypatch, caplog) -> None:
         monkeypatch,
         results=[
             _submit({"answer": 1}),
-            _ran("REFLECTION_OK"),
         ],
         verifier_results=[_verifier_name_error()],
     )
     lm = ScriptedLM(
         [
             "```python\nSUBMIT(answer=1)\n```",
-            "```python\nprint('REFLECTION_OK')\n```",
         ]
     )
     rlm = RLM.from_task(
@@ -371,7 +362,7 @@ def test_buggy_verifier_logs_and_accepts(monkeypatch, caplog) -> None:
     assert result.payload == {"answer": 1}
     turn_types = [t.turn_type for t in result.trajectory]
     assert "verifier_repair" not in turn_types
-    assert turn_types == ["normal", "reflection"]
+    assert turn_types == ["normal"]
     # We did try to run the verifier, but it errored and was tolerated.
     assert len(fake.verifier_executed) == 1
     assert any(
@@ -393,13 +384,11 @@ def test_enable_verifier_false_skips_execution(monkeypatch) -> None:
         monkeypatch,
         results=[
             _submit({"Q1": "x", "Q2": 0, "Q3": 1, "Q4": 1, "Q5": 0}),
-            _ran("REFLECTION_OK"),
         ],
     )
     lm = ScriptedLM(
         [
             "```python\nSUBMIT(Q1='x', Q2=0, Q3=1, Q4=1, Q5=0)\n```",
-            "```python\nprint('REFLECTION_OK')\n```",
         ]
     )
     rlm = RLM.from_task(

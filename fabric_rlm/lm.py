@@ -172,109 +172,182 @@ def _is_auth_expired(exc: BaseException) -> bool:
     )
 
 
-class _RefreshingLM:
-    """Wraps `dspy.LM` and retries once on bearer-token expiry.
+def _make_refreshing_lm_class() -> type:
+    """Build the `_RefreshingLM` class lazily so we can subclass dspy.LM.
 
-    Provider-agnostic: works for any short-lived bearer auth (Azure AAD,
-    GCP IAM, AWS IAM, custom OIDC) by accepting a `token_provider`
-    callable. On `AuthenticationError`, calls `token_provider()`, replaces
-    the configured header (default `Authorization`), and retries once.
-
-    The class is intentionally not a `dspy.LM` subclass — composing rather
-    than inheriting keeps the wrapper safe across dspy versions where
-    `__init__` / `__call__` signatures may shift.
-
-    Parameters
-    ----------
-    model
-        Same as `dspy.LM(model, ...)`.
-    token_provider
-        Zero-arg callable returning a fresh bearer header value. When
-        `None`, the wrapper degrades to plain `dspy.LM` behaviour.
-    token_header
-        Name of the header to update (default `"Authorization"`). Set to
-        `"X-Api-Key"` etc. for non-bearer providers.
-    **kwargs
-        Forwarded to `dspy.LM(...)`.
+    Importing dspy at module top-level is fine in production but slows
+    down `import fabric_rlm.lm` when callers only need `is_reasoning_model`
+    or `register_backend`. We defer the import to first use.
     """
+    import dspy
 
-    def __init__(
-        self,
-        model: str,
-        *,
-        token_provider: Callable[[], str] | None = None,
-        token_header: str = "Authorization",
-        **kwargs: Any,
-    ) -> None:
-        import dspy
+    class _RefreshingLM(dspy.LM):
+        """A `dspy.LM` subclass that refreshes its bearer token on auth-expiry.
 
-        self._inner = dspy.LM(model, **kwargs)
-        self._token_provider = token_provider
-        self._token_header = token_header
-        # dspy 3.2 reasoning-model branch stores the cap as
-        # ``max_completion_tokens`` (lm.py L77) but its truncation log
-        # path indexes ``self.kwargs['max_tokens']`` (L301), raising
-        # ``KeyError('max_tokens')`` whenever a long-prompt response is
-        # truncated (e.g. the synthesize call in decompose_rung). Mirror
-        # the value into both keys so the format string finds it.
-        inner_kwargs = self._inner.kwargs
-        if "max_tokens" not in inner_kwargs and "max_completion_tokens" in inner_kwargs:
-            inner_kwargs["max_tokens"] = inner_kwargs["max_completion_tokens"]
+        Subclasses `dspy.LM` (and therefore `dspy.BaseLM`) so it passes the
+        `isinstance(lm, dspy.BaseLM)` check that `dspy.Predict` and other
+        dspy primitives perform on the configured LM. This is critical for
+        the worker-side `predict()` helper that wraps a sub-LM in
+        `dspy.Predict` — composition-only wrappers fail that check.
 
-    # Forward attribute access for everything we don't own (model, kwargs,
-    # history, callbacks, etc.) — keeps duck-typing with dspy.LM intact.
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
+        The wrapper is provider-agnostic: it works for any short-lived bearer
+        token (Azure AAD, GCP IAM, AWS IAM, custom OIDC) by accepting a
+        `token_provider: Callable[[], str]` and re-applying it on 401.
 
-    @property
-    def kwargs(self) -> dict[str, Any]:
-        return self._inner.kwargs
-
-    def copy(self, **overrides: Any) -> "_RefreshingLM":
-        """Return a new wrapper around `self._inner.copy(**overrides)`.
-
-        The runtime calls ``lm.copy(reasoning_effort=...)`` to clone an LM
-        per attempt without mutating the shared instance. If we let this
-        fall through to ``__getattr__`` it would return a plain ``dspy.LM``
-        and silently strip our auth-refresh capability — long Fabric runs
-        would then start failing with 401 around the AAD token expiry.
+        Parameters
+        ----------
+        model
+            Same as `dspy.LM(model, ...)`.
+        token_provider
+            Zero-arg callable returning a fresh bearer header value. When
+            `None`, the wrapper degrades to plain `dspy.LM` behaviour.
+        token_header
+            Name of the header to update (default `"Authorization"`). Set to
+            `"X-Api-Key"` etc. for non-bearer providers.
+        **kwargs
+            Forwarded to `dspy.LM(...)`.
         """
-        new = _RefreshingLM.__new__(_RefreshingLM)
-        new._inner = self._inner.copy(**overrides)
-        new._token_provider = self._token_provider
-        new._token_header = self._token_header
-        inner_kwargs = new._inner.kwargs
-        if "max_tokens" not in inner_kwargs and "max_completion_tokens" in inner_kwargs:
-            inner_kwargs["max_tokens"] = inner_kwargs["max_completion_tokens"]
-        return new
 
-    def _refresh(self) -> bool:
-        if self._token_provider is None:
-            return False
-        try:
-            new_value = self._token_provider()
-        except Exception:  # provider failure — let the original error surface
-            return False
-        hdrs = dict(self._inner.kwargs.get("extra_headers") or {})
-        hdrs[self._token_header] = new_value
-        self._inner.kwargs["extra_headers"] = hdrs
-        return True
+        def __init__(
+            self,
+            model: str,
+            *,
+            token_provider: Callable[[], str] | None = None,
+            token_header: str = "Authorization",
+            **kwargs: Any,
+        ) -> None:
+            super().__init__(model, **kwargs)
+            self._token_provider = token_provider
+            self._token_header = token_header
+            self._mirror_max_tokens()
 
-    def _do_call(self, *args: Any, **kwargs: Any) -> Any:
-        """Hook for tests and subclasses. Production path delegates to dspy.LM."""
-        return self._inner(*args, **kwargs)
+        def _mirror_max_tokens(self) -> None:
+            # dspy 3.2 reasoning-model branch stores the cap as
+            # ``max_completion_tokens`` (lm.py L77) but its truncation log
+            # path indexes ``self.kwargs['max_tokens']`` (L301), raising
+            # ``KeyError('max_tokens')`` whenever a long-prompt response is
+            # truncated (e.g. the synthesize call in decompose_rung). Mirror
+            # the value into both keys so the format string finds it.
+            if "max_tokens" not in self.kwargs and "max_completion_tokens" in self.kwargs:
+                self.kwargs["max_tokens"] = self.kwargs["max_completion_tokens"]
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        try:
-            return self._do_call(*args, **kwargs)
-        except Exception as exc:
-            if not _is_auth_expired(exc):
-                raise
-            if not self._refresh():
-                raise
-            # one retry, then surface whatever happens
-            return self._do_call(*args, **kwargs)
+        def copy(self, **overrides: Any) -> "_RefreshingLM":
+            """Return a copy with refresh capability preserved.
+
+            ``dspy.LM.copy`` uses ``copy.deepcopy(self)`` so the resulting
+            instance is the correct subclass. We re-mirror max_tokens
+            because dspy may have re-set kwargs based on overrides.
+            """
+            new = super().copy(**overrides)
+            new._mirror_max_tokens()
+            return new
+
+        def _refresh(self) -> bool:
+            if self._token_provider is None:
+                return False
+            try:
+                new_value = self._token_provider()
+            except Exception:  # provider failure — let the original error surface
+                return False
+            hdrs = dict(self.kwargs.get("extra_headers") or {})
+            hdrs[self._token_header] = new_value
+            self.kwargs["extra_headers"] = hdrs
+            return True
+
+        def _do_call(self, *args: Any, **kwargs: Any) -> Any:
+            """Hook for tests and subclasses. Production path delegates to dspy.LM.__call__."""
+            return dspy.LM.__call__(self, *args, **kwargs)
+
+        # Wrap __call__, forward, and aforward so refresh fires regardless
+        # of which entry point is used:
+        #   - `lm("...")` → __call__ (used by tests, runtime, worker `predict()`
+        #     fallbacks)
+        #   - `dspy.Predict(...)(...)` → forward (sync) or aforward (async)
+        # Wrapping all three keeps the refresh-on-401 behaviour reachable
+        # from every call site.
+        def __call__(self, *args: Any, **kwargs: Any) -> Any:
+            try:
+                return self._do_call(*args, **kwargs)
+            except Exception as exc:
+                if not _is_auth_expired(exc):
+                    raise
+                if not self._refresh():
+                    raise
+                return self._do_call(*args, **kwargs)
+
+        def forward(self, *args: Any, **kwargs: Any) -> Any:
+            try:
+                return super().forward(*args, **kwargs)
+            except Exception as exc:
+                if not _is_auth_expired(exc):
+                    raise
+                if not self._refresh():
+                    raise
+                return super().forward(*args, **kwargs)
+
+        async def aforward(self, *args: Any, **kwargs: Any) -> Any:
+            try:
+                return await super().aforward(*args, **kwargs)
+            except Exception as exc:
+                if not _is_auth_expired(exc):
+                    raise
+                if not self._refresh():
+                    raise
+                return await super().aforward(*args, **kwargs)
+
+    return _RefreshingLM
+
+
+# Cache the class after first construction so isinstance checks remain stable.
+_REFRESHING_LM_CLS: type | None = None
+
+
+def _get_refreshing_lm_cls() -> type:
+    global _REFRESHING_LM_CLS
+    if _REFRESHING_LM_CLS is None:
+        _REFRESHING_LM_CLS = _make_refreshing_lm_class()
+    return _REFRESHING_LM_CLS
+
+
+def _RefreshingLM(*args: Any, **kwargs: Any) -> Any:
+    """Factory that returns a `_RefreshingLM` instance.
+
+    Kept as a callable (not the class itself) so the dspy import stays
+    lazy. ``isinstance(x, _RefreshingLM)`` is not supported; use
+    ``isinstance(x, _get_refreshing_lm_cls())`` if needed (rare).
+    """
+    cls = _get_refreshing_lm_cls()
+    return cls(*args, **kwargs)
 
 
 register_backend("fabric/", _fabric_factory)
+
+
+def _try_register_openai_models_for_fabric() -> None:
+    """Alias bare OpenAI model names to the Fabric backend when in Fabric.
+
+    Inside Fabric, ``synapse.ml.fabric`` is importable. When that's true, we
+    register the common OpenAI model-family prefixes (``gpt-``, ``o1``,
+    ``o3``, ``o4``) to route through ``_fabric_factory`` so that string
+    specs like ``sub_lm="gpt-4.1"`` resolve to a Fabric-authenticated LM
+    in the worker subprocess (which cannot inherit a live ``FabricLM``
+    instance from the parent).
+
+    Outside Fabric (local dev, CI, etc.) ``synapse.ml.fabric`` is not
+    importable and these aliases are never registered, so bare ``"gpt-4o"``
+    spec strings continue to use ``dspy.LM(...)`` with whatever
+    ``OPENAI_API_KEY`` the developer has configured.
+    """
+    try:
+        import synapse.ml.fabric  # noqa: F401
+    except ImportError:
+        return
+    # Idempotent: register_backend overwrites a duplicate prefix.
+    register_backend("gpt-", _fabric_factory)
+    register_backend("o1", _fabric_factory)
+    register_backend("o3", _fabric_factory)
+    register_backend("o4", _fabric_factory)
+
+
+_try_register_openai_models_for_fabric()
 

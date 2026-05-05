@@ -3,6 +3,10 @@
 The wrapper must be provider-agnostic: it works for any short-lived bearer
 token (Azure AAD, GCP IAM, AWS IAM, custom OIDC) by accepting a
 `token_provider: Callable[[], str]` and re-applying it on 401.
+
+The wrapper subclasses `dspy.LM` so it passes the `isinstance(lm, dspy.BaseLM)`
+check that `dspy.Predict` performs on the configured LM. This is essential
+for the worker-side `predict()` helper that wraps a sub-LM in `dspy.Predict`.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from fabric_rlm.lm import _RefreshingLM
+from fabric_rlm.lm import _get_refreshing_lm_cls, _is_auth_expired
 
 
 class _FakeAuthError(Exception):
@@ -25,19 +29,25 @@ class _FakeAuthError(Exception):
 _FakeAuthError.__name__ = "AuthenticationError"
 
 
-class _ScriptedLM(_RefreshingLM):
-    """Test double: replays a scripted sequence of return values / exceptions."""
+_RefreshingLM = _get_refreshing_lm_cls()
+
+
+class _ScriptedLM(_RefreshingLM):  # type: ignore[misc, valid-type]
+    """Test double: replays a scripted sequence of return values / exceptions.
+
+    Overrides BOTH `_do_call` (used by `__call__`) and `forward` (used by
+    `dspy.Predict`) so a single script drives whichever entry point a test
+    exercises. The forward override re-implements the same refresh-then-retry
+    logic so we can verify retry behaviour without actually relying on the
+    base class's forward implementation.
+    """
 
     def __init__(self, script: list[Any], **kwargs: Any) -> None:
-        # Avoid hitting any real network — supply a no-op model and api_key
         super().__init__("openai/gpt-4o", api_key="dummy", cache=False, **kwargs)
         self._script = list(script)
         self.call_count = 0
 
-    # Override the underlying call (dspy.LM.__call__) so we don't hit litellm.
-    # dspy's __call__ delegates to forward → request → litellm; we short-circuit
-    # by overriding the bottom-most thing _RefreshingLM.__call__ delegates to.
-    def _do_call(self, *args: Any, **kwargs: Any) -> Any:
+    def _next(self) -> Any:
         self.call_count += 1
         if not self._script:
             raise RuntimeError("script exhausted")
@@ -45,6 +55,19 @@ class _ScriptedLM(_RefreshingLM):
         if isinstance(item, Exception):
             raise item
         return item
+
+    def _do_call(self, *args: Any, **kwargs: Any) -> Any:
+        return self._next()
+
+    def forward(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+        try:
+            return self._next()
+        except Exception as exc:
+            if not _is_auth_expired(exc):
+                raise
+            if not self._refresh():
+                raise
+            return self._next()
 
 
 def test_refresh_on_auth_error_succeeds() -> None:
@@ -122,7 +145,6 @@ def test_token_provider_failure_does_not_mask_original_error() -> None:
     lm = _ScriptedLM(script=[err], token_provider=provider)
     with pytest.raises(Exception) as exc_info:
         lm("hi")
-    # Caller sees the auth error (or chained), not just the provider failure.
     msg = str(exc_info.value) + " | " + str(getattr(exc_info.value, "__cause__", ""))
     assert "401" in msg or "AuthenticationError" in type(exc_info.value).__name__ or "expired" in msg.lower()
     assert lm.call_count == 1  # we did not retry because refresh failed
@@ -130,6 +152,7 @@ def test_token_provider_failure_does_not_mask_original_error() -> None:
 
 def test_custom_token_header() -> None:
     """Header name is configurable (e.g. X-Api-Key for non-Azure providers)."""
+
     def provider() -> str:
         return "new-key"
 
@@ -182,12 +205,10 @@ def test_auth_detection_ignores_unrelated_401_in_message() -> None:
 def test_copy_preserves_wrapper_and_refresh_capability() -> None:
     """REGRESSION: lm.copy(reasoning_effort=...) must NOT strip the auth-refresh wrapper.
 
-    Pre-fix bug: `_RefreshingLM.copy()` fell through `__getattr__` to
-    `self._inner.copy(...)`, returning a plain `dspy.LM`. The runtime
-    calls `lm.copy(reasoning_effort=...)` per attempt to clone the LM
-    without mutating the shared instance — losing the wrapper meant
-    long-running Fabric jobs (>1 hour) silently lost AAD-refresh and
-    started failing with 401 around the token's natural expiry.
+    The runtime calls ``lm.copy(reasoning_effort=...)`` per attempt to clone
+    the LM without mutating the shared instance. The wrapper-preserving
+    behaviour is now provided by `dspy.LM.copy` itself (deepcopy), but we
+    keep this regression test to guard against accidental loss.
     """
     refresh_calls: list[int] = []
 
@@ -207,8 +228,8 @@ def test_copy_preserves_wrapper_and_refresh_capability() -> None:
     # Cloned wrapper carries the same provider + header config
     assert cloned._token_provider is provider
     assert cloned._token_header == "Authorization"
-    # And the inner LM was actually copied (not the same instance)
-    assert cloned._inner is not lm._inner
+    # And the cloned instance is a distinct object
+    assert cloned is not lm
 
 
 def test_max_tokens_mirrored_for_reasoning_models() -> None:
@@ -217,10 +238,6 @@ def test_max_tokens_mirrored_for_reasoning_models() -> None:
     `self.kwargs['max_tokens']` (L301), raising `KeyError('max_tokens')`
     on every truncated response. `_RefreshingLM` mirrors the value into
     both keys so dspy's broken format string finds it.
-
-    Real-world impact: ~16% of dev10 bench questions failed with
-    `synthesize call failed: 'max_tokens'` because long sub-answer
-    concatenations triggered truncation in the synthesize call.
     """
     lm = _RefreshingLM(
         "openai/gpt-5",
@@ -229,11 +246,9 @@ def test_max_tokens_mirrored_for_reasoning_models() -> None:
         temperature=1.0,
         max_tokens=16000,
     )
-    # Both keys present and equal — guards against dspy's KeyError site
     assert lm.kwargs["max_tokens"] == 16000
     assert lm.kwargs["max_completion_tokens"] == 16000
 
-    # And the mirror survives copy()
     cloned = lm.copy(temperature=1.0)
     assert cloned.kwargs["max_tokens"] == 16000
     assert cloned.kwargs["max_completion_tokens"] == 16000
@@ -241,10 +256,7 @@ def test_max_tokens_mirrored_for_reasoning_models() -> None:
 
 def test_max_tokens_not_mirrored_for_non_reasoning_models() -> None:
     """For non-reasoning models dspy already stores `max_tokens` directly
-    (lm.py L81) so we MUST NOT clobber or duplicate it — only mirror when
-    the bugged-key (`max_tokens`) is missing AND `max_completion_tokens`
-    exists. This guards future-us from accidentally introducing the
-    inverse bug.
+    (lm.py L81) so we MUST NOT clobber or duplicate it.
     """
     lm = _RefreshingLM(
         "openai/gpt-4o",
@@ -254,5 +266,45 @@ def test_max_tokens_not_mirrored_for_non_reasoning_models() -> None:
         max_tokens=4000,
     )
     assert lm.kwargs["max_tokens"] == 4000
-    # Non-reasoning branch never sets max_completion_tokens — leave alone
     assert "max_completion_tokens" not in lm.kwargs
+
+
+def test_is_dspy_baselm_subclass() -> None:
+    """REGRESSION: `_RefreshingLM` must subclass `dspy.BaseLM` so that
+    `dspy.Predict._forward_preprocess` accepts it as the configured LM.
+
+    Pre-fix bug: composition-only wrapper failed dspy 3.x's hard
+    `isinstance(lm, dspy.BaseLM)` check, breaking the worker-side
+    `predict()` helper for any sub_lm built via `FabricLM`.
+    """
+    import dspy
+
+    lm = _RefreshingLM("openai/gpt-4o", api_key="dummy", cache=False)
+    assert isinstance(lm, dspy.BaseLM)
+    assert isinstance(lm, dspy.LM)
+
+
+def test_dspy_predict_accepts_refreshing_lm() -> None:
+    """REGRESSION: `dspy.Predict(...)` must accept `_RefreshingLM` as the LM
+    inside `dspy.context(...)`. This is the path the worker `predict()`
+    helper takes when the agent calls `await predict(signature, ...)`.
+
+    Verifies that the isinstance check inside `Predict._forward_preprocess`
+    does NOT raise `ValueError("LM must be an instance of dspy.BaseLM, ...")`.
+    """
+    import dspy
+
+    lm = _RefreshingLM("openai/gpt-4o", api_key="dummy", cache=False)
+    pr = dspy.Predict("english -> french")
+
+    with dspy.context(lm=lm):
+        try:
+            pr(english="Hello")
+        except ValueError as exc:
+            if "BaseLM" in str(exc):
+                raise AssertionError(
+                    f"_RefreshingLM rejected by dspy.Predict isinstance check: {exc}"
+                )
+        except Exception:
+            # Other failures (no real backend, parse errors) are out of scope.
+            pass

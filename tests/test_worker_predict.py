@@ -74,3 +74,51 @@ def test_predict_wraps_file_inputs_for_dspy_image_fields(monkeypatch, tmp_path) 
     assert isinstance(seen["kwargs"]["image"], dspy.Image)
     assert seen["kwargs"]["image"].url.startswith("data:image/")
     assert result.a == "ok"
+
+
+def test_predict_sync_runs_without_asyncio_run(monkeypatch) -> None:
+    """REGRESSION: predict_sync must work without users writing asyncio.run().
+
+    The worker is already inside a running event loop when user code executes,
+    so we rely on nest_asyncio (applied at _worker import) to make
+    loop.run_until_complete re-entrant inside predict_sync.
+    """
+    import asyncio as _asyncio
+
+    class FakePredict:
+        def __init__(self, sig):
+            pass
+
+        async def acall(self, **kwargs):
+            return dspy.Prediction(french="bonjour")
+
+    monkeypatch.setattr(dspy, 'Predict', FakePredict)
+    monkeypatch.setattr(_worker, '_get_lm', lambda: object())
+
+    # Simulate the worker context: an event loop is already running.
+    async def driver():
+        # Direct call (no asyncio.run wrapper) — this is what the agent will do.
+        return _worker.predict_sync('english -> french', english='hello')
+
+    result = _asyncio.run(driver())
+    assert result.french == 'bonjour'
+
+
+def test_predict_sync_works_outside_running_loop(monkeypatch) -> None:
+    """predict_sync must also work in plain sync code (no loop yet running).
+
+    Falls back to asyncio.run when no loop is active.
+    """
+
+    class FakePredict:
+        def __init__(self, sig):
+            pass
+
+        async def acall(self, **kwargs):
+            return dspy.Prediction(french='bonjour')
+
+    monkeypatch.setattr(dspy, 'Predict', FakePredict)
+    monkeypatch.setattr(_worker, '_get_lm', lambda: object())
+
+    result = _worker.predict_sync('english -> french', english='hello')
+    assert result.french == 'bonjour'

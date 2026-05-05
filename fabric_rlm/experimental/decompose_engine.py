@@ -136,7 +136,6 @@ class DecomposeRLMAdapter:
                 trajectory=traj,
                 final_state={},
                 failure_reason=result.error or "decompose_rung_failure",
-                reflection_used=False,
                 total_lm_seconds=elapsed,
                 total_worker_seconds=elapsed,
             )
@@ -148,7 +147,6 @@ class DecomposeRLMAdapter:
             trajectory=traj,
             final_state=dict(payload),
             failure_reason=None,
-            reflection_used=False,
             total_lm_seconds=elapsed,
             total_worker_seconds=elapsed,
         )

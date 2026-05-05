@@ -140,6 +140,7 @@ def _install_runtime_api() -> None:
             "File": File,
             "SUBMIT": SUBMIT,
             "predict": predict,
+            "predict_sync": predict_sync,
             "load_skill": load_skill,
             "activate_skill": activate_skill,
             "list_skills": list_skills,
@@ -190,6 +191,41 @@ async def predict(
         if inspect.isawaitable(result):
             result = await result
         return _serialize_predict_result(dspy, result)
+
+
+def predict_sync(
+    signature: Any,
+    instructions: str | None = None,
+    pydantic_schemas: dict[str, type] | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Synchronous wrapper around :func:`predict`.
+
+    Lets users call the sub-LM without writing ``asyncio.run(...)`` boilerplate
+    inside every turn::
+
+        result = predict_sync('english -> french', english=phrase)
+        SUBMIT(answer=result.french)
+
+    Safe to call even though the worker is already inside a running event
+    loop because ``nest_asyncio.apply()`` runs at module import (see top of
+    this file). If ``nest_asyncio`` is unavailable, falls back to creating
+    a fresh loop.
+    """
+
+    coro = predict(
+        signature,
+        instructions=instructions,
+        pydantic_schemas=pydantic_schemas,
+        **kwargs,
+    )
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            return loop.run_until_complete(coro)
+    except RuntimeError:
+        pass
+    return asyncio.run(coro)
 
 
 def _build_dspy_signature(

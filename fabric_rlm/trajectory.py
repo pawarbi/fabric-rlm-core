@@ -35,6 +35,9 @@ class TurnRecord:
     reasoning_tokens: int | None = None
     lm_call_seconds: float | None = None
     worker_execute_seconds: float | None = None
+    # Populated when the worker called SUBMIT(...) on this turn — the literal
+    # payload that was submitted. ``None`` for non-submit turns.
+    submit_payload: dict[str, Any] | None = None
 
     @property
     def state_keys(self) -> list[str]:

@@ -107,7 +107,7 @@ def test_happy_path_with_fake_interpreter_still_submits(monkeypatch) -> None:
     _install_fake_interpreter(monkeypatch, fake)
 
     lm = ScriptedLM(["```python\nSUBMIT(answer=1)\n```"])
-    rlm = RLM.from_task("Return one.", outputs=["answer"], lm=lm, max_turns=2, timeout=5, enable_reflection=False)
+    rlm = RLM.from_task("Return one.", outputs=["answer"], lm=lm, max_turns=2, timeout=5)
 
     result = rlm.run()
 
