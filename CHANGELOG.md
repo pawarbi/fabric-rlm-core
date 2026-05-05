@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.1 — `excel_modify` skill + SpreadsheetBench head-to-head
+
+### New
+
+- **`fabric_rlm/skills/excel_modify.md`** — task-agnostic skill for in-place
+  modification of `.xlsx` workbooks via openpyxl. Triggered by keywords
+  `xlsx`, `workbook`, `openpyxl`, `sheet`, `cell range`, etc. Bakes in two
+  recipes that fixed real benchmark failures:
+  1. **Two-load discovery**: load the workbook with `data_only=False` for
+     editing and `data_only=True` for reading source values, so cells whose
+     source is a formula return numbers rather than the literal `'=D3+F3'`
+     string.
+  2. **Mandatory verify-by-reload**: after `wb.save()`, reload with
+     `data_only=True` and assert no cell in the target range is `None` or
+     starts with `=`. Catches the formula-instead-of-value failure class.
+
+### Bench
+
+- **SpreadsheetBench Verified-400 head-to-head** (50Q stratified subset),
+  reproducible end-to-end on Fabric:
+  - Strategy A (gpt-5 single-shot, dspy.Predict + subprocess exec):
+    23/50 = 46.0%, $2.21
+  - Strategy F (gpt-4.1-mini + RLM + Python interpreter + `excel_modify`):
+    21/50 = 42.0%, $0.51 (4.3× cheaper, 2.3× faster wall-clock)
+  - Union pass rate: 29/50 = 58.0%
+  - Report: `bench/spreadsheetbench/REPORT_ssb_h2h_50q.md`
+  - Subset metadata: `bench/spreadsheetbench/ssb_subset_50.jsonl`
+  - Notebook generator: `scripts/build_ssb_notebook.py`
+
 ## 0.1.11 (unreleased) — PLAN / VERIFY / REFLECT (PVR) contract
 
 **Bug fix (dev6):** `Trajectory.__bool__` now explicitly returns `True`. Previously a `Trajectory` with zero turns evaluated as falsy because `__len__` was defined and Python falls back to it for truthiness, causing downstream `if traj: ...` guards (in benchmarks and result-collection helpers) to silently discard the trajectory's metadata — including the entire `adaptive` payload. Found while diagnosing a 5-way comparison where `EffortLadderPolicy` appeared to record 0 attempts on every question.
