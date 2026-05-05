@@ -55,6 +55,9 @@ print(result.answer)
 
 - **`QUICKSTART.md`** — step-by-step getting-started guide (install, first
   run, Fabric notebook usage, skill authoring).
+- **`docs/fabric-runtime-deps.md`** — **read this if your Fabric notebook fails at
+  import time** (`Sentinel`, `yarl.Query`, `aiohttp.ConnectionTimeoutError`).  Use the
+  Python 3.12 `jupyter_python` kernel + `%pip` magic, not the Synapse PySpark kernel.
 - **`fabric_rlm_design.md`** — design notes and the long-form story behind
   the runtime.
 - **`CHANGELOG.md`** — release history.

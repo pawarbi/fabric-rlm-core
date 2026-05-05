@@ -19,9 +19,13 @@ import argparse
 import json
 from pathlib import Path
 
-WHEEL = "fabric_rlm-0.1.11.dev17+sublm-py3-none-any.whl"
+WHEEL = "fabric_rlm-0.2.0-py3-none-any.whl"
 WHEEL_PATH = f"/lakehouse/default/Files/fabric_rlm_longcot/wheels/{WHEEL}"
-DATASET_PATH = "/lakehouse/default/Files/fabric_rlm_longcot/datasets/longcot_cs_hard_holdout25.jsonl"
+DATASETS = {
+    "cs": "/lakehouse/default/Files/fabric_rlm_longcot/datasets/longcot_cs_hard_regression25.jsonl",
+    "aqua": "/lakehouse/default/Files/fabric_rlm_longcot/datasets/aqua_rat_15.jsonl",
+    "dabench": "/lakehouse/default/Files/fabric_rlm_longcot/datasets/dabench_15.jsonl",
+}
 
 WS_ID = "82ad2591-974a-4ad4-ace6-e24879274a4b"
 LH_ID = "9d10bce5-1edc-4875-83c4-ac0a98a02775"
@@ -34,43 +38,65 @@ STRATEGY_INFO = {
     "D": {"label": "fabric_reflect", "title": "D — Fabric RLM (v6-custom, reflect_only)"},
     "E": {"label": "fabric_ladder", "title": "E — Fabric RLM + EffortLadder (v6-custom, adaptive, deterministic minimal->low->medium)"},
     "F": {"label": "fabric_bandit", "title": "F — Fabric RLM + EffortBandit (v6-custom, adaptive, Thompson-sampled minimal->low->medium->high with per-template Beta posteriors, 4-rung ladder)"},
+    "S": {"label": "fabric_sublm", "title": "S — Fabric RLM (v6-custom, full PVR) + sub_lm=gpt-4.1 (worker LM split)"},
 }
 
 
+CELL_META = {"language": "python", "language_group": "jupyter_python"}
+
+
 def cell_code(src: str) -> dict:
-    return {"cell_type": "code", "metadata": {}, "execution_count": None,
+    return {"cell_type": "code", "metadata": dict(CELL_META), "execution_count": None,
             "outputs": [], "source": [line + "\n" for line in src.splitlines()]}
 
 
 def cell_md(src: str) -> dict:
-    return {"cell_type": "markdown", "metadata": {},
+    return {"cell_type": "markdown", "metadata": dict(CELL_META),
             "source": [line + "\n" for line in src.splitlines()]}
 
 
-def build(strategy: str, smoke_n: int | None, run_id: str) -> dict:
+NB_KERNELSPEC = {
+    "kernelspec": {"display_name": "Python 3.12", "language": "python", "name": "python3.12"},
+    "language_info": {"name": "python"},
+    "kernel_info": {"name": "jupyter", "jupyter_kernel_name": "python3.12"},
+    "microsoft": {"language": "python", "language_group": "jupyter_python"},
+}
+
+
+def build(strategy: str, smoke_n: int | None, run_id: str, dataset: str = "cs", base_effort: str = "minimal") -> dict:
     info = STRATEGY_INFO[strategy]
     label = info["label"]
     smoke_suffix = f" — SMOKE n={smoke_n}" if smoke_n else ""
+    dataset_path = DATASETS[dataset]
 
     cells = []
-    cells.append(cell_code(
-        '%%configure -f\n'
-        '{"vCores": 4, "defaultLakehouse": '
-        f'{{"name": "{LH_NAME}", "id": "{LH_ID}", "workspaceId": "{WS_ID}"}}}}'
-    ))
     cells.append(cell_md(
         f"# 5-way comparison · Strategy {strategy} · {info['title']}{smoke_suffix}\n"
         f"\n"
-        f"Wheel: `{WHEEL}` · Dataset: `longcot_cs_hard_holdout25.jsonl`\n"
+        f"Wheel: `{WHEEL}` · Dataset: `{dataset_path.rsplit('/', 1)[-1]}`\n"
         f"\n"
-        f"Shared `RUN_ID`: `{run_id}` (joins across A/C/D/E + local B for analysis)."
+        f"Shared `RUN_ID`: `{run_id}` (joins across A/C/D/E + local B for analysis).\n"
+        f"\n"
+        f"**Kernel:** Python 3.12 (`jupyter_python`) — same as `rlm_massive_log_demo_v5`.\n"
+        f"Lakehouse is pinned via notebook metadata (`dependencies.lakehouse`)."
+    ))
+
+    # %pip install cell -- same recipe as the production rlm_massive_log_demo_v5
+    # notebook.  We install dspy unconditionally because (a) several strategies
+    # need it and (b) the python3.12 jupyter kernel handles the install cleanly
+    # (no cluster-env cascade like the synapse_pyspark kernel).
+    cells.append(cell_code(
+        '%pip uninstall -y pathlib 2>/dev/null || true\n'
+        f'%pip install -q --no-deps --force-reinstall "{WHEEL_PATH}"\n'
+        '%pip install -q "dspy>=3.0.4"'
     ))
 
     # Setup cell ----------------------------------------------------------
     setup = f'''import os, sys, json, time, traceback, uuid, platform as _plat, subprocess, re
 from pathlib import Path
 WHEEL_PATH = "{WHEEL_PATH}"
-DATASET_PATH = "{DATASET_PATH}"
+DATASET_PATH = "{dataset_path}"
+DATASET_KIND = "{dataset}"
 STRATEGY = "{strategy}"
 STRATEGY_LABEL = "{label}"
 RUN_ID = "{run_id}"
@@ -79,9 +105,9 @@ TIER = "comparison_5way"
 FILES_ROOT = Path("/lakehouse/default/Files")
 RUN_ROOT = FILES_ROOT / "fabric_rlm_adaptive_validation" / TIER / RUN_ID
 RUN_ROOT.mkdir(parents=True, exist_ok=True)
-SUMMARY_PATH = RUN_ROOT / f"summary_{{STRATEGY_LABEL}}.json"
-RESULTS_PATH = RUN_ROOT / f"results_{{STRATEGY_LABEL}}.jsonl"
-TRACES_DIR = RUN_ROOT / f"traces_{{STRATEGY_LABEL}}"
+SUMMARY_PATH = RUN_ROOT / f"summary_{{STRATEGY_LABEL}}_{{DATASET_KIND}}.json"
+RESULTS_PATH = RUN_ROOT / f"results_{{STRATEGY_LABEL}}_{{DATASET_KIND}}.jsonl"
+TRACES_DIR = RUN_ROOT / f"traces_{{STRATEGY_LABEL}}_{{DATASET_KIND}}"
 TRACES_DIR.mkdir(parents=True, exist_ok=True)
 
 summary = {{"tier": TIER, "run_id": RUN_ID, "strategy": STRATEGY,
@@ -98,19 +124,20 @@ def stage(name, **info):
     write_summary(); print("[stage]", name, info)
 
 stage("setup", run_root=str(RUN_ROOT))
-# Workaround: Fabric runtime sometimes ships the abandoned `pathlib` PyPI
-# backport in site-packages, which shadows stdlib pathlib and crashes any
-# subprocess on Python 3.10+ with ImportError on collections.Sequence.
-# Worker processes (e.g., v7-dspy) are the typical victim. Uninstalling
-# is a no-op when the bad package isn't present.
-subprocess.call(["pip","uninstall","-y","-q","pathlib"])
-stage("pathlib_purge", done=True)
-subprocess.check_call(["pip","install","--quiet","--force-reinstall","--no-deps", WHEEL_PATH])
-stage("pip_wheel", done=True)
-subprocess.check_call(["pip","install","--quiet","dspy>=3.0.4"])
-stage("pip_dspy", done=True)
-import dspy, fabric_rlm
-stage("imported", dspy=dspy.__version__, fabric_rlm=fabric_rlm.__version__)
+# Wheel + dspy installed by %pip cell above (kernel-level pip).  Just import.
+try:
+    import fabric_rlm
+    stage("imported", fabric_rlm=fabric_rlm.__version__)
+except Exception as _ie:
+    stage("import_failed", error=repr(_ie), traceback=traceback.format_exc())
+    raise
+if STRATEGY in ("A", "B"):
+    try:
+        import dspy
+        stage("dspy_imported", dspy=dspy.__version__)
+    except Exception as _ie:
+        stage("dspy_import_failed", error=repr(_ie), traceback=traceback.format_exc())
+        raise
 '''
     cells.append(cell_code(setup))
 
@@ -127,6 +154,12 @@ CS_INTEGER_TEMPLATES = {"VLIW","CodeTrace"}
 CS_INTEGER_LIST_TEMPLATES = {"Backprop","DistMem"}
 INT_RE = re.compile(r"-?\\d+")
 INT_CSV_RE = re.compile(r"-?\\d+(?:\\s*,\\s*-?\\d+)+")
+# AQUA: extract last A-E letter on a line that looks like an answer
+AQUA_ANS_RE = re.compile(r"(?:^|\\b)(?:answer|final\\s*answer|ans|final)\\s*[:=]?\\s*\\(?([A-Ea-e])\\)?", re.IGNORECASE | re.MULTILINE)
+AQUA_LETTER_RE = re.compile(r"\\(?([A-Ea-e])\\)?")
+# DABENCH: extract @key[value] tokens; value may be number, string, or list
+DABENCH_TOKEN_RE = re.compile(r"@([A-Za-z_][A-Za-z0-9_]*)\\s*\\[([^\\[\\]]*)\\]")
+DABENCH_FLOAT_RE = re.compile(r"-?\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?")
 
 def _resp_text(resp):
     if resp is None: return ""
@@ -165,6 +198,28 @@ def _parse_int_list(text):
     nums = INT_RE.findall(text)
     return [int(n) for n in nums] if nums else None
 
+def _dabench_extract_tokens(text):
+    # Last occurrence of each key wins (matches DABench reference grader)
+    out = {}
+    for m in DABENCH_TOKEN_RE.finditer(text or ""):
+        out[m.group(1).strip().lower()] = m.group(2).strip()
+    return out
+
+def _dabench_value_match(pred_val, gold_val):
+    if pred_val is None: return False
+    pv = str(pred_val).strip()
+    gv = str(gold_val).strip()
+    # numeric compare with tolerance
+    pm = DABENCH_FLOAT_RE.fullmatch(pv) or DABENCH_FLOAT_RE.search(pv)
+    gm = DABENCH_FLOAT_RE.fullmatch(gv) or DABENCH_FLOAT_RE.search(gv)
+    if pm and gm:
+        try:
+            pf = float(pm.group(0)); gf = float(gm.group(0))
+            return abs(pf - gf) <= max(0.01, 0.02 * abs(gf))
+        except Exception:
+            pass
+    return pv.lower() == gv.lower()
+
 def grade(template, gold_answer, response_text):
     text = _resp_text(response_text)
     sol = _extract_solution(text) or text
@@ -172,6 +227,39 @@ def grade(template, gold_answer, response_text):
     if isinstance(expected, str):
         try: expected = json.loads(expected)
         except Exception: pass
+    if template == "DABENCH":
+        # gold = list of [key, value] pairs; ALL must match
+        if not isinstance(expected, list) or not expected:
+            return False
+        # search both the post-think solution AND the full text
+        pred_tokens = _dabench_extract_tokens(sol)
+        if not pred_tokens:
+            pred_tokens = _dabench_extract_tokens(text)
+        for pair in expected:
+            if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                return False
+            k, gv = pair[0], pair[1]
+            pv = pred_tokens.get(str(k).strip().lower())
+            if not _dabench_value_match(pv, gv):
+                return False
+        return True
+    if template == "AQUA":
+        # gold_answer is single uppercase letter A-E
+        gold = str(gold_answer).strip().upper()
+        m = AQUA_ANS_RE.search(sol) or AQUA_ANS_RE.search(text)
+        if m:
+            return m.group(1).upper() == gold
+        # fallback: scan the LAST line for a lone A-E letter
+        for line in reversed([l.strip() for l in (sol or text).splitlines() if l.strip()]):
+            m2 = AQUA_LETTER_RE.fullmatch(line)
+            if m2:
+                return m2.group(1).upper() == gold
+            # also accept "A)" or "A." at the start of the last meaningful line
+            m3 = AQUA_LETTER_RE.match(line)
+            if m3 and len(line) <= 4:
+                return m3.group(1).upper() == gold
+            break
+        return False
     if template in CS_JSON_OBJECT_TEMPLATES:
         cand = _extract_last_json_object(sol) or _extract_last_json_object(text)
         return cand == expected
@@ -194,10 +282,14 @@ stage("validator_ready")
     cells.append(cell_code(dv))
 
     # LM cell -------------------------------------------------------------
-    lm_cell = '''from fabric_rlm import RLM, FabricLM
+    lm_cell = f'''from fabric_rlm import RLM, FabricLM
 os.environ["FABRIC_RLM_CAPTURE_TURNS"] = "1"
-base_lm = FabricLM("gpt-5", reasoning_effort="minimal", cache=False)
-stage("lm_built", model="gpt-5", effort="minimal")
+try:
+    base_lm = FabricLM("gpt-5", reasoning_effort="{base_effort}", max_tokens=16000)
+    stage("lm_built", model="gpt-5", effort="{base_effort}")
+except Exception as _le:
+    stage("lm_build_failed", error=repr(_le), traceback=traceback.format_exc())
+    raise
 '''
     cells.append(cell_code(lm_cell))
 
@@ -240,12 +332,13 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
               elapsed=round(rec.get("elapsed_seconds") or 0, 1),
               tokens=(rec.get("prompt_tokens",0) or 0)+(rec.get("completion_tokens",0) or 0))
 '''
-    elif strategy in ("B", "C", "D"):
+    elif strategy in ("B", "C", "D", "S"):
         if strategy == "D":
             mode_setup = 'os.environ["FABRIC_RLM_PVR_MODE"] = "reflect_only"\nos.environ.pop("FABRIC_RLM_PVR", None)'
         else:
             mode_setup = 'os.environ["FABRIC_RLM_PVR_MODE"] = "full"\nos.environ.pop("FABRIC_RLM_PVR", None)'
-        engine_name = "v7-dspy" if strategy == "B" else "v6-custom"
+        engine_name = "v7-dspy" if (strategy == "B" or dataset == "dabench") else "v6-custom"
+        sub_lm_kwarg = ', sub_lm="gpt-4.1"' if strategy == "S" else ""
         run_cell = f'''{mode_setup}
 stage("pvr_mode_set", mode=os.environ["FABRIC_RLM_PVR_MODE"])
 
@@ -255,8 +348,10 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
         rec = {{"strategy": STRATEGY_LABEL, "question_id": qid, "template": tpl,
                "started_at": time.time()}}
         try:
+            _skills = ["data_exploration"] if DATASET_KIND == "dabench" else None
             rlm = RLM(signature="question -> answer", lm=base_lm,
-                      engine="{engine_name}", max_turns=8)
+                      engine="{engine_name}", max_turns=8{sub_lm_kwarg},
+                      skills=_skills, timeout=300.0)
             t0 = time.perf_counter()
             result = rlm.run({{"question": row["prompt"]}})
             elapsed = time.perf_counter() - t0
@@ -363,7 +458,7 @@ stage("pvr_mode_set", mode=os.environ["FABRIC_RLM_PVR_MODE"])
 
 # Persistent bandit state for the run; per-template (task_key=template) so the
 # bandit accumulates Beta(alpha,beta) posteriors per template across the 25-question sweep.
-BANDIT_STATE_PATH = RUN_ROOT / "bandit_state.json"
+BANDIT_STATE_PATH = RUN_ROOT / f"bandit_state_{DATASET_KIND}.json"
 bandit_state = BanditState.from_path(BANDIT_STATE_PATH)
 stage("bandit_state_loaded", path=str(BANDIT_STATE_PATH),
       n_keys=len(bandit_state.priors))
@@ -490,9 +585,10 @@ print(json.dumps(summary["results_summary"], indent=2, default=str))
     return {
         "cells": cells,
         "metadata": {
-            "kernelspec": {"display_name": "Python 3.11", "language": "python", "name": "python3"},
-            "language_info": {"name": "python", "version": "3.11"},
-            "kernel_info": {"name": "jupyter", "jupyter_kernel_name": "python3.11"},
+            "kernelspec": {"display_name": "Python 3.12", "language": "python", "name": "python3.12"},
+            "language_info": {"name": "python", "version": "3.12"},
+            "kernel_info": {"name": "jupyter", "jupyter_kernel_name": "python3.12"},
+            "microsoft": {"language": "python", "language_group": "jupyter_python"},
             "dependencies": {"lakehouse": {"default_lakehouse": LH_ID,
                                             "default_lakehouse_name": LH_NAME,
                                             "default_lakehouse_workspace_id": WS_ID}},
@@ -506,15 +602,17 @@ def main() -> None:
     p.add_argument("strategy", choices=sorted(STRATEGY_INFO))
     p.add_argument("--smoke", type=int, default=None)
     p.add_argument("--run-id", required=True, help="shared RUN_ID for joining across strategies")
+    p.add_argument("--dataset", choices=sorted(DATASETS), default="cs",
+                   help="cs = LongCoT cs/hard regression25; aqua = AQuA-RAT 15")
     p.add_argument("--out-dir", default="notebooks")
     args = p.parse_args()
 
-    nb = build(args.strategy, args.smoke, args.run_id)
+    nb = build(args.strategy, args.smoke, args.run_id, dataset=args.dataset)
     label = STRATEGY_INFO[args.strategy]["label"]
     suffix = f"_smoke{args.smoke}" if args.smoke else ""
-    out = Path(args.out_dir) / f"comparison_5way_{args.strategy}_{label}{suffix}.ipynb"
+    out = Path(args.out_dir) / f"comparison_5way_{args.strategy}_{label}_{args.dataset}{suffix}.ipynb"
     out.write_text(json.dumps(nb, indent=1), encoding="utf-8")
-    print(f"wrote {out}  cells={len(nb['cells'])}  run_id={args.run_id}  smoke={args.smoke}")
+    print(f"wrote {out}  cells={len(nb['cells'])}  run_id={args.run_id}  dataset={args.dataset}  smoke={args.smoke}")
 
 
 if __name__ == "__main__":
