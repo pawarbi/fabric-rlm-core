@@ -2,20 +2,26 @@
 
 Strategies:
   A: gpt-5 single-shot via dspy.Predict — produces python code, we exec it in subprocess.
-  F: gpt-4.1-mini + fabric_rlm.RLM(engine='adaptive', EffortBanditPolicy)
-     with skills=['data_exploration'] so the model writes & runs its own openpyxl code.
+  F: gpt-4.1-mini + fabric_rlm.RLM(engine='v6-custom') with skills=['excel_modify'].
+  S: gpt-5 parent (orchestrator) + sub_lm='gpt-4.1-mini' (cheap per-turn worker) — RLM
+     splits planning (frontier reasoning) from worker code generation (cheap mini),
+     so the expensive model is only paid for high-level planning while the mini
+     handles per-turn interpreter calls.
 
 Grading: cell-by-cell exact match within answer_position on answer_sheet vs golden xlsx.
 
 Usage:
-  python scripts/build_ssb_notebook.py --strategy A --model gpt-5    --effort medium --run-id ssb-A-...   [--smoke 1]
+  python scripts/build_ssb_notebook.py --strategy A --model gpt-5    --effort medium --run-id ssb-A-... [--smoke 1]
   python scripts/build_ssb_notebook.py --strategy F --model gpt-4.1-mini --effort medium --run-id ssb-F-...
+  python scripts/build_ssb_notebook.py --strategy S --model gpt-5 --sub-lm gpt-4.1-mini --effort medium --run-id ssb-S-...
 """
 import argparse, json, pathlib
 
 ap = argparse.ArgumentParser()
-ap.add_argument('--strategy', choices=['A','F'], required=True)
+ap.add_argument('--strategy', choices=['A','F','S'], required=True)
 ap.add_argument('--model', default='gpt-4.1-mini')
+ap.add_argument('--sub-lm', dest='sub_lm', default='gpt-4.1-mini',
+                help='sub_lm worker model for strategy S (parent=--model orchestrates)')
 ap.add_argument('--effort', default='medium')
 ap.add_argument('--run-id', required=True)
 ap.add_argument('--smoke', type=int, default=0, help='if >0, only run first N questions')
@@ -23,7 +29,11 @@ ap.add_argument('--out', default=None)
 args = ap.parse_args()
 
 WHEEL_PATH = "/lakehouse/default/Files/fabric_rlm_longcot/wheels/fabric_rlm-0.2.1.dev2+excelskill-py3-none-any.whl"
-DATASET_TAR = "/lakehouse/default/Files/fabric_rlm_longcot/datasets/ssb_subset_50.tar.gz"
+# Notebook self-bootstraps the dataset: tries OneLake cache first, else downloads the
+# official SpreadsheetBench Verified-400 tarball from HuggingFace and stages it to OneLake.
+DATASET_TAR  = "/lakehouse/default/Files/fabric_rlm_longcot/datasets/ssb_full_400.tar.gz"
+DATASET_JSONL_NAME = "ssb_full_400.jsonl"
+DATASET_HF_URL = "https://huggingface.co/datasets/KAKA22/SpreadsheetBench/resolve/main/spreadsheetbench_verified_400.tar.gz"
 RUN_ROOT = f"/lakehouse/default/Files/fabric_rlm_adaptive_validation/spreadsheetbench/{args.run_id}"
 
 cells = []
@@ -38,7 +48,7 @@ cell(f"""%pip install -q dspy>=3.0.4 openpyxl
 """)
 
 # ---- Cell 2: imports + dataset extract + grader ----
-cell(f"""import os, sys, json, time, tarfile, shutil, subprocess, traceback, pathlib, re
+cell(f"""import os, sys, json, time, tarfile, shutil, subprocess, traceback, pathlib, re, urllib.request, hashlib
 import openpyxl
 import dspy
 import fabric_rlm
@@ -50,7 +60,9 @@ EFFORT   = "{args.effort}"
 RUN_ID   = "{args.run_id}"
 SMOKE_N  = {args.smoke}
 
-DATASET_TAR = "{DATASET_TAR}"
+DATASET_TAR        = "{DATASET_TAR}"
+DATASET_JSONL_NAME = "{DATASET_JSONL_NAME}"
+DATASET_HF_URL     = "{DATASET_HF_URL}"
 RUN_ROOT    = pathlib.Path("{RUN_ROOT}")
 RUN_ROOT.mkdir(parents=True, exist_ok=True)
 RESULTS_PATH = RUN_ROOT / f"results_{{STRATEGY}}.jsonl"
@@ -66,14 +78,82 @@ stage("imports_done", fabric_rlm=getattr(fabric_rlm, '__version__', '?'))
 WORK = pathlib.Path("/tmp/ssb_work")
 WORK.mkdir(parents=True, exist_ok=True)
 DS_DIR = WORK / "ds"
+
+# ---- Self-bootstrap dataset ----
+# 1. If OneLake cache (DATASET_TAR + jsonl) is present, just extract.
+# 2. Else, download the official SpreadsheetBench Verified-400 release from HuggingFace,
+#    repackage the inner spreadsheets/ dir + a flat jsonl manifest, and cache to OneLake
+#    so subsequent runs skip the download.
+def _bootstrap_dataset():
+    tar_p   = pathlib.Path(DATASET_TAR)
+    jsonl_p = tar_p.parent / DATASET_JSONL_NAME
+    if tar_p.exists() and jsonl_p.exists():
+        stage("dataset_cache_hit", tar=str(tar_p))
+        return tar_p, jsonl_p
+    stage("dataset_cache_miss_downloading_hf", url=DATASET_HF_URL)
+    tar_p.parent.mkdir(parents=True, exist_ok=True)
+    tmp_raw = WORK / "ssb_hf_raw.tar.gz"
+    if not tmp_raw.exists():
+        urllib.request.urlretrieve(DATASET_HF_URL, tmp_raw)
+    raw_dir = WORK / "ssb_hf_raw"
+    raw_dir.mkdir(exist_ok=True)
+    with tarfile.open(tmp_raw) as tf:
+        tf.extractall(raw_dir)
+    inner = next(raw_dir.glob("spreadsheetbench_verified_400*"), None) or raw_dir
+    if not (inner / "dataset.json").exists():
+        cands = list(raw_dir.rglob("dataset.json"))
+        if cands:
+            inner = cands[0].parent
+    ds_json = json.load(open(inner / "dataset.json", encoding="utf-8"))
+    spr_dir = inner / "spreadsheet"
+    # Build flat manifest: pick first init/golden pair per record.
+    records = []
+    for rec in ds_json:
+        sid = str(rec["id"])
+        d = spr_dir / sid
+        if not d.exists():
+            continue
+        inits   = sorted(d.glob("*_init.xlsx"))
+        goldens = sorted(d.glob("*_golden.xlsx"))
+        if not (inits and goldens):
+            continue
+        prompt_p = d / "prompt.txt"
+        instr = prompt_p.read_text(encoding="utf-8") if prompt_p.exists() else rec.get("instruction","")
+        records.append({{
+            "question_id": f"SSB_{{sid}}",
+            "spreadsheet_id": sid,
+            "instruction": instr,
+            "instruction_type": rec.get("instruction_type"),
+            "answer_position": rec["answer_position"],
+            "answer_sheet":    rec.get("answer_sheet"),
+            "init_file":   inits[0].name,
+            "golden_file": goldens[0].name,
+        }})
+    with open(jsonl_p, "w", encoding="utf-8") as fh:
+        for r in records:
+            fh.write(json.dumps(r) + "\\n")
+    # Repack flattened bundle: jsonl will be re-emitted; tarball contains only spreadsheets/.
+    stage_dir = WORK / "ssb_stage"
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+    stage_dir.mkdir()
+    shutil.copytree(spr_dir, stage_dir / "spreadsheets")
+    with tarfile.open(tar_p, "w:gz") as tf:
+        tf.add(stage_dir / "spreadsheets", arcname="spreadsheets")
+    stage("dataset_bootstrapped", n_records=len(records),
+          tar_bytes=tar_p.stat().st_size, jsonl=str(jsonl_p))
+    return tar_p, jsonl_p
+
+DATASET_TAR_P, DATASET_JSONL_P = _bootstrap_dataset()
+
 if not DS_DIR.exists():
     DS_DIR.mkdir()
-    with tarfile.open(DATASET_TAR) as tf:
+    with tarfile.open(DATASET_TAR_P) as tf:
         tf.extractall(DS_DIR)
 n_xlsx = len(list(DS_DIR.rglob('*.xlsx')))
 stage("dataset_extracted", path=str(DS_DIR), xlsx_count=n_xlsx)
 
-records = [json.loads(l) for l in open(DS_DIR / "ssb_subset_50.jsonl", encoding='utf-8')]
+records = [json.loads(l) for l in open(DATASET_JSONL_P, encoding='utf-8')]
 if SMOKE_N > 0:
     records = records[:SMOKE_N]
 stage("records_loaded", n=len(records))
@@ -204,12 +284,19 @@ else:
     # reasoning_effort, so the EffortBandit's per-rung effort lever crashes.
     # Headline claim is "small model + subprocess access beats big model alone";
     # the interpreter is what matters, not the effort ladder.
-    runner = '''os.environ["FABRIC_RLM_PVR_MODE"] = "full"
+    #
+    # Strategy S: same shape as F, but adds sub_lm="<worker>" so the parent LM
+    # (typically gpt-5) plans/critiques and the sub_lm (typically gpt-4.1-mini)
+    # writes per-turn worker code cheaply.
+    sub_lm_kwarg = f', sub_lm="{args.sub_lm}"' if args.strategy == 'S' else ''
+    runner = f'''os.environ["FABRIC_RLM_PVR_MODE"] = "full"
 os.environ.pop("FABRIC_RLM_PVR", None)
+SUB_LM_MODEL = {repr(args.sub_lm) if args.strategy == "S" else "None"}
+stage("sub_lm_config", sub_lm=SUB_LM_MODEL)
 
 t_start = time.time()
 n_pass = 0
-with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
+with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:''' + '''
     for idx, rec in enumerate(records):
         qid = rec['question_id']; sid = str(rec['spreadsheet_id'])
         init_src = DS_DIR / 'spreadsheets' / sid / rec['init_file']
@@ -251,7 +338,7 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
             )
             rlm = RLM(signature="question -> answer", lm=base_lm,
                       engine="v6-custom",
-                      max_turns=14, skills=["excel_modify"], timeout=300.0)
+                      max_turns=14, skills=["excel_modify"], timeout=300.0''' + sub_lm_kwarg + ''')
             t0 = time.perf_counter()
             rlm_result = rlm.run({"question": prompt_text})
             elapsed = time.perf_counter() - t0
@@ -285,6 +372,7 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
               n_turns=rec_out.get("n_turns"))
 
 summary = {"strategy": STRATEGY, "model": MODEL, "effort": EFFORT, "run_id": RUN_ID,
+           "sub_lm": SUB_LM_MODEL,
            "n": len(records), "n_passed": n_pass,
            "pass_rate": round(n_pass/max(1,len(records)), 4),
            "total_seconds": round(time.time()-t_start, 1)}
