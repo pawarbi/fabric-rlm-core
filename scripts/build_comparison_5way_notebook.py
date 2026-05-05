@@ -26,6 +26,7 @@ DATASETS = {
     "aqua": "/lakehouse/default/Files/fabric_rlm_longcot/datasets/aqua_rat_15.jsonl",
     "dabench": "/lakehouse/default/Files/fabric_rlm_longcot/datasets/dabench_15.jsonl",
     "dabench_duckdb": "/lakehouse/default/Files/fabric_rlm_longcot/datasets/dabench_15_duckdb.jsonl",
+    "dabench_noskill": "/lakehouse/default/Files/fabric_rlm_longcot/datasets/dabench_15.jsonl",
 }
 
 WS_ID = "82ad2591-974a-4ad4-ace6-e24879274a4b"
@@ -349,7 +350,7 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
         rec = {{"strategy": STRATEGY_LABEL, "question_id": qid, "template": tpl,
                "started_at": time.time()}}
         try:
-            _skills = ["data_exploration"] if DATASET_KIND.startswith("dabench") else None
+            _skills = ["data_exploration"] if (DATASET_KIND.startswith("dabench") and DATASET_KIND != "dabench_noskill") else None
             rlm = RLM(signature="question -> answer", lm=base_lm,
                       engine="{engine_name}", max_turns=8{sub_lm_kwarg},
                       skills=_skills, timeout=300.0)
