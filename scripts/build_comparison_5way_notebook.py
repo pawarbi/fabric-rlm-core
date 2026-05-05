@@ -25,6 +25,7 @@ DATASETS = {
     "cs": "/lakehouse/default/Files/fabric_rlm_longcot/datasets/longcot_cs_hard_regression25.jsonl",
     "aqua": "/lakehouse/default/Files/fabric_rlm_longcot/datasets/aqua_rat_15.jsonl",
     "dabench": "/lakehouse/default/Files/fabric_rlm_longcot/datasets/dabench_15.jsonl",
+    "dabench_duckdb": "/lakehouse/default/Files/fabric_rlm_longcot/datasets/dabench_15_duckdb.jsonl",
 }
 
 WS_ID = "82ad2591-974a-4ad4-ace6-e24879274a4b"
@@ -337,7 +338,7 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
             mode_setup = 'os.environ["FABRIC_RLM_PVR_MODE"] = "reflect_only"\nos.environ.pop("FABRIC_RLM_PVR", None)'
         else:
             mode_setup = 'os.environ["FABRIC_RLM_PVR_MODE"] = "full"\nos.environ.pop("FABRIC_RLM_PVR", None)'
-        engine_name = "v7-dspy" if (strategy == "B" or dataset == "dabench") else "v6-custom"
+        engine_name = "v7-dspy" if (strategy == "B" or dataset.startswith("dabench")) else "v6-custom"
         sub_lm_kwarg = ', sub_lm="gpt-4.1"' if strategy == "S" else ""
         run_cell = f'''{mode_setup}
 stage("pvr_mode_set", mode=os.environ["FABRIC_RLM_PVR_MODE"])
@@ -348,7 +349,7 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:
         rec = {{"strategy": STRATEGY_LABEL, "question_id": qid, "template": tpl,
                "started_at": time.time()}}
         try:
-            _skills = ["data_exploration"] if DATASET_KIND == "dabench" else None
+            _skills = ["data_exploration"] if DATASET_KIND.startswith("dabench") else None
             rlm = RLM(signature="question -> answer", lm=base_lm,
                       engine="{engine_name}", max_turns=8{sub_lm_kwarg},
                       skills=_skills, timeout=300.0)
@@ -605,9 +606,11 @@ def main() -> None:
     p.add_argument("--dataset", choices=sorted(DATASETS), default="cs",
                    help="cs = LongCoT cs/hard regression25; aqua = AQuA-RAT 15")
     p.add_argument("--out-dir", default="notebooks")
+    p.add_argument("--effort", default="minimal", choices=["minimal","low","medium","high"],
+                   help="reasoning_effort for base FabricLM")
     args = p.parse_args()
 
-    nb = build(args.strategy, args.smoke, args.run_id, dataset=args.dataset)
+    nb = build(args.strategy, args.smoke, args.run_id, dataset=args.dataset, base_effort=args.effort)
     label = STRATEGY_INFO[args.strategy]["label"]
     suffix = f"_smoke{args.smoke}" if args.smoke else ""
     out = Path(args.out_dir) / f"comparison_5way_{args.strategy}_{label}_{args.dataset}{suffix}.ipynb"
