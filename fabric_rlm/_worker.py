@@ -146,6 +146,59 @@ def _install_runtime_api() -> None:
             "list_skills": list_skills,
         }
     )
+    _install_sandbox_shim()
+
+
+# Public names exposed by the synthetic ``sandbox`` module. Kept in sync
+# with _install_runtime_api so user code can use either eval-namespace
+# globals (``SUBMIT(...)``) or the conventional import form
+# (``from sandbox import SUBMIT``). Without this shim, gpt-5 wastes ~7-8%
+# of turns on ``ModuleNotFoundError: No module named 'sandbox'``.
+_SANDBOX_PUBLIC_NAMES: tuple[str, ...] = (
+    "File",
+    "SUBMIT",
+    "predict",
+    "predict_sync",
+    "load_skill",
+    "activate_skill",
+    "list_skills",
+)
+
+
+def _install_sandbox_shim() -> None:
+    """Register a synthetic ``sandbox`` module in sys.modules.
+
+    Attributes mirror the runtime API names above and resolve to the live
+    module-level functions, so users can write either::
+
+        SUBMIT(answer="x")            # eval-namespace form
+        from sandbox import SUBMIT    # import form (this shim)
+        import sandbox; sandbox.SUBMIT(answer="x")
+    """
+    import sys
+    import types
+
+    module = sys.modules.get("sandbox")
+    if module is None or getattr(module, "__fabric_rlm_shim__", False) is not True:
+        module = types.ModuleType("sandbox")
+        module.__doc__ = (
+            "Synthetic shim exposing the fabric_rlm worker runtime API "
+            "(SUBMIT, predict, File, ...) under the conventional `sandbox` "
+            "module name."
+        )
+        module.__fabric_rlm_shim__ = True  # type: ignore[attr-defined]
+        sys.modules["sandbox"] = module
+
+    current = globals()
+    for name in _SANDBOX_PUBLIC_NAMES:
+        setattr(module, name, current[name])
+    # Drop any attributes from a previous install that aren't part of the
+    # curated surface (defensive: keeps `dir(sandbox)` clean across reinstalls).
+    for attr in list(vars(module)):
+        if attr.startswith("_"):
+            continue
+        if attr not in _SANDBOX_PUBLIC_NAMES:
+            delattr(module, attr)
 
 
 def _set_lm_spec(spec: Any) -> None:
