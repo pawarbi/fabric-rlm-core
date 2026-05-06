@@ -23,6 +23,12 @@ ap.add_argument('--model', default='gpt-4.1-mini')
 ap.add_argument('--sub-lm', dest='sub_lm', default='gpt-4.1-mini',
                 help='sub_lm worker model for strategy S (parent=--model orchestrates)')
 ap.add_argument('--effort', default='medium')
+ap.add_argument('--skill', default='excel_modify',
+                help='which excel skill to load (excel_modify or excel_modify_gpt5)')
+ap.add_argument('--skill-dir', dest='skill_dir', default='',
+                help='if set, load skills from this LOCAL directory (e.g. /lakehouse/default/Files/fabric_rlm_skills) instead of the bundled package')
+ap.add_argument('--skill-abfss', dest='skill_abfss', default='',
+                help='if set, copy skills from this abfss:// URI to /tmp/fabric_rlm_skills at runtime then load. Removes the lakehouse mount requirement.')
 ap.add_argument('--run-id', required=True)
 ap.add_argument('--smoke', type=int, default=0, help='if >0, only run first N questions')
 ap.add_argument('--out', default=None)
@@ -53,12 +59,16 @@ import openpyxl
 import dspy
 import fabric_rlm
 from fabric_rlm import RLM, FabricLM
+from fabric_rlm.skill_loader import SkillLoader
 
 STRATEGY = "{args.strategy}"
 MODEL    = "{args.model}"
 EFFORT   = "{args.effort}"
 RUN_ID   = "{args.run_id}"
 SMOKE_N  = {args.smoke}
+SKILL_NAME = "{args.skill}"
+SKILL_DIR  = {repr(args.skill_dir)}
+SKILL_ABFSS = {repr(args.skill_abfss)}
 
 DATASET_TAR        = "{DATASET_TAR}"
 DATASET_JSONL_NAME = "{DATASET_JSONL_NAME}"
@@ -186,7 +196,62 @@ def grade(out_xlsx, gold_xlsx, sheet, cell_range):
 effort_kw = f', reasoning_effort="{args.effort}"' if args.model.startswith(('gpt-5','o3','o1')) else ''
 cell(f"""os.environ["FABRIC_RLM_CAPTURE_TURNS"] = "1"
 base_lm = FabricLM("{args.model}"{effort_kw}, max_tokens=16000)
-stage("lm_built", model="{args.model}", effort="{args.effort}")
+
+# --- abfss skill source: copy abfss://.../fabric_rlm_skills/ to /tmp/fabric_rlm_skills ---
+# This avoids needing a default_lakehouse mount on the notebook.
+if SKILL_ABFSS:
+    import notebookutils  # type: ignore
+    _local_skills = pathlib.Path("/tmp/fabric_rlm_skills")
+    if _local_skills.exists():
+        shutil.rmtree(_local_skills)
+    _local_skills.mkdir(parents=True, exist_ok=True)
+    # List skills at abfss URI then copy each .md file
+    _entries = notebookutils.fs.ls(SKILL_ABFSS)
+    for _e in _entries:
+        if _e.name.endswith('.md'):
+            _src = _e.path  # full abfss URI
+            _dst_local_uri = f"file://{{_local_skills}}/{{_e.name}}"
+            notebookutils.fs.cp(_src, _dst_local_uri)
+    SKILL_DIR = str(_local_skills)
+    stage("skills_copied_from_abfss", abfss=SKILL_ABFSS, local=SKILL_DIR,
+          files=sorted(p.name for p in _local_skills.glob('*.md')))
+
+SKILL_LOADER = SkillLoader(skill_dir=SKILL_DIR) if SKILL_DIR else SkillLoader()
+
+# --- diagnostic dump: write skill loader state to RUN_ROOT/diag_skill.json ---
+_diag = {{"skill_dir": SKILL_DIR, "skill_name": SKILL_NAME, "skill_abfss": SKILL_ABFSS}}
+import pathlib as _pl
+if SKILL_DIR:
+    _p = _pl.Path(SKILL_DIR)
+    _diag["skill_dir_exists"] = _p.exists()
+    if _p.exists():
+        _diag["skill_dir_files"] = sorted([f.name for f in _p.glob("*.md")])
+try:
+    _diag["available_skills"] = SKILL_LOADER.list_skills()
+except Exception as _e:
+    _diag["list_skills_error"] = f"{{type(_e).__name__}}: {{_e}}"
+try:
+    _sk = SKILL_LOADER.load(SKILL_NAME)
+    _diag["loaded_skill_name"] = _sk.name
+    _diag["loaded_skill_len"] = len(_sk.content)
+    _diag["loaded_skill_first200"] = _sk.content[:200]
+    _diag["loaded_skill_keywords"] = list(_sk.applies_when_keywords[:5])
+except Exception as _e:
+    _diag["load_skill_error"] = f"{{type(_e).__name__}}: {{_e}}"
+# Build a probe RLM and inspect its loaded skills
+try:
+    _probe_rlm = RLM(signature="question -> answer", lm=base_lm, engine="v6-custom",
+                    skill_loader=SKILL_LOADER, skills=[SKILL_NAME], max_turns=1)
+    _diag["rlm_loaded_skills"] = [s.name for s in getattr(_probe_rlm, "_loaded_skills", [])]
+    _diag["rlm_skill_loader_id"] = id(getattr(_probe_rlm, "skill_loader", None))
+    _diag["rlm_has_skill_loader_attr"] = hasattr(_probe_rlm, "skill_loader")
+except Exception as _e:
+    import traceback as _tb
+    _diag["rlm_init_error"] = f"{{type(_e).__name__}}: {{_e}}\\n{{_tb.format_exc()[:400]}}"
+RUN_ROOT.mkdir(parents=True, exist_ok=True)
+(RUN_ROOT / "diag_skill.json").write_text(json.dumps(_diag, indent=2, default=str))
+stage("lm_built", model="{args.model}", effort="{args.effort}", skill="{args.skill}", skill_dir=SKILL_DIR)
+stage("skill_diag", **{{k: v for k, v in _diag.items() if k != "loaded_skill_first200"}})
 """)
 
 # ---- Cell 4: per-strategy runner ----
@@ -337,8 +402,8 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:''' + '''
                 f"  - This is an Excel file. Do not try to read it as JSONL / CSV / log file."
             )
             rlm = RLM(signature="question -> answer", lm=base_lm,
-                      engine="v6-custom",
-                      max_turns=14, skills=["excel_modify"], timeout=300.0''' + sub_lm_kwarg + ''')
+                      engine="v6-custom", skill_loader=SKILL_LOADER,
+                      max_turns=14, skills=["''' + args.skill + '''"], timeout=300.0''' + sub_lm_kwarg + ''')
             t0 = time.perf_counter()
             rlm_result = rlm.run({"question": prompt_text})
             elapsed = time.perf_counter() - t0
