@@ -401,11 +401,18 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:''' + '''
                 f"  - Your final `answer` field must be exactly `done`. Do not put a formula or explanation there.\\n"
                 f"  - This is an Excel file. Do not try to read it as JSONL / CSV / log file."
             )
-            rlm = RLM(signature="question -> answer", lm=base_lm,
-                      engine="v6-custom", skill_loader=SKILL_LOADER,
-                      max_turns=14, skills=["''' + args.skill + '''"], timeout=300.0''' + sub_lm_kwarg + ''')
+            rlm = RLM.from_task(
+                task=prompt_text,
+                outputs=["answer"],
+                lm=base_lm,
+                engine="v6-custom",
+                skill_loader=SKILL_LOADER,
+                max_turns=14,
+                skills=["''' + args.skill + '''"],
+                timeout=300.0''' + sub_lm_kwarg + ''',
+            )
             t0 = time.perf_counter()
-            rlm_result = rlm.run({"question": prompt_text})
+            rlm_result = rlm.run({})
             elapsed = time.perf_counter() - t0
             traj = rlm_result.trajectory
             turn_records = list(getattr(traj, "turns", []) or []) if traj is not None else []
