@@ -174,6 +174,17 @@ def test_nosubmit_tool_error_skips_to_effort() -> None:
     assert v.target_rung == 2
 
 
+def test_nosubmit_stuck_loop_skips_to_effort() -> None:
+    """NEW-H: stuck_loop should NOT climb to 'more turns' (rung 1) — more of
+    the same identical-failure turns is exactly what was just proven useless.
+    Skip to rung 2 to raise effort/diversity instead.
+    """
+    rec = _record(0, passed=False, submitted=False, failure_reason="stuck_loop")
+    v = NoSubmit().assess([rec], max_rung=4)
+    assert v.action == "escalate"
+    assert v.target_rung == 2
+
+
 # --- AnswerConsensus ---------------------------------------------------------
 
 

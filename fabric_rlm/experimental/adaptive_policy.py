@@ -323,6 +323,11 @@ class NoSubmit:
         if not submitted:
             if reason in ("", "max_turns"):
                 target = max(1, last.rung + 1)
+            elif reason == "stuck_loop":
+                # NEW-H: an LM that re-emitted identical failing code N times
+                # is unlikely to break out by getting MORE of the same turns.
+                # Skip past rung-1 (more_turns) and raise effort/diversity.
+                target = max(2, last.rung + 1)
             else:
                 # tool-error-y reason — skip past more_turns
                 target = max(2, last.rung + 1)
