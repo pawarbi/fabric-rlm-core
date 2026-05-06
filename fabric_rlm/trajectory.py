@@ -20,7 +20,6 @@ class TurnRecord:
     response_text: str = ""
     duration_s: float | None = None
     token_usage: dict[str, Any] = field(default_factory=dict)
-    cost: dict[str, Any] = field(default_factory=dict)
     validation_errors: list[str] = field(default_factory=list)
     turn_type: str = "normal"
     prompt_tokens: int | None = None
