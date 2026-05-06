@@ -1633,6 +1633,101 @@ def _response_to_text(response: Any) -> str:
     return str(response)
 
 
+def _normalize_usage_details(value: Any) -> dict[str, Any] | None:
+    """Coerce a ``*_tokens_details`` payload to a plain ``dict[str, Any]``.
+
+    OpenAI / LiteLLM / Anthropic SDKs expose the nested
+    ``prompt_tokens_details`` and ``completion_tokens_details`` blocks as
+    Pydantic models or duck-typed objects with attributes such as
+    ``cached_tokens`` / ``reasoning_tokens``. DSPy stores
+    ``lm.history[-1]['usage']`` as a top-level dict but does NOT deep-convert
+    these nested values, so they reach ``_extract_usage`` as objects, not
+    dicts. This helper normalizes both shapes so downstream
+    ``_usage_nested_field`` can read the integers it needs.
+
+    Conversion strategy (in order):
+
+    1. ``None`` → ``None``.
+    2. ``dict`` → shallow copy with ``None`` values stripped (preserves all
+       provider-specific fields the caller may want to record in
+       ``token_usage`` for debugging).
+    3. Pydantic-style (``model_dump`` / ``dict``) → use the SDK's own
+       serialization so any provider-specific fields are preserved.
+    4. Duck-typed object → probe a known set of child attributes
+       (``cached_tokens``, ``audio_tokens``, ``reasoning_tokens``,
+       ``accepted_prediction_tokens``, ``rejected_prediction_tokens``).
+
+    Returns ``None`` if no usable child fields are found.
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        out = {k: v for k, v in value.items() if v is not None}
+        return out or None
+    # Pydantic v2 / v1 SDK objects (OpenAI / LiteLLM responses).
+    for serializer in ("model_dump", "dict"):
+        method = getattr(value, serializer, None)
+        if callable(method):
+            try:
+                serialized = method()
+            except Exception:
+                continue
+            if isinstance(serialized, dict):
+                out = {k: v for k, v in serialized.items() if v is not None}
+                return out or None
+    # Plain duck-typed object: probe well-known child names.
+    candidate_keys = (
+        "cached_tokens",
+        "audio_tokens",
+        "reasoning_tokens",
+        "accepted_prediction_tokens",
+        "rejected_prediction_tokens",
+    )
+    out = {k: getattr(value, k) for k in candidate_keys if getattr(value, k, None) is not None}
+    return out or None
+
+
+# Alternate top-level field names produced by the OpenAI Responses API
+# (``o1`` / ``o3`` / ``o4`` direct calls) and Anthropic's native usage shape.
+# We map them onto the Chat-Completions-style names that the rest of the
+# library already understands so callers do not need to special-case providers.
+_USAGE_FIELD_ALIASES: dict[str, str] = {
+    "input_tokens": "prompt_tokens",
+    "output_tokens": "completion_tokens",
+    "input_tokens_details": "prompt_tokens_details",
+    "output_tokens_details": "completion_tokens_details",
+}
+
+
+def _apply_usage_aliases(usage: dict[str, Any]) -> dict[str, Any]:
+    """Copy values from alias keys into their canonical names if missing.
+
+    Never overwrites an existing canonical value — providers that emit BOTH
+    shapes (rare; some LiteLLM debug paths) keep the canonical one.
+
+    Anthropic's ``cache_read_input_tokens`` is mapped into
+    ``prompt_tokens_details.cached_tokens`` because it has the same
+    semantics (a count of cached prompt tokens billed at the cache-read
+    rate). ``cache_creation_input_tokens`` is intentionally left as a
+    top-level field — billing semantics differ from cache reads, and
+    silently folding it into ``cached_tokens`` would distort cost reports.
+    """
+
+    out = dict(usage)
+    for alias, canonical in _USAGE_FIELD_ALIASES.items():
+        if alias in out and canonical not in out:
+            out[canonical] = out[alias]
+    cache_read = out.get("cache_read_input_tokens")
+    if cache_read is not None:
+        details = out.get("prompt_tokens_details")
+        if details is None:
+            out["prompt_tokens_details"] = {"cached_tokens": cache_read}
+        elif isinstance(details, dict) and details.get("cached_tokens") is None:
+            details["cached_tokens"] = cache_read
+    return out
+
+
 def _extract_usage(response: Any) -> dict[str, Any]:
     """Pull a usage dict out of an LM response, if any.
 
@@ -1641,8 +1736,16 @@ def _extract_usage(response: Any) -> dict[str, Any]:
     an empty dict when nothing usable is found.
 
     Nested ``prompt_tokens_details`` / ``completion_tokens_details`` blocks are
-    preserved so callers can read ``cached_tokens`` and ``reasoning_tokens`` for
-    cost analysis.
+    preserved (and normalized to plain dicts) so callers can read
+    ``cached_tokens`` and ``reasoning_tokens`` for cost analysis. Normalization
+    happens regardless of whether the top-level usage is a dict or an SDK
+    object, because DSPy's ``lm.history[-1]['usage']`` is a dict whose nested
+    detail values are usually still SDK objects.
+
+    Provider aliases (Responses API ``input_tokens`` / ``output_tokens`` and
+    Anthropic ``cache_read_input_tokens``) are mapped onto the canonical
+    Chat-Completions-style names so downstream code does not branch by
+    provider.
     """
 
     if response is None:
@@ -1654,34 +1757,31 @@ def _extract_usage(response: Any) -> dict[str, Any]:
     else:
         usage = getattr(response, "usage", None)
     if isinstance(usage, dict):
-        return dict(usage)
-    if usage is not None and not isinstance(usage, (str, int, float, bool)):
-        out: dict[str, Any] = {
-            key: getattr(usage, key)
-            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-            if getattr(usage, key, None) is not None
-        }
+        out = _apply_usage_aliases(usage)
         for nested_key in ("prompt_tokens_details", "completion_tokens_details"):
-            nested = getattr(usage, nested_key, None)
-            if nested is None:
-                continue
-            if isinstance(nested, dict):
-                out[nested_key] = dict(nested)
-            else:
-                # OpenAI/litellm SDK objects expose attributes for each child.
-                child_keys = (
-                    ("cached_tokens", "audio_tokens")
-                    if nested_key == "prompt_tokens_details"
-                    else ("reasoning_tokens", "audio_tokens", "accepted_prediction_tokens", "rejected_prediction_tokens")
-                )
-                child = {
-                    k: getattr(nested, k)
-                    for k in child_keys
-                    if getattr(nested, k, None) is not None
-                }
-                if child:
-                    out[nested_key] = child
+            if nested_key in out:
+                normalized = _normalize_usage_details(out[nested_key])
+                if normalized is None:
+                    out.pop(nested_key, None)
+                else:
+                    out[nested_key] = normalized
         return out
+    if usage is not None and not isinstance(usage, (str, int, float, bool)):
+        # Object-shaped usage. Probe canonical names AND aliases.
+        out: dict[str, Any] = {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens",
+                    "input_tokens", "output_tokens",
+                    "cache_read_input_tokens", "cache_creation_input_tokens"):
+            value = getattr(usage, key, None)
+            if value is not None:
+                out[key] = value
+        for nested_key in ("prompt_tokens_details", "completion_tokens_details",
+                           "input_tokens_details", "output_tokens_details"):
+            nested = getattr(usage, nested_key, None)
+            normalized = _normalize_usage_details(nested)
+            if normalized is not None:
+                out[nested_key] = normalized
+        return _apply_usage_aliases(out) if out else {}
     return {}
 
 
