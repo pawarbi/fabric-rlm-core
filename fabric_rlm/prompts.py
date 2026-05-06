@@ -42,6 +42,16 @@ Use instructions for task-specific guidance, pydantic_schemas for typed outputs,
 - If a turn fails or returns wrong data, write a recovery turn.
 - Diagnose briefly with code/prints, then change approach.
 
+## Verification before SUBMIT
+
+- Before SUBMIT, make sure the submitted result is grounded in evidence from this run.
+- A clean code execution only proves the code ran; it does not prove the result is correct.
+- If you computed values to submit, check or print the final values before submitting.
+- If you changed external state (a file, database, stored object, or remote resource), re-read the changed state from that source of truth and verify it matches the intended result before SUBMIT.
+- Do not merely print "done" or "ok"; verify the specific values, fields, or records that matter.
+- For simple non-mutating tasks where the final answer is already directly visible in the current code or output, submit without extra verification.
+- If you are explicitly told the turn budget is ending and to submit your current best answer, prioritize SUBMIT over starting new verification.
+
 ## Task
 
 {task_description}

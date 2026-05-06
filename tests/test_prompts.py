@@ -86,3 +86,99 @@ def test_initial_user_message_drops_whitespace_only_preview_values() -> None:
 
     assert "INPUT PREVIEWS" not in message
 
+
+# ---------------------------------------------------------------------------
+# Verification-before-SUBMIT section (LIB-NEW-3)
+# Goal: nudge the model to verify post-state before SUBMIT, universally.
+# Wording must NOT leak benchmark-specific terminology (no openpyxl, cells,
+# ranges, workbook, sheet, dataframe, etc.) — the instruction has to apply
+# to file writes, db writes, in-memory mutations, text generation, etc.
+# ---------------------------------------------------------------------------
+
+
+def test_system_prompt_includes_verification_section() -> None:
+    """Verification-before-SUBMIT section is present in every system prompt."""
+    prompt = build_system_prompt(
+        inline_task="t", inline_outputs=["answer"], inputs={}
+    )
+
+    assert "Verification before SUBMIT" in prompt
+    assert "grounded in evidence" in prompt
+    assert "source of truth" in prompt
+
+
+def test_verification_section_uses_universal_terminology() -> None:
+    """The verify section must not reference benchmark-specific objects.
+
+    LIB-NEW-3 surfaced on Excel cells, but the fix has to be portable to any
+    mutation surface. Forbid words that bias the model toward one task type.
+    """
+    prompt = build_system_prompt(
+        inline_task="t", inline_outputs=["answer"], inputs={}
+    )
+
+    # Extract just the verification section to bound the assertion to its body.
+    start = prompt.index("## Verification before SUBMIT")
+    end = prompt.index("## Task", start)
+    section = prompt[start:end].lower()
+
+    forbidden = [
+        "openpyxl",
+        "cell",
+        "range",
+        "workbook",
+        "worksheet",
+        "sheet",
+        "xlsx",
+        "csv",
+        "dataframe",
+        "pandas",
+        "spreadsheet",
+        "excel",
+    ]
+    leaks = [term for term in forbidden if term in section]
+    assert not leaks, f"verify section leaked benchmark-specific terms: {leaks}"
+
+
+def test_verification_section_allows_non_mutating_shortcut() -> None:
+    """Pure-compute tasks (no external state change) shouldn't be forced
+    to spend an extra verify turn — the section explicitly carves an
+    exception so we don't regress simple tasks."""
+    prompt = build_system_prompt(
+        inline_task="t", inline_outputs=["answer"], inputs={}
+    )
+    start = prompt.index("## Verification before SUBMIT")
+    end = prompt.index("## Task", start)
+    section = prompt[start:end]
+
+    assert "non-mutating" in section.lower()
+    assert "without extra verification" in section
+
+
+def test_verification_section_defers_to_give_up_nudge() -> None:
+    """Final-turn give-up nudge (PR #9 reserve_finalize_turns) must win
+    over the verify instruction so we don't regress max-turn failures."""
+    prompt = build_system_prompt(
+        inline_task="t", inline_outputs=["answer"], inputs={}
+    )
+    start = prompt.index("## Verification before SUBMIT")
+    end = prompt.index("## Task", start)
+    section = prompt[start:end].lower()
+
+    assert "turn budget is ending" in section
+    assert "prioritize submit" in section
+
+
+def test_verification_section_appears_before_task() -> None:
+    """Section ordering must remain stable: Recovery -> Verification -> Task.
+    This anchors the prompt-cache prefix and avoids cache misses when an
+    unrelated change reorders sections."""
+    prompt = build_system_prompt(
+        inline_task="t", inline_outputs=["answer"], inputs={}
+    )
+
+    recovery = prompt.index("## Recovery")
+    verify = prompt.index("## Verification before SUBMIT")
+    task = prompt.index("## Task")
+    assert recovery < verify < task
+
