@@ -168,28 +168,69 @@ if SMOKE_N > 0:
     records = records[:SMOKE_N]
 stage("records_loaded", n=len(records))
 
+def _parse_answer_position(pos):
+    s = pos.strip()
+    s = re.sub(r"!'", "'!", s)
+    if s.count("'") % 2 == 1:
+        s = "'" + s
+    parts = []; cur = ''; in_quote = False
+    for ch in s:
+        if ch == "'":
+            in_quote = not in_quote; continue
+        if ch == ',' and not in_quote:
+            parts.append(cur.strip()); cur = ''
+        else:
+            cur += ch
+    if cur.strip(): parts.append(cur.strip())
+    out = []
+    for p in parts:
+        if '!' in p:
+            sheet, _, rng = p.partition('!'); sheet = sheet.strip()
+        else:
+            sheet, rng = None, p.strip()
+        rng = rng.strip()
+        m = re.match(r'^([A-Z]+)(\d+):(\d+)$', rng)
+        if m: rng = f'{{m.group(1)}}{{m.group(2)}}:{{m.group(1)}}{{m.group(3)}}'
+        out.append((sheet, rng))
+    return out
+
 def grade(out_xlsx, gold_xlsx, sheet, cell_range):
     try:
         wb_a = openpyxl.load_workbook(out_xlsx, data_only=True)
         wb_b = openpyxl.load_workbook(gold_xlsx, data_only=True)
     except Exception as e:
         return False, 0, 0, f"load_err: {{e}}"
-    sname_a = sheet if (sheet and sheet in wb_a.sheetnames) else wb_a.sheetnames[0]
-    sname_b = sheet if (sheet and sheet in wb_b.sheetnames) else wb_b.sheetnames[0]
-    a = wb_a[sname_a]; b = wb_b[sname_b]
-    try:
-        rng_a = a[cell_range]; rng_b = b[cell_range]
-    except Exception as e:
-        return False, 0, 0, f"range_err: {{e}}"
-    flat_a = [c.value for row in rng_a for c in row]
-    flat_b = [c.value for row in rng_b for c in row]
-    if len(flat_a) != len(flat_b):
-        return False, 0, len(flat_b), f"len_mismatch {{len(flat_a)}} vs {{len(flat_b)}}"
-    matches = 0
-    for x, y in zip(flat_a, flat_b):
-        if (x is None and y is None) or (str(x).strip() == str(y).strip()):
-            matches += 1
-    return matches == len(flat_a), matches, len(flat_a), None
+    # Parse possibly multi-range / sheet-prefixed answer_position
+    parts = _parse_answer_position(cell_range) if cell_range else [(None, None)]
+    total_matches = 0; total_cells = 0
+    for part_sheet, part_range in parts:
+        eff_sheet = part_sheet or sheet or ''
+        sname_a = eff_sheet if (eff_sheet and eff_sheet in wb_a.sheetnames) else wb_a.sheetnames[0]
+        sname_b = eff_sheet if (eff_sheet and eff_sheet in wb_b.sheetnames) else wb_b.sheetnames[0]
+        a = wb_a[sname_a]; b = wb_b[sname_b]
+        if not part_range:
+            return False, 0, 0, "no_range"
+        try:
+            rng_a = a[part_range]; rng_b = b[part_range]
+        except Exception as e:
+            return False, total_matches, total_cells, f"range_err: {{e}} on {{eff_sheet}}!{{part_range}}"
+        # Normalize: openpyxl returns Cell, tuple-of-cells, or tuple-of-tuples
+        def flatten(rng):
+            if hasattr(rng, 'value'): return [rng.value]
+            out = []
+            for item in rng:
+                if hasattr(item, 'value'): out.append(item.value)
+                else:
+                    for c in item: out.append(c.value)
+            return out
+        flat_a = flatten(rng_a); flat_b = flatten(rng_b)
+        if len(flat_a) != len(flat_b):
+            return False, total_matches, total_cells + len(flat_b), f"len_mismatch {{len(flat_a)}} vs {{len(flat_b)}}"
+        for x, y in zip(flat_a, flat_b):
+            if (x is None and y is None) or (str(x).strip() == str(y).strip()):
+                total_matches += 1
+        total_cells += len(flat_a)
+    return total_matches == total_cells, total_matches, total_cells, None
 """)
 
 # ---- Cell 3: build LM ----
@@ -420,6 +461,14 @@ with RESULTS_PATH.open("w", encoding="utf-8") as out_fh:''' + '''
             prompt_tok = sum((getattr(t, "prompt_tokens", None) or 0) for t in turn_records)
             completion_tok = sum((getattr(t, "completion_tokens", None) or 0) for t in turn_records)
             passed, m, n, gerr = grade(str(work_xlsx), str(gold_src), sheet_for_grade, answer_pos)
+            # Persist the submitted work.xlsx so we can re-grade later if the grader changes
+            try:
+                if work_xlsx.exists():
+                    submitted_xlsx_dir = RUN_ROOT / "submitted_xlsx"
+                    submitted_xlsx_dir.mkdir(exist_ok=True)
+                    shutil.copyfile(str(work_xlsx), str(submitted_xlsx_dir / f"{qid}.xlsx"))
+            except Exception as _xe:
+                stage("submitted_xlsx_save_err", qid=qid, err=str(_xe))
             (TRACES_DIR / f"trace_{qid}.json").write_text(json.dumps({
                 "qid": qid, "prompt": prompt_text, "passed": passed,
                 "submitted": rlm_result.submitted, "n_turns": n_turns,
