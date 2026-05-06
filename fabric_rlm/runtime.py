@@ -147,6 +147,24 @@ def _truncate_for_feedback(text: str, limit: int) -> str:
     return text[:limit] + f"\n... (truncated {extra} more chars)"
 
 
+def _final_turn_suffix() -> str:
+    """BUG-LIB-3: addendum appended to the user message immediately preceding
+    the LM's final permitted turn. Tells the model that this is its last shot
+    and that submitting an imperfect answer beats submitting nothing.
+
+    Library-general; applies to any iterative RLM workload, not the SSB
+    benchmark specifically. ASCII-only for consistency with prompts.py.
+    """
+    return (
+        "\n\n*** FINAL TURN ***\n"
+        "This is your LAST turn - no further code will be executed after this "
+        "one. Respond with one complete ```python code block that calls "
+        "SUBMIT(...) with your best current answer derived from the state "
+        "above. Submitting an imperfect answer is strictly better than "
+        "submitting nothing."
+    )
+
+
 def _build_routing_text(
     task_text: str | None,
     bound_inputs: Mapping[str, Any] | None,
@@ -810,17 +828,19 @@ class RLM:
                 reasoning_tokens = _usage_nested_field(usage, "completion_tokens_details", "reasoning_tokens")
                 if _looks_truncated(response_text):
                     messages.append({"role": "assistant", "content": response_text})
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "Your previous response was truncated before the closing code fence. "
-                                "Rewrite that turn in one complete ```python block under 30 lines."
-                            ),
-                        }
-                    )
                     # truncated turns still count toward the budget to avoid loops.
                     turn_counter += 1
+                    truncation_msg = (
+                        "Your previous response was truncated before the closing code fence. "
+                        "Rewrite that turn in one complete ```python block under 30 lines."
+                    )
+                    # BUG-LIB-3: if the truncation retry IS the final turn,
+                    # tell the LM that explicitly (predicate matches the
+                    # normal-path one: after-increment, next iteration is the
+                    # last iff turn_counter + 1 == max_turns).
+                    if (turn_counter + 1) == self.max_turns:
+                        truncation_msg += _final_turn_suffix()
+                    messages.append({"role": "user", "content": truncation_msg})
                     if turn_counter >= self.max_turns:
                         reached_max = True
                     continue
@@ -1034,7 +1054,19 @@ class RLM:
                     )
 
                 messages.append({"role": "assistant", "content": response_text})
-                messages.append({"role": "user", "content": self._format_feedback(result, turn_counter)})
+                # BUG-LIB-3: detect whether the next while-iteration will be
+                # the FINAL LM turn so the user message can include an explicit
+                # submit-now nudge. After this body, turn_counter has already
+                # been incremented for this turn; the loop will run once more
+                # iff turn_counter < max_turns, and that next run is the LAST
+                # iff turn_counter + 1 == max_turns.
+                is_final_turn = (turn_counter + 1) == self.max_turns
+                messages.append({
+                    "role": "user",
+                    "content": self._format_feedback(
+                        result, turn_counter, is_final_turn=is_final_turn
+                    ),
+                })
 
             if not reached_max:
                 reached_max = True
@@ -1229,7 +1261,9 @@ class RLM:
             )
         return None
 
-    def _format_feedback(self, result: ExecResult, turn: int) -> str:
+    def _format_feedback(
+        self, result: ExecResult, turn: int, *, is_final_turn: bool = False
+    ) -> str:
         stdout_text = _truncate_for_feedback(result.stdout, STDOUT_FEEDBACK_LIMIT)
         parts = [f"REPL output from turn {turn}:\n```\n{stdout_text}\n```"]
         if not result.ok:
@@ -1238,7 +1272,13 @@ class RLM:
             stderr_text = _truncate_for_feedback(result.stderr, STDERR_FEEDBACK_LIMIT)
             parts.append(f"\nstderr:\n```\n{stderr_text}\n```")
         parts.append(f"\nState keys: {', '.join(result.state.keys()) or '(none)'}")
-        parts.append("\nContinue with one complete Python code block, or call SUBMIT() if done.")
+        if is_final_turn:
+            # BUG-LIB-3: explicit final-turn nudge. Trace mining identified
+            # turns burning the budget without ever submitting; making
+            # "this is your last shot" salient recovers many of those.
+            parts.append(_final_turn_suffix())
+        else:
+            parts.append("\nContinue with one complete Python code block, or call SUBMIT() if done.")
         return "".join(parts)
 
     def _log(self, message: str) -> None:
