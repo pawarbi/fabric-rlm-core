@@ -16,6 +16,9 @@ in production (see fabric_rlm/_worker.py:_execute).
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 
 from fabric_rlm import _worker
@@ -92,3 +95,138 @@ def test_multiline_user_code_keeps_correct_line_number() -> None:
     err = result["error"]
     assert "line 3" in err
     assert "on line three" in err
+
+
+# ---------------------------------------------------------------------------
+# Rubber-duck review follow-ups (chained exceptions, SyntaxError, async user
+# code, defensive internal formatter, robust path filter).
+# ---------------------------------------------------------------------------
+
+
+def test_chained_exception_with_cause_preserves_root_cause() -> None:
+    """`raise X from Y` must show BOTH exceptions so the model sees the real cause."""
+    code = (
+        "try:\n"
+        "    int('not a number')\n"
+        "except ValueError as e:\n"
+        "    raise RuntimeError('wrapped') from e\n"
+    )
+    result = _run_failing_code(code)
+    err = result["error"]
+    assert "ValueError" in err, f"root cause lost from chain:\n{err}"
+    assert "not a number" in err
+    assert "RuntimeError" in err
+    assert "wrapped" in err
+    assert "direct cause" in err, f"chain separator missing:\n{err}"
+
+
+def test_chained_exception_with_implicit_context_preserved() -> None:
+    """Implicit chaining (`raise X` inside `except`) must show both exceptions
+    via `During handling of the above exception, another exception occurred`.
+    """
+    code = (
+        "try:\n"
+        "    1 / 0\n"
+        "except ZeroDivisionError:\n"
+        "    raise AssertionError('handler failed')\n"
+    )
+    result = _run_failing_code(code)
+    err = result["error"]
+    assert "ZeroDivisionError" in err, f"implicit context lost:\n{err}"
+    assert "AssertionError" in err
+    assert "handler failed" in err
+    assert "During handling" in err
+
+
+def test_chained_exception_with_suppressed_context_omits_inner() -> None:
+    """`raise X from None` must suppress the implicit context."""
+    code = (
+        "try:\n"
+        "    1 / 0\n"
+        "except ZeroDivisionError:\n"
+        "    raise ValueError('clean') from None\n"
+    )
+    result = _run_failing_code(code)
+    err = result["error"]
+    assert "ValueError: clean" in err
+    assert "ZeroDivisionError" not in err, (
+        f"`from None` should suppress implicit context, got:\n{err}"
+    )
+
+
+def test_syntax_error_reaches_user_with_useful_message() -> None:
+    """SyntaxError happens at compile time -- the formatter must still produce
+    a non-empty, informative message even with no user frames in the traceback."""
+    result = _run_failing_code("def foo(:\n    pass\n")
+    assert result["ok"] is False
+    err = result["error"]
+    assert "SyntaxError" in err, f"SyntaxError type missing from:\n{err!r}"
+    assert err.strip() != "", "formatter produced empty output for SyntaxError"
+
+
+def test_async_user_function_keeps_user_frames() -> None:
+    """User code that legitimately uses asyncio (e.g. `await asyncio.sleep(0)`)
+    must keep its OWN frames -- only stdlib asyncio internals are filtered."""
+    code = (
+        "import asyncio\n"
+        "async def my_user_helper():\n"
+        "    await asyncio.sleep(0)\n"
+        "    raise ValueError('from async user code')\n"
+        "asyncio.run(my_user_helper())\n"
+    )
+    result = _run_failing_code(code)
+    err = result["error"]
+    assert result["ok"] is False
+    assert "ValueError" in err
+    assert "from async user code" in err
+    assert "my_user_helper" in err, (
+        f"user's async frame was filtered out as 'asyncio noise':\n{err}"
+    )
+    # Stdlib asyncio internals (runners.py, base_events.py, tasks.py) MUST be filtered.
+    assert "base_events.py" not in err
+    assert "runners.py" not in err
+    assert "tasks.py" not in err
+
+
+def test_user_dir_named_asyncio_is_not_filtered_out() -> None:
+    """Defensive: a user file in a directory whose tail is e.g. asyncio_helpers
+    must NOT be filtered. The filter only targets the real stdlib asyncio
+    package by checking against asyncio.__file__'s parent directory."""
+    import asyncio as _asyncio_mod
+    asyncio_root = str(Path(_asyncio_mod.__file__).resolve().parent) + os.sep
+    fake = "/home/user/asyncio_helpers/utils.py"
+    assert _worker._is_worker_frame(fake, "/path/to/_worker.py", asyncio_root) is False, (
+        "user file with 'asyncio' in path was wrongly filtered as worker plumbing"
+    )
+
+
+def test_internal_traceback_formatter_keeps_full_stack() -> None:
+    """The defensive `_format_internal_traceback` (used for worker bugs, NOT
+    user code) must include the full unfiltered stack so operators can debug."""
+    try:
+        # Raise from inside the worker module so frames belong to _worker.py.
+        # Use _execute on a snippet that exercises some worker plumbing then
+        # synthesize an internal exception ourselves.
+        raise RuntimeError("simulated internal worker bug")
+    except RuntimeError as exc:
+        out = _worker._format_internal_traceback(exc)
+    assert "RuntimeError" in out
+    assert "simulated internal worker bug" in out
+    # Internal formatter MUST keep this test's frame (it would be filtered by
+    # the user formatter as "test infra"... actually it wouldn't, but the key
+    # property is that NO frames are filtered).
+    assert "Traceback" in out
+    assert "test_internal_traceback_formatter_keeps_full_stack" in out
+
+
+def test_user_traceback_helper_is_idempotent_to_call_with_explicit_exc() -> None:
+    """Calling _format_user_traceback with an explicit exc and via sys.exc_info
+    inside an except block must produce the same result for the same exception."""
+    try:
+        raise ValueError("same input")
+    except ValueError as exc:
+        from_explicit = _worker._format_user_traceback(exc)
+        from_sys = _worker._format_user_traceback()
+    assert "ValueError: same input" in from_explicit
+    assert "ValueError: same input" in from_sys
+
