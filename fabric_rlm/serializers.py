@@ -4,11 +4,31 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 import types
 from pathlib import Path
 from typing import Any, Mapping
 
 DEFAULT_INJECTED_NAMES = {"File", "SUBMIT", "predict", "predict_sync", "load_skill", "activate_skill", "list_skills"}
+
+# CPython's default ``object.__repr__`` produces ``<module.path.Class object at
+# 0xHEXADDR>``. The hex address changes every Python process and even between
+# turn restarts, so it must be stripped from serialized state — otherwise two
+# adjacent turns that share the same opaque object (workbook, dataframe, db
+# connection, file handle, …) produce non-identical state snapshots, which
+# defeats LM prompt caching and produces noise in trajectory diffs.
+#
+# We are deliberately conservative: only strip the literal `` at 0xHEX``
+# pattern when followed by a closing delimiter (``>``, ``,``, ``)``, ``]``).
+# This catches the standard ``<… at 0x…>`` form and nested forms like
+# ``functools.partial(<function f at 0x…>, 1)`` and
+# ``<bound method X.f of <Y object at 0x…>>``, while avoiding stripping prose
+# such as ``"price at 0xff per unit"`` from custom ``__repr__`` outputs.
+_DEFAULT_REPR_ADDRESS = re.compile(r" at 0x[0-9a-fA-F]+(?=[>,)\]])")
+
+
+def _stable_repr(value: Any, max_chars: int = 300) -> str:
+    return _DEFAULT_REPR_ADDRESS.sub("", repr(value))[:max_chars]
 
 
 def freeze(
@@ -89,7 +109,7 @@ def freeze(
 def opaque_marker(value: Any) -> dict[str, Any]:
     return {
         "__type__": type(value).__name__,
-        "__repr__": repr(value)[:300],
+        "__repr__": _stable_repr(value),
         "__serializable__": False,
     }
 
