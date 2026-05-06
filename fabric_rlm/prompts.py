@@ -92,12 +92,36 @@ def build_system_prompt(
     )
 
 
-def build_initial_user_message(inputs: dict[str, Any]) -> str:
+def build_initial_user_message(
+    inputs: dict[str, Any],
+    previews: dict[str, str | None] | None = None,
+) -> str:
+    """Compose the first user message handed to the model.
+
+    Always announces which input names are bound in the worker namespace.
+    If ``previews`` is provided, also appends an ``## INPUT PREVIEWS``
+    section with one ``### name`` block per bound input that has a
+    non-empty *string* preview. Non-string or whitespace-only values, and
+    previews keyed on inputs that aren't actually bound, are silently
+    ignored — this lets callers register a preview registry once and
+    reuse it across calls with varying inputs.
+    """
     input_names = ", ".join(inputs) if inputs else "no named inputs"
-    return (
+    base = (
         f"The inputs are already bound in your namespace ({input_names}). "
         "Write one concise Python code block for the first step."
     )
+    if not previews:
+        return base
+    blocks: list[str] = []
+    for name in inputs:
+        text = previews.get(name)
+        if not isinstance(text, str) or not text.strip():
+            continue
+        blocks.append(f"### `{name}`\n{text}")
+    if not blocks:
+        return base
+    return base + "\n\n## INPUT PREVIEWS\n\n" + "\n\n".join(blocks)
 
 
 def _parse_string_signature_outputs(sig: str) -> list[str]:

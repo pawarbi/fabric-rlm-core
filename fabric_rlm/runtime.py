@@ -309,6 +309,7 @@ class RLM:
         adaptive: dict | None = None,
         inner_engine: str = "v6-custom",
         stuck_loop_threshold: int | None = 3,
+        input_previews: dict[str, Any] | None = None,
     ):
         # ---- engine validation (early, before any heavy resolution) ---------
         valid_engines = ("v6-custom", "v7-dspy", "adaptive")
@@ -374,6 +375,7 @@ class RLM:
             self.digest_after_turn = digest_after_turn
             self.output_validator = output_validator
             self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
+            self.input_previews: dict[str, Any] = dict(input_previews or {})
             self._loaded_skills: list[Skill] = []
             self._activated_skills: set[str] = set()
             self._inline_task: str | None = None
@@ -403,6 +405,7 @@ class RLM:
                 output_validator=output_validator,
                 halve_max_iter_on_retry=halve_max_iter_on_retry,
                 stuck_loop_threshold=stuck_loop_threshold,
+                input_previews=dict(input_previews or {}),
             )
             return
 
@@ -433,6 +436,7 @@ class RLM:
         self.digest_after_turn = digest_after_turn
         self.output_validator = output_validator
         self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
+        self.input_previews: dict[str, Any] = dict(input_previews or {})
         self.engine = engine
         self.inner_engine = engine  # for symmetry — non-adaptive RLMs are their own inner
         self.adaptive_config = None
@@ -465,6 +469,42 @@ class RLM:
 
     def __call__(self, **inputs: Any) -> RLMResult:
         return self.run(inputs or None)
+
+    def _resolve_input_previews(
+        self, bound_inputs: dict[str, Any]
+    ) -> dict[str, str] | None:
+        """Resolve registered ``input_previews`` against ``bound_inputs``.
+
+        For each input whose name is in both ``self.input_previews`` and
+        ``bound_inputs``, evaluate the preview entry:
+          * callables are invoked with the bound value;
+          * strings are used verbatim;
+          * any exception is swallowed (logged at DEBUG) and the input
+            is omitted — a debugging convenience must never break a run.
+
+        Non-string and whitespace-only results are dropped. Returns
+        ``None`` if no previews resolve, so the prompt builder emits the
+        legacy short message unchanged.
+
+        Note: the ``v7-dspy`` engine path does not currently consume
+        ``input_previews`` — it only takes effect on the ``v6-custom``
+        loop (the default and recommended engine).
+        """
+        if not self.input_previews or not bound_inputs:
+            return None
+        resolved: dict[str, str] = {}
+        for name, value in bound_inputs.items():
+            entry = self.input_previews.get(name)
+            if entry is None:
+                continue
+            try:
+                text = entry(value) if callable(entry) else entry
+            except Exception:  # noqa: BLE001 — preview must never crash a run
+                logger.debug("input preview failed for %r", name, exc_info=True)
+                continue
+            if isinstance(text, str) and text.strip():
+                resolved[name] = text
+        return resolved or None
 
     def _run_adaptive(self, bound_inputs: dict[str, Any]) -> RLMResult:
         """Route ``run()`` through ``AdaptiveRunner`` for ``engine='adaptive'``.
@@ -754,7 +794,10 @@ class RLM:
                     router_active=self.enable_router,
                 ),
             },
-            {"role": "user", "content": build_initial_user_message(bound_inputs)},
+            {"role": "user", "content": build_initial_user_message(
+                bound_inputs,
+                previews=self._resolve_input_previews(bound_inputs),
+            )},
         ]
         # Track digest state per active skill to swap full bodies for digests
         # after `digest_after_turn` turns of being present.
