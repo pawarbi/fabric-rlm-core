@@ -37,6 +37,7 @@ Thumbs.db
 _*
 !_worker.py
 !__init__.py
+!fabric_rlm/skills/_*.py
 
 # Notebook checkpoints
 .ipynb_checkpoints/
