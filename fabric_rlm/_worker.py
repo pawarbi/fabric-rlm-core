@@ -164,6 +164,12 @@ _SANDBOX_PUBLIC_NAMES: tuple[str, ...] = (
     "list_skills",
 )
 
+# Private sentinel used to mark our shim module so re-installs don't clobber
+# a real `sandbox` package the user happened to import. Object identity is
+# more collision-resistant than a boolean flag (a real module that happened
+# to set ``__fabric_rlm_shim__ = True`` would otherwise be misidentified).
+_SANDBOX_SHIM_SENTINEL: object = object()
+
 
 def _install_sandbox_shim() -> None:
     """Register a synthetic ``sandbox`` module in sys.modules.
@@ -174,19 +180,41 @@ def _install_sandbox_shim() -> None:
         SUBMIT(answer="x")            # eval-namespace form
         from sandbox import SUBMIT    # import form (this shim)
         import sandbox; sandbox.SUBMIT(answer="x")
+
+    OWNERSHIP POLICY
+    ----------------
+    The fabric_rlm worker subprocess intentionally OWNS the ``sandbox``
+    module name in its sys.modules. If a real package named ``sandbox``
+    is already present at install time, it is replaced. Rationale:
+
+    1. The worker subprocess is a dedicated execution sandbox; user code
+       running inside it expects ``sandbox`` to mean the harness API.
+    2. The 105/1354 (7.7%) gpt-5 turn loss measured in benchmarks comes
+       from the model assuming this convention (see PR #4).
+    3. If a real ``sandbox`` package is needed, users should fork the
+       worker entrypoint -- the worker is a single-purpose process.
+
+    The shim is reinstalled on every ``_install_runtime_api()`` call (i.e.
+    after JSON-RPC ``reset``) so attribute references stay live even if a
+    test or framework reloads ``fabric_rlm._worker``.
     """
     import sys
     import types
 
     module = sys.modules.get("sandbox")
-    if module is None or getattr(module, "__fabric_rlm_shim__", False) is not True:
+    is_our_shim = (
+        module is not None
+        and getattr(module, "__fabric_rlm_shim__", None) is _SANDBOX_SHIM_SENTINEL
+    )
+    if not is_our_shim:
         module = types.ModuleType("sandbox")
         module.__doc__ = (
             "Synthetic shim exposing the fabric_rlm worker runtime API "
             "(SUBMIT, predict, File, ...) under the conventional `sandbox` "
-            "module name."
+            "module name. Owned by fabric_rlm._worker -- replaced on each "
+            "_install_runtime_api() call."
         )
-        module.__fabric_rlm_shim__ = True  # type: ignore[attr-defined]
+        module.__fabric_rlm_shim__ = _SANDBOX_SHIM_SENTINEL  # type: ignore[attr-defined]
         sys.modules["sandbox"] = module
 
     current = globals()
@@ -194,6 +222,8 @@ def _install_sandbox_shim() -> None:
         setattr(module, name, current[name])
     # Drop any attributes from a previous install that aren't part of the
     # curated surface (defensive: keeps `dir(sandbox)` clean across reinstalls).
+    # Skips dunders / underscore names so we don't disturb __spec__, __loader__,
+    # __fabric_rlm_shim__, etc. that the import system or our sentinel rely on.
     for attr in list(vars(module)):
         if attr.startswith("_"):
             continue
