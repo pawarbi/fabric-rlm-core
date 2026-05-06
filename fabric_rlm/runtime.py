@@ -13,6 +13,72 @@ from dataclasses import dataclass
 from typing import Any
 
 from .interpreter import ExecResult, Interpreter, WorkerTimeout
+
+
+# ---------------------------------------------------------------------------
+# Stuck-loop detection helpers (NEW-H)
+# ---------------------------------------------------------------------------
+#
+# Trace mining of v4 SSB runs surfaced trajectories where the LM emits the
+# SAME failing code with the SAME error type 3+ times in a row, then exhausts
+# the turn budget. Even on gpt-5 the count is small (~2/399), but when it
+# triggers it burns the full ``max_turns`` budget for zero diagnostic value
+# beyond the second attempt.
+#
+# Detection uses a normalized-whitespace code hash plus the bare exception
+# *type* (e.g., ``NameError``) — not the full message — so a flake-induced
+# message diff doesn't mask a real loop.
+
+
+def _normalize_code_for_loop_detection(code: str | None) -> str:
+    """Hashable representation of code that ignores trivial whitespace.
+
+    Strips trailing whitespace per line and drops blank lines, so the LM
+    re-emitting identical code with cosmetic differences is still detected
+    as a loop. Indentation is preserved (semantic).
+    """
+    if not code:
+        return ""
+    lines = [line.rstrip() for line in code.splitlines()]
+    lines = [line for line in lines if line.strip()]
+    return "\n".join(lines)
+
+
+def _extract_error_signature(error: str | None) -> tuple[str | None, str | None]:
+    """Return ``(error_type, normalized_message)`` from an error string.
+
+    Real Python tracebacks are multi-line with the type+msg on the LAST line
+    (``ValueError: bad input``). Single-line errors split on the first colon.
+    Returns ``(None, None)`` if the input is empty.
+
+    The full message is returned (not just the type) so that stateful runs
+    where the LM re-emits identical code but the error text changes — e.g.
+    interpreter state has advanced between attempts — are NOT classified as
+    stuck. This keeps the breaker conservative against false positives.
+    """
+    if not error:
+        return (None, None)
+    last_line = error.strip().splitlines()[-1].strip()
+    head, _, msg = last_line.partition(":")
+    error_type = head.strip() or None
+    message = msg.strip() or None
+    return (error_type, message)
+
+
+def _loop_signature(turn: "TurnRecord") -> tuple[str, str | None, str | None]:
+    """Signature for stuck-loop detection: (normalized_code, error_type, msg).
+
+    Including the full message text means an identical code cell whose error
+    *message* changes between attempts (e.g. state advancing in a stateful
+    interpreter) is treated as making progress, not stuck. Only when ALL
+    three components match across N consecutive turns do we abort.
+    """
+    error_type, message = _extract_error_signature(turn.error)
+    return (
+        _normalize_code_for_loop_detection(turn.code),
+        error_type,
+        message,
+    )
 from .lm import resolve_lm
 from .prompts import (
     _task_and_outputs,
@@ -224,6 +290,7 @@ class RLM:
         engine: str = "v6-custom",
         adaptive: dict | None = None,
         inner_engine: str = "v6-custom",
+        stuck_loop_threshold: int | None = 3,
     ):
         # ---- engine validation (early, before any heavy resolution) ---------
         valid_engines = ("v6-custom", "v7-dspy", "adaptive")
@@ -231,6 +298,20 @@ class RLM:
             raise ValueError(
                 f"engine must be one of {valid_engines}, got {engine!r}"
             )
+        # ---- stuck-loop threshold validation -------------------------------
+        if stuck_loop_threshold is not None:
+            # Reject bool explicitly: bool is a subclass of int in Python.
+            if isinstance(stuck_loop_threshold, bool) or not isinstance(stuck_loop_threshold, int):
+                raise TypeError(
+                    "stuck_loop_threshold must be an int or None; "
+                    f"got {type(stuck_loop_threshold).__name__}"
+                )
+            if stuck_loop_threshold < 2:
+                raise ValueError(
+                    "stuck_loop_threshold must be >= 2 (a single retry is normal); "
+                    f"got {stuck_loop_threshold!r}. Pass None to disable."
+                )
+        self.stuck_loop_threshold = stuck_loop_threshold
         if engine == "adaptive":
             if inner_engine not in ("v6-custom", "v7-dspy"):
                 raise ValueError(
@@ -303,6 +384,7 @@ class RLM:
                 digest_after_turn=digest_after_turn,
                 output_validator=output_validator,
                 halve_max_iter_on_retry=halve_max_iter_on_retry,
+                stuck_loop_threshold=stuck_loop_threshold,
             )
             return
 
@@ -874,6 +956,34 @@ class RLM:
                         submit_payload=result.submit_payload if result.submitted else None,
                     )
                 )
+
+                # NEW-H stuck-loop circuit breaker: bail early if the last
+                # ``stuck_loop_threshold`` CONSECUTIVE turns are all failures
+                # with the same normalized code and the same error type.
+                # An intervening success or non-erroring turn resets the chain.
+                if (
+                    not result.submitted
+                    and result.error is not None
+                    and self.stuck_loop_threshold is not None
+                ):
+                    threshold = self.stuck_loop_threshold
+                    if len(trajectory.turns) >= threshold:
+                        tail = trajectory.turns[-threshold:]
+                        all_failed = all(
+                            (not t.submitted) and t.error is not None
+                            for t in tail
+                        )
+                        if all_failed:
+                            recent_sigs = {_loop_signature(t) for t in tail}
+                            if len(recent_sigs) == 1:
+                                return RLMResult(
+                                    submitted=False,
+                                    payload=None,
+                                    trajectory=trajectory,
+                                    final_state=final_state,
+                                    failure_reason="stuck_loop",
+                                    **_aggregate_trajectory_metrics(trajectory),
+                                )
 
                 if result.submitted:
                     if not validation.ok:
