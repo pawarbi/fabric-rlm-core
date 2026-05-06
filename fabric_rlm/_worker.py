@@ -36,6 +36,7 @@ import dataclasses
 import inspect
 import io
 import json
+import os
 import sys
 import traceback
 from collections.abc import Mapping
@@ -382,6 +383,139 @@ def _state() -> dict[str, Any]:
     return snapshot(_namespace, injected_names=set(DEFAULT_INJECTED_NAMES))
 
 
+def _is_worker_frame(filename: str, worker_path: str, asyncio_root: str) -> bool:
+    """Return True if a traceback frame belongs to worker plumbing.
+
+    Robust to symlinks / editable installs / different Python builds: tries
+    a resolved-path equality first, then falls back to lenient endswith checks
+    for paths that fail to resolve (e.g., ``<frozen ...>`` or in-memory).
+    """
+    if filename == worker_path:
+        return True
+    if filename.endswith("_worker.py"):
+        try:
+            if str(Path(filename).resolve()) == worker_path:
+                return True
+        except OSError:
+            pass
+    if filename.endswith("nest_asyncio.py"):
+        return True
+    if asyncio_root and filename.startswith(asyncio_root):
+        return True
+    # Last-resort: stdlib path layouts vary, accept either separator form.
+    if (os.sep + "asyncio" + os.sep) in filename or "/asyncio/" in filename:
+        # Guard against a user directory literally called "asyncio_helpers".
+        # We only filter if the LAST segment looks like an asyncio module file.
+        tail = Path(filename).name
+        if tail in {
+            "base_events.py",
+            "events.py",
+            "futures.py",
+            "runners.py",
+            "tasks.py",
+            "coroutines.py",
+            "unix_events.py",
+            "windows_events.py",
+            "selector_events.py",
+            "proactor_events.py",
+            "transports.py",
+            "streams.py",
+            "queues.py",
+            "locks.py",
+            "subprocess.py",
+            "__init__.py",
+        }:
+            return True
+    return False
+
+
+def _format_user_traceback(exc: BaseException | None = None) -> str:
+    """Format the current exception traceback with framework frames stripped.
+
+    Removes frames originating from the worker plumbing (this file, asyncio,
+    nest_asyncio, the eval/compile boundary) so user code receives a focused
+    traceback. Keeps the user-code frame from "<fabric_rlm_worker>" plus any
+    in-process frames the user's own code introduced. Chained exceptions
+    (``raise X from Y`` / "during handling of X another exception occurred")
+    are preserved with the same filtering applied to each link in the chain.
+
+    See BUG-LIB-1: raw traceback.format_exc() emits ~17 lines of asyncio /
+    nest_asyncio noise before the actual exception, wasting tokens and
+    obscuring the diagnostic the model needs to recover.
+    """
+    if exc is None:
+        _exc_type, exc_val, _exc_tb = sys.exc_info()
+        if exc_val is None:
+            return ""
+        exc = exc_val
+
+    try:
+        worker_path = str(Path(__file__).resolve())
+    except OSError:
+        worker_path = __file__
+    try:
+        import asyncio as _asyncio_mod
+
+        asyncio_root = str(Path(_asyncio_mod.__file__).resolve().parent) + os.sep
+    except Exception:  # pragma: no cover -- defensive
+        asyncio_root = ""
+
+    seen: set[int] = set()
+
+    def _format_single(e: BaseException) -> str:
+        user_frames = []
+        tb = e.__traceback__
+        saw_user_frame = False
+        while tb is not None:
+            filename = tb.tb_frame.f_code.co_filename
+            if not _is_worker_frame(filename, worker_path, asyncio_root):
+                user_frames.append(tb)
+                saw_user_frame = True
+            tb = tb.tb_next
+
+        if not saw_user_frame:
+            return "".join(traceback.format_exception_only(type(e), e)).rstrip("\n")
+
+        lines = ["Traceback (most recent call last):\n"]
+        for tb in user_frames:
+            lines.extend(traceback.format_list(traceback.extract_tb(tb, limit=1)))
+        lines.extend(traceback.format_exception_only(type(e), e))
+        return "".join(lines).rstrip("\n")
+
+    def _format_chain(e: BaseException) -> list[str]:
+        if id(e) in seen:
+            return []
+        seen.add(id(e))
+        parts: list[str] = []
+        # Mirror CPython's traceback ordering: cause/context first, then current.
+        if e.__cause__ is not None:
+            parts.extend(_format_chain(e.__cause__))
+            parts.append(
+                "\n\nThe above exception was the direct cause of the "
+                "following exception:\n\n"
+            )
+        elif e.__context__ is not None and not e.__suppress_context__:
+            parts.extend(_format_chain(e.__context__))
+            parts.append(
+                "\n\nDuring handling of the above exception, another "
+                "exception occurred:\n\n"
+            )
+        parts.append(_format_single(e))
+        return parts
+
+    return "".join(_format_chain(exc))
+
+
+def _format_internal_traceback(exc: BaseException) -> str:
+    """Full unfiltered traceback for worker-internal (non-user) exceptions.
+
+    Used by the defensive JSON-RPC error branch so operators can debug worker
+    bugs without losing the internal stack. NEVER use this for user code
+    failures -- the asyncio / nest_asyncio frames pollute LM prompts.
+    """
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip("\n")
+
+
 def _execute(code: str) -> dict[str, Any]:
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -410,7 +544,7 @@ def _execute(code: str) -> dict[str, Any]:
             "submitted": False,
             "stdout": stdout.getvalue(),
             "stderr": stderr.getvalue(),
-            "error": traceback.format_exc(),
+            "error": _format_user_traceback(),
             "state": _state(),
         }
 
@@ -681,7 +815,7 @@ def _handle_jsonrpc(message: dict[str, Any]) -> dict[str, Any] | None:
             "error": {
                 "code": JSONRPC_APP_ERRORS["Unknown"],
                 "message": str(exc) or "internal worker error",
-                "data": {"type": type(exc).__name__, "trace": traceback.format_exc()},
+                "data": {"type": type(exc).__name__, "trace": _format_internal_traceback(exc)},
             },
             "id": msg_id,
         }
@@ -717,7 +851,7 @@ def main() -> None:
             if response is None:
                 break
         except Exception:
-            response = {"ok": False, "error": traceback.format_exc(), "state": _state()}
+            response = {"ok": False, "error": _format_user_traceback(), "state": _state()}
         _write_response(response)
 
 
