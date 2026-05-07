@@ -1,0 +1,87 @@
+{
+  "suite_version": "behavior-v1",
+  "calibrated_at": "2026-05-07T16:39:44Z",
+  "calibrated_against_commit": "9c5b1b112576a616a7e6655a59b8ce002b76f8ea",
+  "questions_sha256": "2821092ca0533d969edd0612a3969677ea9b89a16da05a48c070726219ee3e09",
+  "max_turns": 8,
+  "timeout_s": 120,
+  "calibration_runs_per_qid": 5,
+  "models": {
+    "openai/gpt-4.1-mini": {
+      "questions": {
+        "C1_sum_squares_mod": {
+          "baseline_pass_rate": 1.0,
+          "passes": 5,
+          "runs": 5,
+          "expected_to_pass": true
+        },
+        "C5_palindrome_count": {
+          "baseline_pass_rate": 1.0,
+          "passes": 5,
+          "runs": 5,
+          "expected_to_pass": true
+        },
+        "M1_optional_field_count": {
+          "baseline_pass_rate": 1.0,
+          "passes": 5,
+          "runs": 5,
+          "expected_to_pass": true
+        },
+        "M3_mixed_string_sum": {
+          "baseline_pass_rate": 1.0,
+          "passes": 5,
+          "runs": 5,
+          "expected_to_pass": true
+        },
+        "S5_dedup_preserve_order": {
+          "baseline_pass_rate": 1.0,
+          "passes": 5,
+          "runs": 5,
+          "expected_to_pass": true
+        }
+      },
+      "aggregate": {
+        "baseline_passes": 5,
+        "min_passes": 4
+      }
+    },
+    "openai/gpt-oss-120b:free": {
+      "questions": {
+        "C1_sum_squares_mod": {
+          "baseline_pass_rate": 1.0,
+          "passes": 5,
+          "runs": 5,
+          "expected_to_pass": true
+        },
+        "C5_palindrome_count": {
+          "baseline_pass_rate": 1.0,
+          "passes": 5,
+          "runs": 5,
+          "expected_to_pass": true
+        },
+        "M1_optional_field_count": {
+          "baseline_pass_rate": 1.0,
+          "passes": 5,
+          "runs": 5,
+          "expected_to_pass": true
+        },
+        "M3_mixed_string_sum": {
+          "baseline_pass_rate": 1.0,
+          "passes": 5,
+          "runs": 5,
+          "expected_to_pass": true
+        },
+        "S5_dedup_preserve_order": {
+          "baseline_pass_rate": 1.0,
+          "passes": 5,
+          "runs": 5,
+          "expected_to_pass": true
+        }
+      },
+      "aggregate": {
+        "baseline_passes": 5,
+        "min_passes": 4
+      }
+    }
+  }
+}

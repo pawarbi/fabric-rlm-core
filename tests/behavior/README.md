@@ -55,7 +55,8 @@ You must recalibrate when:
 
 ```powershell
 $env:OPENROUTER_API_KEY = "sk-or-..."
-python -m tests.behavior.runner --calibrate `
+$env:PYTHONPATH = "tests"
+python -m behavior.runner --calibrate `
     --model openai/gpt-4.1-mini `
     --runs 5 `
     --out tests/behavior/baselines.json
