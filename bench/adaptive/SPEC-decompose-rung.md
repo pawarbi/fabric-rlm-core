@@ -24,10 +24,15 @@ Borrowed from: λ-RLM `MULTI_HOP` plan (`SPLIT_δ → MAP(PEEK) → FILTER → M
      original question, must produce SUBMIT.
 3. The validator gates rung 5 the same way it gates every other rung — a wrong
    final answer escalates back into the bandit's posterior update.
-4. **Depends on `feat/combinators-skill`** being merged first — Phase B uses
+4. ~~**Depends on `feat/combinators-skill`** being merged first — Phase B uses
    `map_combinator(solve, sub_problems)` to express the parallel solve cleanly.
    If combinators aren't merged, Phase B falls back to a hand-coded
-   `concurrent.futures.ThreadPoolExecutor`.
+   `concurrent.futures.ThreadPoolExecutor`.~~ **(Removed.)** The combinators
+   skill was dropped after empirical A/B testing showed it never improved any
+   of (pass-rate, tokens, time) and actively regressed gpt-4.1 on a
+   chunk/map/reduce task it was designed for; model never imported the
+   primitives in 20/20 cells. Phase B now uses
+   `concurrent.futures.ThreadPoolExecutor` directly.
 5. Validation set is **the prior-fail subset** of LongCoT CS-hard:
    `Backprop_hard_1`, `VLIW_hard_1`, `DistMem_hard_*` — questions where
    even rung 4 (high+parallel) failed. If rung 5 doesn't move any of these
@@ -188,8 +193,10 @@ Coverage target: ≥85% on `decompose_rung.py`.
 
 ## Phases (after spec approval)
 
-- **Phase 2 (Plan)**: dependency on `feat/combinators-skill` — confirm or
-  decouple; sub_lm parallelization details; validator coupling.
+- **Phase 2 (Plan)**: ~~dependency on `feat/combinators-skill` — confirm or
+  decouple~~ **decoupled** (combinators skill dropped after empirical A/B
+  showed no lift on its target task class); sub_lm parallelization details;
+  validator coupling.
 - **Phase 3 (Tasks)**: decompose_rung impl → effort ladder extension →
   bandit cost vector → micro-bench harness → micro-bench run → gate.
 - **Phase 4 (Implement, conditional on micro-bench)**: TDD per
