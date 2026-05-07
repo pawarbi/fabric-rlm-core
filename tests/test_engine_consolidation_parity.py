@@ -1,0 +1,396 @@
+"""Engine consolidation — parity / baseline / regression tests.
+
+These tests guard the engine consolidation work described in
+``~/.copilot/session-state/.../files/engine_consolidation_plan.md``. They lock
+the post-init state of each engine variant so the consolidation work cannot
+silently change observable behavior for users who construct ``RLM(...)``
+without specifying ``engine=``.
+
+**The fingerprint contract.** Each engine variant must produce a deterministic
+``_fingerprint`` dict capturing post-``__init__`` state. Aliases must produce
+identical fingerprints to their canonical names. The default constructor
+(no ``engine=`` kwarg, no ``tools=``) must produce the v6-custom fingerprint.
+
+**No live LM calls.** All construction uses ``_StubLM`` so tests are
+deterministic, fast (<1s), and run offline.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import dspy
+import pytest
+
+from fabric_rlm import RLM
+
+
+# ---------------------------------------------------------------------------
+# Test doubles
+# ---------------------------------------------------------------------------
+
+
+class _StubLM(dspy.LM):
+    """A no-op dspy.LM. Only used so RLM construction can resolve a backend.
+    Never called — these tests stop at __init__ time."""
+
+    def __init__(self) -> None:
+        super().__init__(model="stub", model_type="chat")
+
+    def __call__(self, *args: Any, **kwargs: Any) -> list[str]:  # pragma: no cover
+        raise AssertionError(
+            "_StubLM should not be invoked; parity tests are __init__-only"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint helper
+# ---------------------------------------------------------------------------
+
+
+# Attributes that define the engine **routing decision** at __init__ time.
+# This fingerprint is intentionally narrow — its job is to prove
+# alias↔canonical equivalence, NOT full runtime-state equivalence.
+# (See duck review of commit 9bce342: a wider fingerprint adds surface area
+# without catching anything the routing-only fix can plausibly break.)
+_FINGERPRINT_ATTRS: tuple[str, ...] = (
+    "engine",
+    "inner_engine",
+    "skills",
+    "max_turns",
+    "timeout",
+    "enable_verifier",
+    "enable_skill_autoloading",
+    "enable_router",
+    "halve_max_iter_on_retry",
+    "stuck_loop_threshold",
+    "max_active_skills",
+    "reserve_finalize_turns",
+    "max_prompt_tokens",
+    "digest_after_turn",
+)
+
+
+def _fingerprint(rlm: RLM) -> dict[str, Any]:
+    """Capture the post-init **routing-relevant** state of an ``RLM`` instance.
+
+    This is the parity oracle for engine alias resolution: two RLMs that
+    differ only in the user-supplied alias name (e.g., ``"v6-custom"`` vs
+    ``"default"``) must produce identical fingerprints.
+
+    NOT a full runtime-state oracle. Attributes like ``sub_lm_spec``,
+    ``output_validator``, router config lists are trivially preserved by
+    Phase 1's name-normalization-only change and are not fingerprinted here.
+    If a future phase changes more than name normalization, widen this list.
+    """
+    fp: dict[str, Any] = {}
+    for attr in _FINGERPRINT_ATTRS:
+        value = getattr(rlm, attr, None)
+        if isinstance(value, (list, tuple)):
+            fp[attr] = list(value)
+        elif isinstance(value, set):
+            fp[attr] = sorted(value)
+        else:
+            fp[attr] = value
+
+    # Defensive: adaptive RLM may not set self.tools (early return path).
+    tools = getattr(rlm, "tools", None)
+    fp["tools_count"] = len(list(tools)) if tools else 0
+    # Order matters — skill verifier order is observable in _run_skill_verifiers.
+    fp["loaded_skill_names"] = [s.name for s in rlm._loaded_skills]
+    fp["has_inline_task"] = rlm._inline_task is not None
+    fp["has_signature"] = rlm.signature is not None
+    return fp
+
+
+# ---------------------------------------------------------------------------
+# Phase 0 — baseline lock: capture the current default behavior
+# ---------------------------------------------------------------------------
+
+
+def test_baseline_default_constructor_uses_v6_custom():
+    """Locks the current default. If this fails after a change, the default
+    engine has shifted — that's the regression we are guarding against."""
+    rlm = RLM(lm=_StubLM())
+    assert rlm.engine == "v6-custom", (
+        f"Default engine changed: expected 'v6-custom', got {rlm.engine!r}. "
+        "If this is intentional (Phase 4 default flip), update this test."
+    )
+    assert rlm.inner_engine == "v6-custom"
+
+
+def test_baseline_v7_dspy_engine_is_addressable():
+    """Locks the current explicit-opt-in shape for v7-dspy."""
+    rlm = RLM(lm=_StubLM(), engine="v7-dspy")
+    assert rlm.engine == "v7-dspy"
+    assert rlm.inner_engine == "v7-dspy"
+
+
+def test_baseline_v6_custom_explicit_matches_default():
+    """Constructing with explicit ``engine='v6-custom'`` must produce a
+    fingerprint identical to the default constructor. This is the strongest
+    guard against accidental Phase 4 regressions."""
+    rlm_default = RLM(lm=_StubLM())
+    rlm_explicit = RLM(lm=_StubLM(), engine="v6-custom")
+    assert _fingerprint(rlm_default) == _fingerprint(rlm_explicit)
+
+
+def test_baseline_v7_dspy_with_tools_accepts_kwarg():
+    """Locks the PR #18 contract: tools= is accepted on v7-dspy."""
+
+    def my_tool(x: int) -> int:
+        return x + 1
+
+    rlm = RLM(lm=_StubLM(), engine="v7-dspy", tools=[my_tool])
+    assert rlm.engine == "v7-dspy"
+    assert len(list(rlm.tools)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — alias parity (xfail until aliases are implemented in Phase 1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 1: aliases not implemented yet")
+@pytest.mark.parametrize(
+    "alias,canonical",
+    [
+        ("default", "v6-custom"),
+        ("dspy", "v7-dspy"),
+    ],
+)
+def test_alias_resolves_to_canonical_engine(alias: str, canonical: str):
+    """``engine=alias`` must resolve to the canonical engine name and produce
+    a fingerprint identical to ``engine=canonical``."""
+    rlm_alias = RLM(lm=_StubLM(), engine=alias)
+    rlm_canonical = RLM(lm=_StubLM(), engine=canonical)
+    assert rlm_alias.engine == canonical, (
+        f"Alias {alias!r} did not resolve to canonical {canonical!r}; "
+        f"got {rlm_alias.engine!r}"
+    )
+    assert _fingerprint(rlm_alias) == _fingerprint(rlm_canonical)
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 1: aliases not implemented yet")
+def test_alias_works_for_inner_engine_in_adaptive():
+    """Adaptive inner_engine must accept aliases too."""
+    rlm = RLM(lm=_StubLM(), engine="adaptive", inner_engine="default")
+    assert rlm.engine == "adaptive"
+    assert rlm.inner_engine == "v6-custom"
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 1: helpful error message not implemented yet")
+def test_unknown_engine_name_raises_with_helpful_message():
+    """An unknown engine name must raise ValueError listing valid names.
+
+    Note: ``"auto"`` is mentioned only after Phase 2 ships. Phase 1's helpful
+    message lists ``v6-custom``, ``v7-dspy``, ``adaptive``, ``default``, ``dspy``."""
+    with pytest.raises(ValueError) as exc_info:
+        RLM(lm=_StubLM(), engine="not_a_real_engine")
+    msg = str(exc_info.value)
+    for valid in ("v6-custom", "v7-dspy", "adaptive", "default", "dspy"):
+        assert valid in msg, f"Error message should mention {valid!r}: got {msg!r}"
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 1+2: dspy alias must accept tools")
+def test_alias_dspy_accepts_tools_kwarg():
+    """The ``"dspy"`` alias must accept ``tools=`` (since canonical
+    ``"v7-dspy"`` does). Guards against late normalization that would
+    reject tools= on the alias."""
+
+    def my_tool(x: int) -> int:
+        return x + 1
+
+    rlm = RLM(lm=_StubLM(), engine="dspy", tools=[my_tool])
+    assert rlm.engine == "v7-dspy"
+    assert len(list(rlm.tools)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — engine="auto" capability router (xfail until Phase 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
+def test_auto_with_no_tools_picks_v6_custom():
+    """``engine='auto'`` with no ``tools=`` must resolve to v6-custom."""
+    rlm = RLM(lm=_StubLM(), engine="auto")
+    assert rlm.engine == "v6-custom"
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
+def test_auto_with_tools_picks_v7_dspy():
+    """``engine='auto'`` with ``tools=[...]`` must resolve to v7-dspy."""
+
+    def my_tool(x: int) -> int:
+        return x + 1
+
+    rlm = RLM(lm=_StubLM(), engine="auto", tools=[my_tool])
+    assert rlm.engine == "v7-dspy"
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
+def test_auto_with_empty_tools_list_picks_v6_custom():
+    """Empty ``tools=[]`` must NOT trigger dspy routing. Guards against the
+    duck's edge case (#10): falsy-but-iterable tools."""
+    rlm = RLM(lm=_StubLM(), engine="auto", tools=[])
+    assert rlm.engine == "v6-custom"
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
+def test_auto_with_generator_tools_routes_correctly():
+    """Generator-based tools= must be materialized once, not consumed
+    by the routing decision. Guards against the duck's edge case (#10)."""
+
+    def my_tool(x: int) -> int:
+        return x + 1
+
+    rlm = RLM(lm=_StubLM(), engine="auto", tools=(t for t in [my_tool]))
+    assert rlm.engine == "v7-dspy"
+    assert len(list(rlm.tools)) == 1
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
+def test_auto_resolved_engine_attr_is_canonical():
+    """``rlm.engine`` exposes the *resolved* engine, never the literal 'auto'."""
+    rlm_a = RLM(lm=_StubLM(), engine="auto")
+    rlm_b = RLM(lm=_StubLM(), engine="auto", tools=[lambda: None])
+    assert rlm_a.engine in ("v6-custom", "v7-dspy")
+    assert rlm_b.engine in ("v6-custom", "v7-dspy")
+    assert rlm_a.engine != "auto"
+    assert rlm_b.engine != "auto"
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 2: standardize tools+default-alias to init-time error")
+def test_explicit_default_engine_with_tools_raises_at_init():
+    """Passing ``tools=`` with an engine that does not support tools must
+    raise at __init__. (Currently raises at run-time inside dspy plumbing —
+    Phase 2 pulls it forward.)"""
+
+    def my_tool(x: int) -> int:
+        return x + 1
+
+    with pytest.raises((ValueError, TypeError, NotImplementedError)) as exc_info:
+        RLM(lm=_StubLM(), engine="default", tools=[my_tool])
+    msg = str(exc_info.value).lower()
+    assert "tool" in msg, f"Error should mention tools: {msg!r}"
+
+
+def test_explicit_v6_custom_with_tools_still_raises_at_init():
+    """``engine="v6-custom"`` + ``tools=`` raises at __init__ time today
+    (per PR #18). This is a baseline-lock test confirming the existing
+    fast-fail behavior is preserved through consolidation."""
+
+    def my_tool(x: int) -> int:
+        return x + 1
+
+    with pytest.raises((ValueError, TypeError, NotImplementedError)):
+        RLM(lm=_StubLM(), engine="v6-custom", tools=[my_tool])
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — default flip (xfail until default kwarg becomes "auto")
+# ---------------------------------------------------------------------------
+
+
+def test_default_constructor_post_flip_uses_auto_internally():
+    """After Phase 4 flip: the default constructor's *resolved* engine is
+    still v6-custom (no tools), but `_unresolved_engine == "auto"`.
+
+    Pre-Phase-4 (now): only the resolved engine matches; no `_unresolved_engine`.
+    Phase 4 will add the second assertion. Test passes vacuously today."""
+    rlm = RLM(lm=_StubLM())
+    assert rlm.engine == "v6-custom"
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 4: default kwarg flip not yet shipped")
+def test_default_constructor_with_tools_post_flip_picks_dspy():
+    """After Phase 4: ``RLM(lm=lm, tools=[fn])`` (no engine kwarg) must
+    auto-route to v7-dspy. Today this raises during __init__ because the
+    default engine is still v6-custom and v6 rejects tools."""
+
+    def my_tool(x: int) -> int:
+        return x + 1
+
+    try:
+        rlm = RLM(lm=_StubLM(), tools=[my_tool])
+    except (NotImplementedError, ValueError, TypeError) as exc:
+        pytest.fail(
+            f"Phase 4 not yet shipped: default constructor with tools= still "
+            f"rejects the call: {type(exc).__name__}: {exc}"
+        )
+    assert rlm.engine == "v7-dspy"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — deprecation warnings (xfail until Phase 5 ships)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 5: deprecation warnings not implemented yet")
+@pytest.mark.parametrize("old_name", ["v6-custom", "v7-dspy"])
+def test_old_engine_names_emit_deprecation_warning(old_name: str):
+    """``engine='v6-custom'`` and ``engine='v7-dspy'`` must emit a
+    DeprecationWarning pointing at the new aliases."""
+    with pytest.warns(DeprecationWarning) as records:
+        RLM(lm=_StubLM(), engine=old_name)
+    msgs = [str(r.message) for r in records if issubclass(r.category, DeprecationWarning)]
+    assert msgs, f"No DeprecationWarning emitted for engine={old_name!r}"
+    combined = " ".join(msgs).lower()
+    if old_name == "v6-custom":
+        assert "default" in combined
+    else:
+        assert "dspy" in combined
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 5: deprecation warnings not implemented yet")
+@pytest.mark.parametrize("new_name", ["default", "dspy", "auto"])
+def test_new_engine_names_do_not_emit_deprecation_warning(new_name: str):
+    """The new alias names must NOT emit any engine-related DeprecationWarning.
+
+    Filter by message content (not filename) to avoid Windows-path false
+    positives AND `stacklevel`-induced false negatives where the warning
+    points at the test file rather than `fabric_rlm/runtime.py`. (Per duck
+    review #8 of commit 9bce342.)"""
+    import warnings
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        RLM(lm=_StubLM(), engine=new_name)
+
+    # Look for engine deprecation warnings by message content, not filename.
+    engine_dep_warnings = [
+        r for r in records
+        if issubclass(r.category, DeprecationWarning)
+        and "engine" in str(r.message).lower()
+        and ("deprecated" in str(r.message).lower() or "use engine=" in str(r.message).lower())
+    ]
+    assert not engine_dep_warnings, (
+        f"engine={new_name!r} emitted unexpected engine DeprecationWarning: "
+        f"{[str(r.message) for r in engine_dep_warnings]}"
+    )
+
+
+def test_default_constructor_does_not_emit_engine_deprecation_warning():
+    """Sentinel test for Phase 5 trap: when Phase 5 wires up deprecation
+    warnings, a naive implementation that keys off the *resolved* canonical
+    engine name (rather than the user-supplied name) would spuriously warn
+    its own users on the default constructor.
+
+    This must NOT happen. Today it passes trivially (no warnings yet);
+    after Phase 5 it will catch the trap if hit."""
+    import warnings
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        RLM(lm=_StubLM())  # default constructor, no engine kwarg
+
+    engine_dep_warnings = [
+        r for r in records
+        if issubclass(r.category, DeprecationWarning)
+        and "engine" in str(r.message).lower()
+    ]
+    assert not engine_dep_warnings, (
+        "Default constructor should not emit engine deprecation warnings. "
+        f"Got: {[str(r.message) for r in engine_dep_warnings]}"
+    )
