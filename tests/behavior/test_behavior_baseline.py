@@ -81,8 +81,11 @@ def _write_results(request: pytest.FixtureRequest, payload: dict[str, Any]) -> N
 
 
 def _run_gate(model: str, request: pytest.FixtureRequest) -> None:
-    _require_api_key()
+    # Skip first if no baseline -- there's nothing to gate, even in CI.  This
+    # also lets PR-1 (tooling-only, no committed baseline) pass on the existing
+    # test.yml workflow before the dedicated behavior-ci.yml lands.
     baseline = _load_baseline_or_skip()
+    _require_api_key()
     if model not in baseline.models:
         pytest.skip(f"No baseline calibrated for model {model!r}; skipping.")
 
