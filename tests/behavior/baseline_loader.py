@@ -217,8 +217,10 @@ def evaluate_gates(
         elif not pr_results[qid]:
             reasons.append(f"per-qid: {qid} regressed (baseline passing -> PR failing)")
 
-    # Aggregate floor.
-    pr_passes = sum(1 for v in pr_results.values() if v)
+    # Aggregate floor: count only over baseline qids to avoid future callers
+    # accidentally inflating the pass count with non-baseline qids.
+    baseline_qids = set(model_baseline.questions)
+    pr_passes = sum(1 for qid in baseline_qids if pr_results.get(qid) is True)
     if pr_passes < model_baseline.min_passes:
         reasons.append(
             f"aggregate: PR passed {pr_passes} qids; floor is {model_baseline.min_passes} "

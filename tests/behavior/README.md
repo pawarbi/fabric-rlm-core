@@ -62,11 +62,22 @@ python -m tests.behavior.runner --calibrate `
 ```
 
 Each candidate qid runs 5 times.  A qid is promoted to the blocking suite
-(`expected_to_pass=True`) iff its pass rate is ≥ 0.8 (i.e., ≥4/5).  The
-aggregate `min_passes` is set to `baseline_passes - 1`.
+(`expected_to_pass=True`) **iff its pass rate is 1.0** (i.e., 5/5).  A qid
+that flaked even once is recorded but excluded from both gates -- a single PR
+run is n=1, so any non-zero per-call failure rate translates directly into
+noisy merge blockers.  The aggregate `min_passes` is set to
+`baseline_passes - 1`.
+
+If you want the looser 4/5 promotion threshold, pass
+`--pass-rate-threshold 0.8` (not exposed via CLI yet -- call `calibrate(...)`
+from Python directly, or accept that calibration spend goes up).
 
 Re-running calibration for a different model **merges** into the existing
-file (preserves other models).  Pass `--replace` to overwrite.
+file (preserves other models), but refuses to merge if suite metadata
+(`questions_sha256`, `max_turns`, `timeout_s`, `calibration_runs_per_qid`,
+`suite_version`) disagrees.  Pass `--replace` to overwrite from scratch, or
+`--force-merge` to override the guard (not recommended -- creates mixed-suite
+baselines).
 
 ## Adding a question
 

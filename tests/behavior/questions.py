@@ -21,7 +21,7 @@ passes >=4/5 runs, then commit the new baseline.
 from __future__ import annotations
 
 import hashlib
-import inspect
+import json
 import random
 import string
 from dataclasses import dataclass, field
@@ -171,17 +171,31 @@ QUESTIONS: list[Question] = _build_questions()
 
 
 def questions_sha256() -> str:
-    """SHA-256 of this module's source (without the cached hash itself).
+    """SHA-256 of the canonical realized question data.
 
-    Used in baselines.json to detect when the suite changes without a recalibration.
-    Source-based (not data-based) so adding a new question or changing ``task``
-    text invalidates the baseline; pure-formatting changes also invalidate but
-    that's an acceptable false positive.
+    Hashes the JSON-canonical form of every Question's grading-relevant fields
+    (qid, category, task, inputs, expected, cmp).  This makes the hash robust
+    to whitespace/comment changes in the builder source while still catching
+    any change that affects what the model is asked or how its answer is
+    judged -- including a switched comparator (``cmp``).
+
+    Bump ``SUITE_VERSION`` (in ``baseline_loader.py``) when ``grader.py``
+    semantics for an existing comparator change; the question-data hash will
+    not detect that on its own.
     """
-    src = inspect.getsource(_build_questions).encode("utf-8")
-    src += inspect.getsource(_seeded_words).encode("utf-8")
-    src += inspect.getsource(_seeded_ints).encode("utf-8")
-    return hashlib.sha256(src).hexdigest()
+    payload = [
+        {
+            "qid": q.qid,
+            "category": q.category,
+            "task": q.task,
+            "inputs": q.inputs,
+            "expected": q.expected,
+            "cmp": q.cmp,
+        }
+        for q in QUESTIONS
+    ]
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
 
 
 def get_question(qid: str) -> Question:

@@ -103,24 +103,52 @@ _INFRA_TOKENS = (
     "rate limit",
     "rate-limit",
     "rate_limit",
+    "too many requests",
     "429",
     "timeout",
     "timed out",
+    "readtimeout",
+    "connecttimeout",
+    "apitimeout",
+    "apiconnectionerror",
     "connection",
     "connection reset",
     "read timed out",
     "service unavailable",
-    "503",
-    "502",
-    "504",
-    "bad gateway",
+    "internal server error",
+    "server error",
+    "temporarily unavailable",
+    "overloaded",
+    "upstream",
+    "no healthy upstream",
     "remote disconnected",
+    "econnreset",
+    "etimedout",
     "maxretry",
     "retries exceeded",
+    # Common HTTP status codes for transient/upstream failures (incl. Cloudflare).
+    "500",
+    "502",
+    "503",
+    "504",
+    "520",
+    "521",
+    "522",
+    "523",
+    "524",
+    "529",
+    "bad gateway",
+    "gateway timeout",
 )
 
 
 def _classify_error(exc: BaseException) -> str:
+    # Prefer structured status code when the exception carries one
+    # (httpx/openai/litellm/dspy all surface it via .status_code or .response.status_code).
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int) and status in {408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529}:
+        return "infra"
+
     msg = f"{type(exc).__name__}: {exc}".lower()
     if any(tok in msg for tok in _INFRA_TOKENS):
         return "infra"
@@ -138,9 +166,9 @@ def _run_once(q: Question, model: str, *, max_turns: int, timeout_s: float) -> t
     """
     from fabric_rlm import RLM
 
-    lm = make_lm(model)
     t0 = time.time()
     try:
+        lm = make_lm(model)
         rlm = RLM.from_task(
             task=q.task,
             inputs=q.inputs if q.inputs else None,
@@ -155,7 +183,10 @@ def _run_once(q: Question, model: str, *, max_turns: int, timeout_s: float) -> t
         if getattr(result, "outputs", None):
             ans = result.outputs.get("answer")
         return (ans, getattr(result, "n_turns", None), elapsed, None)
-    except BaseException as exc:  # noqa: BLE001 — we classify and re-raise selectively
+    except (KeyboardInterrupt, GeneratorExit, SystemExit):
+        # Never swallow shutdown / cancellation signals.
+        raise
+    except Exception as exc:  # noqa: BLE001 — classified by caller
         return (None, None, time.time() - t0, exc)
 
 
@@ -253,14 +284,20 @@ def calibrate(
     runs: int = 5,
     max_turns: int = 8,
     timeout_s: float = 120.0,
-    pass_rate_threshold: float = 0.8,
+    pass_rate_threshold: float = 1.0,
     questions: Iterable[Question] = QUESTIONS,
 ) -> dict[str, Any]:
     """Run each question ``runs`` times; produce a baselines.json payload for ``model``.
 
-    A qid's ``expected_to_pass`` is True iff its pass rate >= ``pass_rate_threshold``.
-    Aggregate ``min_passes`` is set to ``baseline_passes - 1`` (allow one stable qid
-    to flake to wrong-answer; per-qid gate is the primary check).
+    A qid is promoted to the per-qid blocking gate (``expected_to_pass=True``)
+    iff its pass rate is ``>= pass_rate_threshold``.  The default of ``1.0``
+    means **only perfect-pass qids are gated** -- anything that flaked even once
+    in calibration is recorded but excluded from both gates, on the principle
+    that PR runs are n=1 and any non-zero per-call failure rate translates
+    directly into noisy merge blockers.
+
+    Aggregate ``min_passes`` is set to ``baseline_passes - 1`` (allow one
+    stable qid to flake to wrong-answer).
     """
     qlist = list(questions)
     per_qid_passes: dict[str, int] = {q.qid: 0 for q in qlist}
@@ -312,27 +349,66 @@ def calibrate(
     }
 
 
-def merge_calibration(existing: dict[str, Any] | None, new: dict[str, Any]) -> dict[str, Any]:
+_MERGE_COMPATIBLE_KEYS = (
+    "suite_version",
+    "questions_sha256",
+    "max_turns",
+    "timeout_s",
+    "calibration_runs_per_qid",
+)
+
+
+class IncompatibleBaselineMerge(ValueError):
+    """Raised when merging two calibrations whose suite metadata disagrees.
+
+    Suite metadata mismatches indicate stale per-model entries (e.g., model A
+    calibrated against old questions, model B calibrated after questions.py
+    changed).  Merging silently would let stale baselines pass the sha check
+    in the gating test.  Use ``--force-merge`` if you really know what you're
+    doing.
+    """
+
+
+def merge_calibration(
+    existing: dict[str, Any] | None,
+    new: dict[str, Any],
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
     """Merge a new model's calibration into an existing baselines.json payload.
 
-    Top-level metadata (calibrated_at, commit, sha) reflects the most recent
-    calibration; ``models`` is a per-model union (new replaces old for the
-    calibrated model).
+    Refuses to merge if any of ``_MERGE_COMPATIBLE_KEYS`` differ between
+    ``existing`` and ``new`` (unless ``force=True``).  Other models'
+    per-qid data is preserved; the entry for the calibrated model is
+    replaced.
     """
     if not existing:
         return new
+
+    if not force:
+        mismatches = [
+            (k, existing.get(k), new.get(k))
+            for k in _MERGE_COMPATIBLE_KEYS
+            if existing.get(k) != new.get(k)
+        ]
+        if mismatches:
+            details = "; ".join(f"{k}: existing={ev!r} new={nv!r}" for k, ev, nv in mismatches)
+            raise IncompatibleBaselineMerge(
+                "Refusing to merge -- suite metadata disagrees with existing "
+                f"baseline ({details}).  Re-run with --replace to overwrite, or "
+                "--force-merge to override the guard (not recommended)."
+            )
+
     merged = dict(existing)
     merged_models = dict(existing.get("models", {}))
     for k, v in new.get("models", {}).items():
         merged_models[k] = v
     merged["models"] = merged_models
-    merged["suite_version"] = new["suite_version"]
+    # When force-merging, the new metadata wins (callers opted in to overwrite).
+    for k in _MERGE_COMPATIBLE_KEYS:
+        merged[k] = new[k]
     merged["calibrated_at"] = new["calibrated_at"]
     merged["calibrated_against_commit"] = new["calibrated_against_commit"]
-    merged["questions_sha256"] = new["questions_sha256"]
-    merged["max_turns"] = new["max_turns"]
-    merged["timeout_s"] = new["timeout_s"]
-    merged["calibration_runs_per_qid"] = new["calibration_runs_per_qid"]
     return merged
 
 
@@ -361,7 +437,11 @@ def _cli_calibrate(args: argparse.Namespace) -> int:
         max_turns=args.max_turns,
         timeout_s=args.timeout_s,
     )
-    merged = merge_calibration(existing, payload)
+    try:
+        merged = merge_calibration(existing, payload, force=args.force_merge)
+    except IncompatibleBaselineMerge as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 3
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
     print(f"[calibrate] wrote {out_path}", file=sys.stderr)
@@ -396,6 +476,11 @@ def main(argv: list[str] | None = None) -> int:
         help="output baseline path",
     )
     p.add_argument("--replace", action="store_true", help="overwrite existing baselines.json instead of merging")
+    p.add_argument(
+        "--force-merge",
+        action="store_true",
+        help="merge into existing baseline even if suite metadata (sha / max_turns / etc.) disagrees -- not recommended",
+    )
 
     args = p.parse_args(argv)
     if args.calibrate:

@@ -55,6 +55,39 @@ def test_questions_sha256_is_stable() -> None:
     assert len(h1) == 64  # hex SHA-256
 
 
+def test_questions_sha256_changes_when_cmp_changes() -> None:
+    """A switched comparator must invalidate the baseline (P1 from review).
+
+    Source-only hashing missed this; data-canonical hashing catches it.
+    """
+    from dataclasses import replace
+
+    from . import questions as mod
+
+    h_before = questions_sha256()
+    original = list(mod.QUESTIONS)
+    try:
+        mod.QUESTIONS[0] = replace(original[0], cmp="string")
+        h_after = questions_sha256()
+        assert h_after != h_before, "changing cmp must change the suite hash"
+    finally:
+        mod.QUESTIONS[:] = original
+
+
+def test_questions_sha256_changes_when_expected_changes() -> None:
+    from dataclasses import replace
+
+    from . import questions as mod
+
+    h_before = questions_sha256()
+    original = list(mod.QUESTIONS)
+    try:
+        mod.QUESTIONS[0] = replace(original[0], expected=999_999)
+        assert questions_sha256() != h_before
+    finally:
+        mod.QUESTIONS[:] = original
+
+
 def test_every_question_has_nonempty_task_and_expected() -> None:
     for q in QUESTIONS:
         assert q.task.strip(), f"{q.qid}: empty task"
