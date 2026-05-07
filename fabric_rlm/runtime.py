@@ -304,7 +304,20 @@ def _aggregate_trajectory_metrics(trajectory: Trajectory) -> dict[str, Any]:
 
 
 class RLM:
-    """LM-driven Python REPL loop with persistent worker state."""
+    """LM-driven Python REPL loop with persistent worker state.
+
+    Parameters
+    ----------
+    tools : Iterable[Callable], optional
+        Host callables exposed to the worker via the JSON-RPC tool protocol.
+        Currently supported only when ``engine='v7-dspy'``; passing tools with
+        any other engine raises ``NotImplementedError``. The iterable is
+        snapshotted to a list at construction time, so generators are safe
+        but consumed once. Tool names are inferred from each callable's
+        ``__name__``; wrap with ``functools.wraps`` if you need to preserve
+        the underlying name through a decorator. Pass ``dspy.Tool(fn,
+        name='...')`` for an explicit name override.
+    """
 
     def __init__(
         self,
@@ -333,6 +346,7 @@ class RLM:
         adaptive: dict | None = None,
         inner_engine: str = "v6-custom",
         stuck_loop_threshold: int | None = 3,
+        tools: Iterable[Callable[..., Any]] | None = None,
     ):
         # ---- engine validation (early, before any heavy resolution) ---------
         valid_engines = ("v6-custom", "v7-dspy", "adaptive")
@@ -340,6 +354,26 @@ class RLM:
             raise ValueError(
                 f"engine must be one of {valid_engines}, got {engine!r}"
             )
+        # ---- tools validation (engine-gated, normalize once) ---------------
+        # The JSON-RPC tool-call protocol lives only on SubprocessPythonInterpreter
+        # (used by engine='v7-dspy'). Legacy Interpreter (v6-custom) and the
+        # adaptive wrapper don't carry tools through. Refuse loudly rather than
+        # silently dropping the caller's tools.
+        # Snapshot the iterable now so generators/etc. are exhausted exactly
+        # once at construction time and downstream code sees a stable list.
+        tool_list: list[Callable[..., Any]] = list(tools) if tools is not None else []
+        if tool_list and engine != "v7-dspy":
+            raise NotImplementedError(
+                "tools= currently requires engine='v7-dspy'. "
+                f"Got engine={engine!r}. Tracked for future v6/adaptive parity."
+            )
+        for i, t in enumerate(tool_list):
+            if not callable(t):
+                raise TypeError(
+                    f"tools[{i}] is not callable: got {type(t).__name__}. "
+                    "Pass a list/iterable of plain callables (function names "
+                    "are inferred from __name__) or dspy.Tool objects."
+                )
         # ---- stuck-loop threshold validation -------------------------------
         if stuck_loop_threshold is not None:
             # Reject bool explicitly: bool is a subclass of int in Python.
@@ -431,6 +465,7 @@ class RLM:
             return
 
         # ---- legacy v6/v7 path (unchanged below this line) -----------------
+        self.tools: list[Callable[..., Any]] = tool_list
         self.signature = signature
         self.outer_lm = resolve_lm(lm)
         self.sub_lm_spec = sub_lm if sub_lm is not None else (lm if isinstance(lm, (str, dict)) else None)
@@ -1378,12 +1413,15 @@ class RLM:
             t0 = time.time()
             try:
                 with dspy.context(lm=outer_lm):
-                    rlm = DspyRLM(
+                    dspy_rlm_kwargs: dict[str, Any] = dict(
                         signature=signature,
                         sub_lm=sub_lm,
                         interpreter=interpreter,
                         max_iterations=max_iter,
                     )
+                    if self.tools:
+                        dspy_rlm_kwargs["tools"] = self.tools
+                    rlm = DspyRLM(**dspy_rlm_kwargs)
                     prediction = rlm(**current_inputs)
             except Exception as exc:
                 last_failure_reason = (

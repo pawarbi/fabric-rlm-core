@@ -9,6 +9,8 @@ SubprocessPythonInterpreter as the code execution backend. These tests verify:
 
 from __future__ import annotations
 
+from typing import Any
+
 import dspy
 import pytest
 
@@ -122,3 +124,152 @@ def test_v7_dspy_matches_raw_dspy_RLM_output() -> None:
         interp.shutdown()
 
     assert facade_result.payload["answer"] == raw_pred.answer == 99
+
+
+# ----- tools= kwarg plumbing (v7-dspy only) ----------------------------------
+
+
+def test_tools_kwarg_accepted_on_v7_engine() -> None:
+    """tools= is stored on the RLM instance when engine='v7-dspy'."""
+
+    def my_tool(x: int) -> int:
+        return x + 1
+
+    rlm = RLM(
+        signature="q -> a",
+        lm=_StubLM(),
+        engine="v7-dspy",
+        tools=[my_tool],
+    )
+    assert rlm.tools == [my_tool]
+
+
+def test_tools_kwarg_defaults_to_empty_list() -> None:
+    """When tools= is omitted, self.tools is an empty list (not None)."""
+    rlm = RLM(signature="q -> a", lm=_StubLM(), engine="v7-dspy")
+    assert rlm.tools == []
+
+
+def test_tools_kwarg_rejected_on_v6_custom_engine() -> None:
+    """The legacy Interpreter has no tool-call protocol; refuse loudly."""
+
+    def my_tool() -> str:
+        return "ok"
+
+    with pytest.raises(NotImplementedError, match="v7-dspy"):
+        RLM(
+            signature="q -> a",
+            lm=_StubLM(),
+            engine="v6-custom",
+            tools=[my_tool],
+        )
+
+
+def test_tools_kwarg_rejected_on_adaptive_engine() -> None:
+    """Adaptive wrapper doesn't carry tools through; refuse rather than drop."""
+
+    def my_tool() -> str:
+        return "ok"
+
+    with pytest.raises(NotImplementedError, match="v7-dspy"):
+        RLM(
+            signature="q -> a",
+            lm=_StubLM(),
+            engine="adaptive",
+            tools=[my_tool],
+        )
+
+
+def test_tools_kwarg_passes_through_to_dspy_rlm(monkeypatch) -> None:
+    """The tools list reaches dspy.predict.RLM as a kwarg.
+
+    This is the critical regression guard: if the seam in runtime.py
+    drops the tools list, the LM never learns about the tools.
+    """
+    captured_kwargs: dict[str, Any] = {}
+
+    class _SpyDspyRLM:
+        def __init__(self, **kwargs: Any) -> None:
+            captured_kwargs.update(kwargs)
+
+        def __call__(self, **inputs: Any):
+            class _P:
+                answer = 1
+            return _P()
+
+    import dspy.predict as _dspy_predict
+    monkeypatch.setattr(_dspy_predict, "RLM", _SpyDspyRLM)
+
+    def my_tool(x: int) -> int:
+        return x
+
+    rlm = RLM(
+        signature="q -> a",
+        lm=_StubLM(),
+        engine="v7-dspy",
+        tools=[my_tool],
+    )
+    rlm(q="hi")
+
+    assert "tools" in captured_kwargs, (
+        f"DspyRLM was called without 'tools' kwarg. Got: {sorted(captured_kwargs)}"
+    )
+    assert captured_kwargs["tools"] == [my_tool]
+
+
+def test_no_tools_means_no_tools_kwarg_to_dspy(monkeypatch) -> None:
+    """When no tools are registered, we omit the kwarg entirely."""
+    captured_kwargs: dict[str, Any] = {}
+
+    class _SpyDspyRLM:
+        def __init__(self, **kwargs: Any) -> None:
+            captured_kwargs.update(kwargs)
+
+        def __call__(self, **inputs: Any):
+            class _P:
+                answer = 1
+            return _P()
+
+    import dspy.predict as _dspy_predict
+    monkeypatch.setattr(_dspy_predict, "RLM", _SpyDspyRLM)
+
+    rlm = RLM(signature="q -> a", lm=_StubLM(), engine="v7-dspy")
+    rlm(q="hi")
+
+    assert "tools" not in captured_kwargs, (
+        f"DspyRLM was called with 'tools' kwarg even though none were registered: "
+        f"{captured_kwargs.get('tools')!r}"
+    )
+
+
+def test_tools_kwarg_rejects_non_callable() -> None:
+    """A non-callable item in tools= should fail at construction, not later."""
+    with pytest.raises(TypeError, match=r"tools\[1\] is not callable"):
+        RLM(
+            signature="q -> a",
+            lm=_StubLM(),
+            engine="v7-dspy",
+            tools=[lambda: None, "not_a_function"],  # type: ignore[list-item]
+        )
+
+
+def test_tools_kwarg_accepts_generator() -> None:
+    """An iterable (generator) is snapshotted to a list once."""
+
+    def my_tool() -> str:
+        return "ok"
+
+    rlm = RLM(
+        signature="q -> a",
+        lm=_StubLM(),
+        engine="v7-dspy",
+        tools=(t for t in [my_tool]),
+    )
+    assert rlm.tools == [my_tool]
+
+
+# Note: a real-path tool round-trip test (live dspy.RLM + SubprocessPythonInterpreter
+# + tool callback) is not included here because dspy switches to a tool-call
+# response format when tools= is set, which the canned _StubLM cannot mimic.
+# End-to-end validation across three scenarios with openai/gpt-4.1-mini lives in
+# experiments/tools_e2e/RESULTS.md on the tools-e2e-exploration branch.
