@@ -67,6 +67,26 @@ print(result.answer)
 - **`fabric_rlm/skills/PLAYBOOK_CONTRACT.md`** — how skills are structured;
   copy `SKILL_TEMPLATE.md` to author a new one.
 
+## Choosing a model
+
+RLM gives the most lift when the model is **good enough to self-correct from
+runtime errors but not so strong it one-shots the task**. Above and below that
+band, the iterative protocol either adds overhead without benefit (strong
+models) or burns the turn budget the model needs for the actual computation
+(weak models).
+
+| Model class                                              | Use RLM?                                                                  | Why                                                                                                                            |
+| -------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **Mid-tier instruction-followers** (e.g. `gpt-4.1`)      | ✅ **Sweet spot**                                                          | Reliably emits code blocks, follows the SUBMIT protocol, and reads tracebacks — but still benefits from a structured retry loop. |
+| **Cheap instruction-followers** (e.g. `gpt-4.1-mini`)    | ✅ Good cost/perf                                                          | Modest but real gains on multi-step tasks. Cheapest production option.                                                          |
+| **Strong reasoning models** (e.g. `gpt-5`)               | ✅ for genuinely iterative or exploratory tasks; ⚠️ skip for one-shot Q&A | Already self-corrects internally. RLM helps when the task needs verification or multi-pass refinement; otherwise it adds latency. |
+| **Weak / quantized "nano" models**                       | ❌ Avoid                                                                   | Tight turn budgets + weak self-correction = the loop scaffolding consumes the budget that should go to the actual task.         |
+
+In our internal SSB validation (Excel-modify, n=30 cells across the supported
+tier), RLM took the bottom-tier instruction-follower from 0% raw → 40% with a
+loop, with no regression on the stronger models. Use that as a rough sanity
+check when picking a model for your workload.
+
 ## Develop
 
 ```bash
