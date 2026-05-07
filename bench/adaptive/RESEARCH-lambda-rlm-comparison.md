@@ -4,6 +4,16 @@ Status: Discovery / planning — no code changes yet.
 Outputs three follow-up spec branches: `feat/combinators-skill`, `feat/task-type-classifier`, `feat/decompose-rung`.
 Companion to `REPORT-comparison-5way.md` (Addenda 1 & 2).
 
+> **Update (2026-05-06):** The `combinators` skill recommended in §3.1 was
+> implemented and then **dropped** after empirical A/B testing (`files/combinators_ab/`
+> in session state). On a synthetic chunk/map/reduce task it was designed for
+> (5 questions × 2 models × {baseline, +combinators}, 20 cells total): the
+> model imported `_combinators` in **0/20** cells, gpt-4.1 regressed from 5/5
+> to 4/5 with **13.5× more prompt tokens** and **4.7× slower** wall time, and
+> gpt-4.1-mini gave up entirely (returned a constant on every question). The
+> 12k-token playbook distorted task interpretation rather than providing
+> useful primitives. SPEC and skill files removed in PR #13.
+
 ## 1. Skills audit — would loaded skills have helped the bandit hit > 6/25?
 
 ### Finding
@@ -95,9 +105,16 @@ In descending order of expected payoff. Each gets its own branch with a SPEC and
 gated workflow per `.github/skills/spec-driven-development/SKILL.md` (no code in
 SPEC phase).
 
-### 3.1 Combinator library as a skill — **HIGH priority**
+### 3.1 Combinator library as a skill — ~~**HIGH priority**~~ **ABANDONED (PR #13)**
 
-Branch: `feat/combinators-skill` · Spec: `bench/adaptive/SPEC-combinators-skill.md`
+> **Status: ABANDONED** after empirical A/B evaluation (PR #13). The skill was
+> implemented and the SPEC has been deleted. The recommendation below is
+> retained for historical context only — do not act on it. See the top-of-file
+> note for A/B numbers and the empirical reasoning. Branch
+> `feat/combinators-skill` and `bench/adaptive/SPEC-combinators-skill.md` no
+> longer exist.
+
+~~Branch: `feat/combinators-skill` · Spec: `bench/adaptive/SPEC-combinators-skill.md`~~
 
 Ship λ-RLM's 7 primitives as a `combinators` skill, pre-imported in the
 fabric_rlm subprocess:
@@ -209,19 +226,23 @@ the rung is just expensive. Validate on the prior-fail set first
 
 ## 5. Open questions
 
-1. **What benchmark validates the combinators skill?** Need a task class that
+1. ~~**What benchmark validates the combinators skill?** Need a task class that
    actually rewards SPLIT/MAP/REDUCE — Spark-RCA is the closest existing
    candidate; alternatively synthesize a "count entities across N OneLake jsonl
-   shards" task.
+   shards" task.~~ **Resolved (PR #13):** Validated on a synthetic
+   chunk/map/reduce task (the skill's exact target). Result: 0/20 imports,
+   13.5× token bloat, 5/5 → 4/5 regression on gpt-4.1. Skill abandoned.
 2. **What's the right classifier prompt for §3.2?** λ-RLM uses one LLM call;
    ours could be a small `dspy.Predict` or even a regex/keyword first-pass that
    only escalates to LLM on ambiguity.
 3. **Does the §3.3 decompose rung need a verifier?** λ-RLM's `REDUCE` is total;
    our synthesis step is an LLM call that can be wrong. Probably needs the same
    validator gate every other rung uses.
-4. **Should §3.1 land first as a no-op skill** (just imports + docs) so the
+4. ~~**Should §3.1 land first as a no-op skill** (just imports + docs) so the
    model has the primitives available before §3.3 tries to depend on them?
-   Probably yes — that's the dependency order in the SPECs.
+   Probably yes — that's the dependency order in the SPECs.~~ **Resolved
+   (PR #13):** §3.1 abandoned; §3.3 (decompose-rung) decoupled from
+   combinators (uses `concurrent.futures.ThreadPoolExecutor` directly).
 
 ## 6. Cross-references
 
