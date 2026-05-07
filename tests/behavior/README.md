@@ -15,7 +15,7 @@ that PR #12 missed (gpt-5.4-nano −20pp drop).
 | `baseline_loader.py` | Loads & validates `baselines.json`; evaluates per-qid + aggregate gates. |
 | `baselines.json` | Per-model calibration committed on `main` (created by the `--calibrate` CLI). |
 | `test_grader.py`, `test_questions.py`, `test_baseline_loader.py`, `test_runner.py` | Offline unit tests; run on every CI build. |
-| `test_behavior_baseline.py` | Online gate; runs only when `OPENROUTER_API_KEY` is present (and is required in GitHub Actions). |
+| `test_behavior_baseline.py` | Online gate; runs only when `OPENROUTER_API_KEY` is present. Hard-fails on missing key when `BEHAVIOR_CI_REQUIRED=1` (set by `behavior-ci.yml`); skips otherwise. |
 
 ## Two gates, both must pass
 
@@ -40,9 +40,10 @@ $env:OPENROUTER_API_KEY = "sk-or-..."
 python -m pytest tests/behavior/test_behavior_baseline.py -q -m primary
 ```
 
-Without `OPENROUTER_API_KEY` the gate test **skips** locally.  Inside GitHub
-Actions a missing key is a hard failure (so a misconfigured workflow cannot
-silently pass).
+Without `OPENROUTER_API_KEY` the gate test **skips** — both locally and in
+CI runs that are not the dedicated behavior workflow.  The `behavior-ci.yml`
+workflow sets `BEHAVIOR_CI_REQUIRED=1`, which turns a missing key into a
+hard failure (so a misconfigured workflow cannot silently pass).
 
 ## Recalibrating
 
