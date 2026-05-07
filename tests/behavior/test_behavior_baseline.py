@@ -43,12 +43,16 @@ _SECONDARY_FREE_MODEL = os.environ.get(
 def _require_api_key() -> None:
     if os.environ.get("OPENROUTER_API_KEY"):
         return
-    if os.environ.get("GITHUB_ACTIONS") == "true":
+    # The behavior-ci workflow sets BEHAVIOR_CI_REQUIRED=1 to make a missing
+    # secret a loud failure (mis-configured workflow shouldn't silently pass).
+    # The general unit-test workflow (test.yml) doesn't set it, so the gate
+    # skips there even though GITHUB_ACTIONS=true.
+    if os.environ.get("BEHAVIOR_CI_REQUIRED") == "1":
         pytest.fail(
-            "OPENROUTER_API_KEY is required in GitHub Actions; behavior CI cannot run "
-            "without it.  Configure the secret on the repository."
+            "OPENROUTER_API_KEY is required when BEHAVIOR_CI_REQUIRED=1; "
+            "configure the secret on the repository."
         )
-    pytest.skip("OPENROUTER_API_KEY not set; skipping behavior gate locally.")
+    pytest.skip("OPENROUTER_API_KEY not set; skipping behavior gate.")
 
 
 def _load_baseline_or_skip() -> bl.Baseline:
