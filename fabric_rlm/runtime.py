@@ -228,6 +228,30 @@ class RLMResult:
     total_lm_seconds: float | None = None
     total_worker_seconds: float | None = None
 
+    @property
+    def turns(self) -> list[TurnRecord]:
+        """Convenience alias for ``self.trajectory.turns``.
+
+        Lets callers write ``result.turns`` instead of
+        ``result.trajectory.turns``. Returns an empty list when the trajectory
+        has no recorded turns.
+        """
+        return self.trajectory.turns
+
+    @property
+    def n_turns(self) -> int:
+        """Number of turns recorded in the trajectory."""
+        return len(self.trajectory.turns)
+
+    @property
+    def outputs(self) -> dict[str, Any]:
+        """Submitted payload as a dict; empty dict when no submission occurred.
+
+        Always returns a dict so callers can safely chain ``.outputs.get(...)``
+        even on runs that ended without a SUBMIT.
+        """
+        return self.payload if self.payload is not None else {}
+
     def __getattr__(self, name: str) -> Any:
         if self.payload and name in self.payload:
             return self.payload[name]
