@@ -32,7 +32,7 @@ from .questions import QUESTIONS, get_question, questions_sha256
 _BASELINE_PATH = Path(__file__).parent / "baselines.json"
 _PRIMARY_MODEL = os.environ.get("BEHAVIOR_PRIMARY_MODEL", "openai/gpt-4.1-mini")
 _SECONDARY_FREE_MODEL = os.environ.get(
-    "BEHAVIOR_SECONDARY_FREE_MODEL", "deepseek/deepseek-chat-v3.1:free"
+    "BEHAVIOR_SECONDARY_FREE_MODEL", "openai/gpt-oss-120b:free"
 )
 
 
