@@ -46,4 +46,6 @@ asyncio_mode = "auto"
 addopts = "-q"
 markers = [
   "experimental: opt-in tests for fabric_rlm.experimental modules",
+  "primary: behavior CI gate against the primary blocking model (requires OPENROUTER_API_KEY)",
+  "secondary_free: behavior CI gate against a free-tier model (informational, requires OPENROUTER_API_KEY)",
 ]
