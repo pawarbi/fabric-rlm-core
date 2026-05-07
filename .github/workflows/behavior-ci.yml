@@ -1,0 +1,98 @@
+name: behavior-ci
+
+# NOTE on path filters + branch protection:
+# Path filters cause this workflow to be skipped on PRs that don't touch the
+# listed paths.  If a future maintainer marks `primary (blocking)` as a
+# required check in branch protection, doc-only / unrelated PRs will then
+# block on an "Expected" check that never runs.  The standard mitigation is
+# to always-run the workflow and add an internal guard step that no-ops on
+# irrelevant PRs.  Refactor when/if this check becomes required.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'fabric_rlm/**'
+      - 'tests/behavior/**'
+      - 'pyproject.toml'
+      - '.github/workflows/behavior-ci.yml'
+  # Manual ad-hoc runs from the Actions UI (e.g., recalibration sanity check).
+  # PR transient failures should use "Re-run failed jobs" in the Checks tab.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: behavior-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  primary:
+    name: primary (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run primary gate
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Hard-fail on missing secret only when this PR/event SHOULD have
+          # access to it.  Fork PRs (head.repo != base.repo) don't get repo
+          # secrets and must skip cleanly; same-repo PRs and workflow_dispatch
+          # must hard-fail so a missing/misnamed secret is caught loudly.
+          BEHAVIOR_CI_REQUIRED: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+        run: |
+          pytest -q tests/behavior/test_behavior_baseline.py -m primary \
+            --behavior-results=behavior-primary.json
+      - name: Upload primary results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: behavior-primary-results
+          path: behavior-primary.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  secondary_free:
+    name: secondary_free (informational)
+    runs-on: ubuntu-latest
+    # Job-level continue-on-error: a secondary failure surfaces in checks but
+    # doesn't block merge.  Free-tier providers go down often; that's not a
+    # core regression.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run secondary_free gate
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BEHAVIOR_CI_REQUIRED: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          BEHAVIOR_SECONDARY_FREE_MODEL: openai/gpt-oss-120b:free
+        run: |
+          pytest -q tests/behavior/test_behavior_baseline.py -m secondary_free \
+            --behavior-results=behavior-secondary.json
+      - name: Upload secondary_free results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: behavior-secondary-results
+          path: behavior-secondary.json
+          if-no-files-found: ignore
+          retention-days: 14
