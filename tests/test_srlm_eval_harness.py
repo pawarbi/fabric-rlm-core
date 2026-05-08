@@ -192,13 +192,26 @@ def test_get_config_returns_eval_config_for_each_name(name: str) -> None:
 
 def test_stub_features_route_through_adaptive_current_today() -> None:
     base = get_config("adaptive_current").adaptive
-    for name in ("adaptive_a", "adaptive_b", "adaptive_c", "adaptive_d", "adaptive_all"):
+    # Phase 2: Feature A (adaptive_a) is now wired to prefer_shorter_traces=True
+    # and is no longer a stub. The remaining b/c/d/all stay stubbed.
+    for name in ("adaptive_b", "adaptive_c", "adaptive_d", "adaptive_all"):
         cfg = get_config(name)
         # Same engine + same adaptive kwargs as adaptive_current today.
         assert cfg.engine == "adaptive"
         assert cfg.adaptive == base
         # Stub note documents the deferred behavior.
         assert "STUB" in cfg.notes
+
+
+def test_adaptive_a_wires_prefer_shorter_traces() -> None:
+    """Phase 2: adaptive_a is no longer a stub — it sets prefer_shorter_traces=True."""
+    cfg = get_config("adaptive_a")
+    assert cfg.engine == "adaptive"
+    assert cfg.adaptive.get("prefer_shorter_traces") is True
+    # Still inherits the K=3 baseline.
+    assert cfg.adaptive.get("parallel_rollouts") == 3
+    assert "STUB" not in cfg.notes
+    assert "Feature A" in cfg.notes
 
 
 def test_get_config_rejects_unknown_name() -> None:

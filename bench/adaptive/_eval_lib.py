@@ -100,11 +100,17 @@ def get_config(name: str) -> EvalConfig:
             notes="Current adaptive engine (rung-3 best-of-N at K=3).",
         )
     if name == "adaptive_a":
+        adaptive_a_cfg = dict(base_adaptive)
+        adaptive_a_cfg["prefer_shorter_traces"] = True
         return EvalConfig(
             name="adaptive_a",
             engine="adaptive",
-            adaptive=dict(base_adaptive),
-            notes=_stub_features_note("A"),
+            adaptive=adaptive_a_cfg,
+            notes=(
+                "Feature A: trace-length tiebreaker (prefer_shorter_traces=True). "
+                "Late-tier tie-break only — fires after passed/score/confidence/"
+                "completeness equal."
+            ),
         )
     if name == "adaptive_b":
         return EvalConfig(

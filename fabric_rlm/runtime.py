@@ -882,6 +882,7 @@ class RLM:
             on_attempt=cfg.get("on_attempt"),
             feedback_injection=policy_kwargs.get("feedback_injection", True),
             pre_run=pre_run_hook,
+            prefer_shorter_traces=bool(cfg.get("prefer_shorter_traces", False)),
         )
         adaptive_result = runner.run(bound_inputs)
         # AdaptiveRunner already attaches metadata to the winning trajectory

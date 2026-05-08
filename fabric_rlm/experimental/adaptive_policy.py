@@ -112,6 +112,11 @@ class AttemptRecord:
     completion_tokens: int | None = None
     cached_tokens: int | None = None
     reasoning_tokens: int | None = None
+    # Free-form per-rollout observability bag. Frozen-dataclass safe: the dict
+    # object reference is immutable but its contents are mutable, which is
+    # exactly what selectors / signals (SRLM features A-D) need to record
+    # diagnostics like selector_key / trace_length_completion / vc_aggregate.
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_summary(self) -> dict[str, Any]:
         """JSON-serializable summary, safe for trajectory metadata."""
@@ -764,17 +769,78 @@ def _is_blank(v: Any) -> bool:
     return False
 
 
+def _trace_length(
+    record: AttemptRecord,
+    mode: Literal["completion", "turns", "step_sum"] = "completion",
+) -> int:
+    """Provider-independent trace-length signal (shared helper).
+
+    Defined in the SRLM integration plan ("Trace-length definition" section)
+    so Features A, B, and D all read the same source of truth and can't drift.
+
+    Modes
+    -----
+    ``"completion"`` (Feature A — tie-breaker)
+        ``record.completion_tokens`` if available, else 0. Excludes prompt
+        tokens and provider-specific reasoning tokens. Treats missing as 0
+        (no preference / no penalty), so the selector fails safely on
+        providers that don't report token counts.
+    ``"turns"`` (Feature B — DifficultySignal)
+        ``record.turns_used`` (always present).
+    ``"step_sum"`` (Feature D — VC × Len)
+        Per-step completion-token sum. Today this falls back to
+        ``record.completion_tokens`` because per-step counts are not yet
+        captured; Feature D may specialize this when the per-step capture
+        lands.
+    """
+    if mode == "turns":
+        return int(record.turns_used or 0)
+    # "completion" and "step_sum" both use completion_tokens today; "step_sum"
+    # is reserved for Feature D specialization (per-step accumulation).
+    return int(record.completion_tokens or 0)
+
+
 def select_best_of_n(
     rollouts: list[AttemptRecord],
     *,
     required_keys: tuple[str, ...] = (),
+    prefer_shorter_traces: bool = False,
 ) -> AttemptRecord:
     """Deterministic best-of-N selection.
 
-    Sort key (all descending where higher = better, except ``rollout_index``
-    which is ascending so the lowest-indexed rollout wins on ultimate tie):
+    Default sort key (all descending where higher = better, except
+    ``rollout_index`` which is ascending so the lowest-indexed rollout wins
+    on ultimate tie):
 
         (passed, score, confidence, required_filled, total_non_blank, -rollout_index)
+
+    SRLM Feature A — opt-in via ``prefer_shorter_traces=True`` — appends a
+    LATE-TIER trace-length tie-breaker AFTER all correctness/completeness
+    signals and BEFORE ``-rollout_index`` (which remains the ultimate
+    determinism tie-break):
+
+        (passed, score, confidence, required_filled, total_non_blank,
+         -trace_length_completion, -rollout_index)
+
+    Trace length uses :func:`_trace_length(rec, "completion")` — provider-
+    independent and missing-safe (None/0 → no penalty/no preference).
+
+    Late-tier-only is non-negotiable: trace length must never override
+    validator-passed, score, confidence, or payload completeness. The
+    inverse-failure case (concise wrong answer beats verbose correct answer)
+    is gated by the validator already calling them equally correct, which we
+    accept as the documented trade-off.
+
+    Plumbing choice: this function takes ``prefer_shorter_traces`` as a
+    direct keyword instead of stuffing it into :class:`AttemptConfig`. The
+    flag is a property of *how rollouts are compared*, not of any individual
+    attempt's execution config, so it lives on the call site that does the
+    comparison. :class:`AdaptiveRunner` carries it as a constructor field.
+
+    Observability: every rollout (winner and losers) gets
+    ``record.metadata['srlm']['trace_length_completion']`` populated; the
+    winner additionally gets ``record.metadata['srlm']['selector_key']`` set
+    to the actual sort tuple used.
     """
 
     if not rollouts:
@@ -782,16 +848,28 @@ def select_best_of_n(
 
     def key(rec: AttemptRecord) -> tuple:
         rf, tn = payload_completeness(rec.result, required_keys=required_keys)
-        return (
+        base = (
             int(rec.verdict.passed),
             (rec.verdict.score if rec.verdict.score is not None else float("-inf")),
             (rec.verdict.confidence if rec.verdict.confidence is not None else float("-inf")),
             rf,
             tn,
-            -rec.rollout_index,
         )
+        if prefer_shorter_traces:
+            return (*base, -_trace_length(rec, "completion"), -rec.rollout_index)
+        return (*base, -rec.rollout_index)
 
-    return max(rollouts, key=key)
+    keys: list[tuple[tuple, AttemptRecord]] = [(key(r), r) for r in rollouts]
+
+    # Per-rollout observability hook (always recorded, even when flag is off,
+    # so callers can inspect what *would* have happened). One-line addition.
+    for k, r in keys:
+        srlm = r.metadata.setdefault("srlm", {})
+        srlm["trace_length_completion"] = _trace_length(r, "completion")
+
+    winner_key, winner = max(keys, key=lambda kr: kr[0])
+    winner.metadata.setdefault("srlm", {})["selector_key"] = winner_key
+    return winner
 
 
 __all__ = [
@@ -811,6 +889,7 @@ __all__ = [
     "ToolErrorRate",
     "ValidationVerdict",
     "ValidatorOnly",
+    "_trace_length",
     "as_verdict",
     "inject_feedback",
     "payload_completeness",

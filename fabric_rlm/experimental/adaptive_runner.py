@@ -81,6 +81,11 @@ class AdaptiveRunner:
         When True (default), prepends a documented feedback block to the
         first textual input field of the next attempt when the prior
         validator returned a ``feedback`` string.
+    prefer_shorter_traces
+        SRLM Feature A — when True, :func:`select_best_of_n` adds a late-tier
+        trace-length tie-breaker after passed/score/confidence/completeness.
+        Off by default; default behavior is byte-identical to before. See
+        :func:`select_best_of_n` docstring for the full sort key.
     """
 
     def __init__(
@@ -93,6 +98,7 @@ class AdaptiveRunner:
         on_attempt: Callable[[AttemptRecord], None] | None = None,
         feedback_injection: bool = True,
         pre_run: Callable[[Mapping[str, Any], "AdaptiveRunner"], None] | None = None,
+        prefer_shorter_traces: bool = False,
     ):
         self.rlm_factory = rlm_factory
         self.policy = policy or LadderPolicy()
@@ -104,6 +110,7 @@ class AdaptiveRunner:
         # classifier integration to seed bandit priors from a single LM call,
         # but generic — any caller can plug in custom warm-up logic.
         self.pre_run = pre_run
+        self.prefer_shorter_traces = prefer_shorter_traces
 
     def run(self, inputs: Mapping[str, Any] | None = None, **kwargs: Any) -> AdaptiveResult:
         run_inputs = dict(inputs or {})
@@ -149,7 +156,10 @@ class AdaptiveRunner:
                         except Exception:
                             pass
                 # selection — best becomes the "current" tail
-                winner = select_best_of_n(rollout_records)
+                winner = select_best_of_n(
+                    rollout_records,
+                    prefer_shorter_traces=self.prefer_shorter_traces,
+                )
                 if winner.verdict.passed:
                     return self._make_result(
                         winner=winner,
@@ -344,7 +354,10 @@ class AdaptiveRunner:
     def _best_partial(self, attempts: list[AttemptRecord]) -> AttemptRecord:
         # No passing attempt — pick the most-populated payload, breaking ties
         # by lowest (rung, rollout_index) for determinism.
-        return select_best_of_n(attempts)
+        return select_best_of_n(
+            attempts,
+            prefer_shorter_traces=self.prefer_shorter_traces,
+        )
 
     def _make_result(
         self,
