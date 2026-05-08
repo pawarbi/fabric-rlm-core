@@ -149,17 +149,24 @@ print(result.total_prompt_tokens, result.total_completion_tokens)
 
 ---
 
-## 4. Two engines — pick one
+## 4. Engines — `"auto"` is the default
 
 ```python
-RLM(..., engine="v6-custom")   # default — our own loop, supports skills/router/reflection
-RLM(..., engine="v7-dspy")     # delegates to dspy.predict.RLM, our subprocess as backend
+RLM(...)                       # engine="auto" — picks "dspy" if non-empty tools=[...] is supplied, else "default"
+RLM(..., engine="default")     # custom loop, supports skills/router/reflection/verifier
+RLM(..., engine="dspy")        # delegates to dspy.predict.RLM, our subprocess as backend
+RLM(..., engine="dspy", tools=[my_tool, ...])  # tools= requires dspy
 ```
 
 | Engine | When to use |
 |---|---|
-| `v6-custom` | Default. You want skills, router, reflection, multi-turn verifier feedback. |
-| `v7-dspy` | You want dspy-native behavior + composability with the rest of your dspy program. Same SUBMIT contract, same subprocess interpreter. |
+| `"auto"` (default) | You don't want to think about it. If you pass a non-empty `tools=[...]`, you get `"dspy"`; otherwise `"default"`. |
+| `"default"` | You want skills, router, reflection, multi-turn verifier feedback. |
+| `"dspy"` | You want dspy-native behavior + composability with the rest of your dspy program, or you need `tools=`. Same SUBMIT contract, same subprocess interpreter. |
+
+> The legacy spellings `"v6-custom"` and `"v7-dspy"` still resolve to
+> `"default"` and `"dspy"` respectively, but emit a `DeprecationWarning`.
+> Removal is not planned before v0.3.
 
 Both write the SAME Python code through the SAME subprocess. Choose by what
 you want around the loop, not for raw capability.
@@ -191,7 +198,7 @@ rlm = RLM(
     signature="question -> answer",
     lm=FabricLM("gpt-4.1-mini"),
     engine="adaptive",                 # outer wrapper
-    inner_engine="v6-custom",           # what each attempt uses (default)
+    inner_engine="default",             # what each attempt uses (default)
     adaptive=dict(
         strong_lm=FabricLM("gpt-5"),    # the rung-4 escalation LM
         validator=my_validator,         # gates pass/fail per attempt
@@ -242,7 +249,7 @@ rlm = RLM(
         signature_validator(CountWords),     # auto: list[int] check
         assert_list_len("counts", n=3),      # semantic: must be 3 sentences
     ),
-    engine="v7-dspy",
+    engine="dspy",
     max_turns=10,
     halve_max_iter_on_retry=False,            # don't shrink budget on retry
 )
@@ -396,7 +403,7 @@ For lakehouse logs / CSVs / Parquet too big to fit in context:
 from fabric_rlm import RLM, FabricLM
 
 rlm = RLM(
-    engine="v7-dspy",
+    engine="dspy",
     signature="question -> answer: str",
     lm=FabricLM("gpt-5", max_tokens=16000),   # in Fabric — uses notebook identity
     skills=["data_exploration"],              # opt-in; teaches load-once-then-query
@@ -450,7 +457,7 @@ See `_mfmc_validator_eval/VALIDATOR_DESIGN.md` for the design rationale.
 | `output_validator` | None | Your callable; raise `AssertionError` to reject |
 | `halve_max_iter_on_retry` | True | If False, retries keep full `max_iterations` |
 | `verbose` | False | Print live progress |
-| `engine` | `"v6-custom"` | `v6-custom` or `v7-dspy` |
+| `engine` | `"auto"` | `"auto"` (default), `"default"`, `"dspy"`, `"adaptive"` (experimental). Legacy `"v6-custom"`/`"v7-dspy"` deprecated. |
 
 ---
 

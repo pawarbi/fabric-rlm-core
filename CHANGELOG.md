@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Engine selection (consolidation)
+
+- **`engine="auto"` is the new default** for `RLM(...)`. It picks `"dspy"`
+  when a non-empty `tools=[...]` iterable is supplied, otherwise `"default"`.
+  Existing code that passes no `tools=` (or an empty `tools=[]`) and didn't
+  pass `engine=` keeps identical behavior (resolves to the same canonical
+  engine as before).
+- **New public aliases**: `engine="default"` (= legacy `"v6-custom"`) and
+  `engine="dspy"` (= legacy `"v7-dspy"`).
+- **Deprecated**: passing `engine="v6-custom"` or `engine="v7-dspy"`
+  directly (or via `RLM.from_task(...)`) now emits a `DeprecationWarning`
+  pointing at the user's call site. Behavior is unchanged — both still
+  resolve to the same canonical engines. **Removal not before v0.3.**
+- Migration: prefer `engine="auto"` (recommended), or explicit
+  `engine="default"` / `engine="dspy"`. Adaptive (`engine="adaptive"`)
+  is unaffected and remains experimental.
+- Internal: `_normalize_engine_name` is pure (no side effects); the
+  deprecation warning is emitted at public entry points (`__init__`,
+  `from_task`) with correct stacklevel for both call paths. The adaptive
+  inner-RLM factory translates canonical inner engines to public aliases
+  before constructing inner attempts to avoid library self-warning.
+
 ## 0.2.1 — `excel_modify` skill + SpreadsheetBench head-to-head
 
 ### New
