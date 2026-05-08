@@ -37,6 +37,12 @@ Thumbs.db
 _*
 !_worker.py
 !__init__.py
+!bench/adaptive/_eval_lib.py
+
+# SRLM bench harness outputs (regenerated from real LM runs)
+bench/adaptive/results/
+bench/adaptive/srlm_eval_summary.json
+bench/adaptive/srlm_eval_report.md
 
 # Notebook checkpoints
 .ipynb_checkpoints/
