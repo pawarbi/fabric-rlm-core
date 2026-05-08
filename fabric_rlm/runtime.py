@@ -766,7 +766,23 @@ class RLM:
                         # If the LM doesn't accept reasoning_effort via copy(),
                         # leave it alone — non-reasoning chat models will reject it.
                         pass
-            return RLM(**kwargs)
+            inner = RLM(**kwargs)
+            # Propagate from_task inline state. When the outer adaptive RLM is
+            # constructed via ``RLM.from_task(...)``, that classmethod sets
+            # ``_inline_task`` / ``_inline_outputs`` / ``_inline_inputs`` on the
+            # outer instance AFTER ``__init__`` returns (see ``from_task`` above).
+            # ``inner_kwargs`` is a snapshot taken inside outer ``__init__``, so
+            # those attributes are NOT in it — without this copy, every inner
+            # RLM would run "blind" (no task description, no declared outputs)
+            # and consistently emit ``answer=None``. Mirror the post-init
+            # assignment that ``from_task`` does so inner RLMs see the same task.
+            if getattr(self, "_inline_task", None) is not None:
+                inner._inline_task = self._inline_task
+                inner._inline_outputs = (
+                    list(self._inline_outputs) if self._inline_outputs else []
+                )
+                inner._inline_inputs = dict(self._inline_inputs or {})
+            return inner
 
         # ---- policy + budget construction from adaptive_config ---------------
         policy_kwargs = {

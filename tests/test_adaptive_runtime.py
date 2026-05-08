@@ -313,3 +313,136 @@ def test_lm_instance_seeds_base_reasoning_effort() -> None:
     else:
         eff = None
     assert eff == "medium"
+
+
+def test_adaptive_factory_propagates_inline_state_from_from_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for adaptive ``answer=None`` bug.
+
+    ``RLM.from_task(task=..., inputs=..., outputs=...)`` sets ``_inline_task`` /
+    ``_inline_outputs`` / ``_inline_inputs`` on the outer instance AFTER
+    ``__init__`` returns. The adaptive engine's inner-RLM factory snapshots
+    constructor kwargs *during* outer ``__init__`` and previously did not copy
+    those post-init attributes onto the freshly-built inner RLM. Result: every
+    inner attempt ran "blind" (no task description, no declared outputs) and
+    consistently emitted ``answer=None`` no matter how many rungs the ladder
+    climbed.
+
+    This test captures the factory closure, invokes it directly, and asserts
+    the inner instance receives the outer's inline state.
+    """
+    from fabric_rlm.experimental import adaptive_runner as ar_mod
+    from fabric_rlm.experimental.adaptive_policy import AttemptConfig
+
+    captured: dict = {}
+
+    class _FakeAdaptiveResult:
+        def __init__(self) -> None:
+            class _R:
+                class trajectory:
+                    metadata: dict = {}
+                payload = {"answer": "stub"}
+                submitted = True
+                failure_reason = None
+            self.result = _R()
+            self.passed = True
+            self.attempts = []
+            self.winner = None
+            self.stop_reason = "ok"
+            self.elapsed_seconds = 0.0
+
+    class _CapturingRunner:
+        def __init__(self, *, rlm_factory, **_kw) -> None:
+            captured["factory"] = rlm_factory
+
+        def run(self, inputs, **_kw):
+            inner = captured["factory"](
+                AttemptConfig(rung=0, max_turns=1, inner_engine="v6-custom")
+            )
+            captured["inner"] = inner
+            return _FakeAdaptiveResult()
+
+    monkeypatch.setattr(ar_mod, "AdaptiveRunner", _CapturingRunner)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rlm = RLM.from_task(
+            "Compute the answer to the question.",
+            inputs={"question": "2+2?"},
+            outputs=["answer"],
+            lm="gpt-4.1-mini",
+            engine="adaptive",
+            adaptive={"validator": lambda _result: True},
+        )
+        rlm.run()
+
+    inner = captured["inner"]
+    # The inner RLM must see the same task / outputs / inputs the outer was
+    # built from -- otherwise it runs "blind" and produces answer=None.
+    assert inner._inline_task == "Compute the answer to the question."
+    assert inner._inline_outputs == ["answer"]
+    assert inner._inline_inputs == {"question": "2+2?"}
+    # The collections must be defensive copies so inner mutations don't bleed
+    # back into the outer instance (or sibling inners on subsequent attempts).
+    assert inner._inline_outputs is not rlm._inline_outputs
+    assert inner._inline_inputs is not rlm._inline_inputs
+
+
+def test_adaptive_factory_skips_inline_copy_when_outer_has_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the outer adaptive RLM is constructed via ``RLM(signature=...)``
+    (no ``from_task``), ``_inline_task`` is ``None`` and the factory must
+    NOT copy any inline state -- the inner relies on ``signature`` (which is
+    already in ``_adaptive_inner_kwargs``) to know what to run.
+    """
+    from fabric_rlm.experimental import adaptive_runner as ar_mod
+    from fabric_rlm.experimental.adaptive_policy import AttemptConfig
+
+    captured: dict = {}
+
+    class _FakeAdaptiveResult:
+        def __init__(self) -> None:
+            class _R:
+                class trajectory:
+                    metadata: dict = {}
+                payload = {"answer": "stub"}
+                submitted = True
+                failure_reason = None
+            self.result = _R()
+            self.passed = True
+            self.attempts = []
+            self.winner = None
+            self.stop_reason = "ok"
+            self.elapsed_seconds = 0.0
+
+    class _CapturingRunner:
+        def __init__(self, *, rlm_factory, **_kw) -> None:
+            captured["factory"] = rlm_factory
+
+        def run(self, inputs, **_kw):
+            inner = captured["factory"](
+                AttemptConfig(rung=0, max_turns=1, inner_engine="v6-custom")
+            )
+            captured["inner"] = inner
+            return _FakeAdaptiveResult()
+
+    monkeypatch.setattr(ar_mod, "AdaptiveRunner", _CapturingRunner)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rlm = RLM(
+            signature="question -> answer",
+            lm="gpt-4.1-mini",
+            engine="adaptive",
+            adaptive={"validator": lambda _result: True},
+        )
+        rlm.run({"question": "hello"})
+
+    inner = captured["inner"]
+    assert inner._inline_task is None
+    # signature path: inline outputs/inputs stay at their __init__ defaults
+    # (None / empty), NOT copied from the outer because the guard skipped it.
+    assert not inner._inline_outputs  # None or empty
+    assert not inner._inline_inputs  # None or empty
