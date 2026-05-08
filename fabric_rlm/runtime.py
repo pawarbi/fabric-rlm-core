@@ -654,22 +654,22 @@ class RLM:
         # via kwargs (v6.5+) and we'd otherwise hit "multiple values for 'signature'".
         kwargs.setdefault("signature", None)
         # Phase 5 deprecation: emit at the from_task call site stacklevel
-        # (warn -> helper -> from_task -> user = 3), then translate the
-        # legacy literal to the public alias so __init__ does not re-emit
-        # the warning. The end-state ``self.engine`` is identical because
-        # the alias resolves to the same canonical name.
-        _user_engine = kwargs.get("engine")
-        _emit_engine_deprecation_warning_if_legacy(_user_engine, stacklevel=3)
-        if isinstance(_user_engine, str) and _user_engine in _DEPRECATED_LEGACY_ENGINES:
-            kwargs["engine"] = _DEPRECATED_LEGACY_ENGINES[_user_engine]
-        instance = cls(**kwargs)
-        # Preserve the user's literal in ``_unresolved_engine`` so debug
-        # introspection on ``from_task``-constructed instances matches
-        # direct-constructor instances. Without this, the alias-translation
-        # done above to suppress double-warning would silently overwrite
-        # the user-visible debug breadcrumb. Caught by Phase 5 v2 duck.
-        if isinstance(_user_engine, str) and _user_engine in _DEPRECATED_LEGACY_ENGINES:
-            instance._unresolved_engine = _user_engine
+        # (warn -> helper -> from_task -> user = 3). Suppress only the
+        # inner re-emission of OUR engine-deprecation warning during the
+        # delegated ``cls(**kwargs)`` call via a narrow message-scoped
+        # filter -- we must NOT mutate ``kwargs["engine"]``, because
+        # subclasses are entitled to observe the user's literal value in
+        # their ``__init__`` (caught by Phase 7 v1 duck as a subclass
+        # regression: rewriting kwargs before delegating broke the
+        # ``from_task`` extension surface for ``cls != RLM``).
+        _emit_engine_deprecation_warning_if_legacy(kwargs.get("engine"), stacklevel=3)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"engine=.*is deprecated as a public spelling",
+                category=DeprecationWarning,
+            )
+            instance = cls(**kwargs)
         instance._inline_task = task
         instance._inline_outputs = list(outputs or [])
         instance._inline_inputs = dict(inputs or {})

@@ -758,3 +758,77 @@ def test_adaptive_inner_factory_does_not_self_warn_when_invoked():
     finally:
         ar_module.AdaptiveRunner = original_runner
 
+
+def test_from_task_does_not_mutate_engine_kwarg_for_subclass_init():
+    """Phase 7 v1 duck-blocking regression test: ``cls.from_task(engine='v6-custom')``
+    must pass the user's literal engine value through to ``cls.__init__``,
+    not a translated public alias.
+
+    Pre-fix: ``from_task`` rewrote ``kwargs['engine']`` from 'v6-custom' to
+    'default' before calling ``cls(**kwargs)`` to suppress double-warning.
+    For base ``RLM`` this was invisible (final state restored via
+    ``_unresolved_engine`` patch), but for subclasses overriding
+    ``__init__`` it was a behavior regression: subclass ``__init__``
+    received a different ``engine`` value via ``from_task`` than via
+    direct construction. ``from_task`` is a ``@classmethod`` so subclass
+    construction is part of the documented extension surface.
+
+    Post-fix: ``from_task`` uses a message-scoped ``warnings.catch_warnings``
+    filter to suppress only the inner double-warn, leaving ``kwargs``
+    unmutated."""
+    import warnings as _warnings
+
+    captured: list[dict[str, Any]] = []
+
+    class _RecordingRLM(RLM):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            captured.append(dict(kwargs))
+            super().__init__(*args, **kwargs)
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore", DeprecationWarning)
+        _ = _RecordingRLM(lm=_StubLM(), engine="v6-custom")
+        _ = _RecordingRLM.from_task(
+            "echo", inputs={"q": "x"}, outputs=["a"],
+            lm=_StubLM(), engine="v6-custom",
+        )
+
+    assert len(captured) == 2, captured
+    direct_kwargs, from_task_kwargs = captured[0], captured[1]
+    assert direct_kwargs["engine"] == "v6-custom"
+    assert from_task_kwargs["engine"] == "v6-custom", (
+        f"from_task must pass the user's literal engine value through to "
+        f"subclass __init__ unchanged; mutating kwargs to suppress "
+        f"double-warn was a subclass regression. Direct construction "
+        f"sees {direct_kwargs['engine']!r}; from_task sees "
+        f"{from_task_kwargs['engine']!r}."
+    )
+
+
+def test_from_task_suppresses_double_deprecation_warning():
+    """Phase 5 contract preserved post-Phase-7-fix: ``from_task`` must
+    emit the deprecation warning exactly once at the user's call site,
+    not twice (once from from_task + once from delegated __init__).
+
+    Implementation changed in Phase 7 from kwargs-mutation to
+    message-scoped ``warnings.catch_warnings`` filter; this test locks
+    the user-facing contract regardless of mechanism."""
+    import warnings as _warnings
+
+    with _warnings.catch_warnings(record=True) as records:
+        _warnings.simplefilter("always")
+        _ = RLM.from_task(
+            "echo", inputs={"q": "x"}, outputs=["a"],
+            lm=_StubLM(), engine="v6-custom",
+        )
+
+    engine_dep = [
+        r for r in records
+        if issubclass(r.category, DeprecationWarning)
+        and "engine=" in str(r.message)
+        and "v6-custom" in str(r.message)
+    ]
+    assert len(engine_dep) == 1, (
+        f"from_task must emit the engine deprecation warning exactly "
+        f"once. Got {len(engine_dep)}: {[str(r.message) for r in engine_dep]}"
+    )
