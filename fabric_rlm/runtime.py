@@ -308,7 +308,14 @@ _ENGINE_ALIASES: dict[str, str] = {
     "dspy": "v7-dspy",
 }
 
+# Canonical engine names that map 1:1 to a runtime path.
 _CANONICAL_ENGINES: tuple[str, ...] = ("v6-custom", "v7-dspy", "adaptive")
+
+# Capability-router pseudo-engines: valid as user input, but resolved to a
+# canonical name at __init__ based on what kwargs were passed (e.g. ``tools=``).
+# ``self.engine`` always exposes the resolved canonical name, never the
+# pseudo-engine literal — see ``_unresolved_engine`` for the original input.
+_ROUTER_ENGINES: tuple[str, ...] = ("auto",)
 
 
 def _normalize_engine_name(name: str) -> str:
@@ -318,11 +325,16 @@ def _normalize_engine_name(name: str) -> str:
         ``"default"`` -> ``"v6-custom"``
         ``"dspy"``    -> ``"v7-dspy"``
 
-    Canonical names (``"v6-custom"``, ``"v7-dspy"``, ``"adaptive"``) pass
-    through unchanged. ``"auto"`` is rejected here until Phase 2 ships.
+    Canonical names (``"v6-custom"``, ``"v7-dspy"``, ``"adaptive"``) and the
+    capability-router pseudo-engine ``"auto"`` (Phase 2) pass through unchanged
+    — ``"auto"`` is resolved to a canonical name later in ``__init__`` once
+    routing-relevant kwargs (``tools=``) are materialized.
+
     Unknown values raise ``ValueError`` listing the valid set.
     """
-    valid = sorted(set(_CANONICAL_ENGINES) | set(_ENGINE_ALIASES))
+    valid = sorted(
+        set(_CANONICAL_ENGINES) | set(_ENGINE_ALIASES) | set(_ROUTER_ENGINES)
+    )
     # Preserve old behavior: invalid engine values raised ValueError, not
     # TypeError. Keep the same exception class even for non-string inputs
     # so existing callers' exception handlers continue to work. (Phase 1
@@ -333,7 +345,7 @@ def _normalize_engine_name(name: str) -> str:
         )
     if name in _ENGINE_ALIASES:
         return _ENGINE_ALIASES[name]
-    if name in _CANONICAL_ENGINES:
+    if name in _CANONICAL_ENGINES or name in _ROUTER_ENGINES:
         return name
     raise ValueError(
         f"engine must be one of {valid}, got {name!r}"
@@ -347,10 +359,14 @@ class RLM:
     ----------
     tools : Iterable[Callable], optional
         Host callables exposed to the worker via the JSON-RPC tool protocol.
-        Currently supported only when ``engine='v7-dspy'``; passing tools with
-        any other engine raises ``NotImplementedError``. The iterable is
-        snapshotted to a list at construction time, so generators are safe
-        but consumed once. Tool names are inferred from each callable's
+        Supported by the DSPy/tool-call engine. Prefer ``engine='auto'``
+        (auto-routes to the tool-call engine when ``tools=`` is passed) or
+        ``engine='dspy'``; the canonical ``engine='v7-dspy'`` is also
+        accepted. Passing tools with an engine that resolves to
+        ``v6-custom`` or ``adaptive`` raises ``NotImplementedError``. The
+        iterable is snapshotted to a list at construction time, so
+        generators are safe but consumed once. Tool names are inferred from
+        each callable's
         ``__name__``; wrap with ``functools.wraps`` if you need to preserve
         the underlying name through a decorator. Pass ``dspy.Tool(fn,
         name='...')`` for an explicit name override.
@@ -389,6 +405,10 @@ class RLM:
         # Resolve aliases ('default' -> 'v6-custom', 'dspy' -> 'v7-dspy')
         # before any further engine-based logic so internal switches keep
         # using canonical literals. Phase 1 of engine consolidation.
+        # Capture the user's literal input BEFORE normalization so debug
+        # tooling and Phase 5 deprecation logic can distinguish e.g.
+        # `engine="default"` from `engine="v6-custom"`.
+        self._unresolved_engine: str = engine if isinstance(engine, str) else ""
         engine = _normalize_engine_name(engine)
         # `inner_engine` is only consulted when engine == "adaptive". For
         # non-adaptive engines it is silently ignored (and overwritten with
@@ -404,10 +424,23 @@ class RLM:
         # Snapshot the iterable now so generators/etc. are exhausted exactly
         # once at construction time and downstream code sees a stable list.
         tool_list: list[Callable[..., Any]] = list(tools) if tools is not None else []
+        # ---- engine="auto" capability router (Phase 2) ---------------------
+        # Resolve the pseudo-engine to a canonical name based on what the
+        # caller actually needs. Decision is made AFTER tool_list is
+        # materialized so generators are exhausted exactly once and the
+        # router sees the real (possibly empty) length.
+        # Routing rule: tools= present -> v7-dspy (the only engine that
+        # currently supports the JSON-RPC tool-call protocol); otherwise
+        # v6-custom (the historic default).
+        if engine == "auto":
+            engine = "v7-dspy" if tool_list else "v6-custom"
         if tool_list and engine != "v7-dspy":
             raise NotImplementedError(
-                "tools= currently requires engine='v7-dspy'. "
-                f"Got engine={engine!r}. Tracked for future v6/adaptive parity."
+                "tools= requires the DSPy/tool-call engine "
+                "(canonical name: 'v7-dspy'). "
+                "Use engine='dspy' or engine='auto' (which auto-selects "
+                "the tool-call engine when tools= is passed). "
+                f"Got resolved engine={engine!r}."
             )
         for i, t in enumerate(tool_list):
             if not callable(t):

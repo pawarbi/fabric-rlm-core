@@ -269,10 +269,10 @@ def test_unknown_engine_name_raises_with_helpful_message():
     msg = str(exc_info.value)
     for valid in ("v6-custom", "v7-dspy", "adaptive", "default", "dspy"):
         assert valid in msg, f"Error message should mention {valid!r}: got {msg!r}"
-    # Phase 1 contract: "auto" is NOT yet a valid engine; it must not appear
-    # in the helpful message until Phase 2 ships the capability router.
-    assert "auto" not in msg, (
-        f"'auto' must not appear in unknown-engine message until Phase 2: {msg!r}"
+    # After Phase 2 ships the capability router, "auto" is a valid input
+    # and SHOULD appear in the helpful message.
+    assert "auto" in msg, (
+        f"'auto' should appear in unknown-engine message after Phase 2: {msg!r}"
     )
 
 
@@ -305,14 +305,12 @@ def test_alias_dspy_accepts_tools_kwarg():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
 def test_auto_with_no_tools_picks_v6_custom():
     """``engine='auto'`` with no ``tools=`` must resolve to v6-custom."""
     rlm = RLM(lm=_StubLM(), engine="auto")
     assert rlm.engine == "v6-custom"
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
 def test_auto_with_tools_picks_v7_dspy():
     """``engine='auto'`` with ``tools=[...]`` must resolve to v7-dspy."""
 
@@ -323,7 +321,6 @@ def test_auto_with_tools_picks_v7_dspy():
     assert rlm.engine == "v7-dspy"
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
 def test_auto_with_empty_tools_list_picks_v6_custom():
     """Empty ``tools=[]`` must NOT trigger dspy routing. Guards against the
     duck's edge case (#10): falsy-but-iterable tools."""
@@ -331,7 +328,6 @@ def test_auto_with_empty_tools_list_picks_v6_custom():
     assert rlm.engine == "v6-custom"
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
 def test_auto_with_generator_tools_routes_correctly():
     """Generator-based tools= must be materialized once, not consumed
     by the routing decision. Guards against the duck's edge case (#10)."""
@@ -344,7 +340,17 @@ def test_auto_with_generator_tools_routes_correctly():
     assert len(list(rlm.tools)) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
+def test_auto_with_empty_generator_tools_picks_v6_custom():
+    """Empty generator tools= must route to v6-custom. A generator object
+    is truthy even when it yields nothing, so checking the raw ``tools=``
+    parameter would route incorrectly. The router MUST decide on the
+    materialized ``tool_list``, not the generator object's truthiness.
+    Phase 2 duck review hardening test."""
+    rlm = RLM(lm=_StubLM(), engine="auto", tools=(t for t in []))
+    assert rlm.engine == "v6-custom"
+    assert list(rlm.tools) == []
+
+
 def test_auto_resolved_engine_attr_is_canonical():
     """``rlm.engine`` exposes the *resolved* engine, never the literal 'auto'."""
     rlm_a = RLM(lm=_StubLM(), engine="auto")
@@ -355,16 +361,45 @@ def test_auto_resolved_engine_attr_is_canonical():
     assert rlm_b.engine != "auto"
 
 
+@pytest.mark.parametrize(
+    "user_input, expected_resolved, expected_unresolved",
+    [
+        ("auto", "v6-custom", "auto"),       # router pseudo-engine, no tools
+        ("default", "v6-custom", "default"), # alias preserved literally
+        ("dspy", "v7-dspy", "dspy"),         # alias preserved literally
+        ("v6-custom", "v6-custom", "v6-custom"),  # canonical preserved
+        ("v7-dspy", "v7-dspy", "v7-dspy"),        # canonical preserved
+    ],
+)
+def test_unresolved_engine_preserves_user_literal_input(
+    user_input, expected_resolved, expected_unresolved,
+):
+    """``_unresolved_engine`` MUST capture the literal input string before
+    alias normalization or auto-routing. Phase 5 deprecation/debug logic
+    will rely on this to distinguish e.g. ``engine="default"`` from
+    ``engine="v6-custom"``. Phase 2 duck review hardening test."""
+    rlm = RLM(lm=_StubLM(), engine=user_input)
+    assert rlm.engine == expected_resolved
+    assert rlm._unresolved_engine == expected_unresolved
+
+
 def test_explicit_default_engine_with_tools_raises_at_init():
     """Passing ``tools=`` with the ``default`` alias (resolves to v6-custom)
     must raise at __init__ time. After Phase 1, the alias normalizes first,
-    then the existing tools-on-non-v7 guard fires with NotImplementedError."""
+    then the existing tools-on-non-v7 guard fires with NotImplementedError.
+
+    Phase 2 duck review: the error message must point users at the new
+    public engine names (``dspy``, ``auto``), not the canonical
+    ``v7-dspy``."""
 
     def my_tool(x: int) -> int:
         return x + 1
 
-    with pytest.raises(NotImplementedError, match="(?i)tool"):
+    with pytest.raises(NotImplementedError, match="(?i)tool") as exc_info:
         RLM(lm=_StubLM(), engine="default", tools=[my_tool])
+    msg = str(exc_info.value)
+    assert "dspy" in msg, f"error should suggest engine='dspy': {msg!r}"
+    assert "auto" in msg, f"error should suggest engine='auto': {msg!r}"
 
 
 def test_explicit_v6_custom_with_tools_still_raises_at_init():
@@ -375,8 +410,11 @@ def test_explicit_v6_custom_with_tools_still_raises_at_init():
     def my_tool(x: int) -> int:
         return x + 1
 
-    with pytest.raises(NotImplementedError, match="(?i)tool"):
+    with pytest.raises(NotImplementedError, match="(?i)tool") as exc_info:
         RLM(lm=_StubLM(), engine="v6-custom", tools=[my_tool])
+    msg = str(exc_info.value)
+    assert "dspy" in msg, f"error should suggest engine='dspy': {msg!r}"
+    assert "auto" in msg, f"error should suggest engine='auto': {msg!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -386,12 +424,15 @@ def test_explicit_v6_custom_with_tools_still_raises_at_init():
 
 def test_default_constructor_post_flip_uses_auto_internally():
     """After Phase 4 flip: the default constructor's *resolved* engine is
-    still v6-custom (no tools), but `_unresolved_engine == "auto"`.
+    still v6-custom (no tools), but ``_unresolved_engine == "auto"``.
 
-    Pre-Phase-4 (now): only the resolved engine matches; no `_unresolved_engine`.
-    Phase 4 will add the second assertion. Test passes vacuously today."""
+    Pre-Phase-4 (now): the default engine kwarg is still ``"v6-custom"``,
+    so ``_unresolved_engine == "v6-custom"`` (Phase 2 captures the literal
+    user input). Phase 4 will change the default to ``"auto"`` and add the
+    `_unresolved_engine == "auto"` assertion."""
     rlm = RLM(lm=_StubLM())
     assert rlm.engine == "v6-custom"
+    assert rlm._unresolved_engine == "v6-custom"
 
 
 @pytest.mark.xfail(strict=True, reason="Phase 4: default kwarg flip not yet shipped")
@@ -461,7 +502,6 @@ def test_new_engine_names_do_not_emit_deprecation_warning(new_name: str):
     )
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
 def test_auto_engine_name_does_not_emit_deprecation_warning():
     """Phase 2's ``"auto"`` value must NOT emit deprecation warnings."""
     import warnings
