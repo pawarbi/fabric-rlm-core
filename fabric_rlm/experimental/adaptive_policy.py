@@ -485,12 +485,24 @@ class LadderPolicy:
     parallel_rollouts: int = 3
     signal: DifficultySignal = field(default_factory=ValidatorOnly)
     skip_more_turns_when_submitted: bool = True
+    # SRLM bench knob — when > 0, baseline_config() returns a config built at
+    # this rung instead of rung 0. Used to isolate "is selection better at K>1?"
+    # from "does the escalation policy ever escalate?" Off by default; default
+    # behavior is byte-identical to before. See bench/adaptive/_eval_lib.py
+    # (force_min_rung in EvalConfig) for the harness wiring.
+    start_rung: int = 0
 
     @property
     def max_rung(self) -> int:
         return 4 if self.strong_lm_spec is not None else 3
 
     def baseline_config(self) -> AttemptConfig:
+        if self.start_rung > 0:
+            target = min(self.start_rung, self.max_rung)
+            return self._build_config(target)
+        return self._zero_baseline_config()
+
+    def _zero_baseline_config(self) -> AttemptConfig:
         return AttemptConfig(
             rung=0,
             max_turns=self.base_max_turns,
@@ -558,7 +570,7 @@ class LadderPolicy:
         rollouts: int = 1,
         feedback: str | None = None,
     ) -> AttemptConfig:
-        cfg = self.baseline_config()
+        cfg = self._zero_baseline_config()
         max_turns = cfg.max_turns
         reasoning_effort = cfg.reasoning_effort
         lm_spec = cfg.lm_spec

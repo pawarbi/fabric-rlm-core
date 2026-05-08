@@ -798,6 +798,8 @@ class RLM:
             policy_kwargs["skip_more_turns_when_submitted"] = bool(
                 cfg["skip_more_turns_when_submitted"]
             )
+        if "start_rung" in cfg:
+            policy_kwargs["start_rung"] = int(cfg["start_rung"])
         # If the user passed an LM with reasoning_effort already set, seed
         # the policy so its rung-0 baseline matches the user's intent. Works
         # for both dict specs and dspy.LM instances (which carry .kwargs).
