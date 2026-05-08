@@ -23,6 +23,9 @@ from _eval_lib import (  # type: ignore  # noqa: E402
     QuestionRecord,
     ResultRow,
     RolloutObservability,
+    _validate_dabench,
+    _validate_longcot,
+    _validate_ssb,
     bootstrap_ci,
     default_question_set,
     get_config,
@@ -400,3 +403,251 @@ def test_run_one_records_error_without_crashing(
     assert "simulated failure" in row.error
     assert row.passed is False
     assert row.answer is None
+
+# ---------------------------------------------------------------------------
+# Phase 2.5 — Domain-specific validators (dabench / ssb / longcot)
+# ---------------------------------------------------------------------------
+
+
+# DABench: list-of-pairs JSON answers with numeric tolerance.
+class TestValidateDabench:
+    def test_exact_json_match(self) -> None:
+        assert _validate_dabench(
+            '[["correlation_pclass_fare", "-0.55"]]',
+            '[["correlation_pclass_fare", "-0.55"]]',
+        ) is True
+
+    def test_numeric_tolerance(self) -> None:
+        # rounding noise within 1% should still pass
+        assert _validate_dabench(
+            '[["correlation_pclass_fare", "-0.5499"]]',
+            '[["correlation_pclass_fare", "-0.55"]]',
+        ) is True
+
+    def test_obvious_fail(self) -> None:
+        assert _validate_dabench(
+            '[["correlation_pclass_fare", "0.99"]]',
+            '[["correlation_pclass_fare", "-0.55"]]',
+        ) is False
+
+    def test_prose_with_name_and_number(self) -> None:
+        # Model didn't emit JSON; prose mentions the name and the value.
+        prose = "The correlation_pclass_fare is approximately -0.55."
+        assert _validate_dabench(
+            prose, '[["correlation_pclass_fare", "-0.55"]]'
+        ) is True
+
+    def test_prose_missing_name_fails(self) -> None:
+        prose = "The value is -0.55."
+        assert _validate_dabench(
+            prose, '[["correlation_pclass_fare", "-0.55"]]'
+        ) is False
+
+    def test_multi_pair_match(self) -> None:
+        assert _validate_dabench(
+            '[["average_fare_Mr", "24.44"], ["average_fare_Mrs", "45.14"]]',
+            '[["average_fare_Mrs", "45.14"], ["average_fare_Mr", "24.44"]]',
+        ) is True
+
+    def test_yes_no_string_value(self) -> None:
+        assert _validate_dabench(
+            '[["significance", "Yes"]]',
+            '[["significance", "Yes"]]',
+        ) is True
+        assert _validate_dabench(
+            '[["significance", "No"]]',
+            '[["significance", "Yes"]]',
+        ) is False
+
+    def test_returns_false_on_garbage(self) -> None:
+        assert _validate_dabench("not json", '[["x", "1"]]') is False
+        assert _validate_dabench("anything", "{not json") is False
+
+    def test_none_input_returns_false(self) -> None:
+        assert _validate_dabench(None, '[["x", "1"]]') is False
+        assert _validate_dabench("anything", None) is False
+
+
+# SSB: signal-of-life range token match.
+class TestValidateSsb:
+    def test_range_token_in_answer(self) -> None:
+        assert _validate_ssb(
+            "Filled formula in H3:H6 with the recoupment formula.", "H3:H6"
+        ) is True
+
+    def test_case_insensitive(self) -> None:
+        assert _validate_ssb("filled cells h3:h6 done", "H3:H6") is True
+
+    def test_no_mention_returns_false(self) -> None:
+        assert _validate_ssb("Did some work in column G", "H3:H6") is False
+
+    def test_none_input_returns_false(self) -> None:
+        assert _validate_ssb(None, "H3:H6") is False
+        assert _validate_ssb("text", None) is False
+
+    def test_empty_expected_returns_false(self) -> None:
+        assert _validate_ssb("text", "") is False
+
+
+# LongCoT: dict-with-list-value JSON answers.
+class TestValidateLongcot:
+    EXPECTED = '{"final_capacities": [5, 14, 7, 9]}'
+
+    def test_exact_dict_match(self) -> None:
+        assert _validate_longcot(self.EXPECTED, self.EXPECTED) is True
+
+    def test_obvious_fail(self) -> None:
+        assert _validate_longcot(
+            '{"final_capacities": [5, 14, 7, 8]}', self.EXPECTED
+        ) is False
+
+    def test_bare_list_answer_matches_dict_expected(self) -> None:
+        assert _validate_longcot("[5, 14, 7, 9]", self.EXPECTED) is True
+
+    def test_inline_list_in_prose(self) -> None:
+        prose = "After computing, the final capacities are [5, 14, 7, 9]. Done."
+        assert _validate_longcot(prose, self.EXPECTED) is True
+
+    def test_inline_list_wrong_values(self) -> None:
+        prose = "Got: [5, 14, 7, 8]"
+        assert _validate_longcot(prose, self.EXPECTED) is False
+
+    def test_returns_false_on_garbage(self) -> None:
+        assert _validate_longcot("not json", self.EXPECTED) is False
+
+    def test_none_input_returns_false(self) -> None:
+        assert _validate_longcot(None, self.EXPECTED) is False
+        assert _validate_longcot("x", None) is False
+
+
+# Dispatch through validate_question_passed.
+class TestValidateDispatch:
+    def test_dabench_dispatch(self) -> None:
+        q = QuestionRecord(
+            id="d", source_file="dabench_15.jsonl", source_idx=0,
+            prompt="x", expected='[["x", "1.5"]]',
+        )
+        assert validate_question_passed('[["x", "1.5"]]', q) is True
+        assert validate_question_passed('[["x", "9.9"]]', q) is False
+
+    def test_ssb_dispatch(self) -> None:
+        q = QuestionRecord(
+            id="s", source_file="ssb_subset_50.jsonl", source_idx=0,
+            prompt="x", expected="A1:B2",
+        )
+        assert validate_question_passed("touched A1:B2 cells", q) is True
+        assert validate_question_passed("did nothing", q) is False
+
+    def test_longcot_dispatch(self) -> None:
+        q = QuestionRecord(
+            id="l", source_file="longcot_cs_hard_holdout25.jsonl", source_idx=0,
+            prompt="x", expected='{"final_capacities": [1, 2, 3]}',
+        )
+        assert validate_question_passed("answer is [1, 2, 3]", q) is True
+        assert validate_question_passed("answer is [9, 9, 9]", q) is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.5 — Bench configs: minrung3 wiring + force_min_rung
+# ---------------------------------------------------------------------------
+
+
+def test_adaptive_current_minrung3_config() -> None:
+    cfg = get_config("adaptive_current_minrung3")
+    assert cfg.engine == "adaptive"
+    assert cfg.adaptive.get("start_rung") == 3
+    assert cfg.adaptive.get("parallel_rollouts") == 3
+    assert cfg.force_min_rung == 3
+
+
+def test_adaptive_a_minrung3_config() -> None:
+    cfg = get_config("adaptive_a_minrung3")
+    assert cfg.engine == "adaptive"
+    assert cfg.adaptive.get("start_rung") == 3
+    assert cfg.adaptive.get("prefer_shorter_traces") is True
+    assert cfg.force_min_rung == 3
+
+
+def test_ladder_policy_start_rung_short_circuits_baseline() -> None:
+    """Offline test: LadderPolicy(start_rung=3).baseline_config() returns a
+    rung-3 config (parallel_rollouts > 1), bypassing rungs 0/1/2."""
+    from fabric_rlm.experimental.adaptive_policy import LadderPolicy
+
+    pol = LadderPolicy(start_rung=3, parallel_rollouts=3)
+    cfg = pol.baseline_config()
+    assert cfg.rung == 3
+    assert cfg.parallel_rollouts == 3
+
+
+def test_ladder_policy_start_rung_zero_is_unchanged() -> None:
+    """Default behavior is byte-identical to before: start_rung=0 => rung 0."""
+    from fabric_rlm.experimental.adaptive_policy import LadderPolicy
+
+    pol = LadderPolicy()  # start_rung defaults to 0
+    cfg = pol.baseline_config()
+    assert cfg.rung == 0
+    assert cfg.parallel_rollouts == 1
+
+
+def test_ladder_policy_start_rung_clamped_to_max_rung() -> None:
+    """If start_rung exceeds max_rung (no strong_lm), clamp to max_rung."""
+    from fabric_rlm.experimental.adaptive_policy import LadderPolicy
+
+    pol = LadderPolicy(start_rung=99)
+    cfg = pol.baseline_config()
+    assert cfg.rung == pol.max_rung == 3
+
+
+def test_force_min_rung_propagates_through_rlm_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end offline: passing adaptive={'start_rung': 3} via RLM(engine='adaptive')
+    results in a LadderPolicy whose baseline_config is rung 3.
+
+    Mirrors the monkeypatched-AdaptiveRunner pattern in test_adaptive_runtime.py.
+    """
+    import warnings
+
+    from fabric_rlm import RLM
+    from fabric_rlm.experimental import adaptive_runner as ar_mod
+
+    captured: dict = {}
+
+    class _CapturingRunner:
+        def __init__(self, *, rlm_factory, policy, **_kw) -> None:
+            captured["policy"] = policy
+            captured["factory"] = rlm_factory
+
+        def run(self, inputs, **_kw):
+            class _R:
+                class trajectory:
+                    metadata: dict = {}
+                payload = {"answer": "stub"}
+                submitted = True
+                failure_reason = None
+
+            class _AR:
+                result = _R()
+                passed = True
+                attempts = []
+                winner = None
+                stop_reason = "ok"
+                elapsed_seconds = 0.0
+            return _AR()
+
+    monkeypatch.setattr(ar_mod, "AdaptiveRunner", _CapturingRunner)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rlm = RLM(
+            signature="q -> a",
+            lm="gpt-4.1-mini",
+            engine="adaptive",
+            adaptive={"validator": lambda r: True, "start_rung": 3},
+        )
+        rlm.run({"q": "hi"})
+
+    pol = captured["policy"]
+    assert pol.start_rung == 3
+    cfg = pol.baseline_config()
+    assert cfg.rung == 3
+    assert cfg.parallel_rollouts >= 2

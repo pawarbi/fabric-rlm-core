@@ -43,11 +43,13 @@ from typing import Any, Callable, Iterable, Sequence
 CONFIG_NAMES: tuple[str, ...] = (
     "default",
     "adaptive_current",
-    "adaptive_a",  # Feature A: trace-length tiebreaker (stub)
+    "adaptive_a",  # Feature A: trace-length tiebreaker
     "adaptive_b",  # Feature B: TraceLengthSignal (stub)
     "adaptive_c",  # Feature C: self-consistency hard pre-filter (stub)
     "adaptive_d",  # Feature D: VC × Len SRLM-style selection (stub)
     "adaptive_all",  # All four features composed (stub)
+    "adaptive_current_minrung3",  # adaptive_current forced to start at rung 3
+    "adaptive_a_minrung3",  # adaptive_a forced to start at rung 3
 )
 
 
@@ -57,7 +59,10 @@ class EvalConfig:
 
     ``engine`` is the literal forwarded to :class:`fabric_rlm.RLM`. ``adaptive``
     is the kwargs dict forwarded under ``adaptive=`` (only meaningful when
-    engine=='adaptive').
+    engine=='adaptive'). ``force_min_rung`` short-circuits the ladder to start
+    at that rung (≥1 means skip rung 0); when 0 (default) the ladder behaves
+    as built. Used to isolate selection-quality from escalation-policy effects
+    in bench evaluation.
     """
 
     name: str
@@ -65,6 +70,7 @@ class EvalConfig:
     adaptive: dict[str, Any] = field(default_factory=dict)
     inner_engine: str | None = None
     notes: str = ""
+    force_min_rung: int = 0
 
 
 def _stub_features_note(feature_id: str) -> str:
@@ -111,6 +117,35 @@ def get_config(name: str) -> EvalConfig:
                 "Late-tier tie-break only — fires after passed/score/confidence/"
                 "completeness equal."
             ),
+        )
+    if name == "adaptive_current_minrung3":
+        cfg = dict(base_adaptive)
+        cfg["start_rung"] = 3
+        return EvalConfig(
+            name="adaptive_current_minrung3",
+            engine="adaptive",
+            adaptive=cfg,
+            notes=(
+                "adaptive_current with start_rung=3 — forces parallel BoN at "
+                "K=3 from the first attempt; bypasses rungs 0/1/2. Used to "
+                "exercise the rung-3 selection path in bench evaluation."
+            ),
+            force_min_rung=3,
+        )
+    if name == "adaptive_a_minrung3":
+        cfg = dict(base_adaptive)
+        cfg["prefer_shorter_traces"] = True
+        cfg["start_rung"] = 3
+        return EvalConfig(
+            name="adaptive_a_minrung3",
+            engine="adaptive",
+            adaptive=cfg,
+            notes=(
+                "Feature A (prefer_shorter_traces=True) with start_rung=3 — "
+                "isolates the trace-length tie-breaker by guaranteeing "
+                "rung-3 best-of-N runs every question."
+            ),
+            force_min_rung=3,
         )
     if name == "adaptive_b":
         return EvalConfig(
@@ -385,42 +420,275 @@ class ResultRow:
 # ---------------------------------------------------------------------------
 
 _AQUA_ANS_RE = re.compile(r"answer\s*[:\-]\s*([A-E])\b", re.IGNORECASE)
+_NUM_RE = re.compile(r"-?\d+\.?\d*(?:[eE][+-]?\d+)?")
 
 
 def _normalize(s: Any) -> str:
     return re.sub(r"\s+", " ", str(s or "").strip().lower())
 
 
+def _try_json(s: Any) -> Any:
+    """Best-effort JSON parse. Returns the original value on failure."""
+    if not isinstance(s, str):
+        return s
+    s2 = s.strip()
+    if not s2 or s2[0] not in "[{\"":
+        # also try numeric / boolean literals
+        try:
+            return json.loads(s2)
+        except (json.JSONDecodeError, ValueError):
+            return s
+    try:
+        return json.loads(s2)
+    except (json.JSONDecodeError, ValueError):
+        return s
+
+
+def _nums_close(a: Any, b: Any, *, abs_tol: float = 1e-2, rel_tol: float = 1e-2) -> bool:
+    """Numeric tolerance matching for floats parsed from text.
+
+    Default tolerance is 1% relative or 0.01 absolute — DABench answers are
+    rounded (e.g. "-0.55", "45.14") so strict equality is too tight; use the
+    coarser of the two so 0.5499 vs 0.55 counts as a match.
+    """
+    try:
+        af = float(a)
+        bf = float(b)
+    except (TypeError, ValueError):
+        return False
+    if math.isnan(af) or math.isnan(bf):
+        return False
+    return abs(af - bf) <= max(abs_tol, rel_tol * max(abs(af), abs(bf)))
+
+
+def _equal_with_numeric_tolerance(a: Any, b: Any) -> bool:
+    """Recursive equality that treats numeric leaves with tolerance."""
+    if isinstance(a, list) and isinstance(b, list):
+        if len(a) != len(b):
+            return False
+        return all(_equal_with_numeric_tolerance(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        if set(a.keys()) != set(b.keys()):
+            return False
+        return all(_equal_with_numeric_tolerance(a[k], b[k]) for k in a)
+    # leaf
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a == b
+    # numeric tolerance — only when BOTH look numeric
+    try:
+        return _nums_close(a, b)
+    except Exception:
+        pass
+    return _normalize(a) == _normalize(b)
+
+
+def _validate_dabench(answer: str | None, expected: str | None) -> bool:
+    """DABench grader.
+
+    DABench gold answers are JSON arrays of [name, value] pairs, e.g.
+    ``[["correlation_pclass_fare", "-0.55"]]`` or
+    ``[["average_fare_Mrs", "45.14"], ["average_fare_Mr", "24.44"]]``.
+
+    Strategy (each step is a fall-through; first to succeed wins):
+      1. Parse both sides as JSON. If both are list-of-pairs, compare as a
+         dict (order-insensitive) with numeric tolerance on values.
+      2. If both parse to lists/dicts, compare recursively with numeric
+         tolerance.
+      3. For every (name, value) pair in expected, require BOTH the name
+         token and a numerically-close value (or exact string) to appear
+         in the model's raw answer text. This handles the common case
+         where the model emits the answer as prose like
+         ``"correlation_pclass_fare = -0.55"`` instead of strict JSON.
+      4. Last-resort substring match.
+
+    Returns False on any parse error rather than raising.
+    """
+    if expected is None or answer is None:
+        return False
+    try:
+        exp_obj = _try_json(expected)
+        ans_obj = _try_json(answer)
+
+        # Step 1+2: structural compare
+        if isinstance(exp_obj, list) and isinstance(ans_obj, list):
+            # list-of-pairs dict-style: convert both
+            def _as_dict(x: list) -> dict | None:
+                d: dict[str, Any] = {}
+                for item in x:
+                    if isinstance(item, (list, tuple)) and len(item) == 2:
+                        d[str(item[0])] = item[1]
+                    else:
+                        return None
+                return d
+
+            exp_d = _as_dict(exp_obj)
+            ans_d = _as_dict(ans_obj)
+            if exp_d is not None and ans_d is not None:
+                if set(exp_d.keys()) <= set(ans_d.keys()):
+                    if all(
+                        _equal_with_numeric_tolerance(exp_d[k], ans_d[k])
+                        for k in exp_d
+                    ):
+                        return True
+            if _equal_with_numeric_tolerance(exp_obj, ans_obj):
+                return True
+
+        if isinstance(exp_obj, (dict, list)) and isinstance(ans_obj, (dict, list)):
+            if _equal_with_numeric_tolerance(exp_obj, ans_obj):
+                return True
+
+        # Step 3: name+value occurrence in raw text
+        if isinstance(exp_obj, list):
+            ans_text = str(answer)
+            ans_text_lower = ans_text.lower()
+            ans_nums = [float(m) for m in _NUM_RE.findall(ans_text)]
+            ok = True
+            for item in exp_obj:
+                if not (isinstance(item, (list, tuple)) and len(item) == 2):
+                    ok = False
+                    break
+                name, val = item[0], item[1]
+                if str(name).lower() not in ans_text_lower:
+                    ok = False
+                    break
+                # numeric-or-string value match
+                try:
+                    val_f = float(val)
+                    if not any(
+                        abs(val_f - n) <= max(1e-2, 1e-2 * max(abs(val_f), abs(n)))
+                        for n in ans_nums
+                    ):
+                        ok = False
+                        break
+                except (TypeError, ValueError):
+                    if str(val).lower() not in ans_text_lower:
+                        ok = False
+                        break
+            if ok and exp_obj:
+                return True
+    except Exception:
+        return False
+
+    # Step 4: substring fallback
+    return _normalize(expected) in _normalize(answer)
+
+
+def _validate_ssb(answer: str | None, expected: str | None) -> bool:
+    """SpreadsheetBench grader (signal-of-life).
+
+    True grading needs to load init/golden xlsx files and diff the workbook
+    cells in ``answer_position`` (e.g. ``H3:H6``) — out of scope for the
+    in-memory bench harness. Instead we accept any of:
+
+      * The model's answer references the answer-position range token
+        (case-insensitive substring), e.g. mentions ``H3:H6`` somewhere.
+      * The expected token equals the answer (rare but possible when the
+        model emits just the position).
+
+    Returns False (not True/None) when the model didn't reference the range,
+    which keeps SSB as a "did the model engage with the right cells?" signal
+    rather than a strong correctness gate. Fall-back: substring match.
+    """
+    if expected is None or answer is None:
+        return False
+    e = _normalize(expected)
+    a = _normalize(answer)
+    if not e:
+        return False
+    return e in a or a == e
+
+
+def _validate_longcot(answer: str | None, expected: str | None) -> bool:
+    """LongCoT-CS grader (MFMC puzzles).
+
+    Gold answers are JSON objects, typically of the form
+    ``{"final_capacities": [int, int, ...]}``. The model's answer may be:
+
+      * Strict JSON matching the gold object exactly.
+      * Strict JSON of just the list (no surrounding object).
+      * A list rendered inline in prose (we extract the first
+        bracketed integer list).
+
+    Strategy:
+      1. JSON-parse both sides; if dicts compare key-equality with recursive
+         tolerance, if lists compare element-wise.
+      2. If expected is a single-key dict whose value is a list, accept a
+         bare-list answer that matches that value.
+      3. Extract the first bracketed integer list from the raw answer text
+         and compare against expected's value list.
+      4. Substring fall-back (rarely useful for these puzzles).
+
+    Returns False on any parse error.
+    """
+    if expected is None or answer is None:
+        return False
+    try:
+        exp_obj = _try_json(expected)
+        ans_obj = _try_json(answer)
+
+        # Step 1
+        if _equal_with_numeric_tolerance(exp_obj, ans_obj):
+            return True
+
+        # Step 2: bare-list answer vs single-key dict expected
+        if (
+            isinstance(exp_obj, dict)
+            and len(exp_obj) == 1
+            and isinstance(next(iter(exp_obj.values())), list)
+        ):
+            exp_list = next(iter(exp_obj.values()))
+            if isinstance(ans_obj, list) and _equal_with_numeric_tolerance(
+                exp_list, ans_obj
+            ):
+                return True
+            # Step 3: extract first [..] of integers from raw text
+            m = re.search(r"\[\s*-?\d+(?:\s*,\s*-?\d+)*\s*\]", str(answer))
+            if m is not None:
+                try:
+                    parsed = json.loads(m.group(0))
+                    if _equal_with_numeric_tolerance(exp_list, parsed):
+                        return True
+                except (json.JSONDecodeError, ValueError):
+                    pass
+    except Exception:
+        return False
+
+    # Step 4: substring fall-back
+    return _normalize(expected) in _normalize(answer)
+
+
 def validate_question_passed(answer: str | None, question: QuestionRecord) -> bool:
     """Generic, domain-aware grader.
 
-    The default RLM engine doesn't run a per-question validator, so the harness
-    needs its own grader. We keep this deliberately simple: substring-match for
-    canary domains (easy / longcot / dabench), letter-extraction for AQUA, and
-    answer-position match for SSB. For SSB the textual ground truth is only an
-    address (e.g. "A1"); reliable grading needs the workbook diff and is out
-    of scope for the harness — we return False but record the answer.
+    Dispatches by ``question.domain`` to the right per-domain validator:
+
+    * ``math``       — AQUA letter extraction (A..E)
+    * ``dabench``    — DABench JSON name/value compare with numeric tolerance
+    * ``ssb``        — SpreadsheetBench answer-range signal-of-life
+    * ``longcot_holdout`` — LongCoT JSON list compare
+    * everything else (``easy_calibration`` etc.) — substring match
+
+    All domain validators return ``False`` (never raise) on parse errors.
     """
     expected = question.expected
     if expected is None or answer is None:
         return False
     domain = question.domain
-    a = _normalize(answer)
-    e = _normalize(expected)
-    if not e:
-        return False
     if domain == "math":
         m = _AQUA_ANS_RE.search(str(answer))
         if m is not None:
             return m.group(1).strip().upper() == str(expected).strip().upper()
-        # Fall back to substring: "Answer: B" -> normalized contains "answer: b"
-        return e in a
+        return _normalize(expected) in _normalize(answer)
+    if domain == "dabench":
+        return _validate_dabench(answer, expected)
     if domain == "ssb":
-        # SSB needs file diff to grade; substring match on the cell address is
-        # not reliable, but is a useful signal-of-life. Treat as "unknown".
-        return e in a
-    # easy_calibration / dabench / longcot_holdout / unknown: substring match.
-    return e in a or a == e
+        return _validate_ssb(answer, expected)
+    if domain == "longcot_holdout":
+        return _validate_longcot(answer, expected)
+    # easy_calibration / unknown: substring match (legacy behavior)
+    a = _normalize(answer)
+    e = _normalize(expected)
+    return bool(e) and (e in a or a == e)
 
 
 # ---------------------------------------------------------------------------
@@ -883,6 +1151,9 @@ __all__ = [
     "QuestionRecord",
     "ResultRow",
     "RolloutObservability",
+    "_validate_dabench",
+    "_validate_longcot",
+    "_validate_ssb",
     "bootstrap_ci",
     "default_question_set",
     "get_config",
