@@ -190,11 +190,21 @@ def test_non_adaptive_ignores_arbitrary_inner_engine():
     assert rlm.inner_engine == "v6-custom"
 
 
-def test_adaptive_factory_propagates_canonical_inner_engine():
-    """When the outer is constructed with ``inner_engine="default"``, the
-    closure that builds inner attempts in ``_run_adaptive`` must close over
-    the canonical engine name (``"v6-custom"``), not the alias. Closes the
-    run-time path blind spot from duck review #3 of Phase 1 diff.
+def test_adaptive_factory_passes_public_alias_to_avoid_self_warn_post_phase5():
+    """Phase 5: when the outer is constructed with ``inner_engine="default"``
+    (or any spelling that resolves to ``"v6-custom"``), the closure that
+    builds inner attempts in ``_run_adaptive`` must pass the **public alias**
+    (``"default"`` / ``"dspy"``) to the inner ``RLM(**kwargs)`` call — NOT
+    the canonical legacy literal — so the inner construction does not
+    self-emit a Phase 5 ``DeprecationWarning``.
+
+    End-state ``self.engine`` is identical because ``_normalize_engine_name``
+    resolves the alias back to the same canonical name.
+
+    This supersedes the pre-Phase-5 contract that the factory propagated
+    the canonical name verbatim — Phase 5 added the deprecation warning
+    layer that made the verbatim canonical pass-through a self-warning bug
+    (caught by duck review of Phase 5 diff). End behavior is unchanged.
 
     We don't run the adaptive loop (which requires real LM calls). Instead
     we monkey-patch ``AdaptiveRunner`` to capture the factory the moment
@@ -204,7 +214,6 @@ def test_adaptive_factory_propagates_canonical_inner_engine():
     from fabric_rlm.experimental.adaptive_policy import AttemptConfig
     import fabric_rlm.runtime as rt
 
-    # Adaptive RLM with the alias on inner_engine.
     rlm = RLM(
         lm=_StubLM(),
         engine="adaptive",
@@ -254,9 +263,12 @@ def test_adaptive_factory_propagates_canonical_inner_engine():
 
     assert captured_rlm_kwargs, "factory did not invoke RLM constructor"
     passed_engine = captured_rlm_kwargs[0].get("engine")
-    assert passed_engine == "v6-custom", (
-        f"factory passed alias instead of canonical name: {passed_engine!r}"
+    assert passed_engine == "default", (
+        f"Phase 5 factory must pass public alias 'default' (was 'v6-custom' "
+        f"pre-Phase-5); end behavior is identical because alias resolves to "
+        f"the same canonical name. Got: {passed_engine!r}"
     )
+
 
 
 def test_unknown_engine_name_raises_with_helpful_message():
@@ -471,13 +483,12 @@ def test_init_signature_engine_default_is_auto_post_flip():
     assert sig.parameters["engine"].default == "auto"
 
 
-def test_explicit_v6_custom_still_works_post_flip():
-    """Explicit ``engine='v6-custom'`` is not yet deprecated in Phase 4
-    (Phase 5 adds the warning). Today it remains a clean, warning-free
-    construction with the same resolved engine as the default."""
-    import warnings as _warnings
-    with _warnings.catch_warnings():
-        _warnings.simplefilter("error", DeprecationWarning)
+def test_explicit_v6_custom_emits_deprecation_warning_post_flip():
+    """Phase 5: explicit ``engine='v6-custom'`` emits a DeprecationWarning
+    pointing at the new alias. Resolution still works — back-compat is
+    preserved — but the user is steered toward ``engine='default'`` (or
+    ``engine='auto'`` for capability routing)."""
+    with pytest.warns(DeprecationWarning, match=r"v6-custom.*deprecated"):
         rlm = RLM(lm=_StubLM(), engine="v6-custom")
     assert rlm.engine == "v6-custom"
     assert rlm._unresolved_engine == "v6-custom"
@@ -489,7 +500,6 @@ def test_explicit_v6_custom_still_works_post_flip():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 5: deprecation warnings not implemented yet")
 @pytest.mark.parametrize("old_name", ["v6-custom", "v7-dspy"])
 def test_old_engine_names_emit_deprecation_warning(old_name: str):
     """``engine='v6-custom'`` and ``engine='v7-dspy'`` must emit a
@@ -575,3 +585,176 @@ def test_default_constructor_does_not_emit_engine_deprecation_warning():
         "Default constructor should not emit engine deprecation warnings. "
         f"Got: {[str(r.message) for r in engine_dep_warnings]}"
     )
+
+
+def test_from_task_legacy_engine_warning_points_at_user_callsite():
+    """Phase 5 stacklevel contract for ``RLM.from_task``: the deprecation
+    warning emitted when a from_task caller passes ``engine='v6-custom'``
+    must point at the **caller's** file (this test file), NOT at
+    ``fabric_rlm/runtime.py``.
+
+    Catches the duck-flagged stacklevel bug where emitting from
+    ``_normalize_engine_name`` produced a warning whose ``filename`` pointed
+    at runtime internals for from_task callers (different call depth than
+    direct ``RLM(...)`` construction)."""
+    import warnings
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        RLM.from_task(
+            "echo",
+            inputs={"q": "x"},
+            outputs=["a"],
+            lm=_StubLM(),
+            engine="v6-custom",
+        )
+
+    dep = [r for r in records if issubclass(r.category, DeprecationWarning)
+           and "v6-custom" in str(r.message)]
+    assert len(dep) == 1, (
+        f"from_task with engine='v6-custom' must emit exactly one Phase 5 "
+        f"DeprecationWarning. Got {len(dep)}: {[str(r.message) for r in dep]}"
+    )
+    assert dep[0].filename.endswith("test_engine_consolidation_parity.py"), (
+        f"DeprecationWarning must point at the from_task caller (this test "
+        f"file), not at library internals. Got filename={dep[0].filename!r}, "
+        f"lineno={dep[0].lineno}"
+    )
+
+
+def test_from_task_legacy_engine_preserves_unresolved_engine_user_literal():
+    """Phase 5 v2 duck-blocking regression test: ``RLM.from_task(engine='v6-custom')``
+    must preserve the user's literal in ``_unresolved_engine`` to match
+    the contract honored by direct construction.
+
+    Phase 5 v1 fix translated ``kwargs['engine']`` to the public alias
+    inside from_task to suppress double-warning. That correctly fixed the
+    double-warn but accidentally wiped the user-visible debug breadcrumb
+    -- ``rlm._unresolved_engine`` became 'default' instead of the user's
+    'v6-custom' literal. Phase 5 v2 fix restores the literal after the
+    inner ``cls(**kwargs)`` call.
+
+    Locks both directions of the contract: stored ``engine`` resolves
+    canonically (unchanged) AND ``_unresolved_engine`` matches what the
+    user actually typed (restored)."""
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore", DeprecationWarning)
+        rlm_v6 = RLM.from_task(
+            "echo", inputs={"q": "x"}, outputs=["a"],
+            lm=_StubLM(), engine="v6-custom",
+        )
+        rlm_v7 = RLM.from_task(
+            "echo", inputs={"q": "x"}, outputs=["a"],
+            lm=_StubLM(), engine="v7-dspy",
+        )
+
+    assert rlm_v6.engine == "v6-custom"
+    assert rlm_v6._unresolved_engine == "v6-custom", (
+        f"from_task must preserve user's literal in _unresolved_engine; "
+        f"alias-translation done to suppress double-warn must not wipe "
+        f"the debug breadcrumb. Got: {rlm_v6._unresolved_engine!r}"
+    )
+    assert rlm_v7.engine == "v7-dspy"
+    assert rlm_v7._unresolved_engine == "v7-dspy", (
+        f"from_task must preserve user's literal in _unresolved_engine. "
+        f"Got: {rlm_v7._unresolved_engine!r}"
+    )
+
+
+def test_direct_constructor_legacy_engine_warning_points_at_user_callsite():
+    """Phase 5 stacklevel contract for direct ``RLM(...)`` construction:
+    matches the from_task contract — warning points at the user's call
+    site, not at runtime internals. Belt-and-braces companion to the
+    from_task stacklevel test."""
+    import warnings
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        RLM(lm=_StubLM(), engine="v7-dspy")
+
+    dep = [r for r in records if issubclass(r.category, DeprecationWarning)
+           and "v7-dspy" in str(r.message)]
+    assert len(dep) == 1, (
+        f"Direct construction with engine='v7-dspy' must emit exactly one "
+        f"Phase 5 DeprecationWarning. Got {len(dep)}: "
+        f"{[str(r.message) for r in dep]}"
+    )
+    assert dep[0].filename.endswith("test_engine_consolidation_parity.py"), (
+        f"DeprecationWarning must point at the user call site (this test "
+        f"file), not at library internals. Got filename={dep[0].filename!r}, "
+        f"lineno={dep[0].lineno}"
+    )
+
+
+def test_adaptive_inner_factory_does_not_self_warn_when_invoked():
+    """Phase 5: when ``RLM(engine='adaptive', inner_engine='default')`` is
+    constructed and the inner-RLM factory is invoked (simulating a real
+    adaptive attempt), the inner ``RLM(**kwargs)`` call must NOT emit a
+    Phase 5 ``DeprecationWarning``. The factory's own translation of
+    ``inner_engine`` (canonical ``"v6-custom"``) -> public alias
+    (``"default"``) before passing as ``engine=`` is the mechanism that
+    prevents the self-warn.
+
+    Locks the BLOCKING fix from duck review of Phase 5 diff: pre-fix, the
+    factory passed ``engine="v6-custom"`` verbatim, which re-entered the
+    Phase 5 deprecation path and self-warned the library on every
+    adaptive attempt."""
+    import warnings as _warnings
+    from fabric_rlm.experimental.adaptive_policy import AttemptConfig
+    from fabric_rlm.experimental import adaptive_runner as ar_module
+    import fabric_rlm.runtime as rt
+
+    rlm = RLM(
+        lm=_StubLM(),
+        engine="adaptive",
+        inner_engine="default",
+        adaptive={"validator": lambda **_: None},
+    )
+
+    captured_factory: list = []
+
+    class _FakeRunner:
+        def __init__(self, **kwargs):
+            captured_factory.append(kwargs.get("rlm_factory"))
+
+        def run(self, *args, **kwargs):
+            return None
+
+    original_runner = ar_module.AdaptiveRunner
+    try:
+        ar_module.AdaptiveRunner = _FakeRunner  # type: ignore[assignment]
+        try:
+            rlm._run_adaptive({"prompt": "test"})
+        except Exception:
+            pass
+        assert captured_factory, "_run_adaptive did not build a factory"
+        factory = captured_factory[0]
+        cfg = AttemptConfig(rung=0, max_turns=1)
+        # Invoke the factory under a strict warning filter that promotes
+        # any engine-related DeprecationWarning to an error. If the inner
+        # construction self-warns, this raises and the test fails.
+        with _warnings.catch_warnings(record=True) as records:
+            _warnings.simplefilter("always")
+            try:
+                factory(cfg)
+            except Exception:
+                # Inner RLM may error for non-warning reasons (stub LM,
+                # missing skills, etc.) — that's fine for this test.
+                pass
+        engine_dep = [
+            r for r in records
+            if issubclass(r.category, DeprecationWarning)
+            and "engine=" in str(r.message)
+            and ("v6-custom" in str(r.message) or "v7-dspy" in str(r.message))
+        ]
+        assert not engine_dep, (
+            "Adaptive inner-RLM factory self-warned on legacy engine "
+            "literal — Phase 5 BLOCKING fix regressed. Factory must "
+            "translate canonical inner_engine -> public alias before "
+            f"passing as engine=. Got: {[str(r.message) for r in engine_dep]}"
+        )
+    finally:
+        ar_module.AdaptiveRunner = original_runner
+

@@ -1,0 +1,84 @@
+{
+  "_meta": {
+    "phase": "Phase 5 (deprecation warnings) - post duck-restructure",
+    "purpose": "Live evidence that deprecation warnings + adaptive factory translation + from_task stacklevel fix do not regress primary suite. Validates 5/5 stable qids still pass with deprecation warnings active.",
+    "default_engine_kwarg": "auto",
+    "deprecation_warnings_active": true,
+    "duck_fixes_applied": [
+      "adaptive_factory_alias_translation",
+      "from_task_stacklevel_3",
+      "helper_extracted"
+    ],
+    "branch": "engine-consolidation",
+    "commit_at_run": "bb94d411013fc3f904968e129351a4ebd48e1547",
+    "recorded_at": "2026-05-08T03:09:58.127170Z",
+    "command": "pytest tests/behavior/ -q -m primary --behavior-results=tests/fixtures/phase5_deprecation_primary.json",
+    "note": "dspy disk cache hit (2-8s per qid vs ~60s+ cold). Cache validity not the gate - parity tests exercise engine resolution offline. This run confirms the live path still constructs RLM and runs end-to-end without raising under deprecation warnings."
+  },
+  "model": "openai/gpt-4.1-mini",
+  "baseline_passes": 5,
+  "min_passes": 4,
+  "stable_qids": [
+    "C1_sum_squares_mod",
+    "C5_palindrome_count",
+    "M1_optional_field_count",
+    "M3_mixed_string_sum",
+    "S5_dedup_preserve_order"
+  ],
+  "pr_results": {
+    "C1_sum_squares_mod": true,
+    "C5_palindrome_count": true,
+    "M1_optional_field_count": true,
+    "M3_mixed_string_sum": true,
+    "S5_dedup_preserve_order": true
+  },
+  "passed": true,
+  "reasons": [],
+  "detail": [
+    {
+      "qid": "C1_sum_squares_mod",
+      "passed": true,
+      "reason": "",
+      "error_class": null,
+      "n_turns": 2,
+      "elapsed_s": 7.871988296508789,
+      "attempts": 1
+    },
+    {
+      "qid": "C5_palindrome_count",
+      "passed": true,
+      "reason": "",
+      "error_class": null,
+      "n_turns": 2,
+      "elapsed_s": 2.1271915435791016,
+      "attempts": 1
+    },
+    {
+      "qid": "M1_optional_field_count",
+      "passed": true,
+      "reason": "",
+      "error_class": null,
+      "n_turns": 2,
+      "elapsed_s": 2.0438759326934814,
+      "attempts": 1
+    },
+    {
+      "qid": "M3_mixed_string_sum",
+      "passed": true,
+      "reason": "",
+      "error_class": null,
+      "n_turns": 2,
+      "elapsed_s": 2.500129461288452,
+      "attempts": 1
+    },
+    {
+      "qid": "S5_dedup_preserve_order",
+      "passed": true,
+      "reason": "",
+      "error_class": null,
+      "n_turns": 2,
+      "elapsed_s": 2.502931833267212,
+      "attempts": 1
+    }
+  ]
+}

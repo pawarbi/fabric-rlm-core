@@ -317,6 +317,47 @@ _CANONICAL_ENGINES: tuple[str, ...] = ("v6-custom", "v7-dspy", "adaptive")
 # pseudo-engine literal — see ``_unresolved_engine`` for the original input.
 _ROUTER_ENGINES: tuple[str, ...] = ("auto",)
 
+# Phase 5: legacy canonical names still resolve correctly (back-compat) but
+# emit ``DeprecationWarning`` to steer new code toward the public aliases.
+# The warning is emitted by the public entry points (``RLM.__init__`` and
+# ``RLM.from_task``) at the correct ``stacklevel`` for each — NOT inside
+# ``_normalize_engine_name`` itself, because that helper is also re-entered
+# by internal call sites (notably the adaptive inner-RLM factory) that pass
+# canonical names by design and must not self-trigger the warning.
+_DEPRECATED_LEGACY_ENGINES: dict[str, str] = {
+    "v6-custom": "default",
+    "v7-dspy": "dspy",
+}
+
+
+def _emit_engine_deprecation_warning_if_legacy(name: Any, stacklevel: int) -> None:
+    """Emit a ``DeprecationWarning`` if ``name`` is a legacy canonical engine
+    spelling (``"v6-custom"`` / ``"v7-dspy"``).
+
+    ``stacklevel`` is passed straight through to ``warnings.warn`` and must be
+    set by the caller so the warning points at the user's call site rather
+    than at library internals. The convention used by ``RLM`` is:
+
+    * Called directly from ``RLM.__init__`` body: ``stacklevel=3``
+      (warn -> helper -> __init__ -> user).
+    * Called directly from ``RLM.from_task`` body: ``stacklevel=3``
+      (warn -> helper -> from_task -> user).
+
+    Non-string inputs are silently ignored — ``_normalize_engine_name`` is
+    responsible for raising on those.
+    """
+    if isinstance(name, str) and name in _DEPRECATED_LEGACY_ENGINES:
+        replacement = _DEPRECATED_LEGACY_ENGINES[name]
+        warnings.warn(
+            f"engine={name!r} is deprecated as a public spelling; "
+            f"use engine={replacement!r} instead. Behavior is unchanged: "
+            f"{replacement!r} resolves to the same engine. Use engine='auto' "
+            f"to let fabric_rlm pick the engine based on whether tools= is "
+            f"passed.",
+            DeprecationWarning,
+            stacklevel=stacklevel,
+        )
+
 
 def _normalize_engine_name(name: str) -> str:
     """Resolve user-friendly engine aliases to canonical internal names.
@@ -329,6 +370,12 @@ def _normalize_engine_name(name: str) -> str:
     capability-router pseudo-engine ``"auto"`` (Phase 2) pass through unchanged
     — ``"auto"`` is resolved to a canonical name later in ``__init__`` once
     routing-relevant kwargs (``tools=``) are materialized.
+
+    Phase 5 deprecation warnings for legacy canonical names are emitted by
+    public entry points (``RLM.__init__`` / ``RLM.from_task``) using
+    ``_emit_engine_deprecation_warning_if_legacy``, NOT here — this function
+    is re-entered by internal call sites that legitimately pass canonical
+    names and must not self-warn.
 
     Unknown values raise ``ValueError`` listing the valid set.
     """
@@ -408,6 +455,12 @@ class RLM:
         # Capture the user's literal input BEFORE normalization so debug
         # tooling and Phase 5 deprecation logic can distinguish e.g.
         # `engine="default"` from `engine="v6-custom"`.
+        # Phase 5: emit DeprecationWarning here (not inside the normalizer)
+        # so the warning points at the user's call site at stacklevel=3
+        # (warn -> helper -> __init__ -> user). ``RLM.from_task`` performs
+        # its own emit-then-translate to keep its own callers' stacklevel
+        # correct without double-warning.
+        _emit_engine_deprecation_warning_if_legacy(engine, stacklevel=3)
         self._unresolved_engine: str = engine if isinstance(engine, str) else ""
         engine = _normalize_engine_name(engine)
         # `inner_engine` is only consulted when engine == "adaptive". For
@@ -600,7 +653,23 @@ class RLM:
         # Don't pass `None` positionally — callers may supply `signature=...`
         # via kwargs (v6.5+) and we'd otherwise hit "multiple values for 'signature'".
         kwargs.setdefault("signature", None)
+        # Phase 5 deprecation: emit at the from_task call site stacklevel
+        # (warn -> helper -> from_task -> user = 3), then translate the
+        # legacy literal to the public alias so __init__ does not re-emit
+        # the warning. The end-state ``self.engine`` is identical because
+        # the alias resolves to the same canonical name.
+        _user_engine = kwargs.get("engine")
+        _emit_engine_deprecation_warning_if_legacy(_user_engine, stacklevel=3)
+        if isinstance(_user_engine, str) and _user_engine in _DEPRECATED_LEGACY_ENGINES:
+            kwargs["engine"] = _DEPRECATED_LEGACY_ENGINES[_user_engine]
         instance = cls(**kwargs)
+        # Preserve the user's literal in ``_unresolved_engine`` so debug
+        # introspection on ``from_task``-constructed instances matches
+        # direct-constructor instances. Without this, the alias-translation
+        # done above to suppress double-warning would silently overwrite
+        # the user-visible debug breadcrumb. Caught by Phase 5 v2 duck.
+        if isinstance(_user_engine, str) and _user_engine in _DEPRECATED_LEGACY_ENGINES:
+            instance._unresolved_engine = _user_engine
         instance._inline_task = task
         instance._inline_outputs = list(outputs or [])
         instance._inline_inputs = dict(inputs or {})
@@ -658,7 +727,14 @@ class RLM:
 
             kwargs = dict(inner_kwargs)
             kwargs["skill_loader"] = shared_loader
-            kwargs["engine"] = inner_engine
+            # Phase 5: pass the public alias spelling instead of the canonical
+            # legacy literal so the inner ``RLM(**kwargs)`` call does not
+            # self-emit a DeprecationWarning. ``inner_engine`` is already a
+            # validated canonical name ("v6-custom" or "v7-dspy") — translate
+            # to its public alias ("default" / "dspy") via the inverse map.
+            # Behavior is identical because ``_normalize_engine_name`` resolves
+            # both back to the same canonical name.
+            kwargs["engine"] = _DEPRECATED_LEGACY_ENGINES.get(inner_engine, inner_engine)
             kwargs["max_turns"] = attempt_cfg.max_turns
             if attempt_cfg.lm_spec is not None:
                 kwargs["lm"] = attempt_cfg.lm_spec
