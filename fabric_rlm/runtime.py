@@ -395,7 +395,7 @@ class RLM:
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
         halve_max_iter_on_retry: bool = True,
-        engine: str = "v6-custom",
+        engine: str = "auto",
         adaptive: dict | None = None,
         inner_engine: str = "v6-custom",
         stuck_loop_threshold: int | None = 3,

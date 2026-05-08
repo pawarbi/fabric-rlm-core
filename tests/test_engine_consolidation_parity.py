@@ -426,32 +426,62 @@ def test_default_constructor_post_flip_uses_auto_internally():
     """After Phase 4 flip: the default constructor's *resolved* engine is
     still v6-custom (no tools), but ``_unresolved_engine == "auto"``.
 
-    Pre-Phase-4 (now): the default engine kwarg is still ``"v6-custom"``,
-    so ``_unresolved_engine == "v6-custom"`` (Phase 2 captures the literal
-    user input). Phase 4 will change the default to ``"auto"`` and add the
-    `_unresolved_engine == "auto"` assertion."""
+    Phase 4 changed the default kwarg from ``"v6-custom"`` to ``"auto"``.
+    The auto-router resolves the empty-tools case to ``v6-custom`` so the
+    historic resolved-engine contract (and any log grep / repr shape) is
+    preserved. Only ``_unresolved_engine`` reflects the new default."""
     rlm = RLM(lm=_StubLM())
     assert rlm.engine == "v6-custom"
-    assert rlm._unresolved_engine == "v6-custom"
+    assert rlm._unresolved_engine == "auto"
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 4: default kwarg flip not yet shipped")
 def test_default_constructor_with_tools_post_flip_picks_dspy():
     """After Phase 4: ``RLM(lm=lm, tools=[fn])`` (no engine kwarg) must
-    auto-route to v7-dspy. Today this raises during __init__ because the
-    default engine is still v6-custom and v6 rejects tools."""
+    auto-route to v7-dspy. Pre-flip this raised during __init__ because
+    the default engine was v6-custom and v6 rejects tools."""
 
     def my_tool(x: int) -> int:
         return x + 1
 
-    try:
-        rlm = RLM(lm=_StubLM(), tools=[my_tool])
-    except (NotImplementedError, ValueError, TypeError) as exc:
-        pytest.fail(
-            f"Phase 4 not yet shipped: default constructor with tools= still "
-            f"rejects the call: {type(exc).__name__}: {exc}"
-        )
+    rlm = RLM(lm=_StubLM(), tools=[my_tool])
     assert rlm.engine == "v7-dspy"
+    assert rlm._unresolved_engine == "auto"
+    assert len(list(rlm.tools)) == 1
+
+
+def test_resolved_engine_attr_unchanged_post_flip_for_log_grep_back_compat():
+    """Log scrapers / observability tooling that grep ``rlm.engine`` (or
+    its string representation) for ``"v6-custom"`` still hit on the
+    default no-tools constructor after the Phase 4 flip — only the
+    user-visible kwarg default changed, not the resolved attribute."""
+    rlm = RLM(lm=_StubLM())
+    assert rlm.engine == "v6-custom"
+    # Negative assertion makes the back-compat contract explicit: the
+    # resolved attribute must NOT leak the new "auto" sentinel into log
+    # scrapers that were grepping for canonical engine names.
+    assert rlm.engine != "auto"
+
+
+def test_init_signature_engine_default_is_auto_post_flip():
+    """Constructor introspection contract: any caller that uses
+    ``inspect.signature(RLM.__init__).parameters["engine"].default`` to
+    detect the public default must see ``"auto"`` after Phase 4."""
+    import inspect
+    sig = inspect.signature(RLM.__init__)
+    assert sig.parameters["engine"].default == "auto"
+
+
+def test_explicit_v6_custom_still_works_post_flip():
+    """Explicit ``engine='v6-custom'`` is not yet deprecated in Phase 4
+    (Phase 5 adds the warning). Today it remains a clean, warning-free
+    construction with the same resolved engine as the default."""
+    import warnings as _warnings
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error", DeprecationWarning)
+        rlm = RLM(lm=_StubLM(), engine="v6-custom")
+    assert rlm.engine == "v6-custom"
+    assert rlm._unresolved_engine == "v6-custom"
+
 
 
 # ---------------------------------------------------------------------------
