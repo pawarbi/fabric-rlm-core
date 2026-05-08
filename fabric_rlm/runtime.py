@@ -662,13 +662,23 @@ class RLM:
         # their ``__init__`` (caught by Phase 7 v1 duck as a subclass
         # regression: rewriting kwargs before delegating broke the
         # ``from_task`` extension surface for ``cls != RLM``).
-        _emit_engine_deprecation_warning_if_legacy(kwargs.get("engine"), stacklevel=3)
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=r"engine=.*is deprecated as a public spelling",
-                category=DeprecationWarning,
-            )
+        #
+        # The filter is installed ONLY when the user passed a legacy
+        # literal -- otherwise an unconditional filter would silently
+        # swallow any matching ``DeprecationWarning`` emitted by subclass
+        # ``__init__`` even on non-legacy paths, defeating ``-W error``
+        # policy on the subclass extension surface (Phase 7 v2 duck).
+        _user_engine = kwargs.get("engine")
+        _emit_engine_deprecation_warning_if_legacy(_user_engine, stacklevel=3)
+        if isinstance(_user_engine, str) and _user_engine in _DEPRECATED_LEGACY_ENGINES:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=rf"engine={_user_engine!r} is deprecated as a public spelling",
+                    category=DeprecationWarning,
+                )
+                instance = cls(**kwargs)
+        else:
             instance = cls(**kwargs)
         instance._inline_task = task
         instance._inline_outputs = list(outputs or [])

@@ -832,3 +832,65 @@ def test_from_task_suppresses_double_deprecation_warning():
         f"from_task must emit the engine deprecation warning exactly "
         f"once. Got {len(engine_dep)}: {[str(r.message) for r in engine_dep]}"
     )
+
+
+def test_from_task_does_not_swallow_subclass_warnings_on_non_legacy_engine():
+    """Phase 7 v2 duck-blocking regression test: the message-scoped
+    warnings filter installed by ``from_task`` to suppress its own
+    double-warning must NOT be installed on non-legacy engine paths.
+
+    Pre-fix v1: ``from_task`` always installed an unconditional
+    ``filterwarnings(message=r"engine=.*is deprecated as a public
+    spelling", category=DeprecationWarning)`` around ``cls(**kwargs)``,
+    which silently swallowed any matching ``DeprecationWarning`` from
+    subclass ``__init__`` -- including under ``-W error::DeprecationWarning``
+    policy. That defeated the subclass extension surface's ability to
+    emit its own deprecation signals.
+
+    Post-fix v2: the filter is installed only when the user actually
+    passed a legacy literal (``v6-custom`` / ``v7-dspy``). On any other
+    engine value, subclass-emitted warnings pass through unaffected and
+    can still be promoted to errors via standard warning policy."""
+    import warnings as _warnings
+
+    class _NoisySubRLM(RLM):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            _warnings.warn(
+                "engine='custom-spelling' is deprecated as a public spelling; "
+                "subclass-emitted signal that must reach the user.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init__(*args, **kwargs)
+
+    # Non-legacy engine path: subclass warning must reach the user.
+    with _warnings.catch_warnings(record=True) as records:
+        _warnings.simplefilter("always")
+        _ = _NoisySubRLM.from_task(
+            "echo", inputs={"q": "x"}, outputs=["a"],
+            lm=_StubLM(), engine="default",
+        )
+
+    subclass_signals = [
+        r for r in records
+        if issubclass(r.category, DeprecationWarning)
+        and "subclass-emitted signal" in str(r.message)
+    ]
+    assert len(subclass_signals) == 1, (
+        f"from_task must NOT install its double-warn suppression filter "
+        f"on non-legacy engine paths -- doing so silently swallows "
+        f"subclass DeprecationWarnings that match the engine regex. "
+        f"Got {len(subclass_signals)} subclass signals through, expected 1."
+    )
+
+    # Same path under -W error::DeprecationWarning must raise from the
+    # subclass warning. If the filter were installed unconditionally,
+    # the warning would be ignored and construction would silently
+    # succeed.
+    with pytest.raises(DeprecationWarning, match="subclass-emitted signal"):
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error", DeprecationWarning)
+            _ = _NoisySubRLM.from_task(
+                "echo", inputs={"q": "x"}, outputs=["a"],
+                lm=_StubLM(), engine="default",
+            )
