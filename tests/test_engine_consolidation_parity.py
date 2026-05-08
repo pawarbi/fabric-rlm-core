@@ -151,7 +151,6 @@ def test_baseline_v7_dspy_with_tools_accepts_kwarg():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 1: aliases not implemented yet")
 @pytest.mark.parametrize(
     "alias,canonical",
     [
@@ -171,7 +170,6 @@ def test_alias_resolves_to_canonical_engine(alias: str, canonical: str):
     assert _fingerprint(rlm_alias) == _fingerprint(rlm_canonical)
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 1: aliases not implemented yet")
 def test_alias_works_for_inner_engine_in_adaptive():
     """Adaptive inner_engine must accept aliases too."""
     rlm = RLM(lm=_StubLM(), engine="adaptive", inner_engine="default")
@@ -179,7 +177,88 @@ def test_alias_works_for_inner_engine_in_adaptive():
     assert rlm.inner_engine == "v6-custom"
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 1: helpful error message not implemented yet")
+def test_non_adaptive_ignores_arbitrary_inner_engine():
+    """Pre-Phase-1 behavior: when ``engine != "adaptive"``, the
+    ``inner_engine`` kwarg is silently ignored. Config-driven callers that
+    always set both must keep working — Phase 1 must NOT add new strictness
+    on a value that goes unused. (Per duck review #1 of Phase 1 diff.)"""
+    rlm = RLM(lm=_StubLM(), engine="v6-custom", inner_engine="not_a_real_engine")
+    # inner_engine is overwritten with the resolved canonical engine for
+    # non-adaptive paths. Confirm no exception was raised AND the stored
+    # value reflects the actual engine, not the ignored input.
+    assert rlm.engine == "v6-custom"
+    assert rlm.inner_engine == "v6-custom"
+
+
+def test_adaptive_factory_propagates_canonical_inner_engine():
+    """When the outer is constructed with ``inner_engine="default"``, the
+    closure that builds inner attempts in ``_run_adaptive`` must close over
+    the canonical engine name (``"v6-custom"``), not the alias. Closes the
+    run-time path blind spot from duck review #3 of Phase 1 diff.
+
+    We don't run the adaptive loop (which requires real LM calls). Instead
+    we monkey-patch ``AdaptiveRunner`` to capture the factory the moment
+    ``_run_adaptive`` constructs it, then invoke the factory with a
+    minimal AttemptConfig and inspect the kwargs it would pass to
+    ``RLM(**kwargs)``."""
+    from fabric_rlm.experimental.adaptive_policy import AttemptConfig
+    import fabric_rlm.runtime as rt
+
+    # Adaptive RLM with the alias on inner_engine.
+    rlm = RLM(
+        lm=_StubLM(),
+        engine="adaptive",
+        inner_engine="default",
+        adaptive={"validator": lambda **_: None},
+    )
+
+    captured_factory: list = []
+
+    class _FakeRunner:
+        def __init__(self, **kwargs):
+            captured_factory.append(kwargs.get("rlm_factory"))
+
+        def run(self, *args, **kwargs):
+            return None
+
+    captured_rlm_kwargs: list[dict] = []
+
+    def fake_rlm(**kwargs):
+        captured_rlm_kwargs.append(kwargs)
+
+        class _Stub:
+            pass
+
+        return _Stub()
+
+    from fabric_rlm.experimental import adaptive_runner as ar_module
+    import fabric_rlm.runtime as rt
+
+    original_runner = ar_module.AdaptiveRunner
+    original_rlm = rt.RLM
+    try:
+        ar_module.AdaptiveRunner = _FakeRunner  # type: ignore[assignment]
+        rt.RLM = fake_rlm  # type: ignore[assignment]
+        try:
+            rlm._run_adaptive({"prompt": "test"})
+        except Exception:
+            pass
+
+        assert captured_factory, "_run_adaptive did not build a factory"
+        factory = captured_factory[0]
+        cfg = AttemptConfig(rung=0, max_turns=1)
+        factory(cfg)
+    finally:
+        ar_module.AdaptiveRunner = original_runner
+        rt.RLM = original_rlm
+
+    assert captured_rlm_kwargs, "factory did not invoke RLM constructor"
+    passed_engine = captured_rlm_kwargs[0].get("engine")
+    assert passed_engine == "v6-custom", (
+        f"factory passed alias instead of canonical name: {passed_engine!r}"
+    )
+
+
 def test_unknown_engine_name_raises_with_helpful_message():
     """An unknown engine name must raise ValueError listing valid names.
 
@@ -190,9 +269,24 @@ def test_unknown_engine_name_raises_with_helpful_message():
     msg = str(exc_info.value)
     for valid in ("v6-custom", "v7-dspy", "adaptive", "default", "dspy"):
         assert valid in msg, f"Error message should mention {valid!r}: got {msg!r}"
+    # Phase 1 contract: "auto" is NOT yet a valid engine; it must not appear
+    # in the helpful message until Phase 2 ships the capability router.
+    assert "auto" not in msg, (
+        f"'auto' must not appear in unknown-engine message until Phase 2: {msg!r}"
+    )
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 1+2: dspy alias must accept tools")
+@pytest.mark.parametrize("bad_engine", [None, 123, 3.14, object()])
+def test_non_string_engine_raises_value_error(bad_engine):
+    """Non-string engine values must raise ``ValueError`` (not ``TypeError``).
+
+    Pre-Phase-1 callers handled ``ValueError`` for invalid engine values;
+    silently changing to ``TypeError`` would break their except clauses.
+    """
+    with pytest.raises(ValueError, match="engine must be one of"):
+        RLM(lm=_StubLM(), engine=bad_engine)
+
+
 def test_alias_dspy_accepts_tools_kwarg():
     """The ``"dspy"`` alias must accept ``tools=`` (since canonical
     ``"v7-dspy"`` does). Guards against late normalization that would
@@ -261,19 +355,16 @@ def test_auto_resolved_engine_attr_is_canonical():
     assert rlm_b.engine != "auto"
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 2: standardize tools+default-alias to init-time error")
 def test_explicit_default_engine_with_tools_raises_at_init():
-    """Passing ``tools=`` with an engine that does not support tools must
-    raise at __init__. (Currently raises at run-time inside dspy plumbing —
-    Phase 2 pulls it forward.)"""
+    """Passing ``tools=`` with the ``default`` alias (resolves to v6-custom)
+    must raise at __init__ time. After Phase 1, the alias normalizes first,
+    then the existing tools-on-non-v7 guard fires with NotImplementedError."""
 
     def my_tool(x: int) -> int:
         return x + 1
 
-    with pytest.raises((ValueError, TypeError, NotImplementedError)) as exc_info:
+    with pytest.raises(NotImplementedError, match="(?i)tool"):
         RLM(lm=_StubLM(), engine="default", tools=[my_tool])
-    msg = str(exc_info.value).lower()
-    assert "tool" in msg, f"Error should mention tools: {msg!r}"
 
 
 def test_explicit_v6_custom_with_tools_still_raises_at_init():
@@ -284,7 +375,7 @@ def test_explicit_v6_custom_with_tools_still_raises_at_init():
     def my_tool(x: int) -> int:
         return x + 1
 
-    with pytest.raises((ValueError, TypeError, NotImplementedError)):
+    with pytest.raises(NotImplementedError, match="(?i)tool"):
         RLM(lm=_StubLM(), engine="v6-custom", tools=[my_tool])
 
 
@@ -343,8 +434,7 @@ def test_old_engine_names_emit_deprecation_warning(old_name: str):
         assert "dspy" in combined
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 5: deprecation warnings not implemented yet")
-@pytest.mark.parametrize("new_name", ["default", "dspy", "auto"])
+@pytest.mark.parametrize("new_name", ["default", "dspy"])
 def test_new_engine_names_do_not_emit_deprecation_warning(new_name: str):
     """The new alias names must NOT emit any engine-related DeprecationWarning.
 
@@ -367,6 +457,27 @@ def test_new_engine_names_do_not_emit_deprecation_warning(new_name: str):
     ]
     assert not engine_dep_warnings, (
         f"engine={new_name!r} emitted unexpected engine DeprecationWarning: "
+        f"{[str(r.message) for r in engine_dep_warnings]}"
+    )
+
+
+@pytest.mark.xfail(strict=True, reason="Phase 2: engine='auto' not implemented yet")
+def test_auto_engine_name_does_not_emit_deprecation_warning():
+    """Phase 2's ``"auto"`` value must NOT emit deprecation warnings."""
+    import warnings
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        RLM(lm=_StubLM(), engine="auto")
+
+    engine_dep_warnings = [
+        r for r in records
+        if issubclass(r.category, DeprecationWarning)
+        and "engine" in str(r.message).lower()
+        and ("deprecated" in str(r.message).lower() or "use engine=" in str(r.message).lower())
+    ]
+    assert not engine_dep_warnings, (
+        f"engine='auto' emitted unexpected engine DeprecationWarning: "
         f"{[str(r.message) for r in engine_dep_warnings]}"
     )
 

@@ -303,6 +303,43 @@ def _aggregate_trajectory_metrics(trajectory: Trajectory) -> dict[str, Any]:
     }
 
 
+_ENGINE_ALIASES: dict[str, str] = {
+    "default": "v6-custom",
+    "dspy": "v7-dspy",
+}
+
+_CANONICAL_ENGINES: tuple[str, ...] = ("v6-custom", "v7-dspy", "adaptive")
+
+
+def _normalize_engine_name(name: str) -> str:
+    """Resolve user-friendly engine aliases to canonical internal names.
+
+    Aliases (Phase 1):
+        ``"default"`` -> ``"v6-custom"``
+        ``"dspy"``    -> ``"v7-dspy"``
+
+    Canonical names (``"v6-custom"``, ``"v7-dspy"``, ``"adaptive"``) pass
+    through unchanged. ``"auto"`` is rejected here until Phase 2 ships.
+    Unknown values raise ``ValueError`` listing the valid set.
+    """
+    valid = sorted(set(_CANONICAL_ENGINES) | set(_ENGINE_ALIASES))
+    # Preserve old behavior: invalid engine values raised ValueError, not
+    # TypeError. Keep the same exception class even for non-string inputs
+    # so existing callers' exception handlers continue to work. (Phase 1
+    # is alias-only; type-strictness is out of scope.)
+    if not isinstance(name, str):
+        raise ValueError(
+            f"engine must be one of {valid}, got {name!r}"
+        )
+    if name in _ENGINE_ALIASES:
+        return _ENGINE_ALIASES[name]
+    if name in _CANONICAL_ENGINES:
+        return name
+    raise ValueError(
+        f"engine must be one of {valid}, got {name!r}"
+    )
+
+
 class RLM:
     """LM-driven Python REPL loop with persistent worker state.
 
@@ -349,11 +386,16 @@ class RLM:
         tools: Iterable[Callable[..., Any]] | None = None,
     ):
         # ---- engine validation (early, before any heavy resolution) ---------
-        valid_engines = ("v6-custom", "v7-dspy", "adaptive")
-        if engine not in valid_engines:
-            raise ValueError(
-                f"engine must be one of {valid_engines}, got {engine!r}"
-            )
+        # Resolve aliases ('default' -> 'v6-custom', 'dspy' -> 'v7-dspy')
+        # before any further engine-based logic so internal switches keep
+        # using canonical literals. Phase 1 of engine consolidation.
+        engine = _normalize_engine_name(engine)
+        # `inner_engine` is only consulted when engine == "adaptive". For
+        # non-adaptive engines it is silently ignored (and overwritten with
+        # the resolved engine name a few lines down). Validate it ONLY in
+        # the adaptive branch to preserve the prior behavior of accepting
+        # arbitrary `inner_engine` values when they are ignored — config-
+        # driven callers that always set both must keep working.
         # ---- tools validation (engine-gated, normalize once) ---------------
         # The JSON-RPC tool-call protocol lives only on SubprocessPythonInterpreter
         # (used by engine='v7-dspy'). Legacy Interpreter (v6-custom) and the
@@ -389,6 +431,15 @@ class RLM:
                 )
         self.stuck_loop_threshold = stuck_loop_threshold
         if engine == "adaptive":
+            # Resolve aliases for inner_engine ONLY when it is actually used.
+            # Phase 1: keeps non-adaptive callers free of new strictness on
+            # an arg they pass-but-don't-use.
+            if not isinstance(inner_engine, str):
+                raise ValueError(
+                    "inner_engine must be 'v6-custom' or 'v7-dspy' "
+                    f"(got {inner_engine!r}); 'adaptive' cannot be its own inner engine"
+                )
+            inner_engine = _ENGINE_ALIASES.get(inner_engine, inner_engine)
             if inner_engine not in ("v6-custom", "v7-dspy"):
                 raise ValueError(
                     "inner_engine must be 'v6-custom' or 'v7-dspy' "
