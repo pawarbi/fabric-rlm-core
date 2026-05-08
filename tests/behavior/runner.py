@@ -169,7 +169,7 @@ def _run_once(q: Question, model: str, *, max_turns: int, timeout_s: float) -> t
     t0 = time.time()
     try:
         lm = make_lm(model)
-        rlm = RLM.from_task(
+        from_task_kwargs: dict[str, Any] = dict(
             task=q.task,
             inputs=q.inputs if q.inputs else None,
             outputs=["answer"],
@@ -177,6 +177,10 @@ def _run_once(q: Question, model: str, *, max_turns: int, timeout_s: float) -> t
             max_turns=max_turns,
             timeout=timeout_s,
         )
+        engine_override = os.environ.get("BEHAVIOR_CI_ENGINE_OVERRIDE", "").strip()
+        if engine_override:
+            from_task_kwargs["engine"] = engine_override
+        rlm = RLM.from_task(**from_task_kwargs)
         result = rlm.run()
         elapsed = time.time() - t0
         ans = None

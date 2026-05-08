@@ -20,6 +20,20 @@ validator rejects an attempt — opt-in via `engine="adaptive"`. See
 `QUICKSTART.md` §4b for the API and §0.1.10 in `CHANGELOG.md` for the
 bench results.
 
+### Engine selection
+
+`RLM` ships with three stable engines (plus the experimental `adaptive`):
+
+| Engine value | What it does | When to pick it |
+|---|---|---|
+| `"auto"` (default) | Picks `"dspy"` when a non-empty `tools=[...]` iterable is supplied, else `"default"` | You don't want to think about it. Recommended. |
+| `"default"` | Custom loop with skills/router/reflection/verifier (= legacy `v6-custom`) | You want skills + multi-turn verifier feedback. |
+| `"dspy"` | Delegates to `dspy.predict.RLM` with our subprocess as backend (= legacy `v7-dspy`) | You want dspy-native composability or `tools=`. |
+
+The legacy literals `"v6-custom"` / `"v7-dspy"` still work and resolve to
+the same engines, but emit a `DeprecationWarning` — please migrate.
+`engine="adaptive"` remains experimental (opt-in `UserWarning`).
+
 The default `core` skill ships with a **PLAN / VERIFY / REFLECT (PVR)**
 contract: PLAN forces decomposition before any worker code runs, VERIFY
 is a self-check before SUBMIT, and REFLECT carries prior-attempt failure

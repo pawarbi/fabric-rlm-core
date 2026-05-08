@@ -50,10 +50,10 @@ cascade goes away.
 `%pip` runs in the kernel's own pip, so the new packages are picked up immediately. No
 `sys.modules.pop` + reload trickery is needed.
 
-### 4. Use `engine="v7-dspy"` for data-analysis tasks
+### 4. Use `engine="dspy"` for data-analysis tasks
 
-`engine="v6-custom"` does not provide pandas/duckdb-aware skills out of the box. For any
-task that needs to read CSV/parquet, use `engine="v7-dspy"` and pass
+`engine="default"` does not provide pandas/duckdb-aware skills out of the box. For any
+task that needs to read CSV/parquet, use `engine="dspy"` and pass
 `skills=["data_exploration"]`:
 
 ```python
@@ -63,13 +63,18 @@ base_lm = FabricLM("gpt-5", reasoning_effort="medium", max_tokens=16000)
 rlm = RLM(
     signature="question -> answer",
     lm=base_lm,
-    engine="v7-dspy",
+    engine="dspy",
     skills=["data_exploration"],
     max_turns=8,
     timeout=300.0,
 )
 result = rlm.run({"question": "..."})
 ```
+
+> Note: `engine="auto"` (the default since 0.2.x) routes to `"dspy"` only
+> when a non-empty `tools=[...]` iterable is supplied. Passing
+> `skills=["data_exploration"]` alone keeps you on `"default"`, so set
+> `engine="dspy"` explicitly here.
 
 ### Reference notebook
 
@@ -86,7 +91,7 @@ dep cascades above.
 - ❌ `pip install --target=<cluster-env site-packages>` to "patch" a single dep — works
   for one package but the next transitive dep (aiohttp → yarl → multidict → ...) hits the
   same wall. Whack-a-mole.
-- ❌ `cache=False` on `FabricLM` — known to interact badly with the v7-dspy engine on the
+- ❌ `cache=False` on `FabricLM` — known to interact badly with the DSPy engine on the
   jupyter_python kernel; omit it.
 
 ## Helper: `scripts/build_comparison_5way_notebook.py`

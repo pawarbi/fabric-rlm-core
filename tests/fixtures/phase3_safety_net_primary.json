@@ -1,0 +1,74 @@
+{
+  "phase": "engine-consolidation-phase-3",
+  "purpose": "Behavioral safety net: prove engine='auto' passes the same stable behavior-CI suite as the v6-custom default before flipping in Phase 4.",
+  "engine_override": "auto",
+  "branch": "engine-consolidation",
+  "recorded_at": "2026-05-07T18:28:05-07:00",
+  "command": "BEHAVIOR_CI_ENGINE_OVERRIDE=auto pytest tests/behavior/test_behavior_baseline.py -m primary --behavior-results=tests/fixtures/phase3_safety_net_primary.json",
+  "model": "openai/gpt-4.1-mini",
+  "baseline_passes": 5,
+  "min_passes": 4,
+  "stable_qids": [
+    "C1_sum_squares_mod",
+    "C5_palindrome_count",
+    "M1_optional_field_count",
+    "M3_mixed_string_sum",
+    "S5_dedup_preserve_order"
+  ],
+  "pr_results": {
+    "C1_sum_squares_mod": true,
+    "C5_palindrome_count": true,
+    "M1_optional_field_count": true,
+    "M3_mixed_string_sum": true,
+    "S5_dedup_preserve_order": true
+  },
+  "passed": true,
+  "reasons": [],
+  "detail": [
+    {
+      "qid": "C1_sum_squares_mod",
+      "passed": true,
+      "reason": "",
+      "error_class": null,
+      "n_turns": 2,
+      "elapsed_s": 8.539799928665161,
+      "attempts": 1
+    },
+    {
+      "qid": "C5_palindrome_count",
+      "passed": true,
+      "reason": "",
+      "error_class": null,
+      "n_turns": 2,
+      "elapsed_s": 2.02671217918396,
+      "attempts": 1
+    },
+    {
+      "qid": "M1_optional_field_count",
+      "passed": true,
+      "reason": "",
+      "error_class": null,
+      "n_turns": 2,
+      "elapsed_s": 2.221935749053955,
+      "attempts": 1
+    },
+    {
+      "qid": "M3_mixed_string_sum",
+      "passed": true,
+      "reason": "",
+      "error_class": null,
+      "n_turns": 3,
+      "elapsed_s": 3.1487252712249756,
+      "attempts": 1
+    },
+    {
+      "qid": "S5_dedup_preserve_order",
+      "passed": true,
+      "reason": "",
+      "error_class": null,
+      "n_turns": 2,
+      "elapsed_s": 2.3919403553009033,
+      "attempts": 1
+    }
+  ]
+}

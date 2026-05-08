@@ -303,6 +303,102 @@ def _aggregate_trajectory_metrics(trajectory: Trajectory) -> dict[str, Any]:
     }
 
 
+_ENGINE_ALIASES: dict[str, str] = {
+    "default": "v6-custom",
+    "dspy": "v7-dspy",
+}
+
+# Canonical engine names that map 1:1 to a runtime path.
+_CANONICAL_ENGINES: tuple[str, ...] = ("v6-custom", "v7-dspy", "adaptive")
+
+# Capability-router pseudo-engines: valid as user input, but resolved to a
+# canonical name at __init__ based on what kwargs were passed (e.g. ``tools=``).
+# ``self.engine`` always exposes the resolved canonical name, never the
+# pseudo-engine literal — see ``_unresolved_engine`` for the original input.
+_ROUTER_ENGINES: tuple[str, ...] = ("auto",)
+
+# Phase 5: legacy canonical names still resolve correctly (back-compat) but
+# emit ``DeprecationWarning`` to steer new code toward the public aliases.
+# The warning is emitted by the public entry points (``RLM.__init__`` and
+# ``RLM.from_task``) at the correct ``stacklevel`` for each — NOT inside
+# ``_normalize_engine_name`` itself, because that helper is also re-entered
+# by internal call sites (notably the adaptive inner-RLM factory) that pass
+# canonical names by design and must not self-trigger the warning.
+_DEPRECATED_LEGACY_ENGINES: dict[str, str] = {
+    "v6-custom": "default",
+    "v7-dspy": "dspy",
+}
+
+
+def _emit_engine_deprecation_warning_if_legacy(name: Any, stacklevel: int) -> None:
+    """Emit a ``DeprecationWarning`` if ``name`` is a legacy canonical engine
+    spelling (``"v6-custom"`` / ``"v7-dspy"``).
+
+    ``stacklevel`` is passed straight through to ``warnings.warn`` and must be
+    set by the caller so the warning points at the user's call site rather
+    than at library internals. The convention used by ``RLM`` is:
+
+    * Called directly from ``RLM.__init__`` body: ``stacklevel=3``
+      (warn -> helper -> __init__ -> user).
+    * Called directly from ``RLM.from_task`` body: ``stacklevel=3``
+      (warn -> helper -> from_task -> user).
+
+    Non-string inputs are silently ignored — ``_normalize_engine_name`` is
+    responsible for raising on those.
+    """
+    if isinstance(name, str) and name in _DEPRECATED_LEGACY_ENGINES:
+        replacement = _DEPRECATED_LEGACY_ENGINES[name]
+        warnings.warn(
+            f"engine={name!r} is deprecated as a public spelling; "
+            f"use engine={replacement!r} instead. Behavior is unchanged: "
+            f"{replacement!r} resolves to the same engine. Use engine='auto' "
+            f"to let fabric_rlm pick the engine based on whether tools= is "
+            f"passed.",
+            DeprecationWarning,
+            stacklevel=stacklevel,
+        )
+
+
+def _normalize_engine_name(name: str) -> str:
+    """Resolve user-friendly engine aliases to canonical internal names.
+
+    Aliases (Phase 1):
+        ``"default"`` -> ``"v6-custom"``
+        ``"dspy"``    -> ``"v7-dspy"``
+
+    Canonical names (``"v6-custom"``, ``"v7-dspy"``, ``"adaptive"``) and the
+    capability-router pseudo-engine ``"auto"`` (Phase 2) pass through unchanged
+    — ``"auto"`` is resolved to a canonical name later in ``__init__`` once
+    routing-relevant kwargs (``tools=``) are materialized.
+
+    Phase 5 deprecation warnings for legacy canonical names are emitted by
+    public entry points (``RLM.__init__`` / ``RLM.from_task``) using
+    ``_emit_engine_deprecation_warning_if_legacy``, NOT here — this function
+    is re-entered by internal call sites that legitimately pass canonical
+    names and must not self-warn.
+
+    Unknown values raise ``ValueError`` listing the valid set.
+    """
+    valid = sorted(
+        set(_CANONICAL_ENGINES) | set(_ENGINE_ALIASES) | set(_ROUTER_ENGINES)
+    )
+    # Preserve old behavior: invalid engine values raised ValueError, not
+    # TypeError. Keep the same exception class even for non-string inputs
+    # so existing callers' exception handlers continue to work. (Phase 1
+    # is alias-only; type-strictness is out of scope.)
+    if not isinstance(name, str):
+        raise ValueError(
+            f"engine must be one of {valid}, got {name!r}"
+        )
+    if name in _ENGINE_ALIASES:
+        return _ENGINE_ALIASES[name]
+    if name in _CANONICAL_ENGINES or name in _ROUTER_ENGINES:
+        return name
+    raise ValueError(
+        f"engine must be one of {valid}, got {name!r}"
+    )
+
+
 class RLM:
     """LM-driven Python REPL loop with persistent worker state.
 
@@ -310,10 +406,14 @@ class RLM:
     ----------
     tools : Iterable[Callable], optional
         Host callables exposed to the worker via the JSON-RPC tool protocol.
-        Currently supported only when ``engine='v7-dspy'``; passing tools with
-        any other engine raises ``NotImplementedError``. The iterable is
-        snapshotted to a list at construction time, so generators are safe
-        but consumed once. Tool names are inferred from each callable's
+        Supported by the DSPy/tool-call engine. Prefer ``engine='auto'``
+        (auto-routes to the tool-call engine when ``tools=`` is passed) or
+        ``engine='dspy'``; the canonical ``engine='v7-dspy'`` is also
+        accepted. Passing tools with an engine that resolves to
+        ``v6-custom`` or ``adaptive`` raises ``NotImplementedError``. The
+        iterable is snapshotted to a list at construction time, so
+        generators are safe but consumed once. Tool names are inferred from
+        each callable's
         ``__name__``; wrap with ``functools.wraps`` if you need to preserve
         the underlying name through a decorator. Pass ``dspy.Tool(fn,
         name='...')`` for an explicit name override.
@@ -342,18 +442,33 @@ class RLM:
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
         halve_max_iter_on_retry: bool = True,
-        engine: str = "v6-custom",
+        engine: str = "auto",
         adaptive: dict | None = None,
         inner_engine: str = "v6-custom",
         stuck_loop_threshold: int | None = 3,
         tools: Iterable[Callable[..., Any]] | None = None,
     ):
         # ---- engine validation (early, before any heavy resolution) ---------
-        valid_engines = ("v6-custom", "v7-dspy", "adaptive")
-        if engine not in valid_engines:
-            raise ValueError(
-                f"engine must be one of {valid_engines}, got {engine!r}"
-            )
+        # Resolve aliases ('default' -> 'v6-custom', 'dspy' -> 'v7-dspy')
+        # before any further engine-based logic so internal switches keep
+        # using canonical literals. Phase 1 of engine consolidation.
+        # Capture the user's literal input BEFORE normalization so debug
+        # tooling and Phase 5 deprecation logic can distinguish e.g.
+        # `engine="default"` from `engine="v6-custom"`.
+        # Phase 5: emit DeprecationWarning here (not inside the normalizer)
+        # so the warning points at the user's call site at stacklevel=3
+        # (warn -> helper -> __init__ -> user). ``RLM.from_task`` performs
+        # its own emit-then-translate to keep its own callers' stacklevel
+        # correct without double-warning.
+        _emit_engine_deprecation_warning_if_legacy(engine, stacklevel=3)
+        self._unresolved_engine: str = engine if isinstance(engine, str) else ""
+        engine = _normalize_engine_name(engine)
+        # `inner_engine` is only consulted when engine == "adaptive". For
+        # non-adaptive engines it is silently ignored (and overwritten with
+        # the resolved engine name a few lines down). Validate it ONLY in
+        # the adaptive branch to preserve the prior behavior of accepting
+        # arbitrary `inner_engine` values when they are ignored — config-
+        # driven callers that always set both must keep working.
         # ---- tools validation (engine-gated, normalize once) ---------------
         # The JSON-RPC tool-call protocol lives only on SubprocessPythonInterpreter
         # (used by engine='v7-dspy'). Legacy Interpreter (v6-custom) and the
@@ -362,10 +477,23 @@ class RLM:
         # Snapshot the iterable now so generators/etc. are exhausted exactly
         # once at construction time and downstream code sees a stable list.
         tool_list: list[Callable[..., Any]] = list(tools) if tools is not None else []
+        # ---- engine="auto" capability router (Phase 2) ---------------------
+        # Resolve the pseudo-engine to a canonical name based on what the
+        # caller actually needs. Decision is made AFTER tool_list is
+        # materialized so generators are exhausted exactly once and the
+        # router sees the real (possibly empty) length.
+        # Routing rule: tools= present -> v7-dspy (the only engine that
+        # currently supports the JSON-RPC tool-call protocol); otherwise
+        # v6-custom (the historic default).
+        if engine == "auto":
+            engine = "v7-dspy" if tool_list else "v6-custom"
         if tool_list and engine != "v7-dspy":
             raise NotImplementedError(
-                "tools= currently requires engine='v7-dspy'. "
-                f"Got engine={engine!r}. Tracked for future v6/adaptive parity."
+                "tools= requires the DSPy/tool-call engine "
+                "(canonical name: 'v7-dspy'). "
+                "Use engine='dspy' or engine='auto' (which auto-selects "
+                "the tool-call engine when tools= is passed). "
+                f"Got resolved engine={engine!r}."
             )
         for i, t in enumerate(tool_list):
             if not callable(t):
@@ -389,6 +517,15 @@ class RLM:
                 )
         self.stuck_loop_threshold = stuck_loop_threshold
         if engine == "adaptive":
+            # Resolve aliases for inner_engine ONLY when it is actually used.
+            # Phase 1: keeps non-adaptive callers free of new strictness on
+            # an arg they pass-but-don't-use.
+            if not isinstance(inner_engine, str):
+                raise ValueError(
+                    "inner_engine must be 'v6-custom' or 'v7-dspy' "
+                    f"(got {inner_engine!r}); 'adaptive' cannot be its own inner engine"
+                )
+            inner_engine = _ENGINE_ALIASES.get(inner_engine, inner_engine)
             if inner_engine not in ("v6-custom", "v7-dspy"):
                 raise ValueError(
                     "inner_engine must be 'v6-custom' or 'v7-dspy' "
@@ -516,7 +653,33 @@ class RLM:
         # Don't pass `None` positionally — callers may supply `signature=...`
         # via kwargs (v6.5+) and we'd otherwise hit "multiple values for 'signature'".
         kwargs.setdefault("signature", None)
-        instance = cls(**kwargs)
+        # Phase 5 deprecation: emit at the from_task call site stacklevel
+        # (warn -> helper -> from_task -> user = 3). Suppress only the
+        # inner re-emission of OUR engine-deprecation warning during the
+        # delegated ``cls(**kwargs)`` call via a narrow message-scoped
+        # filter -- we must NOT mutate ``kwargs["engine"]``, because
+        # subclasses are entitled to observe the user's literal value in
+        # their ``__init__`` (caught by Phase 7 v1 duck as a subclass
+        # regression: rewriting kwargs before delegating broke the
+        # ``from_task`` extension surface for ``cls != RLM``).
+        #
+        # The filter is installed ONLY when the user passed a legacy
+        # literal -- otherwise an unconditional filter would silently
+        # swallow any matching ``DeprecationWarning`` emitted by subclass
+        # ``__init__`` even on non-legacy paths, defeating ``-W error``
+        # policy on the subclass extension surface (Phase 7 v2 duck).
+        _user_engine = kwargs.get("engine")
+        _emit_engine_deprecation_warning_if_legacy(_user_engine, stacklevel=3)
+        if isinstance(_user_engine, str) and _user_engine in _DEPRECATED_LEGACY_ENGINES:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=rf"engine={_user_engine!r} is deprecated as a public spelling",
+                    category=DeprecationWarning,
+                )
+                instance = cls(**kwargs)
+        else:
+            instance = cls(**kwargs)
         instance._inline_task = task
         instance._inline_outputs = list(outputs or [])
         instance._inline_inputs = dict(inputs or {})
@@ -574,7 +737,14 @@ class RLM:
 
             kwargs = dict(inner_kwargs)
             kwargs["skill_loader"] = shared_loader
-            kwargs["engine"] = inner_engine
+            # Phase 5: pass the public alias spelling instead of the canonical
+            # legacy literal so the inner ``RLM(**kwargs)`` call does not
+            # self-emit a DeprecationWarning. ``inner_engine`` is already a
+            # validated canonical name ("v6-custom" or "v7-dspy") — translate
+            # to its public alias ("default" / "dspy") via the inverse map.
+            # Behavior is identical because ``_normalize_engine_name`` resolves
+            # both back to the same canonical name.
+            kwargs["engine"] = _DEPRECATED_LEGACY_ENGINES.get(inner_engine, inner_engine)
             kwargs["max_turns"] = attempt_cfg.max_turns
             if attempt_cfg.lm_spec is not None:
                 kwargs["lm"] = attempt_cfg.lm_spec
