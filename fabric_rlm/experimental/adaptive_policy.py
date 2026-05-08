@@ -542,6 +542,14 @@ class LadderPolicy:
 
         # escalate
         target = verdict.target_rung if verdict.target_rung is not None else 0
+        # Bench-only knob: when ``start_rung > 0`` and this is the *first*
+        # attempt, jump straight to that rung. The default ``ValidatorOnly``
+        # signal returns ``escalate(0)`` for empty attempts, which would
+        # otherwise win against ``baseline_config()``. Mirror the same intent
+        # here so the runner's first config respects ``start_rung``. No effect
+        # when ``start_rung == 0`` (default) — preserves prior behavior.
+        if not attempts and self.start_rung > 0:
+            target = max(target, min(self.start_rung, self.max_rung))
         # Skip rung 1 when the prior attempt was submitted=True with no feedback —
         # just rerunning more_turns will have the model resubmit the same wrong
         # answer. Bump straight to rung 2 (raise effort) instead.

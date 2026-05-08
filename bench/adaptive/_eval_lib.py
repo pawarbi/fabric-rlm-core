@@ -711,6 +711,13 @@ def make_lm(model: str) -> Any:
     import os
 
     import dspy
+    import litellm
+
+    # OpenRouter/openai gpt-4.1 family doesn't accept ``reasoning_effort``;
+    # the adaptive ladder bumps that param at rung 2+, which would crash the
+    # bench when ``start_rung >= 2`` or any escalation lands above rung 1.
+    # Tell litellm to silently drop unsupported params instead of raising.
+    litellm.drop_params = True
 
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:

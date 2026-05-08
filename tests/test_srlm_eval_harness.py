@@ -598,6 +598,30 @@ def test_ladder_policy_start_rung_clamped_to_max_rung() -> None:
     assert cfg.rung == pol.max_rung == 3
 
 
+def test_ladder_policy_start_rung_first_decision_jumps_to_target() -> None:
+    """Regression: ``next_decision([])`` (the path the AdaptiveRunner actually
+    takes for the first attempt) must respect ``start_rung``. The default
+    ``ValidatorOnly`` signal returns ``escalate(0)`` for empty attempts; the
+    policy must still bump that to the configured ``start_rung`` so the runner
+    starts at rung 3 / K=3 instead of rung 0 / K=1.
+    """
+    from fabric_rlm.experimental.adaptive_policy import LadderPolicy
+
+    pol = LadderPolicy(start_rung=3, parallel_rollouts=3)
+    verdict, cfg = pol.next_decision([])
+    assert verdict.action == "escalate"
+    assert cfg is not None
+    assert cfg.rung == 3
+    assert cfg.parallel_rollouts == 3
+
+    # And the no-knob case stays at rung 0.
+    pol0 = LadderPolicy()
+    _, cfg0 = pol0.next_decision([])
+    assert cfg0 is not None
+    assert cfg0.rung == 0
+    assert cfg0.parallel_rollouts == 1
+
+
 def test_force_min_rung_propagates_through_rlm_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
