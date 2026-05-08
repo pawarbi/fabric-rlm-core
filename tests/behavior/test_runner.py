@@ -398,3 +398,83 @@ class TestCli:
         payload = json.loads(out.read_text(encoding="utf-8"))
         assert payload["suite_version"] == "behavior-v1"
         assert "openai/gpt-4.1-mini" in payload["models"]
+
+
+# ---------------------------------------------------------------------------
+# Engine override env var (Phase 3 safety net for engine-consolidation)
+# ---------------------------------------------------------------------------
+
+class TestEngineOverride:
+    """``BEHAVIOR_CI_ENGINE_OVERRIDE`` lets us run the suite with a non-default
+    engine without changing the runner's stable contract. Used by Phase 3 of
+    the engine-consolidation plan to verify ``engine="auto"`` is byte-equivalent
+    to the current default for the behavior-CI workload.
+
+    Contract:
+    * Unset (or empty) → no ``engine=`` kwarg passed; default is preserved.
+    * Set to a non-empty string → that string is forwarded to ``RLM.from_task``.
+    """
+
+    @staticmethod
+    def _stub_rlm_module():
+        """Build a fake ``fabric_rlm`` module exposing an ``RLM`` whose
+        ``from_task`` records its kwargs. Returns (fake_module, calls_list)."""
+        import sys
+        import types
+
+        calls: list[dict[str, Any]] = []
+
+        class _FakeResult:
+            outputs = {"answer": "ok"}
+            n_turns = 1
+
+        class _FakeRLM:
+            @classmethod
+            def from_task(cls, **kwargs: Any) -> "_FakeRLM":
+                calls.append(dict(kwargs))
+                return cls()
+
+            def run(self) -> _FakeResult:
+                return _FakeResult()
+
+        fake = types.ModuleType("fabric_rlm")
+        fake.RLM = _FakeRLM  # type: ignore[attr-defined]
+        return fake, calls, sys
+
+    def _run_with_env(self, env_value: str | None) -> dict[str, Any]:
+        fake_mod, calls, sys_mod = self._stub_rlm_module()
+        q = QUESTIONS[0]
+        with patch.dict(sys_mod.modules, {"fabric_rlm": fake_mod}):
+            with patch.object(runner_mod, "make_lm", lambda _model: object()):
+                env_patch: dict[str, str] = {}
+                if env_value is not None:
+                    env_patch["BEHAVIOR_CI_ENGINE_OVERRIDE"] = env_value
+                with patch.dict("os.environ", env_patch, clear=False):
+                    if env_value is None:
+                        # Ensure unset even if shell exported it.
+                        import os as _os
+                        _os.environ.pop("BEHAVIOR_CI_ENGINE_OVERRIDE", None)
+                    runner_mod._run_once(q, "openai/gpt-4.1-mini", max_turns=1, timeout_s=10.0)
+        assert len(calls) == 1, f"expected 1 RLM construction, got {len(calls)}"
+        return calls[0]
+
+    def test_env_unset_omits_engine_kwarg(self) -> None:
+        kwargs = self._run_with_env(None)
+        assert "engine" not in kwargs
+
+    def test_env_empty_string_omits_engine_kwarg(self) -> None:
+        kwargs = self._run_with_env("")
+        assert "engine" not in kwargs
+
+    @pytest.mark.parametrize("value", ["auto", "v6-custom", "v7-dspy", "default", "dspy"])
+    def test_env_value_forwarded_as_engine_kwarg(self, value: str) -> None:
+        kwargs = self._run_with_env(value)
+        assert kwargs.get("engine") == value
+
+    def test_env_value_is_stripped_before_forwarding(self) -> None:
+        """Whitespace-only is treated as unset; padded values are stripped."""
+        kwargs = self._run_with_env("   ")
+        assert "engine" not in kwargs
+
+        kwargs = self._run_with_env("  auto  ")
+        assert kwargs.get("engine") == "auto"
