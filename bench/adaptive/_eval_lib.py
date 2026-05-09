@@ -386,14 +386,20 @@ def load_longcot(path: Path, n: int = 5) -> list[QuestionRecord]:
     return out
 
 
-# Canonical 32-question mix locked for Phase 1.
+# Canonical question mix.
+#
+# SSB is excluded (Phase 3): the in-memory ``_validate_ssb`` substring grader
+# returns ~0% across every config because models almost never echo the
+# destination cell-range token verbatim — they emit the formula and a starting
+# cell ("place in F2 and drag down"). The validator is a known signal-of-life
+# stub (its docstring says so) and contributes pure noise to aggregate scores.
+# A real grader needs xlsx execution; tracked as Phase 4 work.
 def default_question_set(repo_root: Path) -> list[QuestionRecord]:
     bench = repo_root / "bench"
     return [
         *load_easy_cases(bench / "adaptive" / "easy_cases.jsonl", n=5),
         *load_aqua(bench / "adaptive" / "aqua_rat_15.jsonl", n=5),
         *load_dabench(bench / "adaptive" / "dabench_15.jsonl", n=12),
-        *load_ssb(bench / "spreadsheetbench" / "ssb_subset_50.jsonl", n=5),
         *load_longcot(bench / "adaptive" / "longcot_cs_hard_holdout25.jsonl", n=5),
     ]
 

@@ -13,6 +13,7 @@ the broader adaptive runtime is still being validated against real benchmarks
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -843,8 +844,10 @@ _DEFAULT_CONSENSUS_ANSWER_KEYS: tuple[str, ...] = ("answer",)
 def _canonicalize_answer(value: Any) -> str | None:
     """Canonicalize a payload value for cluster equality.
 
-    Returns ``None`` for blank / missing values (so they will NOT cluster
-    with other missing values — see Feature C "missing failsafe").
+    Returns ``None`` for blank / missing / degenerate values so they will
+    NOT cluster with each other (Feature C "missing failsafe" + Phase 3
+    duck-review hardening: NaN/Inf/oversized-int are computation failures
+    masquerading as values; clustering them amplifies degenerate consensus).
 
     Rules (intentionally conservative — DABench-style numeric tolerance is
     a known gap; document & extend later if needed):
@@ -852,6 +855,8 @@ def _canonicalize_answer(value: Any) -> str | None:
     * Strings: strip + lowercase + collapse internal whitespace.
     * Numerics: ``repr(float(x))`` after stripping trailing ``.0`` so
       ``"42"`` / ``"42.0"`` / ``42`` / ``42.0`` collapse to the same key.
+    * Non-finite floats (``nan``, ``inf``, ``-inf``) → ``None``.
+    * Oversized ints that overflow ``float`` → ``None`` (was a crash).
     * Other types: ``repr`` after a strip-stringify pass.
     """
     if value is None:
@@ -865,6 +870,14 @@ def _canonicalize_answer(value: Any) -> str | None:
             f = float(s)
         except (TypeError, ValueError):
             return s.lower()
+        except OverflowError:
+            # String IS numeric but exceeds float's range. Treat as a
+            # degenerate sentinel (do not cluster).
+            return None
+        if not math.isfinite(f):
+            # Strings that parse to nan/inf are degenerate sentinels; do
+            # not cluster them.
+            return None
         if f.is_integer():
             return str(int(f))
         return repr(f)
@@ -873,8 +886,12 @@ def _canonicalize_answer(value: Any) -> str | None:
     if isinstance(value, (int, float)):
         try:
             f = float(value)
-        except (TypeError, ValueError):
-            return repr(value)
+        except (TypeError, ValueError, OverflowError):
+            # Oversized ``int`` (200+ digits) overflows ``float`` — treat
+            # as non-clusterable rather than crashing.
+            return None
+        if not math.isfinite(f):
+            return None
         if f.is_integer():
             return str(int(f))
         return repr(f)

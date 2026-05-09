@@ -973,6 +973,45 @@ def test_feat_c_observability_metadata_populated_always() -> None:
     assert c.metadata["srlm"]["candidate_answer_preview"] == "99"
 
 
+def test_feat_c_canonicalize_handles_oversized_int() -> None:
+    """Phase 3 duck B7: 200+ digit integer must not crash the cluster path.
+
+    ``_compute_consensus_clusters`` runs in observability mode even when the
+    flag is OFF, so an unhandled ``OverflowError`` from ``float(huge_int)``
+    would crash *default-config* runs the moment a model emits a giant
+    number. Treat oversized ints as non-clusterable instead.
+    """
+    huge = 10**400  # well past float's exponent range
+    a = _equiv_c(rollout_index=0, answer=str(huge))
+    b = _equiv_c(rollout_index=1, answer=str(huge))
+    c = _equiv_c(rollout_index=2, answer="42")
+    # Must not raise.
+    select_best_of_n([a, b, c])
+    # Oversized-int strings should NOT cluster (they're degenerate sentinels);
+    # each is a singleton.
+    sizes = {r.metadata["srlm"]["consensus_cluster_size"] for r in (a, b, c)}
+    assert sizes == {1}
+
+
+def test_feat_c_canonicalize_treats_nonfinite_as_noncluster() -> None:
+    """Phase 3 duck B7: NaN/Inf are computation-failure sentinels.
+
+    Two rollouts that both produced ``float('nan')`` or ``float('inf')``
+    must not be merged into a 2-cluster — that would amplify the same
+    degenerate failure mode that DABench-style "all NaN" outputs hit.
+    """
+    a = _equiv_c(rollout_index=0, answer=None)
+    a.result.payload = {"answer": float("nan")}  # type: ignore[attr-defined]
+    b = _equiv_c(rollout_index=1, answer=None)
+    b.result.payload = {"answer": float("nan")}  # type: ignore[attr-defined]
+    c = _equiv_c(rollout_index=2, answer=None)
+    c.result.payload = {"answer": float("inf")}  # type: ignore[attr-defined]
+    select_best_of_n([a, b, c])
+    for r in (a, b, c):
+        # canonical form is None → each gets a unique missing-sentinel id.
+        assert r.metadata["srlm"]["consensus_cluster_size"] == 1
+
+
 def test_feat_c_selector_key_slot_when_enabled() -> None:
     """When prefer_consensus=True, the selector_key gets a cluster_size slot
     inserted between completeness (total_non_blank) and -rollout_index."""

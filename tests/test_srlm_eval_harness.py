@@ -110,9 +110,12 @@ def test_loader_tolerates_alternate_field_names(tmp_path: Path) -> None:
     assert q.expected == "ans"
 
 
-def test_default_question_set_has_32_questions() -> None:
+def test_default_question_set_excludes_ssb() -> None:
+    # SSB dropped in Phase 3: ``_validate_ssb`` is a substring stub that
+    # returns ~0% across configs, contributing pure noise to aggregate scores.
+    # See ``default_question_set`` docstring for the Phase 4 follow-up.
     qs = default_question_set(REPO_ROOT)
-    assert len(qs) == 32
+    assert len(qs) == 27
     counts: dict[str, int] = {}
     for q in qs:
         counts[q.domain] = counts.get(q.domain, 0) + 1
@@ -120,9 +123,9 @@ def test_default_question_set_has_32_questions() -> None:
         "easy_calibration": 5,
         "math": 5,
         "dabench": 12,
-        "ssb": 5,
         "longcot_holdout": 5,
     }
+    assert "ssb" not in counts
 
 
 # ---------------------------------------------------------------------------
@@ -306,13 +309,13 @@ def test_summarize_groups_by_domain_with_expected_counts() -> None:
     s = summarize(rows)
     per_dom = s["per_domain"]["default"]
     assert set(per_dom.keys()) == {
-        "easy_calibration", "math", "dabench", "ssb", "longcot_holdout",
+        "easy_calibration", "math", "dabench", "longcot_holdout",
     }
     assert per_dom["easy_calibration"]["n"] == 5
     assert per_dom["math"]["n"] == 5
     assert per_dom["dabench"]["n"] == 12
-    assert per_dom["ssb"]["n"] == 5
     assert per_dom["longcot_holdout"]["n"] == 5
+    assert "ssb" not in per_dom
 
 
 # ---------------------------------------------------------------------------
