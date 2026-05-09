@@ -4,70 +4,76 @@
 
 | config | n | passed | accuracy | 95% CI | mean total tokens | mean elapsed s |
 |---|---:|---:|---:|---|---:|---:|
-| adaptive_current | 2 | 2 | 1.000 | [1.000, 1.000] | 1354 | 2.08 |
-| default | 2 | 2 | 1.000 | [1.000, 1.000] | 1384 | 8.56 |
+| adaptive_a | 64 | 36 | 0.562 | [0.406, 0.719] | 33519 | 41.06 |
+| adaptive_a_minrung3 | 64 | 32 | 0.500 | [0.344, 0.656] | 21923 | 14.51 |
+| adaptive_current | 64 | 29 | 0.453 | [0.297, 0.625] | 34780 | 36.60 |
+| adaptive_current_minrung3 | 64 | 30 | 0.469 | [0.312, 0.625] | 24662 | 24.33 |
 
 ## Per-domain accuracy
 
-| config | easy_calibration |
-|---|---:|
-| adaptive_current | 2/2 |
-| default | 2/2 |
+| config | dabench | easy_calibration | longcot_holdout | math | ssb |
+|---|---:|---:|---:|---:|---:|
+| adaptive_a | 16/24 | 10/10 | 0/10 | 10/10 | 0/10 |
+| adaptive_a_minrung3 | 12/24 | 10/10 | 0/10 | 10/10 | 0/10 |
+| adaptive_current | 9/24 | 10/10 | 0/10 | 10/10 | 0/10 |
+| adaptive_current_minrung3 | 10/24 | 10/10 | 0/10 | 10/10 | 0/10 |
 
+## SRLM Phase 2 — Feature A ship decision (auto-generated addendum)
 
----
+> Run config: `openai/gpt-4.1` (NoEffortLadder), 32 q × 2 seeds × 4 configs = 256 rollouts.
+> Schema corrections applied beforehand: B1 (cost aggregation across all attempts), B2 (per-rollout selector_key + selector_won), B3 (rung-1/2 scope leak removed).
+> All 317 stale results JSONs were deleted before this run.
 
-## Feature A — Trace-Length Tiebreaker — Bench Result
+### Sample-size disclosure (do not over-claim)
 
-- **Question set**: 32 questions across 5 domains (easy_calibration: 5, math: 5, dabench: 12, ssb: 5, longcot_holdout: 5)
-- **Configs**: `adaptive_current` vs `adaptive_a` (`prefer_shorter_traces=True`)
-- **Seeds**: 3 (n=96 rollouts per config; 192 total)
-- **Model**: openai/gpt-4.1 via OpenRouter
+The `n=24` per config in the dabench column is **12 dabench questions × 2 seeds = 24 trials**, not 24 unique questions. `easy_calibration` and `math` are ceilinged at 10/10 across every config (no signal). `longcot_holdout` and `ssb` validators always return 0 (broken — known and tracked separately). Effective signal lives in dabench.
 
-### Per-config aggregate
+### Per-question results (adaptive_a vs adaptive_current, 12 dabench questions × 2 seeds)
 
-| Config            | Acc (mean) | Acc 95% CI       | Mean tokens | Mean elapsed_s |
-|---|---:|---|---:|---:|
-| adaptive_current  | 0.302      | [0.156, 0.469]   | 6611        | 17.69          |
-| adaptive_a        | 0.292      | [0.146, 0.458]   | 6861        | 19.74          |
-
-### Per-domain accuracy
-
-| Domain            | adaptive_current | adaptive_a | delta   |
+| | lifts | regressions | ties |
 |---|---:|---:|---:|
-| easy_calibration  | 15/15            | 15/15      | +0.000  |
-| math              | 14/15            | 13/15      | -0.067  |
-| dabench           | 0/36             | 0/36       | +0.000  |
-| ssb               | 0/15             | 0/15       | +0.000  |
-| longcot_holdout   | 0/15             | 0/15       | +0.000  |
+| adaptive_a vs adaptive_current | 7 | 2 | 23 |
+| adaptive_a_minrung3 vs adaptive_current_minrung3 | 4 | 2 | 26 |
 
-### Selection-path diagnostics
+Lifts (adaptive_a): DABENCH_0129, _0133, _0137, _0175, _0176, _0177, _0719.
+Regressions (adaptive_a): DABENCH_0174, _0517 (one-trial flips, the other seed passes).
 
-Critical observation from per-rollout instrumentation:
+### Validator audit on real answer strings (sample)
 
-| Winner rung           | adaptive_current | adaptive_a |
-|---|---:|---:|
-| 0 (single attempt)    | 95               | 95         |
-| 1 (single attempt)    | 1                | 1          |
-| 3 (best-of-N parallel)| **0**            | **0**      |
+| q | adaptive_a answer | adaptive_current answer | verdict |
+|---|---|---|---|
+| DABENCH_0719 | `@mean_mpg[23.45], @median_mpg[22.75]` | `@mean_mpg[NaN], @median_mpg[NaN]` | A correct, current broken |
+| DABENCH_0175 | `@outliers_count[2]` | `@outliers_count[0]` | A correct, current wrong |
+| DABENCH_0137 | `@model_score[0.61]` | `@model_score[NA]` | A correct, current failed |
+| DABENCH_0177 | `@p_value[0.0000], @significance[Yes]` | `@p_value[NaN], @significance[No]` | A correct, current broken |
+| DABENCH_0517 seed0 | `@correlation_pclass_fare[FileNotFound]` | `-0.55` | **A regressed**, current correct |
+| DABENCH_0174 seed0 | `@fare_skewness[NaN]` | `4.79` | **A regressed**, current correct |
 
-**Tie-break candidates** (rung-3 selections with >=2 rollouts of differing trace length where Feature A's late-tier tie-break could have fired): **0 / 96**.
+### Counterfactual selector replay
 
-The tie-break code path was **never exercised** in this bench. The question difficulty profile and current adaptive policy resolved 99% of questions at rung 0 (single rollout), so `select_best_of_n` never had multiple equal-(passed,score,confidence,completeness) candidates to disambiguate.
+Same-candidate counterfactual replay (replay both selectors against the recorded rung-3 candidate sets, using the per-rollout `selector_key` written by B2): **the trace-length tiebreaker did not cause any of the 2 question-level regressions**. The bad winner adaptive_a picked on DABENCH_0517 seed0 and DABENCH_0174 seed0 would have won under the base selector too. Those regressions are candidate-pool variance, not selector behavior.
 
-### Pre-registered Feature A ship gates
+| config | rung-3 attempts | tiebreaker-decisive | observation |
+|---|---:|---:|---|
+| adaptive_a | 9 | 3 (33%) | All 3 flipped winners passed validation |
+| adaptive_a_minrung3 | 64 | 16 (25%) | All 16 flipped winners passed validation |
 
-- **Zero observed regressions at per-question level?** **NO** (1 regression: `AQUA_0003` seed 0, math). However: this regression occurred at `winner_rung=0` — a single-rollout terminal pass. The Feature A flag **cannot have caused it** (the tie-break code path is unreachable at rung 0). Attributed to LM non-determinism between separate API calls.
-- **No domain regression?** Math: -0.067 (1/45 attempts); all other domains identical. Within seed-noise bounds; not statistically significant given 95% CIs overlap heavily.
-- **Cost neutral or better?** Slight increase: +250 mean tokens (+3.8%), +2.05s elapsed (+11.6%). Within seed noise; not attributable to Feature A given the tie-break never fired.
-- **5 calibration questions still 5/5?** **YES** — 15/15 across 3 seeds for both configs.
-- **Tie-break ACTUALLY fired in any rollout?** **NO** — 0 of 96 adaptive_a rollouts reached rung-3 best-of-N with disambiguable candidates.
+### Caveats and known gaps
 
-### Recommended ship tier: **experimental**
+- Cost/elapsed deltas (-3.6% tokens for full A; -11.1% tokens / -40% elapsed for minrung3) are **observed bench outcomes, not selector-causal evidence** — best-of-N generates all candidates before selection, so the selector cannot directly reduce generation cost. Plausible mechanisms include stochastic candidate-pool differences and (for full A) different rung-2/3 escalation patterns.
+- Held-out-domain regression criterion is **not fully testable here** because longcot_holdout and ssb validators are broken and math/easy_calibration are ceilinged. We can only say: no observed regression in the metrics we have.
+- Sample size is modest. A 3rd seed would strengthen the conclusion but the directional + counterfactual evidence is consistent.
 
-**Justification**: Feature A is correctly implemented (9 unit tests pass, including byte-identical-default regression and end-to-end plumbing), but this 32q bench provides **zero positive evidence** of behavioral benefit because the rung-3 best-of-N path was never triggered. The single observed accuracy delta (math 14/15 -> 13/15) is at rung 0 and therefore mechanically independent of the flag. Recommendation: keep the flag opt-in (`adaptive={"prefer_shorter_traces": True}`) and defer "recommended" tier until a bench is constructed that actually triggers rung-3 multi-rollout selection (e.g. higher `parallel_rollouts`, harder questions, or lower rung-0 pass rate). Default behavior is byte-identical, so risk of shipping the code is zero; the open question is utility, not safety.
+### GPT-5 compatibility (3 dabench × 2 configs = 6 rollouts)
 
-### Surprising findings
+All 6 pass; observability schema works on a reasoning model. adaptive_a was cheaper than current on 2/3 questions (-26%, -44%, ~tied). Trace length is `completion_tokens` only, so the tiebreaker doesn't directly account for hidden `reasoning_tokens` on gpt-5; we don't claim "cost wins from trace length" on reasoning models, only that total tokens still favored A.
 
-1. **Validators dead on 3 of 5 domains** in this bench: dabench (0/36), ssb (0/15), longcot_holdout (0/15) all show 0 passes for **both** configs. Ship-decision signal is dominated by easy_calibration (saturated at 5/5) and math (5 questions x 3 seeds = 15 datapoints).
-2. **Rung-3 never reached**: with the current adaptive policy and K=3 parallel rollouts, the best-of-N selection path is essentially dead code on this bench. Feature A (and any future selection-time tie-breaker) cannot be evaluated here without a bench refresh.
+### Ship decision
+
+**Ship as opt-in default-off** (`prefer_shorter_traces=False` remains the default). Rationale:
+- +10.9pp accuracy on dabench (full A); +3.1pp accuracy + 11% cheaper + 40% faster (minrung3, apples-to-apples).
+- Counterfactual replay shows the tiebreaker **never caused** a regression in our data.
+- 2 question-level regressions are stochastic, not mechanism-driven, and an opt-in caller can still disable.
+- Missing-telemetry safety has been tightened (commit follow-up): None `completion_tokens` is mapped to +inf for sort purposes, so untelemetered candidates can never silently win the tiebreaker.
+
+Default-on is **not** justified by this data — the regression cases (especially the FileNotFound class, where shorter traces commit early to a wrong assumption) need a larger held-out evaluation before flipping the default.

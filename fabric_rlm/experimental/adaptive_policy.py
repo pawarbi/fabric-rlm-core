@@ -825,6 +825,17 @@ def _trace_length(
     return int(record.completion_tokens or 0)
 
 
+def _trace_length_or_none(record: AttemptRecord, mode: str) -> int | None:
+    """Like ``_trace_length`` but returns ``None`` when the underlying signal
+    is missing, so selectors can detect "no telemetry" and fall back safely
+    instead of treating missing as ``0`` (which would always win a
+    "shorter is better" tiebreaker).
+    """
+    if mode == "turns":
+        return int(record.turns_used) if record.turns_used is not None else None
+    return int(record.completion_tokens) if record.completion_tokens is not None else None
+
+
 def select_best_of_n(
     rollouts: list[AttemptRecord],
     *,
@@ -848,7 +859,11 @@ def select_best_of_n(
          -trace_length_completion, -rollout_index)
 
     Trace length uses :func:`_trace_length(rec, "completion")` — provider-
-    independent and missing-safe (None/0 → no penalty/no preference).
+    independent. Candidates whose ``completion_tokens`` is ``None`` (no
+    telemetry from the provider) are mapped to +inf for sort purposes so
+    they never win the tiebreaker. If every candidate is missing telemetry,
+    they all tie on this slot and ``-rollout_index`` (the deterministic
+    fallback) decides.
 
     Late-tier-only is non-negotiable: trace length must never override
     validator-passed, score, confidence, or payload completeness. The
@@ -881,7 +896,14 @@ def select_best_of_n(
             tn,
         )
         if prefer_shorter_traces:
-            return (*base, -_trace_length(rec, "completion"), -rec.rollout_index)
+            # Missing telemetry must NOT win the tiebreaker. We map missing
+            # completion_tokens to +inf (i.e. -inf in the ascending-with-negation
+            # slot) so a candidate with no telemetry can never beat a candidate
+            # with a known short trace; if every candidate is missing telemetry
+            # they all tie on this slot and -rollout_index decides.
+            tl = _trace_length_or_none(rec, "completion")
+            tl_for_sort = tl if tl is not None else float("inf")
+            return (*base, -tl_for_sort, -rec.rollout_index)
         return (*base, -rec.rollout_index)
 
     keys: list[tuple[tuple, AttemptRecord]] = [(key(r), r) for r in rollouts]

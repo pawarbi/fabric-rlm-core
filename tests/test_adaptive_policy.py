@@ -644,20 +644,42 @@ def test_feat_a_observability_metadata_populated() -> None:
 
 
 def test_feat_a_missing_completion_tokens_failsafe() -> None:
-    """completion_tokens=None or 0 must not crash; treated as 0."""
+    """completion_tokens=None must NOT win the tiebreaker.
+
+    Per the duck-flagged correctness fix: missing telemetry is mapped to
+    +inf for sort purposes so a candidate without a token count can never
+    beat a candidate with a known short trace. Among candidates that all
+    have known counts, "shorter wins" still applies. ``0`` is a valid
+    (genuinely empty) trace and is treated as the shortest, not as
+    missing.
+    """
     none_tokens = _equiv(rollout_index=0, completion_tokens=None)
     zero_tokens = _equiv(rollout_index=1, completion_tokens=0)
     fifty_tokens = _equiv(rollout_index=2, completion_tokens=50)
-    # None and 0 tie at trace_length=0; -rollout_index breaks tie -> idx 0.
     winner = select_best_of_n(
         [none_tokens, zero_tokens, fifty_tokens],
         prefer_shorter_traces=True,
     )
-    # Both 0-token rollouts beat the 50-token one; among 0-token, lower index wins.
-    assert winner is none_tokens
-    assert _trace_length(none_tokens, "completion") == 0
-    assert _trace_length(zero_tokens, "completion") == 0
-    assert _trace_length(fifty_tokens, "completion") == 50
+    # zero_tokens has the smallest known trace length (0); it must win
+    # over both the 50-token candidate AND over the missing-telemetry
+    # candidate. Missing-telemetry never wins this tiebreaker.
+    assert winner is zero_tokens
+    # And the missing-telemetry candidate must not have outranked the
+    # 50-token candidate either: i.e., the selector must not silently
+    # promote untelemetered traces.
+    pair_winner = select_best_of_n(
+        [none_tokens, fifty_tokens],
+        prefer_shorter_traces=True,
+    )
+    assert pair_winner is fifty_tokens
+    # If EVERY candidate has missing telemetry, they all tie on this slot
+    # and -rollout_index decides — i.e. the legacy default fallback.
+    one_more_none = _equiv(rollout_index=2, completion_tokens=None)
+    all_missing = select_best_of_n(
+        [none_tokens, _equiv(rollout_index=1, completion_tokens=None), one_more_none],
+        prefer_shorter_traces=True,
+    )
+    assert all_missing.rollout_index == 0
 
 
 # --- SRLM Feature A: end-to-end plumbing test --------------------------------
