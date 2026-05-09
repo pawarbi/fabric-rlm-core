@@ -1,0 +1,285 @@
+{
+  "n_files_scanned": 256,
+  "n_rung3_replayed": 196,
+  "source_config": null,
+  "by_config": {
+    "adaptive_a_minrung3": {
+      "math": {
+        "all_pass": {
+          "n": 10,
+          "fires": 10,
+          "winner_flips": 6,
+          "pass_flips": 0,
+          "tokens_saved_sum": 5614,
+          "fires_at_k1": 10
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        }
+      },
+      "dabench": {
+        "all_pass": {
+          "n": 24,
+          "fires": 5,
+          "winner_flips": 1,
+          "pass_flips": 0,
+          "tokens_saved_sum": 5172,
+          "fires_at_k1": 5
+        },
+        "all_fail_same": {
+          "n": 24,
+          "fires": 3,
+          "winner_flips": 1,
+          "pass_flips": 1,
+          "tokens_saved_sum": 1169,
+          "fires_at_k2": 3
+        }
+      },
+      "longcot_holdout": {
+        "all_pass": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        }
+      },
+      "ssb": {
+        "all_pass": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        }
+      },
+      "easy_calibration": {
+        "all_pass": {
+          "n": 10,
+          "fires": 10,
+          "winner_flips": 6,
+          "pass_flips": 0,
+          "tokens_saved_sum": 1527,
+          "fires_at_k1": 10
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        }
+      }
+    },
+    "adaptive_c_minrung3": {
+      "math": {
+        "all_pass": {
+          "n": 10,
+          "fires": 9,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 3560,
+          "fires_at_k1": 9
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 1,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 671,
+          "fires_at_k2": 1
+        }
+      },
+      "dabench": {
+        "all_pass": {
+          "n": 24,
+          "fires": 3,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 2333,
+          "fires_at_k1": 3
+        },
+        "all_fail_same": {
+          "n": 24,
+          "fires": 3,
+          "winner_flips": 1,
+          "pass_flips": 1,
+          "tokens_saved_sum": 1113,
+          "fires_at_k2": 3
+        }
+      },
+      "longcot_holdout": {
+        "all_pass": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 1,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 5076,
+          "fires_at_k2": 1
+        }
+      },
+      "ssb": {
+        "all_pass": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        }
+      },
+      "easy_calibration": {
+        "all_pass": {
+          "n": 10,
+          "fires": 10,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 1613,
+          "fires_at_k1": 10
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        }
+      }
+    },
+    "adaptive_current_minrung3": {
+      "math": {
+        "all_pass": {
+          "n": 10,
+          "fires": 9,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 4739,
+          "fires_at_k1": 9
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        }
+      },
+      "dabench": {
+        "all_pass": {
+          "n": 24,
+          "fires": 3,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 3222,
+          "fires_at_k1": 3
+        },
+        "all_fail_same": {
+          "n": 24,
+          "fires": 4,
+          "winner_flips": 1,
+          "pass_flips": 1,
+          "tokens_saved_sum": 1210,
+          "fires_at_k2": 4
+        }
+      },
+      "longcot_holdout": {
+        "all_pass": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        }
+      },
+      "ssb": {
+        "all_pass": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        }
+      },
+      "easy_calibration": {
+        "all_pass": {
+          "n": 10,
+          "fires": 10,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 1457,
+          "fires_at_k1": 10
+        },
+        "all_fail_same": {
+          "n": 10,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        }
+      }
+    },
+    "adaptive_all": {
+      "dabench": {
+        "all_pass": {
+          "n": 4,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        },
+        "all_fail_same": {
+          "n": 4,
+          "fires": 0,
+          "winner_flips": 0,
+          "pass_flips": 0,
+          "tokens_saved_sum": 0
+        }
+      }
+    }
+  }
+}
