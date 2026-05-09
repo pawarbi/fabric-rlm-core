@@ -889,6 +889,7 @@ class RLM:
             consensus_answer_keys=tuple(
                 cfg.get("consensus_answer_keys", ("answer",))
             ),
+            early_exit_probe=bool(cfg.get("early_exit_probe", False)),
         )
         adaptive_result = runner.run(bound_inputs)
         # AdaptiveRunner already attaches metadata to the winning trajectory

@@ -51,6 +51,7 @@ CONFIG_NAMES: tuple[str, ...] = (
     "adaptive_current_minrung3",  # adaptive_current forced to start at rung 3
     "adaptive_a_minrung3",  # adaptive_a forced to start at rung 3
     "adaptive_c_minrung3",  # adaptive_c forced to start at rung 3
+    "adaptive_e_minrung3",  # Feature E: early-exit probe forced to start at rung 3
 )
 
 
@@ -182,6 +183,23 @@ def get_config(name: str) -> EvalConfig:
                 "Feature C (prefer_consensus=True) with start_rung=3 — "
                 "isolates the consensus tie-breaker by guaranteeing rung-3 "
                 "best-of-N runs every question."
+            ),
+            force_min_rung=3,
+        )
+    if name == "adaptive_e_minrung3":
+        cfg = dict(base_adaptive)
+        cfg["early_exit_probe"] = True
+        cfg["start_rung"] = 3
+        return EvalConfig(
+            name="adaptive_e_minrung3",
+            engine="adaptive",
+            adaptive=cfg,
+            notes=(
+                "Feature E (early_exit_probe=True) with start_rung=3 — "
+                "probe-then-fanout: launch one rung-3 candidate first, "
+                "skip remaining N-1 if probe passes validator. "
+                "Pass/fail preservation only (winner identity may differ "
+                "from full fanout). Default-OFF flag; this config opts in."
             ),
             force_min_rung=3,
         )
