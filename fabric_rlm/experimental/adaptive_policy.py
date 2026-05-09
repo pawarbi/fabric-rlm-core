@@ -150,6 +150,11 @@ class AttemptRecord:
             "reasoning_effort": self.config.reasoning_effort,
             "parallel_rollouts": self.config.parallel_rollouts,
             "payload_preview": preview,
+            # Per-attempt SRLM observability bag (selector_key, trace_length_*,
+            # vc_*, srlm_score, etc.). Always emitted (possibly empty) so the
+            # summary schema is stable across features. The selectors set this
+            # via ``record.metadata['srlm']`` during best-of-N tie-breaking.
+            "srlm": dict(self.metadata.get("srlm") or {}),
             **(
                 {"turns": _capture_turns(self.result)}
                 if os.environ.get("FABRIC_RLM_CAPTURE_TURNS", "").lower()
@@ -883,12 +888,17 @@ def select_best_of_n(
 
     # Per-rollout observability hook (always recorded, even when flag is off,
     # so callers can inspect what *would* have happened). One-line addition.
+    # We also record each rollout's full selector_key so post-hoc analysis can
+    # prove whether the trace-length slot actually changed the winner (i.e.
+    # whether all losers had identical base-key tuples to the winner).
     for k, r in keys:
         srlm = r.metadata.setdefault("srlm", {})
         srlm["trace_length_completion"] = _trace_length(r, "completion")
+        srlm["selector_key"] = k
 
     winner_key, winner = max(keys, key=lambda kr: kr[0])
     winner.metadata.setdefault("srlm", {})["selector_key"] = winner_key
+    winner.metadata["srlm"]["selector_won"] = True
     return winner
 
 

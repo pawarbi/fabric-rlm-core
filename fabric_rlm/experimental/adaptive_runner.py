@@ -354,10 +354,15 @@ class AdaptiveRunner:
     def _best_partial(self, attempts: list[AttemptRecord]) -> AttemptRecord:
         # No passing attempt — pick the most-populated payload, breaking ties
         # by lowest (rung, rollout_index) for determinism.
-        return select_best_of_n(
-            attempts,
-            prefer_shorter_traces=self.prefer_shorter_traces,
-        )
+        #
+        # Note: ``prefer_shorter_traces`` is intentionally NOT forwarded here.
+        # SRLM Feature A is scoped to rung-3 best-of-N selection only (the
+        # late tie-breaker after a parallel rollout batch). Forwarding it to
+        # exhausted-run selection would let the flag silently change which
+        # failed attempt is reported across all rungs — contradicting the
+        # "rung-3 BoN tie-break only" design intent and contaminating
+        # comparisons of winner_rung / answer / cost on failed runs.
+        return select_best_of_n(attempts)
 
     def _make_result(
         self,

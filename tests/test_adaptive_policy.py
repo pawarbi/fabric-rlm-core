@@ -606,7 +606,14 @@ def test_feat_a_inverse_failure_universality() -> None:
 
 
 def test_feat_a_observability_metadata_populated() -> None:
-    """Every rollout gets trace_length_completion; winner gets selector_key."""
+    """Every rollout gets trace_length_completion AND selector_key; winner
+    is additionally tagged with ``selector_won=True``.
+
+    Recording loser keys is required so post-hoc analysis can prove whether
+    the trace-length tie-break slot actually changed the winner (i.e. that
+    the losers' base keys were equal to the winner's). See SRLM Phase 2
+    blocker B2 review.
+    """
     a = _equiv(rollout_index=0, completion_tokens=300)
     b = _equiv(rollout_index=1, completion_tokens=100)
     c = _equiv(rollout_index=2, completion_tokens=500)
@@ -614,18 +621,26 @@ def test_feat_a_observability_metadata_populated() -> None:
     for rec, expected in [(a, 300), (b, 100), (c, 500)]:
         assert "srlm" in rec.metadata
         assert rec.metadata["srlm"]["trace_length_completion"] == expected
-    # Winner has selector_key with the trace-length component embedded.
+        # B2: every rollout records its full selector_key, not just the winner.
+        assert "selector_key" in rec.metadata["srlm"]
+        sk = rec.metadata["srlm"]["selector_key"]
+        assert isinstance(sk, tuple)
+        # Trace-length slot equals -completion_tokens for that rollout.
+        assert sk[-2] == -expected
+    # Winner has selector_key with the trace-length component embedded and a
+    # selector_won marker so consumers can find the chosen rollout.
     sk = winner.metadata["srlm"]["selector_key"]
-    assert isinstance(sk, tuple)
     # When prefer_shorter_traces=True the key has 7 elements:
     # (passed, score, confidence, required_filled, total_non_blank,
     #  -trace_length, -rollout_index)
     assert len(sk) == 7
     # The -trace_length slot should equal -winner.completion_tokens.
     assert sk[-2] == -100  # b had the shortest trace
-    # And losers should not have selector_key set on this call.
+    assert winner is b
+    assert winner.metadata["srlm"].get("selector_won") is True
+    # Losers must NOT be marked as selector_won.
     for loser in (a, c):
-        assert "selector_key" not in loser.metadata.get("srlm", {})
+        assert loser.metadata["srlm"].get("selector_won") is not True
 
 
 def test_feat_a_missing_completion_tokens_failsafe() -> None:

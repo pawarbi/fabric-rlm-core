@@ -404,6 +404,125 @@ def test_run_one_records_error_without_crashing(
     assert row.passed is False
     assert row.answer is None
 
+
+# ---------------------------------------------------------------------------
+# Phase 2 — B1 (cost aggregation) + B2 (selector_key propagation)
+# ---------------------------------------------------------------------------
+
+
+def _make_adaptive_stub_result(attempts: list[dict], winner_idx: int = -1):
+    """Build a minimal stand-in for an RLMResult coming out of AdaptiveRunner.
+
+    ``attempts`` is a list of per-attempt summary dicts mimicking what
+    ``AttemptRecord.to_summary()`` produces. The ``winner_idx`` selects which
+    attempt's tokens become ``total_*_tokens`` on the wrapping RLMResult
+    (mimicking how the runner exposes the winner's tokens at the top level).
+    """
+    win = attempts[winner_idx]
+
+    class _Traj:
+        metadata = {
+            "adaptive": {
+                "stop_reason": "passed",
+                "elapsed_seconds": 1.0,
+                "winner_rung": win.get("rung"),
+                "winner_rollout_index": win.get("rollout_index"),
+                "attempts": attempts,
+            }
+        }
+        turns: list = []
+
+    class _R:
+        payload = {"answer": "x"}
+        submitted = True
+        total_prompt_tokens = win.get("prompt_tokens") or 0
+        total_completion_tokens = win.get("completion_tokens") or 0
+        total_reasoning_tokens = win.get("reasoning_tokens")
+        total_cached_tokens = None
+        trajectory = _Traj()
+
+    return _R()
+
+
+def test_run_one_adaptive_total_cost_sums_all_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B1: total_cost_tokens must equal sum across ALL attempts, not winner-only."""
+    import _eval_lib as _lib
+
+    attempts = [
+        {"rung": 3, "rollout_index": 0, "prompt_tokens": 100, "completion_tokens": 318, "reasoning_tokens": 0, "turns_used": 1, "srlm": {}},
+        {"rung": 3, "rollout_index": 1, "prompt_tokens": 100, "completion_tokens": 567, "reasoning_tokens": 0, "turns_used": 1, "srlm": {}},
+        {"rung": 3, "rollout_index": 2, "prompt_tokens": 100, "completion_tokens": 173, "reasoning_tokens": 0, "turns_used": 1, "srlm": {"selector_key": [1, 0, 0, 0, 0, -173, 0], "selector_won": True}},
+    ]
+    stub = _make_adaptive_stub_result(attempts, winner_idx=2)
+
+    class _StubRLM:
+        def run(self):
+            return stub
+
+    monkeypatch.setattr(_lib, "_build_rlm", lambda *_a, **_kw: _StubRLM())
+
+    q = QuestionRecord(
+        id="qcost", source_file="dabench_15.jsonl", source_idx=0,
+        prompt="x?", expected="x",
+    )
+    row = run_one(q, get_config("adaptive_a"), 0, "fake-model", lm_factory=lambda m: object())
+    expected_p = 300  # 3 * 100
+    expected_c = 318 + 567 + 173  # 1058
+    assert row.prompt_tokens == expected_p, f"winner-only cost leaked: {row.prompt_tokens}"
+    assert row.completion_tokens == expected_c, f"winner-only cost leaked: {row.completion_tokens}"
+    assert row.total_cost_tokens == expected_p + expected_c
+
+
+def test_run_one_adaptive_propagates_selector_key_into_observability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B2: every per-rollout observability record must carry the srlm dict
+    written by select_best_of_n (selector_key + trace_length_completion).
+    """
+    import _eval_lib as _lib
+
+    attempts = [
+        {
+            "rung": 3, "rollout_index": 0,
+            "prompt_tokens": 50, "completion_tokens": 200, "turns_used": 1,
+            "srlm": {"selector_key": [1, 0, 0, 0, 0, -200, 0], "trace_length_completion": 200},
+        },
+        {
+            "rung": 3, "rollout_index": 1,
+            "prompt_tokens": 50, "completion_tokens": 100, "turns_used": 1,
+            "srlm": {
+                "selector_key": [1, 0, 0, 0, 0, -100, -1],
+                "trace_length_completion": 100,
+                "selector_won": True,
+            },
+        },
+    ]
+    stub = _make_adaptive_stub_result(attempts, winner_idx=1)
+
+    class _StubRLM:
+        def run(self):
+            return stub
+
+    monkeypatch.setattr(_lib, "_build_rlm", lambda *_a, **_kw: _StubRLM())
+
+    q = QuestionRecord(
+        id="qsk", source_file="dabench_15.jsonl", source_idx=0,
+        prompt="x?", expected="x",
+    )
+    row = run_one(q, get_config("adaptive_a"), 0, "fake-model", lm_factory=lambda m: object())
+    assert len(row.observability) == 2
+    # Critical invariant: NO observability record may have selector_key=None
+    # for a Feature A run that produced multiple attempts. The duck flagged
+    # this as B2 — without per-rollout selector_key we can't prove the
+    # tiebreaker actually fired.
+    sks = [obs.selector_key for obs in row.observability]
+    assert all(sk is not None for sk in sks), f"B2 regression: selector_keys={sks}"
+    # And both trace_length_completion values should make it through
+    tlcs = [obs.trace_length_completion for obs in row.observability]
+    assert tlcs == [200, 100], f"trace lengths not propagated: {tlcs}"
+
 # ---------------------------------------------------------------------------
 # Phase 2.5 — Domain-specific validators (dabench / ssb / longcot)
 # ---------------------------------------------------------------------------

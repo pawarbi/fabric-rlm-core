@@ -431,3 +431,70 @@ def test_on_attempt_callback_invoked() -> None:
     # Default LadderPolicy.skip_more_turns_when_submitted=True bumps rung 1
     # straight to rung 2 since the prior attempt was submitted with no feedback.
     assert seen == [0, 2]
+
+
+# --- 9. Feature A scope: prefer_shorter_traces is rung-3-only ---------------
+#
+# Regression test for SRLM Phase 2 blocker B3: the ``prefer_shorter_traces``
+# flag must NOT influence ``_best_partial`` (the exhausted-run fallback that
+# selects across attempts of all rungs). It is scoped to the rung-3 best-of-N
+# tiebreaker only. Without this scoping, the flag silently changes which
+# failed attempt is reported on exhausted runs, contaminating winner_rung
+# and answer/cost metrics.
+
+
+def test_prefer_shorter_traces_does_not_affect_best_partial() -> None:
+    """When all attempts fail, ``_best_partial`` ignores prefer_shorter_traces.
+
+    Two failing attempts with identical (passed, score, confidence,
+    completeness) tuples differ only in completion_tokens. Default selection
+    breaks ties by lowest (rung, rollout_index) — i.e. the first attempt.
+    With ``prefer_shorter_traces=True``, the SHORTER trace would win in
+    rung-3 BoN. ``_best_partial`` must NOT honor that flag and must return
+    the deterministic-tie winner (the first attempt).
+    """
+    # Two attempts, both fail with identical verdicts and identical payloads.
+    # The first has a longer trace, the second is shorter. Default tie-break
+    # keeps the first; if Feature A leaked into _best_partial it would pick
+    # the second.
+    seq = iter([False, False])
+
+    def responder(cfg, inputs):
+        is_first = next(seq)  # noqa: F841 — flag flipped via iter only
+        n_turns = 2 if is_first else 5
+        turns = [StubTurn(completion_tokens=100) for _ in range(n_turns)]
+        return (
+            StubResult(
+                submitted=True,
+                payload={
+                    "answer": "x",
+                    "_verdict": ValidationVerdict(passed=False),
+                },
+                trajectory=StubTrajectory(turns=turns),
+                total_completion_tokens=n_turns * 100,
+            ),
+            None,
+        )
+
+    # Re-do iter so the LONG (higher completion_tokens) attempt comes first.
+    seq = iter([True, False])  # True -> long, False -> short
+
+    runner = AdaptiveRunner(
+        rlm_factory=make_factory(responder),
+        policy=LadderPolicy(base_max_turns=5),
+        budget=Budget(max_attempts=2),
+        validator=verdict_validator,
+        prefer_shorter_traces=True,  # would prefer SHORT in rung-3 BoN
+    )
+    result = runner.run({"q": "..."})
+
+    assert not result.passed
+    assert len(result.attempts) == 2
+    # _best_partial must use deterministic tie-break (lowest rung, rollout_index)
+    # NOT the prefer_shorter_traces preference. Both attempts are at rung 0/1
+    # with rollout_index 0, so the FIRST recorded attempt wins.
+    assert result.winner is result.attempts[0], (
+        "Feature A leaked into _best_partial: the shorter (later) attempt was "
+        "selected instead of the deterministic first-attempt tie-break winner. "
+        "prefer_shorter_traces must be scoped to rung-3 BoN selection only."
+    )

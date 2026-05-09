@@ -800,20 +800,25 @@ def _build_observability_for_default(result: Any) -> list[RolloutObservability]:
 def _build_observability_for_adaptive(result: Any) -> list[RolloutObservability]:
     """Adaptive engine: one rollout per attempt logged in metadata['adaptive'].
 
-    Future features will additionally write per-attempt entries into
-    metadata['srlm']['attempts'] keyed by (rung, rollout_index); we honor
-    that shape but fall back to the existing 'adaptive' attempt summaries.
+    Each per-attempt summary now embeds an ``"srlm"`` sub-dict (populated by
+    selectors via ``AttemptRecord.metadata['srlm']`` and serialized through
+    :meth:`AttemptRecord.to_summary`). Falls back to the legacy
+    ``metadata['srlm']['attempts']`` lookup for forward compatibility.
     """
     traj = getattr(result, "trajectory", None)
     meta = getattr(traj, "metadata", None) or {}
     adaptive_meta = meta.get("adaptive") or {}
     srlm_meta = meta.get("srlm") or {}
-    srlm_attempts = srlm_meta.get("attempts") or {}
+    legacy_srlm_attempts = srlm_meta.get("attempts") or {}
 
     out: list[RolloutObservability] = []
     for att in adaptive_meta.get("attempts") or []:
-        key = (att.get("rung"), att.get("rollout_index"))
-        sa = srlm_attempts.get(f"{key[0]}.{key[1]}") or {}
+        # Preferred source: the attempt summary embeds srlm metadata directly.
+        sa = dict(att.get("srlm") or {})
+        if not sa:
+            # Fallback for any caller still writing the legacy keyed dict.
+            key = (att.get("rung"), att.get("rollout_index"))
+            sa = legacy_srlm_attempts.get(f"{key[0]}.{key[1]}") or {}
         out.append(
             RolloutObservability(
                 selector_key=sa.get("selector_key"),
@@ -918,6 +923,19 @@ def run_one(
         traj = getattr(result, "trajectory", None)
         meta = getattr(traj, "metadata", None) or {}
         winner_rung = (meta.get("adaptive") or {}).get("winner_rung")
+        # B1: cost must reflect ALL rollouts (every attempt the runner spawned),
+        # not just the winner's tokens. ``result.total_*_tokens`` reads from the
+        # winner's RLMResult only. Sum the per-attempt summaries so the bench
+        # accounts for the true wall cost of running this config.
+        attempts_sum = meta.get("adaptive") or {}
+        att_p = att_c = att_r = 0
+        for att in attempts_sum.get("attempts") or []:
+            att_p += int(att.get("prompt_tokens") or 0)
+            att_c += int(att.get("completion_tokens") or 0)
+            att_r += int(att.get("reasoning_tokens") or 0)
+        if att_p or att_c or att_r:
+            p, c = att_p, att_c
+            r_int = att_r if att_r else r_int
     else:
         observability = _build_observability_for_default(result)
         winner_rung = None
