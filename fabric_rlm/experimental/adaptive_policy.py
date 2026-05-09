@@ -12,6 +12,7 @@ the broader adaptive runtime is still being validated against real benchmarks
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -836,11 +837,114 @@ def _trace_length_or_none(record: AttemptRecord, mode: str) -> int | None:
     return int(record.completion_tokens) if record.completion_tokens is not None else None
 
 
+_DEFAULT_CONSENSUS_ANSWER_KEYS: tuple[str, ...] = ("answer",)
+
+
+def _canonicalize_answer(value: Any) -> str | None:
+    """Canonicalize a payload value for cluster equality.
+
+    Returns ``None`` for blank / missing values (so they will NOT cluster
+    with other missing values — see Feature C "missing failsafe").
+
+    Rules (intentionally conservative — DABench-style numeric tolerance is
+    a known gap; document & extend later if needed):
+
+    * Strings: strip + lowercase + collapse internal whitespace.
+    * Numerics: ``repr(float(x))`` after stripping trailing ``.0`` so
+      ``"42"`` / ``"42.0"`` / ``42`` / ``42.0`` collapse to the same key.
+    * Other types: ``repr`` after a strip-stringify pass.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        s = " ".join(value.split())
+        if not s:
+            return None
+        # Try numeric collapse: "42" and "42.0" should cluster.
+        try:
+            f = float(s)
+        except (TypeError, ValueError):
+            return s.lower()
+        if f.is_integer():
+            return str(int(f))
+        return repr(f)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return repr(value)
+        if f.is_integer():
+            return str(int(f))
+        return repr(f)
+    try:
+        s = repr(value).strip()
+    except Exception:
+        return None
+    return s.lower() if s else None
+
+
+def _extract_canonical_answer(
+    record: AttemptRecord,
+    answer_keys: tuple[str, ...],
+) -> str | None:
+    """Pull the first non-blank answer field from a record's payload."""
+    payload = getattr(record.result, "payload", None)
+    if not isinstance(payload, Mapping):
+        return None
+    for k in answer_keys:
+        if k in payload:
+            canonical = _canonicalize_answer(payload[k])
+            if canonical is not None:
+                return canonical
+    return None
+
+
+def _compute_consensus_clusters(
+    rollouts: list[AttemptRecord],
+    answer_keys: tuple[str, ...],
+) -> list[tuple[str, int, str | None]]:
+    """Return [(cluster_id, cluster_size, canonical_preview)] aligned with rollouts.
+
+    Candidates whose canonical answer is ``None`` (missing payload field, blank
+    string, etc.) are each assigned a UNIQUE singleton cluster id — they must
+    not cluster with each other (missing answer is no information; allowing
+    them to form a "consensus" would let the selector silently prefer mutually
+    empty candidates).
+
+    Cluster ids embed a sha256 of the canonical answer (truncated 16 hex chars,
+    ~64 bits — collision-safe at K≤dozens) rather than the raw answer, so JSON
+    serialized observability rows stay compact even when answers are long
+    strings or structured payloads.
+    """
+    canonicals: list[str | None] = [
+        _extract_canonical_answer(r, answer_keys) for r in rollouts
+    ]
+    counts: dict[str, int] = {}
+    for c in canonicals:
+        if c is None:
+            continue
+        counts[c] = counts.get(c, 0) + 1
+
+    out: list[tuple[str, int, str | None]] = []
+    for i, c in enumerate(canonicals):
+        if c is None:
+            # Unique singleton id; never collides with another rollout.
+            out.append((f"singleton:idx={i}", 1, None))
+        else:
+            digest = hashlib.sha256(c.encode("utf-8", "replace")).hexdigest()[:16]
+            out.append((f"cluster:sha256={digest}", counts[c], c))
+    return out
+
+
 def select_best_of_n(
     rollouts: list[AttemptRecord],
     *,
     required_keys: tuple[str, ...] = (),
     prefer_shorter_traces: bool = False,
+    prefer_consensus: bool = False,
+    consensus_answer_keys: tuple[str, ...] = _DEFAULT_CONSENSUS_ANSWER_KEYS,
 ) -> AttemptRecord:
     """Deterministic best-of-N selection.
 
@@ -852,41 +956,59 @@ def select_best_of_n(
 
     SRLM Feature A — opt-in via ``prefer_shorter_traces=True`` — appends a
     LATE-TIER trace-length tie-breaker AFTER all correctness/completeness
-    signals and BEFORE ``-rollout_index`` (which remains the ultimate
-    determinism tie-break):
+    signals and BEFORE ``-rollout_index``:
 
         (passed, score, confidence, required_filled, total_non_blank,
          -trace_length_completion, -rollout_index)
+
+    SRLM Feature C — opt-in via ``prefer_consensus=True`` — inserts a
+    cluster-size slot BETWEEN completeness and the trace-length / index
+    slots. Larger cluster wins on tie; never overrides validator-pass,
+    score, confidence, or payload completeness ("safe" ordering — clusters
+    only break ties within the validator-passed stratum):
+
+        (passed, score, confidence, required_filled, total_non_blank,
+         cluster_size, [-trace_length_completion if A also enabled,]
+         -rollout_index)
 
     Trace length uses :func:`_trace_length(rec, "completion")` — provider-
     independent. Candidates whose ``completion_tokens`` is ``None`` (no
     telemetry from the provider) are mapped to +inf for sort purposes so
     they never win the tiebreaker. If every candidate is missing telemetry,
-    they all tie on this slot and ``-rollout_index`` (the deterministic
-    fallback) decides.
+    they all tie on this slot and ``-rollout_index`` decides.
 
-    Late-tier-only is non-negotiable: trace length must never override
-    validator-passed, score, confidence, or payload completeness. The
-    inverse-failure case (concise wrong answer beats verbose correct answer)
-    is gated by the validator already calling them equally correct, which we
-    accept as the documented trade-off.
+    Cluster equality uses :func:`_canonicalize_answer` (whitespace collapse,
+    case fold, numeric normalize). Missing canonical answer ⇒ unique
+    singleton cluster (the "missing failsafe" — empty answers must not
+    cluster together).
 
-    Plumbing choice: this function takes ``prefer_shorter_traces`` as a
-    direct keyword instead of stuffing it into :class:`AttemptConfig`. The
-    flag is a property of *how rollouts are compared*, not of any individual
-    attempt's execution config, so it lives on the call site that does the
-    comparison. :class:`AdaptiveRunner` carries it as a constructor field.
+    Late-tier-only is non-negotiable for both features: neither trace length
+    nor cluster size may override validator-passed, score, confidence, or
+    payload completeness. The inverse-failure case (two wrong answers that
+    happen to agree winning over a unique correct answer) is gated by the
+    validator already calling them equally correct, which we accept as the
+    documented trade-off.
+
+    Plumbing choice: this function takes both flags as direct keywords
+    instead of stuffing them into :class:`AttemptConfig`. The flags are a
+    property of *how rollouts are compared*, not of any individual attempt's
+    execution config, so they live on the call site that does the
+    comparison. :class:`AdaptiveRunner` carries them as constructor fields.
 
     Observability: every rollout (winner and losers) gets
-    ``record.metadata['srlm']['trace_length_completion']`` populated; the
-    winner additionally gets ``record.metadata['srlm']['selector_key']`` set
-    to the actual sort tuple used.
+    ``record.metadata['srlm']`` populated with ``trace_length_completion``,
+    ``consensus_cluster_id``, ``consensus_cluster_size``,
+    ``candidate_answer_preview``, and the full ``selector_key`` — recorded
+    even when the corresponding flag is off, so callers can inspect what
+    *would* have happened. The winner additionally gets ``selector_won=True``.
     """
 
     if not rollouts:
         raise ValueError("select_best_of_n: empty rollouts")
 
-    def key(rec: AttemptRecord) -> tuple:
+    cluster_info = _compute_consensus_clusters(rollouts, consensus_answer_keys)
+
+    def key(rec: AttemptRecord, idx: int) -> tuple:
         rf, tn = payload_completeness(rec.result, required_keys=required_keys)
         base = (
             int(rec.verdict.passed),
@@ -895,6 +1017,8 @@ def select_best_of_n(
             rf,
             tn,
         )
+        if prefer_consensus:
+            base = (*base, cluster_info[idx][1])
         if prefer_shorter_traces:
             # Missing telemetry must NOT win the tiebreaker. We map missing
             # completion_tokens to +inf (i.e. -inf in the ascending-with-negation
@@ -906,16 +1030,23 @@ def select_best_of_n(
             return (*base, -tl_for_sort, -rec.rollout_index)
         return (*base, -rec.rollout_index)
 
-    keys: list[tuple[tuple, AttemptRecord]] = [(key(r), r) for r in rollouts]
+    keys: list[tuple[tuple, AttemptRecord]] = [
+        (key(r, i), r) for i, r in enumerate(rollouts)
+    ]
 
-    # Per-rollout observability hook (always recorded, even when flag is off,
-    # so callers can inspect what *would* have happened). One-line addition.
-    # We also record each rollout's full selector_key so post-hoc analysis can
-    # prove whether the trace-length slot actually changed the winner (i.e.
-    # whether all losers had identical base-key tuples to the winner).
-    for k, r in keys:
+    # Per-rollout observability hook (always recorded, even when flags are off,
+    # so callers can inspect what *would* have happened). We also record each
+    # rollout's full selector_key so post-hoc analysis can prove whether the
+    # extra slots actually changed the winner.
+    for i, (k, r) in enumerate(keys):
         srlm = r.metadata.setdefault("srlm", {})
         srlm["trace_length_completion"] = _trace_length(r, "completion")
+        cid, csize, preview = cluster_info[i]
+        srlm["consensus_cluster_id"] = cid
+        srlm["consensus_cluster_size"] = csize
+        srlm["candidate_answer_preview"] = (
+            preview[:200] if isinstance(preview, str) else None
+        )
         srlm["selector_key"] = k
 
     winner_key, winner = max(keys, key=lambda kr: kr[0])

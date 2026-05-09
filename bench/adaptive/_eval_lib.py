@@ -45,11 +45,12 @@ CONFIG_NAMES: tuple[str, ...] = (
     "adaptive_current",
     "adaptive_a",  # Feature A: trace-length tiebreaker
     "adaptive_b",  # Feature B: TraceLengthSignal (stub)
-    "adaptive_c",  # Feature C: self-consistency hard pre-filter (stub)
+    "adaptive_c",  # Feature C: self-consistency cluster tiebreaker
     "adaptive_d",  # Feature D: VC × Len SRLM-style selection (stub)
-    "adaptive_all",  # All four features composed (stub)
+    "adaptive_all",  # All four features composed (A+C wired; B/D stub)
     "adaptive_current_minrung3",  # adaptive_current forced to start at rung 3
     "adaptive_a_minrung3",  # adaptive_a forced to start at rung 3
+    "adaptive_c_minrung3",  # adaptive_c forced to start at rung 3
 )
 
 
@@ -155,11 +156,34 @@ def get_config(name: str) -> EvalConfig:
             notes=_stub_features_note("B"),
         )
     if name == "adaptive_c":
+        adaptive_c_cfg = dict(base_adaptive)
+        adaptive_c_cfg["prefer_consensus"] = True
         return EvalConfig(
             name="adaptive_c",
             engine="adaptive",
-            adaptive=dict(base_adaptive),
-            notes=_stub_features_note("C"),
+            adaptive=adaptive_c_cfg,
+            notes=(
+                "Feature C: self-consistency cluster tiebreaker "
+                "(prefer_consensus=True). Late-tier tie-break only — fires "
+                "after passed/score/confidence/completeness equal; larger "
+                "cluster wins. Cluster id = canonicalized first-non-blank "
+                "answer field; missing answer ⇒ unique singleton."
+            ),
+        )
+    if name == "adaptive_c_minrung3":
+        cfg = dict(base_adaptive)
+        cfg["prefer_consensus"] = True
+        cfg["start_rung"] = 3
+        return EvalConfig(
+            name="adaptive_c_minrung3",
+            engine="adaptive",
+            adaptive=cfg,
+            notes=(
+                "Feature C (prefer_consensus=True) with start_rung=3 — "
+                "isolates the consensus tie-breaker by guaranteeing rung-3 "
+                "best-of-N runs every question."
+            ),
+            force_min_rung=3,
         )
     if name == "adaptive_d":
         return EvalConfig(
@@ -168,12 +192,21 @@ def get_config(name: str) -> EvalConfig:
             adaptive=dict(base_adaptive),
             notes=_stub_features_note("D"),
         )
-    # adaptive_all
+    # adaptive_all — A+C wired; B+D still stub. Composes flags so both
+    # late-tier tie-breakers fire (cluster_size first, then -trace_length).
+    all_cfg = dict(base_adaptive)
+    all_cfg["prefer_shorter_traces"] = True
+    all_cfg["prefer_consensus"] = True
     return EvalConfig(
         name="adaptive_all",
         engine="adaptive",
-        adaptive=dict(base_adaptive),
-        notes=_stub_features_note("A+B+C+D"),
+        adaptive=all_cfg,
+        notes=(
+            "Composes wired SRLM features: A (prefer_shorter_traces) + "
+            "C (prefer_consensus). B and D still stub-route through "
+            "adaptive_current. Sort key: (passed, score, conf, rf, tn, "
+            "cluster_size, -trace_length, -rollout_index)."
+        ),
     )
 
 
@@ -391,6 +424,7 @@ class RolloutObservability:
     vc_aggregate: float | None = None
     consensus_cluster_id: str | None = None
     consensus_cluster_size: int | None = None
+    candidate_answer_preview: str | None = None
     srlm_score: float | None = None
     discard_reason: str | None = None
 
@@ -791,6 +825,7 @@ def _build_observability_for_default(result: Any) -> list[RolloutObservability]:
             vc_aggregate=srlm_meta.get("vc_aggregate"),
             consensus_cluster_id=srlm_meta.get("consensus_cluster_id"),
             consensus_cluster_size=srlm_meta.get("consensus_cluster_size"),
+            candidate_answer_preview=srlm_meta.get("candidate_answer_preview"),
             srlm_score=srlm_meta.get("srlm_score"),
             discard_reason=srlm_meta.get("discard_reason"),
         )
@@ -833,6 +868,7 @@ def _build_observability_for_adaptive(result: Any) -> list[RolloutObservability]
                 vc_aggregate=sa.get("vc_aggregate"),
                 consensus_cluster_id=sa.get("consensus_cluster_id"),
                 consensus_cluster_size=sa.get("consensus_cluster_size"),
+                candidate_answer_preview=sa.get("candidate_answer_preview"),
                 srlm_score=sa.get("srlm_score"),
                 discard_reason=sa.get("discard_reason"),
             )

@@ -86,6 +86,16 @@ class AdaptiveRunner:
         trace-length tie-breaker after passed/score/confidence/completeness.
         Off by default; default behavior is byte-identical to before. See
         :func:`select_best_of_n` docstring for the full sort key.
+    prefer_consensus
+        SRLM Feature C — when True, :func:`select_best_of_n` inserts a
+        cluster-size tie-breaker after completeness (and before any trace-
+        length slot). Off by default; default behavior is byte-identical
+        to before. Scoped to rung-3 best-of-N selection ONLY (same scoping
+        rule as Feature A — see ``_best_partial`` comment).
+    consensus_answer_keys
+        Payload field names to scan for the canonical answer when
+        ``prefer_consensus`` is enabled. Defaults match
+        :class:`AnswerConsensus` (``"answer", "output", "result", "report"``).
     """
 
     def __init__(
@@ -99,6 +109,8 @@ class AdaptiveRunner:
         feedback_injection: bool = True,
         pre_run: Callable[[Mapping[str, Any], "AdaptiveRunner"], None] | None = None,
         prefer_shorter_traces: bool = False,
+        prefer_consensus: bool = False,
+        consensus_answer_keys: tuple[str, ...] = ("answer",),
     ):
         self.rlm_factory = rlm_factory
         self.policy = policy or LadderPolicy()
@@ -111,6 +123,8 @@ class AdaptiveRunner:
         # but generic — any caller can plug in custom warm-up logic.
         self.pre_run = pre_run
         self.prefer_shorter_traces = prefer_shorter_traces
+        self.prefer_consensus = prefer_consensus
+        self.consensus_answer_keys = tuple(consensus_answer_keys)
 
     def run(self, inputs: Mapping[str, Any] | None = None, **kwargs: Any) -> AdaptiveResult:
         run_inputs = dict(inputs or {})
@@ -159,6 +173,8 @@ class AdaptiveRunner:
                 winner = select_best_of_n(
                     rollout_records,
                     prefer_shorter_traces=self.prefer_shorter_traces,
+                    prefer_consensus=self.prefer_consensus,
+                    consensus_answer_keys=self.consensus_answer_keys,
                 )
                 if winner.verdict.passed:
                     return self._make_result(
@@ -355,13 +371,14 @@ class AdaptiveRunner:
         # No passing attempt — pick the most-populated payload, breaking ties
         # by lowest (rung, rollout_index) for determinism.
         #
-        # Note: ``prefer_shorter_traces`` is intentionally NOT forwarded here.
-        # SRLM Feature A is scoped to rung-3 best-of-N selection only (the
-        # late tie-breaker after a parallel rollout batch). Forwarding it to
-        # exhausted-run selection would let the flag silently change which
-        # failed attempt is reported across all rungs — contradicting the
-        # "rung-3 BoN tie-break only" design intent and contaminating
-        # comparisons of winner_rung / answer / cost on failed runs.
+        # Note: ``prefer_shorter_traces`` and ``prefer_consensus`` are
+        # intentionally NOT forwarded here. SRLM Features A and C are scoped
+        # to rung-3 best-of-N selection only (the late tie-breakers after a
+        # parallel rollout batch). Forwarding them to exhausted-run selection
+        # would let the flags silently change which failed attempt is
+        # reported across all rungs — contradicting the "rung-3 BoN tie-break
+        # only" design intent and contaminating comparisons of winner_rung /
+        # answer / cost on failed runs.
         return select_best_of_n(attempts)
 
     def _make_result(

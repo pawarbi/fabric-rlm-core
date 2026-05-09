@@ -156,6 +156,7 @@ def test_rollout_observability_defaults_are_none() -> None:
         "selector_key", "trace_length_completion", "trace_length_turns",
         "vc_raw_text", "vc_parsed", "vc_aggregate",
         "consensus_cluster_id", "consensus_cluster_size",
+        "candidate_answer_preview",
         "srlm_score", "discard_reason",
     }
     assert set(d.keys()) == expected_none
@@ -195,9 +196,10 @@ def test_get_config_returns_eval_config_for_each_name(name: str) -> None:
 
 def test_stub_features_route_through_adaptive_current_today() -> None:
     base = get_config("adaptive_current").adaptive
-    # Phase 2: Feature A (adaptive_a) is now wired to prefer_shorter_traces=True
-    # and is no longer a stub. The remaining b/c/d/all stay stubbed.
-    for name in ("adaptive_b", "adaptive_c", "adaptive_d", "adaptive_all"):
+    # Phase 2: Feature A (adaptive_a) wired (prefer_shorter_traces=True).
+    # Phase 3: Feature C (adaptive_c) wired (prefer_consensus=True);
+    # adaptive_all now composes A+C. Remaining b/d still stubbed.
+    for name in ("adaptive_b", "adaptive_d"):
         cfg = get_config(name)
         # Same engine + same adaptive kwargs as adaptive_current today.
         assert cfg.engine == "adaptive"
@@ -215,6 +217,36 @@ def test_adaptive_a_wires_prefer_shorter_traces() -> None:
     assert cfg.adaptive.get("parallel_rollouts") == 3
     assert "STUB" not in cfg.notes
     assert "Feature A" in cfg.notes
+
+
+def test_adaptive_c_wires_prefer_consensus() -> None:
+    """Phase 3: adaptive_c sets prefer_consensus=True; not a stub anymore."""
+    cfg = get_config("adaptive_c")
+    assert cfg.engine == "adaptive"
+    assert cfg.adaptive.get("prefer_consensus") is True
+    # adaptive_c does NOT enable Feature A — keep flags orthogonal so
+    # bench A/B can decompose contributions.
+    assert cfg.adaptive.get("prefer_shorter_traces") is not True
+    assert cfg.adaptive.get("parallel_rollouts") == 3
+    assert "STUB" not in cfg.notes
+    assert "Feature C" in cfg.notes
+
+
+def test_adaptive_c_minrung3_forces_rung3_with_consensus() -> None:
+    cfg = get_config("adaptive_c_minrung3")
+    assert cfg.engine == "adaptive"
+    assert cfg.adaptive.get("prefer_consensus") is True
+    assert cfg.adaptive.get("start_rung") == 3
+    assert cfg.force_min_rung == 3
+
+
+def test_adaptive_all_composes_a_and_c() -> None:
+    """adaptive_all is no longer a pure stub: A and C are wired, B and D still stub."""
+    cfg = get_config("adaptive_all")
+    assert cfg.engine == "adaptive"
+    assert cfg.adaptive.get("prefer_shorter_traces") is True
+    assert cfg.adaptive.get("prefer_consensus") is True
+    assert "STUB" not in cfg.notes
 
 
 def test_get_config_rejects_unknown_name() -> None:

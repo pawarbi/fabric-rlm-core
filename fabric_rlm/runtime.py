@@ -885,6 +885,10 @@ class RLM:
             feedback_injection=policy_kwargs.get("feedback_injection", True),
             pre_run=pre_run_hook,
             prefer_shorter_traces=bool(cfg.get("prefer_shorter_traces", False)),
+            prefer_consensus=bool(cfg.get("prefer_consensus", False)),
+            consensus_answer_keys=tuple(
+                cfg.get("consensus_answer_keys", ("answer",))
+            ),
         )
         adaptive_result = runner.run(bound_inputs)
         # AdaptiveRunner already attaches metadata to the winning trajectory
