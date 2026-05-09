@@ -111,6 +111,7 @@ class AdaptiveRunner:
         prefer_shorter_traces: bool = False,
         prefer_consensus: bool = False,
         consensus_answer_keys: tuple[str, ...] = ("answer",),
+        early_exit_probe: bool = False,
     ):
         self.rlm_factory = rlm_factory
         self.policy = policy or LadderPolicy()
@@ -125,6 +126,14 @@ class AdaptiveRunner:
         self.prefer_shorter_traces = prefer_shorter_traces
         self.prefer_consensus = prefer_consensus
         self.consensus_answer_keys = tuple(consensus_answer_keys)
+        # SRLM Feature E (early-exit probe). When True, the rung-3
+        # best-of-N step uses a probe-then-fanout pattern: launch one
+        # candidate (rollout_index 0), await its result, and skip
+        # launching the remaining N-1 if the probe passes the validator.
+        # Otherwise launch the suffix in parallel as before. Off by
+        # default; default behavior is byte-identical to before. See
+        # ``_run_rollouts`` for the contract.
+        self.early_exit_probe = early_exit_probe
 
     def run(self, inputs: Mapping[str, Any] | None = None, **kwargs: Any) -> AdaptiveResult:
         run_inputs = dict(inputs or {})
@@ -159,7 +168,9 @@ class AdaptiveRunner:
             this_inputs = self._with_feedback(run_inputs, attempts)
 
             if cfg.parallel_rollouts > 1:
-                rollout_records = self._run_rollouts(cfg, this_inputs, kwargs)
+                rollout_records = self._run_rollouts(
+                    cfg, this_inputs, kwargs, wall_start=wall_start,
+                )
                 # record every rollout
                 for rec in rollout_records:
                     attempts.append(rec)
@@ -177,10 +188,22 @@ class AdaptiveRunner:
                     consensus_answer_keys=self.consensus_answer_keys,
                 )
                 if winner.verdict.passed:
+                    # SRLM Feature E (early-exit probe): if the rollout
+                    # batch came back with fewer than the configured N
+                    # rollouts AND the flag is on, the suffix was skipped
+                    # because the probe passed. Emit a distinct stop_reason
+                    # so offline replay can attribute savings correctly.
+                    if (
+                        self.early_exit_probe
+                        and len(rollout_records) < cfg.parallel_rollouts
+                    ):
+                        sr = "early-exit: probe passed"
+                    else:
+                        sr = "best-of-N rollout passed"
                     return self._make_result(
                         winner=winner,
                         attempts=attempts,
-                        stop_reason="best-of-N rollout passed",
+                        stop_reason=sr,
                         wall_start=wall_start,
                     )
             else:
@@ -344,7 +367,34 @@ class AdaptiveRunner:
         cfg: AttemptConfig,
         inputs: Mapping[str, Any],
         run_kwargs: dict[str, Any],
+        *,
+        wall_start: float | None = None,
     ) -> list[AttemptRecord]:
+        """Run ``cfg.parallel_rollouts`` rollouts and return their records.
+
+        Default behavior: launch all N futures at once and collect them.
+
+        When ``self.early_exit_probe`` is True and ``n > 1``, use a
+        probe-then-fanout pattern:
+
+        1. Launch ONE rollout (``rollout_index=0``) and await it.
+        2. If its validator verdict passes, return ``[probe_record]``
+           and skip launching the remaining N-1. This is the all_pass
+           predicate at K=1, empirically validated by
+           ``bench/adaptive/_prefix_replay.py`` to fire on 35% of
+           captured rung-3 rollouts with 0/196 pass-flips.
+        3. Otherwise, re-check the wall budget (the probe may have
+           burned the remaining time); if exceeded, return just the
+           probe so the caller can record it and stop. Else launch
+           the remaining N-1 rollouts in parallel as before and
+           return all N records.
+
+        The contract is **pass/fail preservation only**. The selected
+        winner identity (and therefore reported trace length, answer
+        text, and downstream cost analyses) may differ from the
+        full-fanout selection, especially when Feature A
+        (``prefer_shorter_traces``) is enabled. Document accordingly.
+        """
         n = cfg.parallel_rollouts
         # safety: if user provided pre-resolved lm_instance, downgrade to sequential
         if cfg.lm_instance is not None and cfg.lm_spec is None and n > 1:
@@ -357,10 +407,59 @@ class AdaptiveRunner:
             )
             return [self._run_one(cfg, i, inputs, run_kwargs) for i in range(n)]
 
+        if self.early_exit_probe and n > 1:
+            return self._run_rollouts_with_probe(
+                cfg, inputs, run_kwargs, wall_start=wall_start,
+            )
+
         records: list[AttemptRecord] = [None] * n  # type: ignore[list-item]
         with ThreadPoolExecutor(max_workers=n) as ex:
             futures = {
                 ex.submit(self._run_one, cfg, i, inputs, run_kwargs): i for i in range(n)
+            }
+            for fut in as_completed(futures):
+                idx = futures[fut]
+                records[idx] = fut.result()
+        return records
+
+    def _run_rollouts_with_probe(
+        self,
+        cfg: AttemptConfig,
+        inputs: Mapping[str, Any],
+        run_kwargs: dict[str, Any],
+        *,
+        wall_start: float | None,
+    ) -> list[AttemptRecord]:
+        """Probe-then-fanout implementation of Feature E.
+
+        See ``_run_rollouts`` docstring for the contract.
+        """
+        n = cfg.parallel_rollouts
+        # 1. Probe (rollout_index 0). Run inline — no executor needed for one
+        # task, and this avoids a thread-pool round-trip on the fast path.
+        probe = self._run_one(cfg, 0, inputs, run_kwargs)
+        if probe.verdict.passed:
+            # All-pass predicate fired at K=1: skip suffix entirely.
+            return [probe]
+
+        # 2. Probe failed. Re-check wall budget before launching the suffix
+        # so a slow probe near the deadline can't push us over budget by
+        # launching N-1 more rollouts. (Other budget gates — max_attempts
+        # and turn budget — are enforced by the outer ``run`` loop using
+        # ``len(attempts)`` and ``turns_used_so_far``; the wall clock is
+        # the only one that can change DURING a rollout batch.)
+        if wall_start is not None and self.budget.max_wall_seconds is not None:
+            if (time.perf_counter() - wall_start) >= self.budget.max_wall_seconds:
+                return [probe]
+
+        # 3. Launch suffix in parallel.
+        records: list[AttemptRecord] = [probe]
+        suffix_n = n - 1
+        records.extend([None] * suffix_n)  # type: ignore[list-item]
+        with ThreadPoolExecutor(max_workers=suffix_n) as ex:
+            futures = {
+                ex.submit(self._run_one, cfg, i, inputs, run_kwargs): i
+                for i in range(1, n)
             }
             for fut in as_completed(futures):
                 idx = futures[fut]
