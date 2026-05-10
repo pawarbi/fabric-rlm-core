@@ -451,23 +451,44 @@ If after all tie-breakers you still have multiple plausible matches, **return th
 ```python
 import re
 
+# Common morphological variants. The user often writes the long form
+# ("including duty", "excluding food") while the data uses the short form
+# ("incl duty", "excl food") or vice versa. Always probe both.
+_MORPH_VARIANTS = [
+    ("including", "incl"), ("included", "incl"), ("inclusive", "incl"),
+    ("excluding", "excl"), ("excluded", "excl"), ("exclusive", "excl"),
+    ("not seasonally adjusted", "nsa"), ("seasonally adjusted", "sa"),
+    ("year over year", "yoy"), ("year on year", "yoy"),
+    ("year to date", "ytd"), ("month over month", "mom"),
+    ("quarter over quarter", "qoq"), ("through the cycle", "ttc"),
+]
+
+def _morph_expand(token):
+    """Return all morphological variants of a token (long ↔ short forms)."""
+    t = token.lower()
+    out = {t}
+    for long_, short_ in _MORPH_VARIANTS:
+        if long_ in t:
+            out.add(t.replace(long_, short_))
+        if short_ in t and (" " + short_ in t or t.startswith(short_ + " ") or t == short_):
+            out.add(t.replace(short_, long_))
+    return out
+
+
 def _required_tokens(question_text):
     """Pull tokens from a natural-language description that MUST appear in the matched column header.
 
     Includes: parenthetical hints, quoted literals, base-year tokens (YYYY=NN, NN=YYYY),
     units (per X, /X, %), and capitalized acronyms / category names.
+    Each returned token is actually a SET of acceptable variants — match if ANY variant appears.
     Generic — does not encode any domain.
     """
-    toks = []
-    # parentheticals
-    toks += [m.group(1).strip() for m in re.finditer(r"\(([^)]+)\)", question_text)]
-    # quoted strings
-    toks += re.findall(r'"([^"]+)"', question_text)
-    # base-year style "2015=100" / "100=2015"
-    toks += re.findall(r"\b\d{2,4}\s*=\s*\d{2,4}\b", question_text)
-    # units like "per kg", "/kg", "per capita", "% change"
-    toks += re.findall(r"per\s+\w+|/\w+|%\s*\w*", question_text, flags=re.I)
-    return [t for t in toks if t]
+    raw = []
+    raw += [m.group(1).strip() for m in re.finditer(r"\(([^)]+)\)", question_text)]
+    raw += re.findall(r'"([^"]+)"', question_text)
+    raw += re.findall(r"\b\d{2,4}\s*=\s*\d{2,4}\b", question_text)
+    raw += re.findall(r"per\s+\w+|/\w+|%\s*\w*", question_text, flags=re.I)
+    return [_morph_expand(t) for t in raw if t]
 
 
 def find_column_candidates(titles, question_text, must_contain=None, exclude_markers=None):
@@ -476,9 +497,14 @@ def find_column_candidates(titles, question_text, must_contain=None, exclude_mar
     titles: iterable of (col_idx, title_str)
     must_contain: list of explicit substrings (case-insensitive) the title MUST contain
     exclude_markers: list of substrings that disqualify a candidate (sub-series markers)
+
+    Returns a dict: {"strict": [...top matches...], "matched_token_groups": <int>}.
+    If `strict` is empty, the caller should NOT silently fall back to "shortest title overall" —
+    that picks something irrelevant. Instead, lower the bar one token at a time and re-rank,
+    or report the failure and let the orchestration layer ask the user.
     """
-    must = [s.lower() for s in (must_contain or [])]
-    must += [t.lower() for t in _required_tokens(question_text)]
+    must_strict = [s.lower() for s in (must_contain or [])]
+    must_groups = _required_tokens(question_text)  # list of sets of variants
     exclude = [s.lower() for s in (exclude_markers or [
         "contribution", "component", "excluding", "excl ", "excl.",
         "modelled", "modeled", "imputed", "historical", "forecast",
@@ -488,7 +514,10 @@ def find_column_candidates(titles, question_text, must_contain=None, exclude_mar
     candidates = []
     for col, title in titles:
         t = (title or "").lower()
-        if must and not all(s in t for s in must):
+        if must_strict and not all(s in t for s in must_strict):
+            continue
+        # Each group must have AT LEAST ONE variant present in the title
+        if must_groups and not all(any(v in t for v in group) for group in must_groups):
             continue
         is_subseries = any(m in t for m in exclude)
         candidates.append({
@@ -498,24 +527,25 @@ def find_column_candidates(titles, question_text, must_contain=None, exclude_mar
         })
     # Rank: non-subseries first, then shortest title (parsimony)
     candidates.sort(key=lambda x: (x["is_subseries"], x["len"]))
-    return candidates
+    return {"strict": candidates, "matched_token_groups": len(must_groups)}
 
 
 # Usage:
 # titles = [(c, ws.cell(header_row, c).value) for c in range(1, ws.max_column+1)]
-# cands  = find_column_candidates(titles, user_question, must_contain=["all items"])
-# if not cands:
-#     # filter too strict — relax must_contain by one token and retry
-#     ...
-# elif len(cands) == 1:
+# result = find_column_candidates(titles, user_question, must_contain=["all items"])
+# cands  = result["strict"]
+# if cands:
 #     pick = cands[0]
+#     # If len(cands) > 3, also print runners-up so the trajectory shows the alternatives
 # else:
-#     # >1 plausible match — print top 5 and either pick the top-ranked one
-#     # OR return all of them as candidates in the payload for user review.
-#     for c in cands[:5]:
-#         print(f"  col={c['col']}  len={c['len']}  sub={c['is_subseries']}  {c['title']!r}")
-#     pick = cands[0]
+#     # The strict filter rejected EVERYTHING. Do NOT fall back to "shortest overall" —
+#     # that returns an irrelevant series. Instead drop the most-restrictive token
+#     # one at a time and retry, or surface the failure as a candidate-list response
+#     # so the orchestrator can ask the user to clarify.
+#     pass
 ```
+
+> **Critical anti-pattern:** if `find_column_candidates` returns `[]`, do *not* re-run the search with no constraints and pick the shortest title. The shortest title in a wide schema is almost always something innocuous and unrelated (e.g. "Soft drinks") and you will silently submit a wrong answer. When all required tokens fail to match, the right move is to *report the gap* — print the question, the tokens you required, and the closest near-misses — then either drop the weakest token and retry once, or return the near-misses as candidates for human review.
 
 ### 4. Always verify the pick
 
