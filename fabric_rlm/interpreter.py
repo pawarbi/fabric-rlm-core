@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .artifacts import encode_for_worker
+from .security import SecurityPolicy
 
 
 class WorkerTimeout(TimeoutError):
@@ -68,10 +69,17 @@ class Interpreter:
         timeout: float = 300.0,
         python: str | None = None,
         cwd: str | None = None,
+        security: SecurityPolicy | None = None,
     ):
         self.timeout = timeout
         self.python = python or sys.executable
         self.cwd = cwd
+        # ``security`` is opt-in at this layer (None = no enforcement). The
+        # public RLM facade is responsible for passing a default policy in
+        # for LM-facing executions; verifier code paths intentionally leave
+        # this None because verifier code is trusted, internal, and may need
+        # APIs the policy would otherwise reject.
+        self.security: SecurityPolicy | None = security
         self.proc: subprocess.Popen[str] | None = None
         self._stdout_queue: queue.Queue[str | None] = queue.Queue()
         self._stdout_thread: threading.Thread | None = None
@@ -94,6 +102,10 @@ class Interpreter:
             "bufsize": 1,
             "cwd": self.cwd,
         }
+        # Scrub secret-bearing env vars from the worker if a policy is set.
+        # Without this branch the child inherits the parent env wholesale.
+        if self.security is not None and self.security.enabled:
+            kwargs["env"] = self.security.scrub_env(dict(os.environ))
         if os.name == "nt":
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
@@ -109,6 +121,27 @@ class Interpreter:
         return self
 
     def execute(self, code: str) -> ExecResult:
+        # Apply the security policy parent-side. On rejection, fabricate an
+        # ExecResult that looks like a failed turn so the RLM loop's existing
+        # error-recovery path kicks in (model sees stderr, retries with a
+        # different approach). on_violation="raise" surfaces the violation
+        # as an exception instead — used by tests and strict callers.
+        if self.security is not None and self.security.enabled:
+            violation = self.security.validate_code(code)
+            if violation is not None:
+                if self.security.on_violation == "raise":
+                    from .security import SecurityViolation
+
+                    raise SecurityViolation(violation)
+                # Default: feedback to the loop.
+                return ExecResult(
+                    ok=False,
+                    submitted=False,
+                    stdout="",
+                    stderr=violation,
+                    state={},
+                    error=violation,
+                )
         raw = self._request({"op": "exec", "code": code})
         return ExecResult.from_response(raw)
 
@@ -260,6 +293,7 @@ class SubprocessPythonInterpreter:
         start_timeout: float = 15.0,
         python: str | None = None,
         cwd: str | None = None,
+        security: SecurityPolicy | None = None,
     ) -> None:
         self.tools: dict[str, Callable[..., Any]] = dict(tools) if tools else {}
         self.output_fields = output_fields
@@ -267,6 +301,9 @@ class SubprocessPythonInterpreter:
         self.start_timeout = start_timeout
         self.python = python or sys.executable
         self.cwd = cwd
+        # See ``Interpreter.__init__`` — opt-in at this layer; ``RLM`` is the
+        # public surface that defaults this on for LM-facing code.
+        self.security: SecurityPolicy | None = security
 
         self._proc: subprocess.Popen[str] | None = None
         self._stdout_queue: queue.Queue[str | None] = queue.Queue()
@@ -317,6 +354,10 @@ class SubprocessPythonInterpreter:
         cmd.extend(["-m", "fabric_rlm._worker"])
 
         env = {**os.environ, "PYTHONPATH": self._compute_pythonpath()}
+        if self.security is not None and self.security.enabled:
+            # Scrub secrets from the worker env. PYTHONPATH was set above and
+            # is on the policy's default keep list, so it survives the scrub.
+            env = self.security.scrub_env(env)
 
         kwargs: dict[str, Any] = {
             "stdin": subprocess.PIPE,
@@ -397,6 +438,21 @@ class SubprocessPythonInterpreter:
 
     def execute(self, code: str, variables: dict[str, Any] | None = None) -> Any:
         FinalOutput, CodeInterpreterError = _import_dspy_code_interpreter()
+
+        # Parent-side security policy. On v7 we raise CodeInterpreterError
+        # (the dspy contract) rather than fabricating a FinalOutput — the
+        # dspy.RLM loop reads CodeInterpreterError as a recoverable turn
+        # error and feeds the message back to the LM. This matches how
+        # syntax/runtime errors are surfaced today.
+        if self.security is not None and self.security.enabled:
+            violation = self.security.validate_code(code)
+            if violation is not None:
+                if self.security.on_violation == "raise":
+                    from .security import SecurityViolation
+
+                    raise SecurityViolation(violation)
+                raise CodeInterpreterError(violation)
+
         if self._proc is None or self._proc.poll() is not None:
             self.start()
         if not self._tools_registered:

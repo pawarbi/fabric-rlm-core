@@ -188,9 +188,7 @@ Decision rule:
 
 1. **DuckDB** — best for any structured-or-semi-structured file you will query more than once. Pre-installed in the Fabric Python runtime; just `import duckdb`.
 2. **polars** — also pre-installed in Fabric; great for lazy scans (`pl.scan_csv`, `pl.scan_parquet`) when you want a DataFrame API.
-3. **ripgrep (`rg`)** — fastest first-pass needle-in-haystack on plain text. May NOT be installed; check with `shutil.which("rg")` first.
-4. **Python streaming (`for line in open(...)`)** — universal fallback when DuckDB / polars / ripgrep are unavailable or the pattern is too irregular.
-5. **`grep`** — last resort on Unix-only environments without ripgrep.
+3. **Python streaming (`for line in open(...)`)** — universal fallback when DuckDB / polars are unavailable or the pattern is too irregular. The default `SecurityPolicy` blocks `subprocess` / `os.system`, so external shell tools like `rg` or `grep` are not available — stay inside Python.
 
 > Do not waste a turn on `%pip install duckdb` or `polars` — both ship with the Fabric Python runtime. Just import.
 
@@ -220,30 +218,7 @@ con.execute("CREATE TABLE t AS SELECT * FROM read_csv_auto(?)", [path])
 con.execute("CREATE TABLE t AS SELECT * FROM read_parquet(?)", [path])
 ```
 
-## Pattern B — ripgrep first-pass narrowing
-
-When the file is huge AND the answer is sparse (a few hundred matching lines), narrow with ripgrep first then process the small result set in Python or DuckDB.
-
-```python
-import subprocess, shutil
-rg = shutil.which("rg") or shutil.which("ripgrep")
-if rg:
-    out = subprocess.check_output(
-        [rg, "-n", "OutOfMemoryError", path],
-        text=True, errors="replace"
-    )
-    lines = out.splitlines()
-else:
-    lines = []
-    with open(path, "r", errors="replace") as f:
-        for ln in f:
-            if "OutOfMemoryError" in ln:
-                lines.append(ln.rstrip())
-print("matches:", len(lines))
-print("first 3:", lines[:3])
-```
-
-## Pattern C — Python streaming (always works)
+## Pattern B — Python streaming (always works)
 
 ```python
 import re
@@ -261,6 +236,11 @@ slow.sort(reverse=True)
 print({"oom": oom, "top3": slow[:3]})
 ```
 
+> External shell tools (`subprocess`, `os.system`, ripgrep CLI, …) are
+> blocked by the default `SecurityPolicy`. Stay inside Python — the
+> streaming pattern above is comparable in performance for the line
+> counts we typically see and works on every platform.
+
 ## Result-size preflight
 
 Before fetching unbounded results into stdout, bound the output. If your query has no `LIMIT`, no `count()`, and no `GROUP BY`, prepend a `count(*)` query first to see the cardinality. Anything over ~1000 rows should be aggregated, sampled, or summarised — never printed in full.
@@ -277,7 +257,7 @@ Before fetching unbounded results into stdout, bound the output. If your query h
 
 ## Graceful degradation
 
-DuckDB and ripgrep are OPTIONAL. Always wrap imports/lookups defensively:
+DuckDB is OPTIONAL. Always wrap imports defensively:
 
 ```python
 try:
@@ -285,12 +265,9 @@ try:
     HAS_DUCKDB = True
 except ImportError:
     HAS_DUCKDB = False
-
-import shutil
-RG = shutil.which("rg")
 ```
 
-If both are missing, fall back to Pattern C (pure-Python streaming). The skill is about strategy, not specific binaries.
+If DuckDB is missing, fall back to Pattern B (pure-Python streaming). The skill is about strategy, not specific binaries.
 
 ---
 
