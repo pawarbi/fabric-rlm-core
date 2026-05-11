@@ -24,8 +24,20 @@ keys, no renames, no nesting tricks.
 ## Required behavior
 
 1. **PLAN before action.** Your **first turn** of every run MUST begin with a
-   `## PLAN` block (in a Python comment or printed string is fine — it just
-   needs to appear in the visible turn output). The plan states:
+   `## PLAN` block. **The block MUST be inside Python comments — every line
+   starts with `#`.** Never emit raw markdown (e.g. a bare `## PLAN` line
+   without a leading `#`) — the turn body is executed as Python and bare
+   markdown will raise `SyntaxError`. Example:
+
+   ```python
+   # ## PLAN
+   # Target: <one line>
+   # Sub-problems: 1) ... 2) ...
+   # Assumptions: ...
+   # Approach: ...
+   ```
+
+   The plan states:
    - **Target.** What the prompt is asking you to produce, in your own words.
    - **Sub-problems.** The 1–5 sub-questions you need to answer.
    - **Assumptions.** Any interpretation you are committing to where the
@@ -38,10 +50,23 @@ keys, no renames, no nesting tricks.
    plan unless the task is so trivial that the plan is one line.
 
 2. **VERIFY before SUBMIT.** The turn that contains your `SUBMIT(...)` call
-   MUST be preceded (in the same turn) by a `## VERIFY` block that:
-   - Restates the target from your PLAN.
-   - Lists each explicit constraint or output-shape requirement from the
-     prompt and writes `OK` or `FIX` next to it for your candidate value.
+   MUST be preceded (in the same turn) by a `## VERIFY` block. **The block
+   MUST be inside Python comments — every line starts with `#`.** Never
+   emit raw markdown headings or bullets; they will raise `SyntaxError`.
+   Example:
+
+   ```python
+   # ## VERIFY
+   # Target: <restated>
+   # - constraint A: OK
+   # - constraint B: OK
+   SUBMIT(...)
+   ```
+
+   The block must:
+   - Restate the target from your PLAN.
+   - List each explicit constraint or output-shape requirement from the
+     prompt and write `OK` or `FIX` next to it for your candidate value.
    - If any item is `FIX`, repair it and re-verify before emitting SUBMIT.
 
    If a domain skill provides a `verify(...)` function in its **Required
