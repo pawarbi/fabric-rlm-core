@@ -147,7 +147,8 @@ def test_from_dicts_backward_compat_fills_missing_optionals() -> None:
 
 
 def test_summary_basic_shape() -> None:
-    s = _make_traj().summary()
+    s = _make_traj()
+    s = s.summary()
     assert s["turns"] == 2
     assert s["submitted"] is True
     assert s["submit_turn"] == 2
@@ -157,6 +158,24 @@ def test_summary_basic_shape() -> None:
     assert s["completion_tokens"] == 35
     assert s["total_tokens"] == 255
     assert s["lm_seconds"] == 1.5
+
+
+def test_summary_returns_none_for_uninstrumented_tokens() -> None:
+    """When no turn carries token data, summary() returns None — not 0 — so
+    dashboards can distinguish "not instrumented" from "zero usage"."""
+    traj = Trajectory()
+    traj.append(
+        TurnRecord(
+            turn=1, code="pass", stdout="", stderr="", error=None, submitted=False, state={}
+        )
+    )
+    s = traj.summary()
+    assert s["prompt_tokens"] is None
+    assert s["completion_tokens"] is None
+    assert s["total_tokens"] is None
+    assert s["cached_tokens"] is None
+    assert s["reasoning_tokens"] is None
+    assert s["lm_seconds"] is None
 
 
 def test_summary_counts_error_kinds() -> None:
@@ -231,8 +250,10 @@ def test_diagnose_python_comment_heading_is_not_flagged() -> None:
 
 
 def test_diagnose_finds_repeated_error() -> None:
+    """Detector requires 3 consecutive same-class errors to fire (avoids
+    false-positives during normal recovery cycles)."""
     traj = Trajectory()
-    for i in range(1, 4):
+    for i in range(1, 5):
         traj.append(
             TurnRecord(
                 turn=i,
@@ -245,7 +266,47 @@ def test_diagnose_finds_repeated_error() -> None:
             )
         )
     repeated = [i for i in traj.diagnose() if i.kind == "repeated_error"]
-    assert repeated, "Expected repeated_error detector to fire"
+    assert len(repeated) == 1
+    msg = repeated[0].message
+    assert "consecutive" in msg
+    assert "SyntaxError" in msg
+    # Streak length and end turn should be reported so user sees how long the loop ran.
+    assert "4" in msg
+
+
+def test_diagnose_does_not_fire_repeated_error_on_two() -> None:
+    traj = Trajectory()
+    for i in range(1, 3):
+        traj.append(
+            TurnRecord(
+                turn=i,
+                code="x =",
+                stdout="",
+                stderr="",
+                error="SyntaxError: invalid syntax",
+                submitted=False,
+                state={},
+            )
+        )
+    assert [i for i in traj.diagnose() if i.kind == "repeated_error"] == []
+
+
+def test_diagnose_does_not_flag_python_type_annotations() -> None:
+    """Real Python like ``Result: dict = {}`` must NOT trip markdown_in_code."""
+    traj = Trajectory()
+    traj.append(
+        TurnRecord(
+            turn=1,
+            code='Result: dict[str, int] = {}\nResponse: str = "ok"\nFinalAnswer: list = []',
+            stdout="",
+            stderr="",
+            error=None,
+            submitted=False,
+            state={},
+        )
+    )
+    md = [i for i in traj.diagnose() if i.kind == "markdown_in_code"]
+    assert md == [], f"False positive on type annotations: {md}"
 
 
 def test_diagnose_finds_noop_turn() -> None:
@@ -289,6 +350,39 @@ def test_diagnose_finds_token_cliff() -> None:
     cliffs = [i for i in traj.diagnose() if i.kind == "token_cliff"]
     assert len(cliffs) == 1
     assert cliffs[0].turn == 5
+
+
+def test_diagnose_token_cliff_handles_two_cliffs() -> None:
+    """Baseline excludes the cliff turn itself, so two true cliffs both fire
+    even though their presence inflates the naive overall mean."""
+    traj = Trajectory()
+    for i in [1, 2, 3, 4]:
+        traj.append(
+            TurnRecord(
+                turn=i,
+                code="pass",
+                stdout="",
+                stderr="",
+                error=None,
+                submitted=False,
+                state={},
+                prompt_tokens=500,
+            )
+        )
+    traj.append(
+        TurnRecord(
+            turn=5, code="pass", stdout="", stderr="", error=None, submitted=False,
+            state={}, prompt_tokens=80000,
+        )
+    )
+    traj.append(
+        TurnRecord(
+            turn=6, code="pass", stdout="", stderr="", error=None, submitted=False,
+            state={}, prompt_tokens=80000,
+        )
+    )
+    cliffs = [i for i in traj.diagnose() if i.kind == "token_cliff"]
+    assert {c.turn for c in cliffs} == {5, 6}
 
 
 def test_issue_is_serializable() -> None:
@@ -335,3 +429,96 @@ def test_cli_trace_inspect_no_diagnose_skips_issues() -> None:
     )
     payload = json.loads(result.stdout)
     assert payload["issues"] == []
+
+
+def test_cli_trace_inspect_accepts_stdin() -> None:
+    """``-`` reads from stdin so users can pipe Spark/notebookutils output in."""
+    payload = BUG_TRACE.read_text(encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-m", "fabric_rlm.cli", "trace", "inspect", "-", "--json"],
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    out = json.loads(result.stdout)
+    assert out["summary"]["turns"] >= 1
+    assert any(i["kind"] == "markdown_in_code" for i in out["issues"])
+
+
+def test_cli_trace_inspect_fail_on_issues_exits_nonzero() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "fabric_rlm.cli", "trace", "inspect", str(BUG_TRACE), "--fail-on-issues", "--json"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload["issues"]
+
+
+def test_cli_trace_inspect_fail_on_issues_clean_exits_zero() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "fabric_rlm.cli", "trace", "inspect", str(CLEAN_TRACE), "--fail-on-issues", "--json"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Remote URI handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "abfss://container@account.dfs.core.windows.net/traces/x.jsonl",
+        "s3://bucket/traces/x.jsonl",
+        "https://example.com/x.jsonl",
+        "gs://bucket/x.jsonl",
+    ],
+)
+def test_from_jsonl_rejects_remote_uri_with_actionable_message(uri: str) -> None:
+    """Library is dependency-free; users must pre-read remote files with their
+    own client (notebookutils / fsspec / mlflow.artifacts / Spark) and pass a
+    file-like, line iterable, or parsed dicts. The error message must say so."""
+    with pytest.raises(ValueError) as exc:
+        Trajectory.from_jsonl(uri)
+    msg = str(exc.value).lower()
+    assert "not supported" in msg or "uri" in msg
+    # At least one of the suggested clients should be mentioned.
+    assert any(hint in msg for hint in ("notebookutils", "fsspec", "mlflow", "spark"))
+
+
+# ---------------------------------------------------------------------------
+# Spark Row duck-typing
+# ---------------------------------------------------------------------------
+
+
+class _FakeSparkRow:
+    """Minimal stub mimicking pyspark.sql.Row's .asDict(recursive=...) API."""
+
+    def __init__(self, **kw: Any) -> None:
+        self._d = kw
+
+    def asDict(self, recursive: bool = False) -> dict[str, Any]:
+        return dict(self._d)
+
+
+def test_from_dicts_accepts_spark_like_rows() -> None:
+    rows = [
+        _FakeSparkRow(metadata={"skills": ["core"]}),
+        _FakeSparkRow(turn=1, code="pass", stdout="", stderr="", error=None, submitted=False, state={}),
+        _FakeSparkRow(turn=2, code='SUBMIT({"a": 1})', stdout="", stderr="", error=None, submitted=True, state={}),
+    ]
+    traj = Trajectory.from_dicts(rows)
+    assert traj.metadata == {"skills": ["core"]}
+    assert len(traj) == 2
+    assert traj.turns[1].submitted is True
+
+
+def test_from_dicts_rejects_non_dict_non_row() -> None:
+    with pytest.raises(TypeError):
+        Trajectory.from_dicts([42])

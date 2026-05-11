@@ -36,6 +36,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip diagnostic checks (summary only)",
     )
+    inspect_p.add_argument(
+        "--fail-on-issues",
+        action="store_true",
+        help="Exit with non-zero status when diagnose() finds any issue (CI-friendly)",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "run":
@@ -88,27 +93,32 @@ def _trace_inspect(args: argparse.Namespace) -> int:
     issues = [] if args.no_diagnose else traj.diagnose()
     if args.json:
         print(json.dumps({"summary": summary, "issues": [i.to_dict() for i in issues]}, indent=2))
-        return 0
-    _print_human(args.path, summary, issues)
+    else:
+        _print_human(args.path, summary, issues)
+    if getattr(args, "fail_on_issues", False) and issues:
+        return 1
     return 0
 
 
 def _print_human(path: str, summary: dict[str, Any], issues: list[Any]) -> None:
+    def _fmt(v: Any) -> str:
+        return f"{v:,}" if isinstance(v, int) else "n/a"
+
     print(f"Trajectory: {path}")
     print(f"  turns         : {summary['turns']}")
     print(f"  submitted     : {summary['submitted']}" + (f" (turn {summary['submit_turn']})" if summary["submit_turn"] else ""))
     print(f"  errors        : {summary['errors']}" + (f" {summary['error_kinds']}" if summary["error_kinds"] else ""))
     print(
-        f"  tokens        : prompt={summary['prompt_tokens']:,} "
-        f"completion={summary['completion_tokens']:,} "
-        f"total={summary['total_tokens']:,}"
+        f"  tokens        : prompt={_fmt(summary['prompt_tokens'])} "
+        f"completion={_fmt(summary['completion_tokens'])} "
+        f"total={_fmt(summary['total_tokens'])}"
     )
     if summary["cached_tokens"] or summary["reasoning_tokens"]:
         print(
-            f"                  cached={summary['cached_tokens']:,} "
-            f"reasoning={summary['reasoning_tokens']:,}"
+            f"                  cached={_fmt(summary['cached_tokens'])} "
+            f"reasoning={_fmt(summary['reasoning_tokens'])}"
         )
-    print(f"  lm_seconds    : {summary['lm_seconds']}")
+    print(f"  lm_seconds    : {summary['lm_seconds'] if summary['lm_seconds'] is not None else 'n/a'}")
     if summary["metadata"]:
         meta = summary["metadata"]
         skills = meta.get("skills") or []
