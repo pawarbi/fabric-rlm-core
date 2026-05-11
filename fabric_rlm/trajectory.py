@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
@@ -78,6 +79,133 @@ class TurnRecord:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+# ---------------------------------------------------------------------------
+# Azure storage URI loading (Fabric / Synapse)
+#
+# The library is dependency-free. We import notebookutils / mssparkutils /
+# fsspec lazily so the only cost of supporting Lakehouse URIs is a try/except
+# at call time. ``/lakehouse/default/Files/...`` paths are regular FUSE-
+# mounted files and need no special handling — they go through Path.read_text.
+# ---------------------------------------------------------------------------
+
+
+_AZURE_STORAGE_SCHEMES = frozenset({"abfss", "abfs", "wasbs", "wasb"})
+
+
+def _try_import(name: str) -> Any:
+    try:
+        return __import__(name)
+    except ImportError:
+        return None
+
+
+def _redact_uri(uri: str) -> str:
+    """Strip query/fragment from a URI before including it in user-facing
+    messages. Azure Storage URIs can contain SAS tokens in their query
+    string and we must never echo those back to logs / notebook output."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        parts = urlsplit(uri)
+    except ValueError:
+        return uri
+    if not parts.query and not parts.fragment:
+        return uri
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "<redacted>" if parts.query else "", ""))
+
+
+def _iter_fabric_fs_candidates() -> Iterator[Any]:
+    """Yield candidate Fabric/Synapse ``fs`` objects, in priority order.
+
+    Tries (in order):
+    * ``notebookutils.fs`` (current Fabric)
+    * ``notebookutils.mssparkutils.fs`` (Synapse-compat shim some runtimes expose)
+    * ``mssparkutils.fs`` (older Synapse Spark)
+
+    Each candidate is yielded only if its ``fs`` attribute exists, so callers
+    can stop at the first one whose ``cp()`` succeeds.
+    """
+    nu = _try_import("notebookutils")
+    if nu is not None:
+        fs = getattr(nu, "fs", None)
+        if fs is not None:
+            yield fs
+        shim = getattr(nu, "mssparkutils", None)
+        if shim is not None:
+            fs = getattr(shim, "fs", None)
+            if fs is not None:
+                yield fs
+    ms = _try_import("mssparkutils")
+    if ms is not None:
+        fs = getattr(ms, "fs", None)
+        if fs is not None:
+            yield fs
+
+
+def _read_via_notebookutils(uri: str) -> str | None:
+    """Read a remote text file by copying through a local temp file.
+
+    Returns ``None`` if no Fabric/Synapse ``fs`` API is importable (i.e.
+    we're outside those runtimes). Uses ``fs.cp`` rather than ``fs.head``
+    because head truncates to ~1MB by default. Copies into a fresh
+    ``TemporaryDirectory`` so the destination path is guaranteed not to
+    pre-exist (some ``cp()`` implementations reject existing destinations)
+    and the temp file is cleaned up in all paths.
+    """
+    fs = next(_iter_fabric_fs_candidates(), None)
+    if fs is None:
+        return None
+    with tempfile.TemporaryDirectory(prefix="fabric_rlm_trace_") as tmpdir:
+        tmp_path = Path(tmpdir) / "trace.jsonl"
+        # Fabric expects file URIs for the local destination.
+        fs.cp(uri, f"file:{tmp_path}")
+        return tmp_path.read_text(encoding="utf-8")
+
+
+def _read_via_fsspec(uri: str) -> str | None:
+    """Read a remote text file via fsspec (uses adlfs for abfs/abfss)."""
+    fsspec = _try_import("fsspec")
+    if fsspec is None:
+        return None
+    try:
+        with fsspec.open(uri, "r", encoding="utf-8") as fh:
+            return fh.read()
+    except ImportError as exc:
+        # fsspec raises ImportError when the protocol-specific backend
+        # (adlfs for abfss) isn't installed. Surface that as actionable.
+        raise ImportError(
+            f"fsspec is installed but cannot read {_redact_uri(uri)!r}: {exc}. "
+            "For Azure Storage URIs install adlfs (`pip install adlfs`)."
+        ) from exc
+
+
+def _read_azure_storage_text(uri: str) -> str:
+    """Read text content from an Azure Storage URI.
+
+    Tries Fabric/Synapse ``notebookutils`` first (handles AAD/MSI auth
+    transparently inside Fabric), then falls back to ``fsspec`` /
+    ``adlfs``. Raises ``ImportError`` if neither is available.
+
+    A reader that *is* available but *fails* (e.g., permission denied,
+    not found) aborts the chain — we do not silently retry under a
+    different identity, because that would mask auth/permission errors.
+    """
+    safe_uri = _redact_uri(uri)
+    for reader in (_read_via_notebookutils, _read_via_fsspec):
+        try:
+            text = reader(uri)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to read {safe_uri!r}: {exc}") from exc
+        if text is not None:
+            return text
+    raise ImportError(
+        f"To read {safe_uri!r} you must run inside Fabric/Synapse (so "
+        "``notebookutils`` or ``mssparkutils`` is importable) or install "
+        "``fsspec`` + ``adlfs``. Alternatively, read the bytes yourself and "
+        "pass the text/iterable/dicts to Trajectory.from_jsonl/from_dicts."
+    )
 
 
 @dataclass
@@ -207,30 +335,62 @@ class Trajectory:
     def from_jsonl(cls, source: str | Path | Any) -> "Trajectory":
         """Load a Trajectory from a JSONL source.
 
-        ``source`` may be a path (``str`` / ``Path``), a file-like object
-        with ``.read()``, or any iterable of bytes/str lines.
+        ``source`` may be:
 
-        Remote URIs (``abfss://``, ``s3://``, ``https://``, etc.) are not
-        opened directly — pass a path-like to a string and we will try to
-        read it as a local file, which will fail clearly if it is a URI.
-        For Fabric Lakehouse / MLflow / cloud storage, read the bytes with
-        your own client (notebookutils, fsspec, mlflow.artifacts, Spark)
-        and pass the file-like, line iterable, or parsed dicts here. This
-        keeps the library dependency-free.
+        * A local path (``str`` / ``Path``). Lakehouse-mounted paths like
+          ``/lakehouse/default/Files/traces/x.jsonl`` are regular files on
+          Fabric Spark and work without any extra setup. ``file://`` URIs
+          pointing at the local machine are also accepted and converted
+          back to a filesystem path.
+        * An Azure storage URI (``abfss://``, ``abfs://``, ``wasbs://``,
+          ``wasb://``). These are read via Fabric's ``notebookutils.fs`` /
+          ``mssparkutils.fs`` (preferred) or ``fsspec`` if installed. Both
+          are imported lazily so the library stays dependency-free.
+        * A file-like object with ``.read()``, or any iterable of
+          bytes/str lines.
+
+        Other remote schemes (``s3://``, ``https://``, ``gs://``) are not
+        opened directly: read the bytes with your own client and pass the
+        file-like, line iterable, or parsed dicts here.
+
+        Note: any query/fragment in URIs is stripped from error messages
+        so SAS tokens or other credentials in the URI are not echoed to
+        notebook output or logs.
         """
 
         if isinstance(source, (str, Path)):
+            from urllib.parse import urlsplit
+            from urllib.request import url2pathname
+
             text_source = str(source)
-            if "://" in text_source:
+            parts = urlsplit(text_source)
+            # urlsplit treats Windows drive letters (e.g. ``C:\...``) as a
+            # one-char scheme. Real URI schemes are always >1 character.
+            scheme = parts.scheme.lower() if len(parts.scheme) > 1 else ""
+            if scheme in _AZURE_STORAGE_SCHEMES:
+                text = _read_azure_storage_text(text_source)
+                lines: Iterable[str] = text.splitlines()
+            elif scheme == "file":
+                # ``file://`` URIs are local if netloc is empty or localhost.
+                if parts.netloc not in ("", "localhost"):
+                    raise ValueError(
+                        f"file:// URI with non-local host "
+                        f"{_redact_uri(text_source)!r} is not supported."
+                    )
+                local_path = url2pathname(parts.path)
+                text = Path(local_path).read_text(encoding="utf-8")
+                lines = text.splitlines()
+            elif scheme:
                 raise ValueError(
-                    f"Remote URI {text_source!r} is not supported directly. "
-                    "Read the bytes with your own client (notebookutils / "
-                    "fsspec / mlflow.artifacts / Spark) and pass the "
+                    f"Remote URI {_redact_uri(text_source)!r} is not supported "
+                    "directly. Read the bytes with your own client (fsspec / "
+                    "mlflow.artifacts / Spark / requests) and pass the "
                     "file-like, line iterable, or parsed dicts to "
                     "Trajectory.from_jsonl() or Trajectory.from_dicts()."
                 )
-            text = Path(source).read_text(encoding="utf-8")
-            lines: Iterable[str] = text.splitlines()
+            else:
+                text = Path(source).read_text(encoding="utf-8")
+                lines = text.splitlines()
         elif hasattr(source, "read"):
             text = source.read()
             if isinstance(text, bytes):

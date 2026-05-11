@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -474,22 +475,275 @@ def test_cli_trace_inspect_fail_on_issues_clean_exits_zero() -> None:
 @pytest.mark.parametrize(
     "uri",
     [
-        "abfss://container@account.dfs.core.windows.net/traces/x.jsonl",
         "s3://bucket/traces/x.jsonl",
         "https://example.com/x.jsonl",
         "gs://bucket/x.jsonl",
     ],
 )
-def test_from_jsonl_rejects_remote_uri_with_actionable_message(uri: str) -> None:
-    """Library is dependency-free; users must pre-read remote files with their
-    own client (notebookutils / fsspec / mlflow.artifacts / Spark) and pass a
-    file-like, line iterable, or parsed dicts. The error message must say so."""
+def test_from_jsonl_rejects_non_azure_remote_uri_with_actionable_message(uri: str) -> None:
+    """Non-Azure remote URIs aren't natively supported. The error must tell
+    the user to read the bytes with their own client and pass file-like /
+    iterable / dicts to the loader."""
     with pytest.raises(ValueError) as exc:
         Trajectory.from_jsonl(uri)
     msg = str(exc.value).lower()
     assert "not supported" in msg or "uri" in msg
-    # At least one of the suggested clients should be mentioned.
-    assert any(hint in msg for hint in ("notebookutils", "fsspec", "mlflow", "spark"))
+    assert any(hint in msg for hint in ("fsspec", "mlflow", "spark", "requests"))
+
+
+def test_from_jsonl_lakehouse_fuse_path_reads_as_local_file(tmp_path: Path) -> None:
+    """``/lakehouse/default/Files/...`` is a regular FUSE-mounted path on
+    Fabric Spark; from a code path point of view it's just an absolute file
+    path. We simulate it with a temp file and confirm no special handling
+    is needed and no scheme-rejection happens."""
+    fake_lakehouse_file = tmp_path / "lakehouse_like.jsonl"
+    fake_lakehouse_file.write_text(
+        BUG_TRACE.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    traj = Trajectory.from_jsonl(str(fake_lakehouse_file))
+    assert len(traj) > 0
+    assert traj.metadata  # envelope round-tripped
+
+
+# ---------------------------------------------------------------------------
+# Azure storage URI loading (Fabric / Synapse)
+# ---------------------------------------------------------------------------
+
+
+class _FakeFs:
+    """Mimics notebookutils.fs.cp(src, "file:/tmp/...") by writing local file."""
+
+    def __init__(self, payload: str) -> None:
+        self.payload = payload
+        self.calls: list[tuple[str, str]] = []
+
+    def cp(self, src: str, dst: str) -> None:
+        self.calls.append((src, dst))
+        # Strip the ``file:`` prefix Fabric uses for the destination.
+        local = dst[len("file:") :] if dst.startswith("file:") else dst
+        Path(local).write_text(self.payload, encoding="utf-8")
+
+
+def _install_fake_notebookutils(
+    monkeypatch: pytest.MonkeyPatch, payload: str
+) -> _FakeFs:
+    """Inject a fake ``notebookutils`` module into ``sys.modules`` so the
+    lazy-import path inside trajectory.py picks it up. We also clear any
+    previously-imported ``mssparkutils`` to make the test order-independent."""
+    import types
+
+    fs = _FakeFs(payload)
+    fake = types.ModuleType("notebookutils")
+    fake.fs = fs  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "notebookutils", fake)
+    monkeypatch.setitem(sys.modules, "mssparkutils", fake)
+    return fs
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "abfss://container@account.dfs.core.windows.net/traces/x.jsonl",
+        "abfs://container@account.dfs.core.windows.net/x.jsonl",
+        "wasbs://container@account.blob.core.windows.net/x.jsonl",
+        "wasb://container@account.blob.core.windows.net/x.jsonl",
+    ],
+)
+def test_from_jsonl_loads_azure_uri_via_notebookutils(
+    monkeypatch: pytest.MonkeyPatch, uri: str
+) -> None:
+    payload = BUG_TRACE.read_text(encoding="utf-8")
+    fs = _install_fake_notebookutils(monkeypatch, payload)
+    traj = Trajectory.from_jsonl(uri)
+    assert len(traj) > 0
+    # cp() was called exactly once with the supplied URI and a file: dest.
+    assert len(fs.calls) == 1
+    src, dst = fs.calls[0]
+    assert src == uri
+    assert dst.startswith("file:")
+    # Diagnose still works on the loaded trajectory.
+    assert any(i.kind == "markdown_in_code" for i in traj.diagnose())
+
+
+def test_from_jsonl_uses_synapse_compat_fs_when_top_level_fs_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Some Synapse runtimes ship ``notebookutils`` without a top-level
+    ``.fs`` attribute; the usable API is ``notebookutils.mssparkutils.fs``.
+    The reader must walk the candidate chain instead of giving up."""
+    import types
+
+    payload = CLEAN_TRACE.read_text(encoding="utf-8")
+    fs = _FakeFs(payload)
+
+    shim = types.ModuleType("notebookutils.mssparkutils")
+    shim.fs = fs  # type: ignore[attr-defined]
+    fake_nu = types.ModuleType("notebookutils")
+    fake_nu.mssparkutils = shim  # type: ignore[attr-defined]
+    # Deliberately NO `.fs` on the top-level notebookutils module.
+
+    monkeypatch.setitem(sys.modules, "notebookutils", fake_nu)
+    monkeypatch.delitem(sys.modules, "mssparkutils", raising=False)
+
+    traj = Trajectory.from_jsonl("abfss://account/x.jsonl")
+    assert len(traj) > 0
+    assert len(fs.calls) == 1
+
+
+def test_from_jsonl_azure_uri_falls_back_to_fsspec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When notebookutils/mssparkutils are absent, fsspec should be tried."""
+    import types
+
+    monkeypatch.delitem(sys.modules, "notebookutils", raising=False)
+    monkeypatch.delitem(sys.modules, "mssparkutils", raising=False)
+
+    # Block real notebookutils/mssparkutils imports; allow everything else.
+    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__  # type: ignore[index]
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name in {"notebookutils", "mssparkutils"}:
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    payload = CLEAN_TRACE.read_text(encoding="utf-8")
+    fake_fsspec = types.ModuleType("fsspec")
+
+    class _Ctx:
+        def __init__(self, text: str) -> None:
+            self._text = text
+
+        def __enter__(self) -> "_Ctx":
+            return self
+
+        def __exit__(self, *exc: Any) -> None:
+            return None
+
+        def read(self) -> str:
+            return self._text
+
+    fake_fsspec.open = lambda uri, *a, **kw: _Ctx(payload)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fsspec", fake_fsspec)
+
+    traj = Trajectory.from_jsonl(
+        "abfss://container@account.dfs.core.windows.net/traces/x.jsonl"
+    )
+    assert len(traj) > 0
+
+
+def test_from_jsonl_azure_uri_without_any_client_raises_helpful_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delitem(sys.modules, "notebookutils", raising=False)
+    monkeypatch.delitem(sys.modules, "mssparkutils", raising=False)
+    monkeypatch.delitem(sys.modules, "fsspec", raising=False)
+
+    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__  # type: ignore[index]
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name in {"notebookutils", "mssparkutils", "fsspec"}:
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    with pytest.raises(ImportError) as exc:
+        Trajectory.from_jsonl("abfss://container@account.dfs.core.windows.net/x.jsonl")
+    msg = str(exc.value).lower()
+    assert "fabric" in msg or "synapse" in msg or "fsspec" in msg
+
+
+def test_from_jsonl_does_not_fall_back_when_first_reader_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If an available reader (notebookutils.fs.cp) raises, we abort with a
+    RuntimeError instead of silently retrying via fsspec — masking
+    permission/auth/not-found errors would be a footgun."""
+    import types
+
+    class _BoomFs:
+        def cp(self, src: str, dst: str) -> None:
+            raise PermissionError("AAD says no")
+
+    fake_nu = types.ModuleType("notebookutils")
+    fake_nu.fs = _BoomFs()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "notebookutils", fake_nu)
+    # If we accidentally fell back to fsspec we'd see this payload — but we shouldn't.
+    fake_fsspec = types.ModuleType("fsspec")
+    fake_fsspec.open = lambda *a, **kw: io.StringIO("{}\n")  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fsspec", fake_fsspec)
+
+    with pytest.raises(RuntimeError) as exc:
+        Trajectory.from_jsonl("abfss://account/x.jsonl")
+    assert "AAD" in str(exc.value)
+
+
+def test_from_jsonl_azure_uri_error_redacts_sas_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SAS tokens in query strings must not appear in raised exception text."""
+    import types
+
+    class _BoomFs:
+        def cp(self, src: str, dst: str) -> None:
+            raise RuntimeError("backend exploded")
+
+    fake_nu = types.ModuleType("notebookutils")
+    fake_nu.fs = _BoomFs()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "notebookutils", fake_nu)
+
+    sas = "sv=2024-11-04&sig=SECRETSIGNATURE&se=2025-01-01"
+    uri = f"abfss://c@account.dfs.core.windows.net/x.jsonl?{sas}"
+    with pytest.raises(RuntimeError) as exc:
+        Trajectory.from_jsonl(uri)
+    msg = str(exc.value)
+    assert "SECRETSIGNATURE" not in msg
+    assert "sig=" not in msg
+
+
+def test_from_jsonl_azure_uri_cleans_up_temp_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The TemporaryDirectory used as the cp() destination must be removed."""
+    import tempfile as _tempfile
+
+    captured_dirs: list[str] = []
+    real_tmpdir_cls = _tempfile.TemporaryDirectory
+
+    class _TrackingTemporaryDirectory(real_tmpdir_cls):  # type: ignore[misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            captured_dirs.append(self.name)
+
+    monkeypatch.setattr(
+        "fabric_rlm.trajectory.tempfile.TemporaryDirectory",
+        _TrackingTemporaryDirectory,
+    )
+    _install_fake_notebookutils(monkeypatch, CLEAN_TRACE.read_text(encoding="utf-8"))
+
+    Trajectory.from_jsonl("abfss://account/x.jsonl")
+    assert captured_dirs, "expected TemporaryDirectory to be used"
+    for d in captured_dirs:
+        assert not Path(d).exists(), f"temp dir {d} was not cleaned up"
+
+
+def test_from_jsonl_accepts_file_uri_for_local_path(tmp_path: Path) -> None:
+    """``file:///abs/path`` and ``file://localhost/abs/path`` are local."""
+    fake = tmp_path / "x.jsonl"
+    fake.write_text(CLEAN_TRACE.read_text(encoding="utf-8"), encoding="utf-8")
+    # Build a file:// URI that round-trips through urlsplit on Windows + POSIX.
+    uri = fake.resolve().as_uri()
+    traj = Trajectory.from_jsonl(uri)
+    assert len(traj) > 0
+
+
+def test_from_jsonl_rejects_file_uri_with_remote_host() -> None:
+    with pytest.raises(ValueError) as exc:
+        Trajectory.from_jsonl("file://otherhost/some/path.jsonl")
+    assert "not supported" in str(exc.value).lower()
 
 
 # ---------------------------------------------------------------------------
