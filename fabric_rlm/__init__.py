@@ -12,7 +12,7 @@ from .lm import AnthropicLM, FabricLM, OpenAILM, register_backend, resolve_lm
 from .metrics import ValidationCheck, ValidationReport
 from .runtime import RLM, RLMResult
 from .skill_loader import Skill, SkillLoader, compose_skills, list_skills, load_skill
-from .trajectory import Trajectory, TurnRecord
+from .trajectory import Issue, Trajectory, TurnRecord
 from .validators import (
     assert_in_range,
     assert_keys,
@@ -32,6 +32,7 @@ __all__ = [
     "Interpreter",
     "LocalArtifactStore",
     "OpenAILM",
+    "Issue",
     "RLM",
     "RLMResult",
     "Skill",
