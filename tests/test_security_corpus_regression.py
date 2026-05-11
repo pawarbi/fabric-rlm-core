@@ -1,6 +1,9 @@
 """Corpus-regression check: SecurityPolicy.default().validate_code() must
 return ``None`` (i.e. ALLOW) for every code snippet the LM emitted across
-all saved adaptive trajectories in ``bench/adaptive/results/feat_a/``.
+all saved adaptive trajectories. Historical traces live under
+``_local/bench/adaptive/results/`` on the maintainer's machine
+(gitignored); fresh checkouts fall back to the per-session
+``~/.copilot/session-state/.../files/`` tree.
 
 If this test fails on a turn that an LM actually ran historically, the
 security baseline is producing a *behavioural regression* and must be
@@ -21,6 +24,7 @@ import pytest
 from fabric_rlm.security import SecurityPolicy
 
 _REPO_TRAJ_ROOTS = [
+    Path(__file__).resolve().parent.parent / "_local" / "bench",
     Path(__file__).resolve().parent.parent / "bench",
     Path(__file__).resolve().parent / "fixtures",
 ]

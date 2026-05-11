@@ -38,6 +38,11 @@ _*
 !_worker.py
 !__init__.py
 
+# Local-only scratch tree: experiments, notebooks, benches, research notes.
+# Anything inside _local/ is for the maintainer's machine only and must
+# never enter the published package or git history.
+_local/
+
 # Notebook checkpoints
 .ipynb_checkpoints/
 
