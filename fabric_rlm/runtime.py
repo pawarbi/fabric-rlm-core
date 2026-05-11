@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .interpreter import ExecResult, Interpreter, WorkerTimeout
+from .security import SecurityPolicy
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +448,7 @@ class RLM:
         inner_engine: str = "v6-custom",
         stuck_loop_threshold: int | None = 3,
         tools: Iterable[Callable[..., Any]] | None = None,
+        security: SecurityPolicy | None = None,
     ):
         # ---- engine validation (early, before any heavy resolution) ---------
         # Resolve aliases ('default' -> 'v6-custom', 'dspy' -> 'v7-dspy')
@@ -516,6 +518,15 @@ class RLM:
                     f"got {stuck_loop_threshold!r}. Pass None to disable."
                 )
         self.stuck_loop_threshold = stuck_loop_threshold
+        # Default-on security baseline. The contract is: by default, every
+        # LM-facing interpreter created by this RLM scrubs secret-bearing
+        # env vars and rejects destructive/network/dynamic-dispatch APIs
+        # statically before the code reaches the worker. Pass
+        # ``security=SecurityPolicy.disabled()`` to opt out entirely, or
+        # supply a customised ``SecurityPolicy`` instance to tune the
+        # denylist / env-strip globs. See ``fabric_rlm.security`` for the
+        # honest framing of what this does and does not protect against.
+        self._security: SecurityPolicy = security if security is not None else SecurityPolicy.default()
         if engine == "adaptive":
             # Resolve aliases for inner_engine ONLY when it is actually used.
             # Phase 1: keeps non-adaptive callers free of new strictness on
@@ -598,6 +609,7 @@ class RLM:
                 output_validator=output_validator,
                 halve_max_iter_on_retry=halve_max_iter_on_retry,
                 stuck_loop_threshold=stuck_loop_threshold,
+                security=self._security,
             )
             return
 
@@ -1010,7 +1022,7 @@ class RLM:
         final_state: dict[str, Any] = {}
         task_description, _ = _task_and_outputs(self.signature, self._inline_task, self._inline_outputs)
 
-        with Interpreter(timeout=self.timeout) as interpreter:
+        with Interpreter(timeout=self.timeout, security=self._security) as interpreter:
             if self.sub_lm_spec is not None:
                 interpreter.configure_lm(self.sub_lm_spec)
             if bound_inputs:
@@ -1595,7 +1607,9 @@ class RLM:
         last_failure_reason: str | None = None
 
         for attempt in range(MAX_VERIFIER_RETRIES + 1):
-            interpreter = SubprocessPythonInterpreter(timeout=self.timeout)
+            interpreter = SubprocessPythonInterpreter(
+                timeout=self.timeout, security=self._security
+            )
             t0 = time.time()
             try:
                 with dspy.context(lm=outer_lm):
@@ -1642,6 +1656,12 @@ class RLM:
 
             # Run verifiers + output_validator using a fresh legacy interpreter.
             # Must use context manager — Interpreter requires explicit .start().
+            # Verifier code is loaded from trusted skill .md files; it does
+            # not need to be subjected to the SecurityPolicy. Leaving this
+            # interpreter policy-free also means skill verifiers that
+            # happen to use APIs the policy would block (none in-tree do
+            # today, but future contributors get a stable contract) still
+            # work as authored.
             try:
                 with Interpreter(timeout=self.timeout) as verifier_interp:
                     verifier_feedback = self._run_skill_verifiers(verifier_interp, payload)
