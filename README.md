@@ -6,19 +6,19 @@ Pyodide/WASM), and the model iterates until it calls `SUBMIT(...)` with the
 answer. Runs anywhere CPython runs: your laptop, CI, a Fabric notebook, an
 Azure Function.
 
-This is the **slim core** distribution (v0.1.10). It contains the runtime,
+This is the **slim core** distribution. It contains the runtime,
 interpreter, skill loader/router, LM backends (OpenAI / Anthropic /
 FabricLM), and a small set of always-useful skills:
 
 - `pdf_document_analysis` — long-document analysis with `pymupdf`
 - `data_exploration` — tabular EDA with pandas / polars / duckdb
+- `excel_extract` / `excel_modify` — read and edit `.xlsx` workbooks via openpyxl
 - `core`, `validation`, `error_handling` — always-on scaffolding
 
 It also ships an **experimental adaptive engine** that escalates compute
 (more turns → higher reasoning effort → best-of-N → strong LM) when a
 validator rejects an attempt — opt-in via `engine="adaptive"`. See
-`QUICKSTART.md` §4b for the API and §0.1.10 in `CHANGELOG.md` for the
-bench results.
+`QUICKSTART.md` §4b for the API and `CHANGELOG.md` for the bench results.
 
 ### Engine selection
 
@@ -48,8 +48,8 @@ variable for token-sensitive batch workloads on known-trivial tasks.
 
 ```bash
 pip install fabric-rlm
-# or, from a wheel
-pip install dist/fabric_rlm-0.1.10-py3-none-any.whl
+# or, from a locally built wheel
+pip install dist/fabric_rlm-<version>-py3-none-any.whl
 ```
 
 ## 30-second example
@@ -57,12 +57,23 @@ pip install dist/fabric_rlm-0.1.10-py3-none-any.whl
 ```python
 from fabric_rlm import RLM, OpenAILM
 
-rlm = RLM(lm=OpenAILM(model="gpt-4o-mini"), skills=["pdf_document_analysis"])
-result = rlm.run(
-    prompt="Summarize the parties, term, and termination clauses.",
+rlm = RLM.from_task(
+    task="Summarize the parties, term, and termination clauses.",
     inputs={"pdf_path": "/path/to/contract.pdf"},
+    outputs=["answer"],
+    lm=OpenAILM("gpt-4o-mini"),
+    skills=["pdf_document_analysis"],
 )
+result = rlm.run()
 print(result.answer)
+```
+
+There is also a small CLI (installed as `fabric-rlm`):
+
+```bash
+fabric-rlm --version
+fabric-rlm run examples/simple_math/task.json          # run a task from JSON
+fabric-rlm trace inspect path/to/trajectory.jsonl      # summarize + diagnose a saved run
 ```
 
 ## Where to next
@@ -72,8 +83,6 @@ print(result.answer)
 - **`docs/fabric-runtime-deps.md`** — **read this if your Fabric notebook fails at
   import time** (`Sentinel`, `yarl.Query`, `aiohttp.ConnectionTimeoutError`).  Use the
   Python 3.12 `jupyter_python` kernel + `%pip` magic, not the Synapse PySpark kernel.
-- **`fabric_rlm_design.md`** — design notes and the long-form story behind
-  the runtime.
 - **`CHANGELOG.md`** — release history.
 - **`examples/notebooks/`** — proven Fabric notebook recipes
   (`rlm_pdf_contract_comparison`, `_invoice_processing`, `_document_analysis`,
@@ -84,11 +93,15 @@ print(result.answer)
 ## Develop
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/pawarbi/fabric-rlm-core.git
 cd fabric-rlm-core
 pip install -e ".[dev]"
 pytest -q
 ```
+
+See `CONTRIBUTING.md` for the development workflow and `SECURITY.md` for the
+security model of the code-execution sandbox (read it before running
+untrusted prompts against production data).
 
 ## License
 

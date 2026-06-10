@@ -33,10 +33,10 @@ env/
 .DS_Store
 Thumbs.db
 
-# Project scratch (matches the pattern used in fabric-rlm dev)
-_*
-!_worker.py
-!__init__.py
+# Project scratch: root-level underscore-prefixed files/dirs only. Scoped to
+# the repo root (leading /) so package files like fabric_rlm/_worker.py can
+# never be accidentally ignored.
+/_*
 
 # Local-only scratch tree: experiments, notebooks, benches, research notes.
 # Anything inside _local/ is for the maintainer's machine only and must
