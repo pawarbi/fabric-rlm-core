@@ -54,8 +54,10 @@ def render_page_data_uri(page, dpi=200):
 
 - Use **top-level `await asyncio.gather(...)`** to run independent page-level
   `predict()` calls in parallel — the interpreter executes your code inside an
-  async event loop, so you can `await` directly. Example:
-  `results = await asyncio.gather(predict(...), predict(...), predict(...))`.
+  async event loop, so you can `await` directly. Fan out in **bounded batches**
+  (e.g. 6-8 pages at a time) with `return_exceptions=True` so you don't trip
+  provider rate limits and one bad page doesn't lose the batch:
+  `results = await asyncio.gather(*[predict(...) for p in batch], return_exceptions=True)`.
   Ask for compact JSON-compatible facts per page: dates, entities, financial items,
   section summaries, and uncertainty notes.
 - Prefer signatures with explicit outputs such as `dates`, `entities`,
