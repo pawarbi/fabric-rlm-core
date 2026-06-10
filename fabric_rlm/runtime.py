@@ -82,6 +82,32 @@ def _loop_signature(turn: "TurnRecord") -> tuple[str, str | None, str | None]:
         error_type,
         message,
     )
+
+
+# Repair-turn diversity nudge (reviewer item: "Nudge diversity on repair turns").
+# A short line appended to repair feedback that operationalizes REFLECT *within*
+# an attempt — pushing the model off a stuck trajectory before the hard
+# stuck-loop abort fires. Controlled by FABRIC_RLM_REPAIR_NUDGE:
+#   "escalating" -> append only on the 2nd+ failure of the same repair key
+#                   (repeat-aware; plain on first repair). DEFAULT — chosen via
+#                   A/B (matches "static" accuracy gain with ~1/3 the nudge
+#                   volume and less destabilization of correct first repairs).
+#   "static"     -> always append on every repair turn (reviewer's version)
+#   "off"        -> never append (pre-0.2.x baseline behavior)
+_REPAIR_DIVERSITY_LINE = (
+    "If this is a repeat failure on the same field, recompute it via a "
+    "different method and cross-check the two results before you SUBMIT."
+)
+_REPAIR_NUDGE_MODES = {"off", "static", "escalating"}
+_REPAIR_NUDGE_DEFAULT = "escalating"
+
+
+def _repair_nudge_mode() -> str:
+    """Return the active repair-nudge mode from the environment (default 'escalating')."""
+    mode = os.environ.get("FABRIC_RLM_REPAIR_NUDGE", _REPAIR_NUDGE_DEFAULT).strip().lower()
+    return mode if mode in _REPAIR_NUDGE_MODES else _REPAIR_NUDGE_DEFAULT
+
+
 from .lm import resolve_lm
 from .prompts import (
     _task_and_outputs,
@@ -710,6 +736,9 @@ class RLM:
         self.digest_after_turn = digest_after_turn
         self.output_validator = output_validator
         self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
+        # Per-run counter for repeat-aware repair nudges (keyed by repair target);
+        # reset at the start of each run().
+        self._repair_counts: dict[str, int] = {}
         self.engine = engine
         self.inner_engine = engine  # for symmetry — non-adaptive RLMs are their own inner
         self.adaptive_config = None
@@ -1105,6 +1134,7 @@ class RLM:
             next_turn_type = "normal"
             reached_max = False
             verifier_repair_history: list[dict[str, Any]] = []
+            self._repair_counts = {}
 
             while turn_counter < self.max_turns:
                 # Pre-LM-call: budget urgency hint + digest swap for the system message.
@@ -1451,6 +1481,24 @@ class RLM:
             **_aggregate_trajectory_metrics(trajectory),
         )
 
+    def _repair_nudge_suffix(self, key: str) -> str:
+        """Return the diversity-nudge text to append to a repair message.
+
+        Behavior depends on ``FABRIC_RLM_REPAIR_NUDGE`` (see ``_repair_nudge_mode``):
+        ``off`` -> always empty; ``static`` -> always the line; ``escalating`` ->
+        the line only once ``key`` has failed at least twice in this run. ``key``
+        identifies the repair target (validation, a skill verifier, or the output
+        validator) so the escalating counter tracks "same field" repeat failures.
+        """
+        mode = _repair_nudge_mode()
+        if mode == "off":
+            return ""
+        count = self._repair_counts.get(key, 0) + 1
+        self._repair_counts[key] = count
+        if mode == "static" or count >= 2:
+            return "\n" + _REPAIR_DIVERSITY_LINE
+        return ""
+
     def _format_validation_feedback(
         self, result: ExecResult, turn: int, validation: OutputValidationResult
     ) -> str:
@@ -1461,6 +1509,7 @@ class RLM:
             f"Submitted payload preview: {_preview_payload(result.submit_payload)}\n"
             f"State keys: {', '.join(result.state.keys()) or '(none)'}\n"
             "Repair the final answer and call SUBMIT() again with all required fields present and non-blank."
+            + self._repair_nudge_suffix("output_validation")
         )
 
     def _maybe_digest_active_skills(
@@ -1572,6 +1621,7 @@ class RLM:
                     f"AssertionError: {message}\n\n"
                     f"Submitted payload preview: {_preview_payload(payload)}\n"
                     "Recompute the offending field(s) and call SUBMIT(...) again."
+                    + self._repair_nudge_suffix(f"verifier:{skill.name}")
                 )
                 history_entry: dict[str, Any] = {
                     "skill": skill.name,
@@ -1612,6 +1662,7 @@ class RLM:
                 f"AssertionError: {message}\n\n"
                 f"Submitted payload preview: {_preview_payload(payload)}\n"
                 "Repair the `output` field and call SUBMIT(...) again."
+                + self._repair_nudge_suffix("output_validator")
             )
             history_entry: dict[str, Any] = {
                 "skill": "output_validator",
