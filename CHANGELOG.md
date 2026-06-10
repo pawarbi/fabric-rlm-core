@@ -1,6 +1,62 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 — 2026-06-09 — engine consolidation + public-release hardening
+
+### Fixed
+
+- **Skill router: `from_task` blind spot.** Routing scores keywords against
+  bound input values; when the user's question lives in `task=` and the
+  inputs are just file paths, every run used to elect the same always-on
+  bundle. Routing now falls back to the task text **only when the inputs
+  carry zero keyword signal**, preserving the original menu-inflation
+  protection for benchmark-style signatures. New trajectory metadata:
+  `router_used_task_text_fallback`.
+- **v7/dspy engine: token accounting.** `RLMResult.total_prompt_tokens` /
+  `total_completion_tokens` / `total_cached_tokens` /
+  `total_reasoning_tokens` are now populated for `engine="dspy"` runs by
+  harvesting the dspy `lm.history` usage entries (previously always `None`,
+  including for `engine="auto"` + `tools=` users).
+- **Security rejections no longer wipe reported state.** A parent-side
+  `SecurityPolicy` rejection fabricates a failed turn without consulting the
+  worker; it previously carried `state={}`, erasing `final_state` and the
+  turn's state snapshot. Such turns now carry the last real snapshot and a
+  new `ExecResult.reached_worker=False` marker.
+- **Legacy `Interpreter` stderr drain.** The v6 interpreter now pumps the
+  worker's stderr on a background thread (ring-buffered, last 200 lines).
+  Previously stderr was only read at exit, so chatty native libraries could
+  fill the OS pipe buffer and deadlock the worker into a spurious
+  `WorkerTimeout`.
+- **CLI:** `--max-turns` / `--timeout` now override the task file even with
+  falsy values; added `--version`, `--engine`, `--verbose`; `engine`,
+  `verbose`, `enable_router`, `max_active_skills` are honored from the task
+  JSON; unknown task-file keys warn instead of being silently dropped.
+- README 30-second example used a non-existent `rlm.run(prompt=...)`
+  signature; corrected to `RLM.from_task(...)`.
+- **`SubprocessPythonInterpreter` startup timeout** raised 15s → 60s
+  (override per-instance via `start_timeout=` or globally via
+  `FABRIC_RLM_START_TIMEOUT`). Cold CPython spawns on loaded machines/CI
+  runners legitimately exceed 15s; genuinely broken installs still fail
+  fast because the dead worker closes stdout immediately.
+- **Behavior CI gate: credential failures are no longer reported as model
+  regressions.** 401/403 and `AuthenticationError`-shaped failures get a
+  new `auth` error class and abort the gate immediately with a
+  "fix OPENROUTER_API_KEY" message instead of failing every qid.
+
+### Packaging / docs
+
+- Version is now single-sourced from `fabric_rlm.__version__` (pyproject
+  reads it via `[tool.setuptools.dynamic]`); README/QUICKSTART no longer
+  hardcode wheel versions.
+- Added PyPI metadata (`[project.urls]`, classifiers, keywords), and
+  `CONTRIBUTING.md` / `SECURITY.md` (threat model + private reporting).
+- Example notebooks no longer embed real workspace/lakehouse IDs
+  (placeholders instead).
+- Removed references to non-shipped design/eval documents from README and
+  QUICKSTART; QUICKSTART troubleshooting now documents the real
+  `failure_reason` values.
+- CI: test matrix expanded to Python 3.10–3.13 on ubuntu + windows; added a
+  packaging job (`python -m build`, `twine check`, wheel-content assertions
+  for skills markdown and `py.typed`).
 
 ### Engine selection (consolidation)
 

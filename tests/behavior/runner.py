@@ -46,7 +46,7 @@ class QuestionRun:
     answer: Any = None
     expected: Any = None
     reason: str = ""
-    error_class: str | None = None  # "infra" | "wrong_answer" | "runner_error" | None
+    error_class: str | None = None  # "infra" | "auth" | "wrong_answer" | "runner_error" | None
     error_message: str | None = None
     n_turns: int | None = None
     elapsed_s: float | None = None
@@ -142,14 +142,32 @@ _INFRA_TOKENS = (
 )
 
 
+# Credential failures are neither infra flakes (retrying cannot help) nor
+# regression signal (the model never saw the question).  They get their own
+# class so the gate can fail with a "fix your API key" message instead of
+# reporting bogus per-qid regressions.
+_AUTH_TOKENS = (
+    "authenticationerror",
+    "invalid api key",
+    "incorrect api key",
+    "user not found",
+    "unauthorized",
+    "permissiondeniederror",
+)
+
+
 def _classify_error(exc: BaseException) -> str:
     # Prefer structured status code when the exception carries one
     # (httpx/openai/litellm/dspy all surface it via .status_code or .response.status_code).
     status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int) and status in {401, 403}:
+        return "auth"
     if isinstance(status, int) and status in {408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529}:
         return "infra"
 
     msg = f"{type(exc).__name__}: {exc}".lower()
+    if any(tok in msg for tok in _AUTH_TOKENS):
+        return "auth"
     if any(tok in msg for tok in _INFRA_TOKENS):
         return "infra"
     return "runner_error"

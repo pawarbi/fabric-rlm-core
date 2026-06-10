@@ -370,8 +370,21 @@ class TestClassifyByStatusCode:
 
     def test_4xx_other_than_listed_is_runner_error(self) -> None:
         e = RuntimeError("opaque")
-        e.status_code = 401  # type: ignore[attr-defined]
+        e.status_code = 404  # type: ignore[attr-defined]
         assert _classify_error(e) == "runner_error"
+
+    def test_401_and_403_classify_as_auth(self) -> None:
+        for status in (401, 403):
+            e = RuntimeError("opaque")
+            e.status_code = status  # type: ignore[attr-defined]
+            assert _classify_error(e) == "auth"
+
+    def test_auth_message_tokens_classify_as_auth(self) -> None:
+        e = RuntimeError(
+            "litellm.AuthenticationError: OpenrouterException - "
+            '{"error":{"message":"User not found.","code":401}}'
+        )
+        assert _classify_error(e) == "auth"
 
 
 # ---------------------------------------------------------------------------

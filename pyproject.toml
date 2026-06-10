@@ -4,19 +4,51 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fabric-rlm"
-version = "0.2.1"
+dynamic = ["version"]
 description = "A portable Python subprocess runtime for Recursive Language Models in Fabric notebooks and managed Python environments."
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{ name = "fabric-rlm contributors" }]
+authors = [{ name = "Sandeep Pawar" }]
 license = { text = "MIT" }
+keywords = [
+  "rlm",
+  "recursive-language-model",
+  "llm",
+  "agents",
+  "code-interpreter",
+  "dspy",
+  "fabric",
+  "microsoft-fabric",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
+  # aiohttp is not imported by fabric_rlm directly. The >=3.12 floor exists to
+  # pre-empt the Fabric Synapse cluster-env conflict where an old aiohttp/yarl
+  # pair crashes dspy at import time — see docs/fabric-runtime-deps.md.
   "aiohttp>=3.12",
   "dspy>=3.1.2",
   "nest_asyncio>=1.6",
   "pydantic>=2",
   "typing_extensions>=4.15",
 ]
+
+[project.urls]
+Homepage = "https://github.com/pawarbi/fabric-rlm-core"
+Repository = "https://github.com/pawarbi/fabric-rlm-core"
+Issues = "https://github.com/pawarbi/fabric-rlm-core/issues"
+Changelog = "https://github.com/pawarbi/fabric-rlm-core/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
@@ -33,6 +65,9 @@ analytics = [
 
 [project.scripts]
 fabric-rlm = "fabric_rlm.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "fabric_rlm.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["fabric_rlm*"]

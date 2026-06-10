@@ -201,6 +201,36 @@ def _build_routing_text(
     return "\n".join(parts)
 
 
+def _route_with_task_fallback(
+    router: SkillRouter,
+    task_text: str | None,
+    bound_inputs: Mapping[str, Any] | None,
+    *,
+    explicit_skills: list[str] | None,
+) -> tuple[RouteDecision, bool]:
+    """Route on bound inputs first; fall back to the task text when inputs
+    produce zero keyword signal.
+
+    This fixes the ``from_task`` blind spot: when the user's actual question
+    lives in ``task=`` and the inputs are just file paths
+    (``RLM.from_task(task="Summarize the termination clauses...",
+    inputs={"pdf_path": ...})``), inputs-only routing scores nothing and every
+    run gets the same always-on bundle. The fallback is gated on *zero* input
+    scores so the original menu-inflation protection is preserved: whenever
+    bound inputs match any skill keyword (the longcot/benchmark shape, where
+    the task text enumerates every template), the task text is never consulted.
+
+    Returns ``(decision, used_task_text_fallback)``.
+    """
+
+    routing_text = _build_routing_text(task_text, bound_inputs)
+    decision = router.route(routing_text, explicit_skills=explicit_skills)
+    if decision.scores or not task_text:
+        return decision, False
+    fallback_text = (routing_text + "\n" + task_text) if routing_text else task_text
+    return router.route(fallback_text, explicit_skills=explicit_skills), True
+
+
 @dataclass(frozen=True)
 class OutputValidationResult:
     """Result for validating a worker SUBMIT payload against declared outputs."""
@@ -953,10 +983,6 @@ class RLM:
             task_text_for_routing, _ = _task_and_outputs(
                 self.signature, self._inline_task, self._inline_outputs
             )
-            # Include bound input values so routing matches keywords that appear
-            # in the actual question, not only the generic task description.
-            # Universal: applies to any signature/input shape.
-            routing_text = _build_routing_text(task_text_for_routing, bound_inputs)
             router = SkillRouter.from_loader(
                 self.skill_loader,
                 max_active_skills=self.max_active_skills,
@@ -964,9 +990,17 @@ class RLM:
                 candidate_specificities=self.router_candidate_specificities,
                 include_dependencies=self.router_include_dependencies,
             )
-            route_decision = router.route(
-                routing_text, explicit_skills=self.skills or None
+            # Route on bound input values first (so keywords in the actual
+            # question dominate), falling back to the task text only when the
+            # inputs carry zero keyword signal — the from_task case where the
+            # question lives in task= and inputs are just file paths.
+            route_decision, used_task_fallback = _route_with_task_fallback(
+                router,
+                task_text_for_routing,
+                bound_inputs,
+                explicit_skills=self.skills or None,
             )
+            trajectory.metadata["router_used_task_text_fallback"] = used_task_fallback
             active_skill_objects = [
                 router._by_name[name]
                 for name in route_decision.active
@@ -1184,7 +1218,24 @@ class RLM:
                     )
                 worker_execute_seconds = time.monotonic() - worker_started
                 duration = time.perf_counter() - started
-                final_state = result.state
+                # Turns that never reached the worker (parent-side security
+                # rejection) carry a placeholder empty state; keep the last
+                # real snapshot instead of wiping it. getattr() because
+                # duck-typed interpreter fakes/shims may not carry the flag —
+                # absent means "reached the worker" (the historic behavior).
+                if getattr(result, "reached_worker", True):
+                    final_state = result.state
+                else:
+                    result = ExecResult(
+                        ok=result.ok,
+                        submitted=result.submitted,
+                        stdout=result.stdout,
+                        stderr=result.stderr,
+                        state=dict(final_state),
+                        error=result.error,
+                        submit_payload=result.submit_payload,
+                        reached_worker=False,
+                    )
                 # Router: pick up any `activate_skill(name)` calls from this turn.
                 if self.enable_router and result.stdout:
                     for activated_name in _scan_activation_markers(result.stdout):
@@ -1597,6 +1648,18 @@ class RLM:
         outer_lm = self.outer_lm
         sub_lm = resolve_lm(self.sub_lm_spec) if self.sub_lm_spec is not None else outer_lm
 
+        # Token accounting: dspy appends one history entry (with a usage dict)
+        # per LM call. Snapshot history lengths now and harvest everything new
+        # after the run so v7 results report the same total_* token fields as
+        # the v6 engine. Track outer and sub LM separately unless identical.
+        usage_tracked_lms: list[Any] = [outer_lm]
+        if sub_lm is not outer_lm:
+            usage_tracked_lms.append(sub_lm)
+        pre_history_lens: list[int] = [
+            len(h) if isinstance((h := getattr(lm, "history", None)), list) else 0
+            for lm in usage_tracked_lms
+        ]
+
         # ---- Slice 3: bounded verifier-wrapper retry loop
         MAX_VERIFIER_RETRIES = 2
         verifier_repair_history: list[dict[str, Any]] = []
@@ -1691,7 +1754,10 @@ class RLM:
                 f"{feedback_text[:200]}"
             )
             if attempt >= MAX_VERIFIER_RETRIES:
-                # Out of retries; still return the (rejected) payload but flag.
+                # Out of retries. The run is reported as not-submitted with
+                # payload=None (matching the v6 engine's contract); the
+                # rejected payload itself is preserved for inspection in
+                # trajectory.metadata['verifier_repair_history'].
                 break
 
             # Prepend feedback to first string input we can find.
@@ -1740,6 +1806,7 @@ class RLM:
         if verifier_repair_history:
             trajectory.metadata["verifier_repair_history"] = verifier_repair_history
 
+        token_totals = _sum_usage_from_histories(usage_tracked_lms, pre_history_lens)
         submitted = bool(payload) and last_failure_reason is None
         return RLMResult(
             submitted=submitted,
@@ -1747,6 +1814,10 @@ class RLM:
             trajectory=trajectory,
             final_state={},
             failure_reason=last_failure_reason,
+            total_prompt_tokens=token_totals["prompt_tokens"],
+            total_completion_tokens=token_totals["completion_tokens"],
+            total_cached_tokens=token_totals["cached_tokens"],
+            total_reasoning_tokens=token_totals["reasoning_tokens"],
             total_lm_seconds=elapsed_total,
         )
 
@@ -1766,7 +1837,6 @@ class RLM:
             task_text_for_routing, _ = _task_and_outputs(
                 self.signature, self._inline_task, self._inline_outputs
             )
-            routing_text = _build_routing_text(task_text_for_routing, bound_inputs)
             router = SkillRouter.from_loader(
                 self.skill_loader,
                 max_active_skills=self.max_active_skills,
@@ -1774,7 +1844,15 @@ class RLM:
                 candidate_specificities=self.router_candidate_specificities,
                 include_dependencies=self.router_include_dependencies,
             )
-            route_decision = router.route(routing_text, explicit_skills=self.skills or None)
+            # Same two-stage routing as the v6 path: inputs first, task-text
+            # fallback only on zero input signal. See _route_with_task_fallback.
+            route_decision, used_task_fallback = _route_with_task_fallback(
+                router,
+                task_text_for_routing,
+                bound_inputs,
+                explicit_skills=self.skills or None,
+            )
+            trajectory.metadata["router_used_task_text_fallback"] = used_task_fallback
             active_skill_objects = [
                 router._by_name[name]
                 for name in route_decision.active
@@ -2201,6 +2279,45 @@ def _extract_usage(response: Any) -> dict[str, Any]:
                 out[nested_key] = normalized
         return _apply_usage_aliases(out) if out else {}
     return {}
+
+
+def _sum_usage_from_histories(
+    lms: list[Any], pre_lens: list[int]
+) -> dict[str, int | None]:
+    """Sum token usage across new ``lm.history`` entries since ``pre_lens``.
+
+    Used by the v7/dspy engine, where the loop runs inside ``dspy.predict.RLM``
+    and per-turn usage is not surfaced through our own ``_call_lm_with_meta``
+    path. Each field is ``None`` when no entry reported it (matching the
+    "unknown, not zero" convention of ``_aggregate_trajectory_metrics``).
+    LMs without a list-shaped ``history`` (mocks, custom callables) contribute
+    nothing.
+    """
+
+    totals: dict[str, int | None] = {
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "cached_tokens": None,
+        "reasoning_tokens": None,
+    }
+    for lm, pre_len in zip(lms, pre_lens):
+        history = getattr(lm, "history", None)
+        if not isinstance(history, list):
+            continue
+        for entry in history[pre_len:]:
+            usage = _extract_usage(entry)
+            if not usage:
+                continue
+            for key, value in (
+                ("prompt_tokens", _usage_field(usage, "prompt_tokens")),
+                ("completion_tokens", _usage_field(usage, "completion_tokens")),
+                ("cached_tokens", _usage_nested_field(usage, "prompt_tokens_details", "cached_tokens")),
+                ("reasoning_tokens", _usage_nested_field(usage, "completion_tokens_details", "reasoning_tokens")),
+            ):
+                if value is None:
+                    continue
+                totals[key] = value if totals[key] is None else totals[key] + value
+    return totals
 
 
 def _usage_field(usage: dict[str, Any], key: str) -> int | None:

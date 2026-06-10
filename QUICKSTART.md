@@ -25,7 +25,7 @@ pip install -e .
 # (orjson, cloudpickle, litellm, pydantic, …) come along.
 # DuckDB and polars are already in the Fabric Python runtime — don't reinstall.
 %pip install -q --no-deps --force-reinstall \
-    "/lakehouse/default/Files/fabric_rlm/wheels/fabric_rlm-0.1.9-py3-none-any.whl"
+    "/lakehouse/default/Files/fabric_rlm/wheels/fabric_rlm-<version>-py3-none-any.whl"
 %pip install -q "dspy>=2.5"
 ```
 
@@ -368,20 +368,24 @@ for h in lm.history:
 
 ## 9. Skills (optional — domain knowledge as markdown)
 
-> **⚠️ Honest status:** *Explicit* skill preloading works (the markdown gets
-> concatenated into the system prompt). The *automatic* router (`enable_router=True`)
-> has a known activation bug — trajectory analysis showed it picks the same
-> bundle of skills for every question regardless of input. Don't rely on it
-> for production. The skills+router path was disabled in the 20Q parity
-> bake-off; that's the config we have a green light on.
+> **Honest status:** *Explicit* skill preloading is the recommended,
+> battle-tested path (the markdown gets concatenated into the system prompt).
+> The *automatic* router (`enable_router=True`) routes on keywords in the
+> bound input values, **falling back to the `task=` text when the inputs
+> carry no keyword signal** (fixed in 0.2.2 — previously a question passed
+> via `from_task(task=...)` with file-path-only inputs scored nothing and
+> every run got the same always-on bundle). It is still a keyword heuristic,
+> not semantic matching — for production workloads with a known domain,
+> prefer explicit `skills=[...]`. Check
+> `result.trajectory.metadata["router_active"]` and
+> `["router_used_task_text_fallback"]` to see what the router did.
 
 ```python
-# ✅ Works: explicit preload
+# ✅ Recommended: explicit preload
 rlm = RLM(..., skills=["pdf_document_analysis", "data_exploration"])
 
-# ⚠️ Works but doesn't actually route — picks a fixed bundle.
-# Tracked under todo `router-activation-bug` (CRITICAL, pending).
-rlm = RLM(..., enable_router=True, max_active_skills=1)
+# Keyword-heuristic routing; verify router_active in trajectory metadata.
+rlm = RLM(..., enable_router=True, max_active_skills=2)
 ```
 
 Browse `fabric_rlm/skills/*.md` for examples (e.g. `pdf_document_analysis.md`,
@@ -441,7 +445,8 @@ All importable from `fabric_rlm`:
 | `assert_matches_regex(key, pattern)` | `re.fullmatch` |
 | `assert_predicate(fn, msg)` | Escape hatch for cross-field semantic checks |
 
-See `_mfmc_validator_eval/VALIDATOR_DESIGN.md` for the design rationale.
+See `fabric_rlm/validators.py` for the implementation and
+`tests/test_validators.py` for usage patterns.
 
 ---
 
@@ -465,9 +470,18 @@ See `_mfmc_validator_eval/VALIDATOR_DESIGN.md` for the design rationale.
 
 Once the basic example runs:
 
-1. **Long-log RCA** — `python _spark_log_eval/run_eval.py fabric` (synthetic 53 MB Spark log; subprocess greps it; LM never sees the raw bytes).
-2. **20Q parity** — `python _run_local_20q.py` (CodeSearch templates, fab vs dspy side-by-side).
-3. **Sub-LM verification** — `python _test_sub_lm_v7.py` (model calls `llm_query()` from inside its own code).
+1. **CLI run** — `fabric-rlm run examples/simple_math/task.json` (swap the
+   `lm` field in the JSON for your model), then
+   `fabric-rlm trace inspect <trajectory.jsonl>` on the saved trace.
+2. **Fabric notebook recipes** — `examples/notebooks/` ships four end-to-end
+   PDF workflows (contract comparison, invoice processing, document analysis,
+   redaction) ready to import into a Fabric workspace.
+3. **Long-file analysis** — point the `data_exploration` skill at a CSV/log
+   too big for context (§9a): the subprocess greps/queries it; the LM never
+   sees the raw bytes.
+4. **Sub-LM calls** — give the model a cheaper `sub_lm=` and a task that
+   needs per-item summarization; watch it call `llm_query()` from inside its
+   own generated code (§7).
 
 ---
 
@@ -478,7 +492,10 @@ Once the basic example runs:
 | `OPENROUTER_API_KEY not set` | env var missing | `$env:OPENROUTER_API_KEY = "..."` |
 | Subprocess hangs / timeouts | `max_turns` too low for task | bump `max_turns`, set `halve_max_iter_on_retry=False` |
 | `_tool_stub() requires KEYWORD arguments only` | model called `SUBMIT(x)` instead of `SUBMIT(answer=x)` | the verifier feedback fixes this on retry; no action needed |
-| `payload is None`, `failure_reason="no SUBMIT call"` | model gave up without calling SUBMIT | check `result.trajectory.turns`, increase `max_turns` |
+| `payload is None`, `failure_reason="max_turns"` | model never called SUBMIT before the budget ran out | check `result.trajectory.turns`, increase `max_turns` |
+| `failure_reason="stuck_loop"` | model re-emitted identical failing code 3+ turns in a row | inspect the repeated error in the trajectory; rephrase the task or raise `stuck_loop_threshold` |
+| `failure_reason="worker_timeout"` / `"worker_error"` | a code turn exceeded `timeout` / crashed the worker | raise `timeout=`, or check the recorded turn's `error` field |
+| `failure_reason="output_validation_failed"` | final SUBMIT was missing required fields | declare realistic `outputs=[...]`; see the turn's `validation_errors` |
 | Repeated wrong shape | no `output_validator` | add `signature_validator(YourSig)` (catches type errors automatically) |
 
 ---
@@ -487,8 +504,9 @@ Once the basic example runs:
 
 - `fabric_rlm/runtime.py` — `RLM` class, full constructor signature
 - `fabric_rlm/validators.py` — validator primitives + auto-generator
+- `fabric_rlm/security.py` — the module docstring is the authoritative
+  statement of what the security baseline does and does not protect against
+- `fabric_rlm/skills/PLAYBOOK_CONTRACT.md` — how to author a skill
 - `tests/test_rlm_facade.py` — minimal happy-path examples
 - `tests/test_validators.py` — validator usage patterns
-- `_mfmc_validator_eval/VALIDATOR_DESIGN.md` — why the validator API looks the way it does
-- `_spark_log_eval/RESULTS.md` — long-log RCA writeup (the canonical "RLM wins" demo)
-- `fabric_rlm_design.md` — original architecture / design doc
+- `examples/notebooks/` — end-to-end Fabric recipes

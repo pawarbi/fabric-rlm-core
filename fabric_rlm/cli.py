@@ -12,7 +12,12 @@ from .trajectory import Trajectory
 
 
 def main(argv: list[str] | None = None) -> int:
+    from . import __version__
+
     parser = argparse.ArgumentParser(prog="fabric-rlm")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_parser = subparsers.add_parser("run", help="Run an inline task from a JSON file")
@@ -21,6 +26,14 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--trajectory", help="Write trajectory JSONL to this path")
     run_parser.add_argument("--max-turns", type=int, default=None)
     run_parser.add_argument("--timeout", type=float, default=None)
+    run_parser.add_argument(
+        "--engine",
+        default=None,
+        help="Engine override: auto (default), default, dspy, or adaptive",
+    )
+    run_parser.add_argument(
+        "--verbose", action="store_true", help="Print per-turn progress"
+    )
 
     trace_parser = subparsers.add_parser("trace", help="Inspect a trajectory JSONL file")
     trace_sub = trace_parser.add_subparsers(dest="trace_command", required=True)
@@ -52,16 +65,50 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
+_KNOWN_CONFIG_KEYS = frozenset(
+    {
+        "task",
+        "inputs",
+        "outputs",
+        "lm",
+        "sub_lm",
+        "max_turns",
+        "timeout",
+        "skills",
+        "enable_skill_autoloading",
+        "engine",
+        "verbose",
+        "enable_router",
+        "max_active_skills",
+    }
+)
+
+
 def _run_task(args: argparse.Namespace) -> Any:
     config = json.loads(Path(args.task_file).read_text(encoding="utf-8"))
+    unknown = sorted(set(config) - _KNOWN_CONFIG_KEYS)
+    if unknown:
+        import sys
+
+        print(
+            f"fabric-rlm: warning: ignoring unknown task-file keys: {', '.join(unknown)}",
+            file=sys.stderr,
+        )
+    # CLI flags override the task file; "is not None" (not truthiness) so
+    # explicit zero values are honored.
     kwargs = {
         "lm": config["lm"],
         "sub_lm": config.get("sub_lm"),
-        "max_turns": args.max_turns or config.get("max_turns", 10),
-        "timeout": args.timeout or config.get("timeout", 300.0),
+        "max_turns": args.max_turns if args.max_turns is not None else config.get("max_turns", 10),
+        "timeout": args.timeout if args.timeout is not None else config.get("timeout", 300.0),
         "skills": config.get("skills"),
         "enable_skill_autoloading": bool(config.get("enable_skill_autoloading", False)),
+        "engine": args.engine if args.engine is not None else config.get("engine", "auto"),
+        "verbose": bool(args.verbose or config.get("verbose", False)),
+        "enable_router": bool(config.get("enable_router", False)),
     }
+    if "max_active_skills" in config:
+        kwargs["max_active_skills"] = int(config["max_active_skills"])
     rlm = RLM.from_task(
         task=config["task"],
         inputs=config.get("inputs", {}),
