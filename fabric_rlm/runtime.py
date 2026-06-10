@@ -88,21 +88,24 @@ def _loop_signature(turn: "TurnRecord") -> tuple[str, str | None, str | None]:
 # A short line appended to repair feedback that operationalizes REFLECT *within*
 # an attempt — pushing the model off a stuck trajectory before the hard
 # stuck-loop abort fires. Controlled by FABRIC_RLM_REPAIR_NUDGE:
-#   "off"        -> never append (current/baseline behavior; default)
-#   "static"     -> always append on every repair turn (reviewer's version)
 #   "escalating" -> append only on the 2nd+ failure of the same repair key
-#                   (repeat-aware version; plain on first repair)
+#                   (repeat-aware; plain on first repair). DEFAULT — chosen via
+#                   A/B (matches "static" accuracy gain with ~1/3 the nudge
+#                   volume and less destabilization of correct first repairs).
+#   "static"     -> always append on every repair turn (reviewer's version)
+#   "off"        -> never append (pre-0.2.x baseline behavior)
 _REPAIR_DIVERSITY_LINE = (
     "If this is a repeat failure on the same field, recompute it via a "
     "different method and cross-check the two results before you SUBMIT."
 )
 _REPAIR_NUDGE_MODES = {"off", "static", "escalating"}
+_REPAIR_NUDGE_DEFAULT = "escalating"
 
 
 def _repair_nudge_mode() -> str:
-    """Return the active repair-nudge mode from the environment (default 'off')."""
-    mode = os.environ.get("FABRIC_RLM_REPAIR_NUDGE", "off").strip().lower()
-    return mode if mode in _REPAIR_NUDGE_MODES else "off"
+    """Return the active repair-nudge mode from the environment (default 'escalating')."""
+    mode = os.environ.get("FABRIC_RLM_REPAIR_NUDGE", _REPAIR_NUDGE_DEFAULT).strip().lower()
+    return mode if mode in _REPAIR_NUDGE_MODES else _REPAIR_NUDGE_DEFAULT
 
 
 from .lm import resolve_lm

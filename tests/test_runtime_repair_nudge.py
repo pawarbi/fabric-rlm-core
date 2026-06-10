@@ -3,10 +3,11 @@
 Pins the three modes of ``FABRIC_RLM_REPAIR_NUDGE`` that gate the diversity line
 appended to repair feedback:
 
-* ``off``        -> line never appears (baseline / default).
+* ``off``        -> line never appears (pre-0.2.x baseline).
 * ``static``     -> line appears on every repair turn (reviewer's version).
 * ``escalating`` -> line is suppressed on the first failure of a given repair key
-                    and appears from the second failure onward (repeat-aware).
+                    and appears from the second failure onward (repeat-aware;
+                    the default mode).
 
 The three repair messages (output-validation, skill verifier, output validator)
 all route through ``RLM._repair_nudge_suffix``; these tests exercise the shared
@@ -73,10 +74,18 @@ def test_escalating_keys_tracked_independently(monkeypatch):
     assert _REPAIR_DIVERSITY_LINE in rlm._repair_nudge_suffix("a")
 
 
-def test_unknown_mode_defaults_off(monkeypatch):
+def test_unset_default_is_escalating(monkeypatch):
+    monkeypatch.delenv("FABRIC_RLM_REPAIR_NUDGE", raising=False)
+    rlm = _make_rlm()
+    assert rlm._repair_nudge_suffix("k") == ""  # first failure: plain
+    assert _REPAIR_DIVERSITY_LINE in rlm._repair_nudge_suffix("k")  # 2nd+: nudge
+
+
+def test_unknown_mode_defaults_escalating(monkeypatch):
     monkeypatch.setenv("FABRIC_RLM_REPAIR_NUDGE", "bogus")
     rlm = _make_rlm()
     assert rlm._repair_nudge_suffix("k") == ""
+    assert _REPAIR_DIVERSITY_LINE in rlm._repair_nudge_suffix("k")
 
 
 def test_validation_feedback_respects_mode(monkeypatch):
