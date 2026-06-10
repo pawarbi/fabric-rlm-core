@@ -137,15 +137,52 @@ def _digest_for_skill(skill: Skill) -> str:
 
 STDOUT_FEEDBACK_LIMIT = int(os.environ.get("FABRIC_RLM_STDOUT_LIMIT", "5000"))
 STDERR_FEEDBACK_LIMIT = int(os.environ.get("FABRIC_RLM_STDERR_LIMIT", "5000"))
+ERROR_FEEDBACK_LIMIT = int(os.environ.get("FABRIC_RLM_ERROR_LIMIT", "2000"))
+
+# Default fraction of each budget reserved for the tail (freshest signal).
+# Errors lean tail-heavy: a traceback's diagnostic line is last. Read at call
+# time (not frozen here) so they can be flipped per-run — set any to 0 for the
+# historic head-only behavior (also the A/B control arm and a user escape hatch).
+_STDOUT_TAIL_RATIO_DEFAULT = 0.4
+_STDERR_TAIL_RATIO_DEFAULT = 0.5
+_ERROR_TAIL_RATIO_DEFAULT = 0.7
 
 
-def _truncate_for_feedback(text: str, limit: int) -> str:
-    if text is None:
+def _tail_ratio(env_name: str, default: float) -> float:
+    raw = os.environ.get(env_name)
+    if raw is None:
+        return default
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except ValueError:
+        return default
+
+
+def _truncate_for_feedback(text: str, limit: int, *, tail_ratio: float = 0.0) -> str:
+    """Trim ``text`` to ``limit`` characters for LM feedback.
+
+    With ``tail_ratio == 0`` (default) this keeps the head and drops the rest —
+    the historic behavior. When ``tail_ratio`` is in ``(0, 1]`` it reserves that
+    fraction of the budget for the *tail* of the text and spends the remainder
+    on the head, joining them with an omitted-count marker. The tail carries the
+    freshest signal: the last prints of a turn and — critically — the final
+    ``SomeError: ...`` line of a Python traceback, which pure head-truncation
+    would discard exactly when the model needs it to recover. Same token budget,
+    strictly better signal.
+    """
+    if not text:
         return ""
     if len(text) <= limit:
         return text
-    extra = len(text) - limit
-    return text[:limit] + f"\n... (truncated {extra} more chars)"
+    if tail_ratio <= 0.0:
+        extra = len(text) - limit
+        return text[:limit] + f"\n... (truncated {extra} more chars)"
+    tail = int(limit * min(tail_ratio, 1.0))
+    head = limit - tail
+    omitted = len(text) - head - tail
+    head_part = text[:head]
+    tail_part = text[len(text) - tail:] if tail else ""
+    return f"{head_part}\n... ({omitted} chars omitted) ...\n{tail_part}"
 
 
 def _final_turn_suffix() -> str:
@@ -1572,12 +1609,25 @@ class RLM:
     def _format_feedback(
         self, result: ExecResult, turn: int, *, is_final_turn: bool = False
     ) -> str:
-        stdout_text = _truncate_for_feedback(result.stdout, STDOUT_FEEDBACK_LIMIT)
+        stdout_text = _truncate_for_feedback(
+            result.stdout,
+            STDOUT_FEEDBACK_LIMIT,
+            tail_ratio=_tail_ratio("FABRIC_RLM_STDOUT_TAIL_RATIO", _STDOUT_TAIL_RATIO_DEFAULT),
+        )
         parts = [f"REPL output from turn {turn}:\n```\n{stdout_text}\n```"]
         if not result.ok:
-            parts.append(f"\nERROR:\n```\n{(result.error or '')[:2000]}\n```\nWrite a recovery turn.")
+            error_text = _truncate_for_feedback(
+                result.error or "",
+                ERROR_FEEDBACK_LIMIT,
+                tail_ratio=_tail_ratio("FABRIC_RLM_ERROR_TAIL_RATIO", _ERROR_TAIL_RATIO_DEFAULT),
+            )
+            parts.append(f"\nERROR:\n```\n{error_text}\n```\nWrite a recovery turn.")
         elif result.stderr:
-            stderr_text = _truncate_for_feedback(result.stderr, STDERR_FEEDBACK_LIMIT)
+            stderr_text = _truncate_for_feedback(
+                result.stderr,
+                STDERR_FEEDBACK_LIMIT,
+                tail_ratio=_tail_ratio("FABRIC_RLM_STDERR_TAIL_RATIO", _STDERR_TAIL_RATIO_DEFAULT),
+            )
             parts.append(f"\nstderr:\n```\n{stderr_text}\n```")
         parts.append(f"\nState keys: {', '.join(result.state.keys()) or '(none)'}")
         if is_final_turn:
