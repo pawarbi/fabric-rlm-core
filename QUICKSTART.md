@@ -68,6 +68,14 @@ python examples/simple_math/run_mock.py
 into a one-liner. No keys, no URLs, no plumbing — uses your notebook's
 identity automatically.
 
+> 🧩 **Which models can I name?** `FabricLM("...")` / `lm="fabric/..."` must
+> reference a model that Fabric's prebuilt Foundry Tools host. The hosted set
+> changes over time and varies by region — check the authoritative list before
+> picking a model:
+> [Prebuilt AI models in Fabric](https://learn.microsoft.com/en-us/fabric/data-science/ai-services/ai-services-overview#prebuilt-ai-models-in-fabric-preview).
+> For any model not on that list, use **Bring Your Own Key (BYOK)** or run
+> outside Fabric (see §3b).
+
 ```python
 from fabric_rlm import RLM, FabricLM
 

@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.3 — 2026-06-10 — tail-preserving feedback truncation + docs
+
+### Changed
+
+- **Tail-preserving feedback truncation.** When a turn's stdout, stderr, or
+  error traceback overflows the feedback budget, the runtime now keeps both the
+  **head and the tail** (with a `... (N chars omitted) ...` marker) instead of
+  the head only. Python output is bottom-loaded — the final `print`, the last
+  progress line, and a traceback's terminal `SomeError: ...` line all live at
+  the end — so head-only truncation routinely dropped exactly the value the
+  model needed. Same token budget, strictly more useful signal. Tail ratios are
+  tunable via `FABRIC_RLM_STDOUT_TAIL_RATIO` (default 0.4),
+  `FABRIC_RLM_STDERR_TAIL_RATIO` (0.5), and `FABRIC_RLM_ERROR_TAIL_RATIO` (0.7);
+  set any to `0` to restore the previous head-only behavior. Error/traceback
+  feedback now honors a dedicated `ERROR_FEEDBACK_LIMIT` instead of an inline
+  2000-char head cut.
+
+  A/B validation on overflowing-output tasks (OpenRouter, identical code, env
+  flag flipped) showed combined task success rising from **25% → 87.5%** across
+  `gpt-5.1` and `gpt-4.1`, with a clean causal chain: the answer token was
+  visible in feedback ⇒ the model passed; truncated away ⇒ it failed. No
+  regressions where output fit the budget (e.g. frame-collapsed tracebacks).
+
+### Docs
+
+- **QUICKSTART §3a (Fabric):** added a "Which models can I name?" note pointing
+  to the Microsoft Learn Prebuilt AI models list (no hardcoded model names), so
+  users pick model strings their workspace actually exposes.
+
 ## 0.2.2 — 2026-06-09 — engine consolidation + public-release hardening
 
 ### Fixed

@@ -136,11 +136,12 @@ def test_full_stdout_preserved_in_trajectory(monkeypatch) -> None:
     second_call_messages = lm.messages[1]
     feedback = second_call_messages[-1]["content"]
     assert "REPL output from turn 1" in feedback
-    assert "(truncated" in feedback and "more chars)" in feedback
+    assert "chars omitted)" in feedback
     # The literal full payload must NOT appear in the LM-visible feedback.
     assert big not in feedback
-    expected_extra = 10000 - STDOUT_FEEDBACK_LIMIT
-    assert f"(truncated {expected_extra} more chars)" in feedback
+    # stdout uses tail_ratio=0.4: head+tail kept, middle omitted.
+    expected_omitted = 10000 - STDOUT_FEEDBACK_LIMIT
+    assert f"({expected_omitted} chars omitted)" in feedback
 
 
 def test_stderr_same_treatment(monkeypatch) -> None:
@@ -175,8 +176,9 @@ def test_stderr_same_treatment(monkeypatch) -> None:
 
     feedback = lm.messages[1][-1]["content"]
     assert "stderr:" in feedback
-    expected_extra = 10000 - STDERR_FEEDBACK_LIMIT
-    assert f"(truncated {expected_extra} more chars)" in feedback
+    # stderr uses tail_ratio=0.5: head+tail kept, middle omitted.
+    expected_omitted = 10000 - STDERR_FEEDBACK_LIMIT
+    assert f"({expected_omitted} chars omitted)" in feedback
     assert big_err not in feedback
 
 
@@ -185,3 +187,73 @@ def test_truncate_with_explicit_limit_arg() -> None:
     out = _truncate_for_feedback(text, 50)
     assert out.startswith("y" * 50)
     assert out.endswith("(truncated 150 more chars)")
+
+
+def test_tail_ratio_preserves_head_and_tail() -> None:
+    text = "HEAD_MARKER" + ("m" * 10000) + "TAIL_ValueError: boom"
+    out = _truncate_for_feedback(text, 200, tail_ratio=0.5)
+    # Head context survives.
+    assert out.startswith("HEAD_MARKER")
+    # The freshest signal — the trailing exception line — survives.
+    assert out.endswith("TAIL_ValueError: boom")
+    # The omitted middle is accounted for and the full text is not present.
+    assert "chars omitted)" in out
+    assert text not in out
+    # Budget respected (omitted marker is small, fixed overhead aside).
+    omitted = len(text) - 200
+    assert f"({omitted} chars omitted)" in out
+
+
+def test_tail_ratio_zero_is_head_only() -> None:
+    text = "a" * 300
+    assert _truncate_for_feedback(text, 100) == _truncate_for_feedback(
+        text, 100, tail_ratio=0.0
+    )
+
+
+def test_error_traceback_tail_survives_in_feedback(monkeypatch) -> None:
+    """A long traceback's final exception line must reach the next LM turn."""
+    traceback_text = (
+        "Traceback (most recent call last):\n"
+        + ("  File \"x.py\", line 1, in <module>\n        do_thing()\n" * 400)
+        + "ValueError: the-actual-root-cause-42\n"
+    )
+    results = [
+        ExecResult(
+            ok=False,
+            submitted=False,
+            stdout="",
+            stderr="",
+            state={},
+            error=traceback_text,
+        ),
+        ExecResult(
+            ok=True,
+            submitted=True,
+            stdout="",
+            stderr="",
+            state={},
+            submit_payload={"answer": 1},
+        ),
+    ]
+    _install_fake_interpreter(monkeypatch, results)
+
+    lm = ScriptedLM(
+        [
+            "```python\nraise ValueError('boom')\n```",
+            "```python\nSUBMIT(answer=1)\n```",
+        ]
+    )
+    rlm = RLM.from_task(
+        "Return 1.", outputs=["answer"], lm=lm, max_turns=3, timeout=5
+    )
+    result = rlm.run()
+
+    assert result.submitted
+    feedback = lm.messages[1][-1]["content"]
+    assert "ERROR:" in feedback
+    # The root-cause line lives at the END of the traceback; head-only
+    # truncation would have dropped it. Tail preservation must keep it.
+    assert "ValueError: the-actual-root-cause-42" in feedback
+    assert "chars omitted)" in feedback
+    assert traceback_text not in feedback
