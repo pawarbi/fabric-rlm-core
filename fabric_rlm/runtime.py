@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 import logging
 import os
+import re
 import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping
@@ -1173,11 +1175,31 @@ class RLM:
                         reached_max = True
                     continue
 
+                # No runnable code at all (pure prose, or a fence-less response
+                # that isn't valid Python). Sibling of the truncation guard
+                # above: don't ship prose to the worker just to get a SyntaxError
+                # back — short-circuit with a clean "resend a block" signal.
+                selected_code = _select_code_block(response_text)
+                if selected_code is None:
+                    messages.append({"role": "assistant", "content": response_text})
+                    turn_counter += 1
+                    no_code_msg = (
+                        "Your previous response contained no complete ```python code block. "
+                        "Reply with exactly one complete ```python block (or call SUBMIT(...) "
+                        "if you are done)."
+                    )
+                    if (turn_counter + 1) == self.max_turns:
+                        no_code_msg += _final_turn_suffix()
+                    messages.append({"role": "user", "content": no_code_msg})
+                    if turn_counter >= self.max_turns:
+                        reached_max = True
+                    continue
+
                 turn_counter += 1
                 current_turn_type = next_turn_type
                 next_turn_type = "normal"
 
-                code = _extract_code(response_text)
+                code = selected_code
                 self._log(f"\n=== Turn {turn_counter}/{self.max_turns} ({current_turn_type}) ===\n{code}")
                 started = time.perf_counter()
                 worker_started = time.monotonic()
@@ -2008,14 +2030,61 @@ class RLM:
         return built
 
 
+_FENCE_RE = re.compile(r"```([A-Za-z0-9_+\-]*)[^\n]*\n(.*?)```", re.DOTALL)
+_PYTHON_FENCE_LANGS = {"python", "py", "python3"}
+
+
+def _is_parseable_python(code: str) -> bool:
+    try:
+        ast.parse(code)
+    except SyntaxError:
+        return False
+    return True
+
+
+def _fenced_blocks(text: str) -> list[tuple[str, str]]:
+    """All COMPLETE fenced blocks as ``(lang, body)`` in document order.
+
+    Truncated blocks (an opening fence with no closing ```) don't match and are
+    handled upstream by ``_looks_truncated``.
+    """
+    return [(m.group(1).lower(), m.group(2).strip()) for m in _FENCE_RE.finditer(text)]
+
+
+def _select_code_block(text: str) -> str | None:
+    """Pick the runnable Python to execute, or ``None`` when the response has no
+    runnable code (caller should ask the model to resend a code block).
+
+    Selection order:
+
+    * Prefer language-tagged (```python) blocks over untagged ``` blocks — an
+      untagged trailing block is usually an *expected output* example, not code.
+    * Within the chosen group, take the model's LAST parseable block — revisions
+      come last — falling back to the last non-empty block so genuinely broken
+      code still surfaces a real SyntaxError on the model's latest attempt.
+    * With no fenced block at all, run the bare text only if it is itself valid
+      Python (lenient fence-less fallback); otherwise it's prose -> ``None``.
+    """
+    blocks = _fenced_blocks(text)
+    tagged = [body for lang, body in blocks if lang in _PYTHON_FENCE_LANGS]
+    untagged = [body for lang, body in blocks if lang not in _PYTHON_FENCE_LANGS]
+    for group in (tagged, untagged):
+        non_empty = [b for b in group if b]
+        if not non_empty:
+            continue
+        for body in reversed(non_empty):
+            if _is_parseable_python(body):
+                return body
+        return non_empty[-1]
+    stripped = text.strip()
+    if stripped and _is_parseable_python(stripped):
+        return stripped
+    return None
+
+
 def _extract_code(text: str) -> str:
-    for fence in ("```python", "```py", "```"):
-        if fence in text:
-            start = text.index(fence) + len(fence)
-            rest = text[start:]
-            if "```" in rest:
-                return rest[: rest.index("```")].strip()
-    return text.strip()
+    """Back-compat wrapper: the selected code block, or "" when none is runnable."""
+    return _select_code_block(text) or ""
 
 
 def validate_submit_payload(
