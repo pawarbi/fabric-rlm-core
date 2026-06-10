@@ -47,6 +47,12 @@ class ExecResult:
     state: dict[str, Any]
     error: str | None = None
     submit_payload: dict[str, Any] | None = None
+    # False when the turn never reached the worker (e.g. rejected by the
+    # parent-side SecurityPolicy). Such results carry an empty ``state``
+    # snapshot that does NOT reflect the worker's real namespace — callers
+    # tracking state across turns must not overwrite their last good
+    # snapshot with it.
+    reached_worker: bool = True
 
     @classmethod
     def from_response(cls, raw: dict[str, Any]) -> "ExecResult":
@@ -83,6 +89,8 @@ class Interpreter:
         self.proc: subprocess.Popen[str] | None = None
         self._stdout_queue: queue.Queue[str | None] = queue.Queue()
         self._stdout_thread: threading.Thread | None = None
+        self._stderr_buf: list[str] = []
+        self._stderr_thread: threading.Thread | None = None
 
     @property
     def is_running(self) -> bool:
@@ -112,12 +120,21 @@ class Interpreter:
             kwargs["start_new_session"] = True
 
         self._stdout_queue = queue.Queue()
+        self._stderr_buf = []
         self.proc = subprocess.Popen(
             [self.python, "-u", "-m", "fabric_rlm._worker"],
             **kwargs,
         )
         self._stdout_thread = threading.Thread(target=self._pump_stdout, daemon=True)
         self._stdout_thread.start()
+        # Drain stderr continuously. Without this, anything the worker writes
+        # to its real stderr outside the redirected execute window (import-time
+        # warnings from dspy/litellm, native-library chatter from pymupdf or
+        # duckdb) accumulates in the OS pipe buffer; once full (~64KB) the
+        # worker blocks on the write and the parent reports a spurious
+        # WorkerTimeout. Ring-buffered to the last 200 lines for diagnostics.
+        self._stderr_thread = threading.Thread(target=self._pump_stderr, daemon=True)
+        self._stderr_thread.start()
         return self
 
     def execute(self, code: str) -> ExecResult:
@@ -133,7 +150,9 @@ class Interpreter:
                     from .security import SecurityViolation
 
                     raise SecurityViolation(violation)
-                # Default: feedback to the loop.
+                # Default: feedback to the loop. ``reached_worker=False``
+                # tells the caller this empty ``state`` is a placeholder, not
+                # a real namespace snapshot — the worker was never consulted.
                 return ExecResult(
                     ok=False,
                     submitted=False,
@@ -141,6 +160,7 @@ class Interpreter:
                     stderr=violation,
                     state={},
                     error=violation,
+                    reached_worker=False,
                 )
         raw = self._request({"op": "exec", "code": code})
         return ExecResult.from_response(raw)
@@ -211,13 +231,20 @@ class Interpreter:
             self._stdout_queue.put(line)
         self._stdout_queue.put(None)
 
+    def _pump_stderr(self) -> None:
+        proc = self.proc
+        if proc is None or proc.stderr is None:
+            return
+        for line in proc.stderr:
+            self._stderr_buf.append(line)
+            if len(self._stderr_buf) > 200:
+                self._stderr_buf.pop(0)
+
     def _format_worker_exit(self, prefix: str) -> str:
-        stderr = ""
-        if self.proc is not None and self.proc.stderr is not None:
-            try:
-                stderr = self.proc.stderr.read()
-            except Exception:
-                stderr = ""
+        # Read from the ring buffer maintained by _pump_stderr — the pipe is
+        # already being drained by that thread, so a direct .read() here would
+        # race it (and could block if the thread hadn't started).
+        stderr = "".join(self._stderr_buf).strip()
         return f"{prefix}. Worker stderr:\n{stderr}".rstrip()
 
     def __enter__(self) -> "Interpreter":
@@ -290,7 +317,7 @@ class SubprocessPythonInterpreter:
         tools: dict[str, Callable[..., Any]] | None = None,
         output_fields: list[dict] | None = None,
         timeout: float = 300.0,
-        start_timeout: float = 15.0,
+        start_timeout: float | None = None,
         python: str | None = None,
         cwd: str | None = None,
         security: SecurityPolicy | None = None,
@@ -298,6 +325,18 @@ class SubprocessPythonInterpreter:
         self.tools: dict[str, Callable[..., Any]] = dict(tools) if tools else {}
         self.output_fields = output_fields
         self.timeout = timeout
+        # Startup self-test timeout. Defaults generously (60s) because a cold
+        # CPython spawn on a loaded machine (AV scan, CI runner contention)
+        # can legitimately take tens of seconds; a genuinely broken install
+        # still fails fast because the dead worker closes stdout immediately
+        # ("Worker exited unexpectedly"), without waiting out this timeout.
+        # Override per-instance via start_timeout= or globally via the
+        # FABRIC_RLM_START_TIMEOUT environment variable.
+        if start_timeout is None:
+            try:
+                start_timeout = float(os.environ.get("FABRIC_RLM_START_TIMEOUT", "60"))
+            except ValueError:
+                start_timeout = 60.0
         self.start_timeout = start_timeout
         self.python = python or sys.executable
         self.cwd = cwd
