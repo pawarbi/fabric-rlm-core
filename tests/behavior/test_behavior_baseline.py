@@ -100,6 +100,19 @@ def _run_gate(model: str, request: pytest.FixtureRequest) -> None:
         res = runner_mod.run_question(
             q, model, max_turns=baseline.max_turns, timeout_s=float(baseline.timeout_s)
         )
+        if res.error_class == "auth":
+            # Credential problem, not a regression: the model never saw the
+            # question.  Fail fast and loudly with the real cause instead of
+            # burning the remaining questions and reporting per-qid
+            # "regressions" that send maintainers bisecting nothing.
+            pytest.fail(
+                "Behavior gate aborted: the LM provider rejected the API key "
+                f"(qid {res.qid!r}: {res.reason}). "
+                "This is an environment/credentials problem, NOT a model "
+                "regression. Check OPENROUTER_API_KEY (expired/revoked keys "
+                "return 401 'User not found').",
+                pytrace=False,
+            )
         pr_results[q.qid] = res.passed
         detail.append({
             "qid": res.qid,
