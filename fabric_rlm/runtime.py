@@ -186,6 +186,36 @@ def _tail_ratio(env_name: str, default: float) -> float:
         return default
 
 
+# Failure-time truncation hint. When a turn prints more than the stdout budget,
+# the model only sees the head/tail of its own output; trace analysis showed
+# models that over-print then *guess* the items they could not see. Firing a
+# concrete recovery instruction at exactly that moment follows the project's
+# "signal at failure time, don't teach always-on" rule. Default OFF: A/B on real
+# tasks showed the deployed-class models (gpt-3.5-turbo, gpt-4.1-mini, gpt-4.1)
+# self-limit printing (they sample rather than dump), so the trigger rarely
+# fires on classification/counting workloads. Kept as an opt-in safety net for
+# genuine large-output dumps (big logs, full-document prints).
+_TRUNCATION_HINT_DEFAULT = "off"
+_TRUNCATION_HINT_MARKER = "you are NOT seeing all of the output"
+
+
+def _truncation_hint_enabled() -> bool:
+    raw = os.environ.get("FABRIC_RLM_TRUNCATION_HINT", _TRUNCATION_HINT_DEFAULT)
+    return raw.strip().lower() in ("1", "on", "true", "yes")
+
+
+def _build_truncation_hint(full_len: int, limit: int) -> str:
+    return (
+        f"\n\nNOTE: this turn printed {full_len} characters but only about {limit} "
+        f"are shown above, so {_TRUNCATION_HINT_MARKER}. Do not count, classify, "
+        "label, or otherwise judge items you cannot see — guessing the hidden ones "
+        "is the most common cause of wrong answers. Instead either (a) compute the "
+        "result in Python and print only a short summary, or (b) if each item needs "
+        "a language-model judgment, process the data in bounded chunks with "
+        "`await predict(...)` and combine the results."
+    )
+
+
 def _truncate_for_feedback(text: str, limit: int, *, tail_ratio: float = 0.0) -> str:
     """Trim ``text`` to ``limit`` characters for LM feedback.
 
@@ -1688,6 +1718,8 @@ class RLM:
             tail_ratio=_tail_ratio("FABRIC_RLM_STDOUT_TAIL_RATIO", _STDOUT_TAIL_RATIO_DEFAULT),
         )
         parts = [f"REPL output from turn {turn}:\n```\n{stdout_text}\n```"]
+        if len(result.stdout) > STDOUT_FEEDBACK_LIMIT and _truncation_hint_enabled():
+            parts.append(_build_truncation_hint(len(result.stdout), STDOUT_FEEDBACK_LIMIT))
         if not result.ok:
             error_text = _truncate_for_feedback(
                 result.error or "",
