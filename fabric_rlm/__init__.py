@@ -10,6 +10,12 @@ from .interpreter import (
 )
 from .lm import AnthropicLM, FabricLM, OpenAILM, register_backend, resolve_lm
 from .metrics import ValidationCheck, ValidationReport
+from .replay_lm import (
+    DivergenceError,
+    ReplayInterpreter,
+    ReplayLM,
+    replay_trajectory,
+)
 from .runtime import RLM, RLMResult
 from .skill_loader import Skill, SkillLoader, compose_skills, list_skills, load_skill
 from .trajectory import Issue, Trajectory, TurnRecord
@@ -26,6 +32,7 @@ from .validators import (
 
 __all__ = [
     "AnthropicLM",
+    "DivergenceError",
     "ExecResult",
     "FabricLM",
     "File",
@@ -33,8 +40,11 @@ __all__ = [
     "LocalArtifactStore",
     "OpenAILM",
     "Issue",
+    "ReplayInterpreter",
+    "ReplayLM",
     "RLM",
     "RLMResult",
+    "replay_trajectory",
     "Skill",
     "SkillLoader",
     "SubprocessPythonInterpreter",
@@ -61,4 +71,4 @@ __all__ = [
 
 # Single source of truth for the package version. pyproject.toml reads this
 # statically via [tool.setuptools.dynamic] — bump it here and nowhere else.
-__version__ = "0.2.3"
+__version__ = "0.2.4"

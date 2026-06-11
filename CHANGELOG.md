@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.2.4 — 2026-06-10 — golden-trajectory replay + loop-robustness
+
+### Added
+
+- **`ReplayLM` golden-trajectory harness (`fabric_rlm.replay_lm`).** Re-run the
+  *real* `RLM.run` loop from a recorded `Trajectory` with **zero API calls and
+  zero subprocesses**. A recording already stores both sides of every turn — the
+  raw LM response (`TurnRecord.response_text`) and the worker outcome
+  (`stdout`/`error`/`submitted`/`state`/`submit_payload`) — which is everything
+  needed to drive the loop again. Two in-memory fakes, `ReplayLM` (feeds recorded
+  responses) and `ReplayInterpreter` (feeds reconstructed `ExecResult`s), plus a
+  one-call `replay_trajectory(rlm, trajectory)` helper, give deterministic
+  end-to-end regression coverage of feedback formatting, validation, repair
+  routing, and stop conditions. Divergence is the signal: if a change makes the
+  loop request more turns, execute different code, or stop earlier than the
+  recording, `replay_trajectory` raises `DivergenceError`. New public exports:
+  `ReplayLM`, `ReplayInterpreter`, `replay_trajectory`, `DivergenceError`.
+  Frozen example recordings live in `examples/trajectories/`; see
+  `examples/replay_golden_trajectories.py` for the how/why and the Lakehouse
+  save/load path. Targets the default `engine="v6-custom"` loop; verifier-free
+  recordings are the supported golden path.
+
+### Changed
+
+- **Robust code extraction.** A response with no `python` code fence is no longer
+  shipped to the worker as bare prose (which burned a turn on a `SyntaxError`);
+  the loop now short-circuits with a clean "resend one complete block" signal,
+  the sibling of the existing truncated-fence guard. Extraction also now selects
+  the **last** complete fenced block rather than the first, matching how models
+  revise — a sketch in block 1, the corrected code in block 2.
+- **Repair-turn diversity nudge (default `escalating`).** Validation / verifier
+  repair feedback can append a line nudging the model to recompute a repeatedly
+  failing field via a different method and cross-check before re-submitting —
+  operationalizing the REFLECT principle *within* an attempt to break stuck
+  loops. Modes via `FABRIC_RLM_REPAIR_NUDGE`: `off` / `static` / `escalating`
+  (default; the line appears only after a field has failed at least twice).
+
+### Fixed
+
+- **PDF-skill parallel gather hardening.** The `pdf_document_analysis` skill's
+  map-reduce snippet now bounds concurrency and uses `return_exceptions=True` so
+  one bad chunk can't sink the whole gather, and documents the
+  split → `predict()` per chunk → gather → synthesize idiom.
+
+### Other
+
+- **Opt-in failure-time truncation hint** (`FABRIC_RLM_TRUNCATION_HINT`, default
+  **off**). When a turn's stdout overflows the feedback budget, an opt-in hint
+  tells the model it is not seeing all output and should aggregate in Python or
+  chunk + `predict()`. Shipped default-off as a tested safety net (A/B showed the
+  dominant "sample-and-guess" failure produces small stdout that never triggers
+  it, so no benefit is claimed by default).
+
 ## 0.2.3 — 2026-06-10 — tail-preserving feedback truncation + docs
 
 ### Changed
