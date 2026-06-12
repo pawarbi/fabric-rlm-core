@@ -18,25 +18,18 @@ A 5-minute getting-started guide for the `fabric_rlm` package.
 pip install -e .
 ```
 
-### 1b. Inside a Fabric notebook (from a lakehouse-staged wheel)
+### 1b. Inside a Fabric notebook
 
 ```python
-# Install the wheel WITHOUT --no-deps for dspy so its transitive deps
-# (orjson, cloudpickle, litellm, pydantic, …) come along.
-# DuckDB and polars are already in the Fabric Python runtime — don't reinstall.
-%pip install -q --no-deps --force-reinstall \
-    "/lakehouse/default/Files/fabric_rlm/wheels/fabric_rlm-<version>-py3-none-any.whl"
-%pip install -q "dspy>=3.1.2"
+# Temporary until 0.2.5 is on production PyPI.
+%pip install -q \
+    --index-url https://test.pypi.org/simple \
+    --extra-index-url https://pypi.org/simple \
+    fabric-rlm==0.2.5
 ```
 
 > ⚠️ **Restart the Python session** after `%pip install` (Fabric ribbon →
 > Restart session). `%pip` does not reload already-imported modules.
->
-> ⚠️ Don't pass `--no-deps` to the `dspy` line — that's what causes
-> `ModuleNotFoundError: No module named 'orjson'` at `from fabric_rlm import
-> FabricLM`. Use `--no-deps` only on the `fabric_rlm` wheel itself (to
-> protect Fabric's pinned numpy/pandas/duckdb/polars), and let dspy pull
-> its own deps.
 
 You also need an LLM API key. The examples below use OpenRouter (any model),
 but `dspy.LM` works with OpenAI / Anthropic / Azure / local Ollama too.
