@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.5 — 2026-06-11 — task-constructor alias
+
+### Added
+
+- **`RLM.task(...)` ergonomic alias.** `RLM.task(task, inputs=..., outputs=..., **kwargs)`
+  now constructs the same inline-task runtime as `RLM.from_task(...)`, preserving
+  subclass dispatch, copied caller inputs/outputs, constructor kwargs, and
+  legacy-engine deprecation warning behavior.
+
 ## 0.2.4 — 2026-06-10 — golden-trajectory replay + loop-robustness
 
 ### Added

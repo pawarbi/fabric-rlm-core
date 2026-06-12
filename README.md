@@ -27,11 +27,9 @@ validator rejects an attempt — opt-in via `engine="adaptive"`. See
 | Engine value | What it does | When to pick it |
 |---|---|---|
 | `"auto"` (default) | Picks `"dspy"` when a non-empty `tools=[...]` iterable is supplied, else `"default"` | You don't want to think about it. Recommended. |
-| `"default"` | Custom loop with skills/router/reflection/verifier (= legacy `v6-custom`) | You want skills + multi-turn verifier feedback. |
-| `"dspy"` | Delegates to `dspy.predict.RLM` with our subprocess as backend (= legacy `v7-dspy`) | You want dspy-native composability or `tools=`. |
+| `"default"` | Custom loop with skills/router/reflection/verifier | You want skills + multi-turn verifier feedback. |
+| `"dspy"` | Delegates to `dspy.predict.RLM` with our subprocess as backend | You want dspy-native composability or `tools=`. |
 
-The legacy literals `"v6-custom"` / `"v7-dspy"` still work and resolve to
-the same engines, but emit a `DeprecationWarning` — please migrate.
 `engine="adaptive"` remains experimental (opt-in `UserWarning`).
 
 The default `core` skill ships with a **PLAN / VERIFY / REFLECT (PVR)**
@@ -57,7 +55,7 @@ pip install dist/fabric_rlm-<version>-py3-none-any.whl
 ```python
 from fabric_rlm import RLM, OpenAILM
 
-rlm = RLM.from_task(
+rlm = RLM.task(
     task="Summarize the parties, term, and termination clauses.",
     inputs={"pdf_path": "/path/to/contract.pdf"},
     outputs=["answer"],
@@ -67,6 +65,8 @@ rlm = RLM.from_task(
 result = rlm.run()
 print(result.answer)
 ```
+
+`RLM.from_task(...)` remains available as the explicit constructor form.
 
 There is also a small CLI (installed as `fabric-rlm`):
 

@@ -7,7 +7,7 @@ class MockLM:
 
 
 if __name__ == "__main__":
-    rlm = RLM.from_task(
+    rlm = RLM.task(
         task="Add the two input numbers and submit answer.",
         inputs={"a": 2, "b": 3},
         outputs=["answer"],
@@ -16,4 +16,3 @@ if __name__ == "__main__":
     )
     result = rlm.run()
     print(result.payload)
-

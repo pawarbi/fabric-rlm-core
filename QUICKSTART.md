@@ -26,7 +26,7 @@ pip install -e .
 # DuckDB and polars are already in the Fabric Python runtime — don't reinstall.
 %pip install -q --no-deps --force-reinstall \
     "/lakehouse/default/Files/fabric_rlm/wheels/fabric_rlm-<version>-py3-none-any.whl"
-%pip install -q "dspy>=2.5"
+%pip install -q "dspy>=3.1.2"
 ```
 
 > ⚠️ **Restart the Python session** after `%pip install` (Fabric ribbon →
@@ -81,7 +81,7 @@ from fabric_rlm import RLM, FabricLM
 
 lm = FabricLM("gpt-5")   # defaults: temperature=1.0, max_tokens=16000
 
-rlm = RLM.from_task(
+rlm = RLM.task(
     task="Compute the 30th Fibonacci number using a loop.",
     inputs={"n": 30},
     outputs=["fib"],
@@ -91,7 +91,7 @@ rlm = RLM.from_task(
 print(rlm(n=30).payload)   # {'fib': 832040}
 ```
 
-> 💡 **Reasoning-model handling (auto in v0.1.3+):** `FabricLM` /
+> 💡 **Reasoning-model handling:** `FabricLM` /
 > `OpenAILM` / `resolve_lm` now detect reasoning models (gpt-5,
 > o1/o3/o4 family) and **omit `temperature` automatically** (it's
 > rejected/ignored by the API). Pass `reasoning_effort="minimal"|"low"
@@ -110,7 +110,7 @@ print(rlm(n=30).payload)   # {'fib': 832040}
 Equivalent string-spec form (auto-routes through the same factory):
 
 ```python
-rlm = RLM.from_task(..., lm="fabric/gpt-5")
+rlm = RLM.task(..., lm="fabric/gpt-5")
 ```
 
 Equivalent verbose form (if you need to pass extra dspy.LM kwargs the helper
@@ -147,8 +147,8 @@ lm = dspy.LM(
     max_tokens=16000,
 )
 
-rlm = RLM.from_task(task="Compute fib(30)", inputs={"n": 30},
-                    outputs=["fib"], lm=lm, max_turns=5)
+rlm = RLM.task(task="Compute fib(30)", inputs={"n": 30},
+               outputs=["fib"], lm=lm, max_turns=5)
 result = rlm(n=30)            # __call__ is sugar for .run()
 print(result.payload)         # {'fib': 832040}
 print(result.submitted)       # True
@@ -171,10 +171,6 @@ RLM(..., engine="dspy", tools=[my_tool, ...])  # tools= requires dspy
 | `"auto"` (default) | You don't want to think about it. If you pass a non-empty `tools=[...]`, you get `"dspy"`; otherwise `"default"`. |
 | `"default"` | You want skills, router, reflection, multi-turn verifier feedback. |
 | `"dspy"` | You want dspy-native behavior + composability with the rest of your dspy program, or you need `tools=`. Same SUBMIT contract, same subprocess interpreter. |
-
-> The legacy spellings `"v6-custom"` and `"v7-dspy"` still resolve to
-> `"default"` and `"dspy"` respectively, but emit a `DeprecationWarning`.
-> Removal is not planned before v0.3.
 
 Both write the SAME Python code through the SAME subprocess. Choose by what
 you want around the loop, not for raw capability.
@@ -232,7 +228,7 @@ adaptive_result.winner.verdict    # validator's last call on the winner
 
 This API is **experimental** — it emits a `UserWarning("experimental")` once
 at construction. Behaviour, knob names, and metadata layout may change in
-0.2.x. Validator is recommended; without one the runner cannot tell when to
+future minor releases. Validator is recommended; without one the runner cannot tell when to
 escalate, and a `UserWarning` is emitted to flag that.
 
 ---
@@ -380,9 +376,7 @@ for h in lm.history:
 > battle-tested path (the markdown gets concatenated into the system prompt).
 > The *automatic* router (`enable_router=True`) routes on keywords in the
 > bound input values, **falling back to the `task=` text when the inputs
-> carry no keyword signal** (fixed in 0.2.2 — previously a question passed
-> via `from_task(task=...)` with file-path-only inputs scored nothing and
-> every run got the same always-on bundle). It is still a keyword heuristic,
+> carry no keyword signal**. It is still a keyword heuristic,
 > not semantic matching — for production workloads with a known domain,
 > prefer explicit `skills=[...]`. Check
 > `result.trajectory.metadata["router_active"]` and
@@ -403,11 +397,7 @@ applies to per-skill `verify()` blocks — wired but most skills don't have
 meaningful verifier bodies yet (use `output_validator` + the validator
 primitives in §10 instead).
 
-### 9a. Large-file / log analysis (new in v0.1.1, opt-in)
-
-> v0.1.2 note: skill text now explicitly tells the LM that `duckdb` and
-> `polars` are pre-installed in the Fabric Python runtime, so it won't
-> waste a turn trying to `%pip install` them.
+### 9a. Large-file / log analysis
 
 For lakehouse logs / CSVs / Parquet too big to fit in context:
 
@@ -466,11 +456,11 @@ See `fabric_rlm/validators.py` for the implementation and
 | `timeout` | 300.0 | Subprocess timeout (seconds) |
 | `enable_router` | False | Turn on skill router |
 | `max_active_skills` | 2 | Max skills the router activates |
-| `enable_verifier` | True | Skill verifier blocks (v6 only) |
+| `enable_verifier` | True | Enable skill verifier blocks when configured |
 | `output_validator` | None | Your callable; raise `AssertionError` to reject |
 | `halve_max_iter_on_retry` | True | If False, retries keep full `max_iterations` |
 | `verbose` | False | Print live progress |
-| `engine` | `"auto"` | `"auto"` (default), `"default"`, `"dspy"`, `"adaptive"` (experimental). Legacy `"v6-custom"`/`"v7-dspy"` deprecated. |
+| `engine` | `"auto"` | `"auto"` (default), `"default"`, `"dspy"`, `"adaptive"` (experimental). |
 
 ---
 

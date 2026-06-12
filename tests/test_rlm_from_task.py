@@ -123,6 +123,53 @@ class TestFromTaskConstruction:
         assert rlm._inline_inputs == {}
 
 
+class TestTaskAliasConstruction:
+    def test_task_alias_wires_task_outputs_inputs_and_kwargs(self):
+        rlm = RLM.task(
+            "Compute the unique answer.",
+            inputs={"foo": 7},
+            outputs=["answer", "evidence"],
+            lm=ScriptedLM([]),
+            max_turns=7,
+            timeout=11,
+        )
+        assert rlm._inline_task == "Compute the unique answer."
+        assert rlm._inline_outputs == ["answer", "evidence"]
+        assert rlm._inline_inputs == {"foo": 7}
+        assert rlm.signature is None
+        assert rlm.max_turns == 7
+        assert rlm.timeout == 11
+
+    def test_task_alias_preserves_subclass_dispatch(self):
+        class CustomRLM(RLM):
+            pass
+
+        rlm = CustomRLM.task("X", lm=ScriptedLM([]), max_turns=1, timeout=5)
+
+        assert isinstance(rlm, CustomRLM)
+
+    def test_task_alias_runs_through_inline_task_runtime(self):
+        lm = ScriptedLM([_wrap("SUBMIT(answer=foo * 2)")])
+        rlm = RLM.task(
+            "Double foo.",
+            inputs={"foo": 21},
+            outputs=["answer"],
+            lm=lm,
+            max_turns=1,
+            timeout=5,
+        )
+
+        result = rlm.run()
+
+        assert result.submitted
+        assert result.payload == {"answer": 42}
+
+    def test_task_alias_omitted_inputs_and_outputs_default_to_empty(self):
+        rlm = RLM.task("X", lm=ScriptedLM([]), max_turns=1, timeout=5)
+        assert rlm._inline_outputs == []
+        assert rlm._inline_inputs == {}
+
+
 # ---------------------------------------------------------------------------
 # Caller-supplied collections must be copied, not aliased
 # ---------------------------------------------------------------------------

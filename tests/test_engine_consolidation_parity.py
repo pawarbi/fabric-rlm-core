@@ -834,6 +834,36 @@ def test_from_task_suppresses_double_deprecation_warning():
     )
 
 
+def test_task_alias_legacy_engine_warning_points_at_user_callsite():
+    """``RLM.task`` is an ergonomic alias, but warning stacklevel must still
+    point at the user's alias call site rather than the implementation wrapper.
+    """
+    import warnings as _warnings
+
+    with _warnings.catch_warnings(record=True) as records:
+        _warnings.simplefilter("always")
+        _ = RLM.task(
+            "echo", inputs={"q": "x"}, outputs=["a"],
+            lm=_StubLM(), engine="v6-custom",
+        )
+
+    engine_dep = [
+        r for r in records
+        if issubclass(r.category, DeprecationWarning)
+        and "engine=" in str(r.message)
+        and "v6-custom" in str(r.message)
+    ]
+    assert len(engine_dep) == 1, (
+        f"task alias must emit the engine deprecation warning exactly once. "
+        f"Got {len(engine_dep)}: {[str(r.message) for r in engine_dep]}"
+    )
+    assert engine_dep[0].filename.endswith("test_engine_consolidation_parity.py"), (
+        f"DeprecationWarning must point at the RLM.task caller (this test file), "
+        f"not at library internals. Got filename={engine_dep[0].filename!r}, "
+        f"lineno={engine_dep[0].lineno}"
+    )
+
+
 def test_from_task_does_not_swallow_subclass_warnings_on_non_legacy_engine():
     """Phase 7 v2 duck-blocking regression test: the message-scoped
     warnings filter installed by ``from_task`` to suppress its own

@@ -446,7 +446,8 @@ _ROUTER_ENGINES: tuple[str, ...] = ("auto",)
 # Phase 5: legacy canonical names still resolve correctly (back-compat) but
 # emit ``DeprecationWarning`` to steer new code toward the public aliases.
 # The warning is emitted by the public entry points (``RLM.__init__`` and
-# ``RLM.from_task``) at the correct ``stacklevel`` for each — NOT inside
+# ``RLM.from_task`` / ``RLM.task``) at the correct ``stacklevel`` for each —
+# NOT inside
 # ``_normalize_engine_name`` itself, because that helper is also re-entered
 # by internal call sites (notably the adaptive inner-RLM factory) that pass
 # canonical names by design and must not self-trigger the warning.
@@ -466,8 +467,9 @@ def _emit_engine_deprecation_warning_if_legacy(name: Any, stacklevel: int) -> No
 
     * Called directly from ``RLM.__init__`` body: ``stacklevel=3``
       (warn -> helper -> __init__ -> user).
-    * Called directly from ``RLM.from_task`` body: ``stacklevel=3``
-      (warn -> helper -> from_task -> user).
+    * Called from the shared task-constructor implementation:
+      ``stacklevel=4`` (warn -> helper -> _from_task_impl -> public
+      constructor alias -> user).
 
     Non-string inputs are silently ignored — ``_normalize_engine_name`` is
     responsible for raising on those.
@@ -498,7 +500,7 @@ def _normalize_engine_name(name: str) -> str:
     routing-relevant kwargs (``tools=``) are materialized.
 
     Phase 5 deprecation warnings for legacy canonical names are emitted by
-    public entry points (``RLM.__init__`` / ``RLM.from_task``) using
+    public entry points (``RLM.__init__`` / task constructors) using
     ``_emit_engine_deprecation_warning_if_legacy``, NOT here — this function
     is re-entered by internal call sites that legitimately pass canonical
     names and must not self-warn.
@@ -783,11 +785,13 @@ class RLM:
         self._inline_inputs: dict[str, Any] = {}
 
     @classmethod
-    def from_task(
+    def _from_task_impl(
         cls,
         task: str,
         inputs: dict[str, Any] | None = None,
         outputs: list[str] | None = None,
+        *,
+        deprecation_stacklevel: int,
         **kwargs: Any,
     ) -> "RLM":
         # Don't pass `None` positionally — callers may supply `signature=...`
@@ -809,7 +813,9 @@ class RLM:
         # ``__init__`` even on non-legacy paths, defeating ``-W error``
         # policy on the subclass extension surface (Phase 7 v2 duck).
         _user_engine = kwargs.get("engine")
-        _emit_engine_deprecation_warning_if_legacy(_user_engine, stacklevel=3)
+        _emit_engine_deprecation_warning_if_legacy(
+            _user_engine, stacklevel=deprecation_stacklevel
+        )
         if isinstance(_user_engine, str) and _user_engine in _DEPRECATED_LEGACY_ENGINES:
             with warnings.catch_warnings():
                 warnings.filterwarnings(
@@ -824,6 +830,39 @@ class RLM:
         instance._inline_outputs = list(outputs or [])
         instance._inline_inputs = dict(inputs or {})
         return instance
+
+    @classmethod
+    def from_task(
+        cls,
+        task: str,
+        inputs: dict[str, Any] | None = None,
+        outputs: list[str] | None = None,
+        **kwargs: Any,
+    ) -> "RLM":
+        return cls._from_task_impl(
+            task,
+            inputs=inputs,
+            outputs=outputs,
+            deprecation_stacklevel=4,
+            **kwargs,
+        )
+
+    @classmethod
+    def task(
+        cls,
+        task: str,
+        inputs: dict[str, Any] | None = None,
+        outputs: list[str] | None = None,
+        **kwargs: Any,
+    ) -> "RLM":
+        """Ergonomic alias for :meth:`from_task`."""
+        return cls._from_task_impl(
+            task,
+            inputs=inputs,
+            outputs=outputs,
+            deprecation_stacklevel=4,
+            **kwargs,
+        )
 
     def __call__(self, **inputs: Any) -> RLMResult:
         return self.run(inputs or None)
@@ -2545,4 +2584,3 @@ def _usage_nested_field(usage: dict[str, Any], parent: str, child: str) -> int |
     if not isinstance(nested, dict):
         return None
     return _usage_field(nested, child)
-
