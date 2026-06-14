@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import openpyxl
 import pytest
+
+openpyxl = pytest.importorskip("openpyxl")
 
 from fabric_rlm.excel_artifacts import (
     ExcelTargetRange,
@@ -18,6 +19,14 @@ def test_parse_target_ranges_handles_comma_separated_sheet_ranges() -> None:
         ExcelTargetRange(sheet_name=None, cell_range="A1:A50"),
         ExcelTargetRange(sheet_name="Sheet2", cell_range="A1:E20"),
         ExcelTargetRange(sheet_name="Sheet, Three", cell_range="C3:D4"),
+    ]
+
+
+def test_parse_target_ranges_unescapes_quoted_sheet_apostrophes() -> None:
+    parsed = parse_target_ranges("'O''Brien'!A1:B2")
+
+    assert parsed == [
+        ExcelTargetRange(sheet_name="O'Brien", cell_range="A1:B2"),
     ]
 
 

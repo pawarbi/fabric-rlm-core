@@ -155,7 +155,7 @@ def _parse_one_range(part: str) -> ExcelTargetRange:
         cell_range = cell_range[1:-1]
     if "!" in cell_range:
         sheet, cell_range = cell_range.rsplit("!", 1)
-        sheet_name = _unquote_sheet_name(_strip_stray_quotes(sheet.strip())) or None
+        sheet_name = _normalize_sheet_name(sheet) or None
     return ExcelTargetRange(
         sheet_name=sheet_name,
         cell_range=_normalize_range(_strip_stray_quotes(cell_range.strip())),
@@ -166,6 +166,14 @@ def _unquote_sheet_name(sheet: str) -> str:
     if len(sheet) >= 2 and sheet[0] == "'" and sheet[-1] == "'":
         return sheet[1:-1].replace("''", "'")
     return sheet
+
+
+def _normalize_sheet_name(sheet: str) -> str:
+    sheet = sheet.strip()
+    unquoted = _unquote_sheet_name(sheet)
+    if unquoted != sheet:
+        return unquoted
+    return _strip_stray_quotes(sheet)
 
 
 def _strip_stray_quotes(value: str) -> str:
