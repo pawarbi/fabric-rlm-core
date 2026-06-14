@@ -569,6 +569,7 @@ class RLM:
         max_prompt_tokens: int | None = None,
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
+        output_validator_context: Callable[[Mapping[str, Any], Mapping[str, Any]], None] | None = None,
         halve_max_iter_on_retry: bool = True,
         engine: str = "auto",
         adaptive: dict | None = None,
@@ -706,6 +707,7 @@ class RLM:
             self.max_prompt_tokens = max_prompt_tokens
             self.digest_after_turn = digest_after_turn
             self.output_validator = output_validator
+            self.output_validator_context = output_validator_context
             self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
             self._loaded_skills: list[Skill] = []
             self._activated_skills: set[str] = set()
@@ -734,6 +736,7 @@ class RLM:
                 max_prompt_tokens=max_prompt_tokens,
                 digest_after_turn=digest_after_turn,
                 output_validator=output_validator,
+                output_validator_context=output_validator_context,
                 halve_max_iter_on_retry=halve_max_iter_on_retry,
                 stuck_loop_threshold=stuck_loop_threshold,
                 security=self._security,
@@ -767,6 +770,7 @@ class RLM:
         self.max_prompt_tokens = max_prompt_tokens
         self.digest_after_turn = digest_after_turn
         self.output_validator = output_validator
+        self.output_validator_context = output_validator_context
         self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
         # Per-run counter for repeat-aware repair nudges (keyed by repair target);
         # reset at the start of each run().
@@ -1499,6 +1503,16 @@ class RLM:
                         continue
 
                     output_feedback = self._run_output_validator(result.submit_payload)
+                    if output_feedback is None:
+                        output_feedback = self._run_output_validator_context(
+                            result.submit_payload,
+                            {
+                                "inputs": bound_inputs,
+                                "state": result.state,
+                                "turn": turn_counter,
+                                "trajectory": trajectory,
+                            },
+                        )
                     if output_feedback is not None:
                         feedback_text, history_entry = output_feedback
                         if history_entry is not None:
@@ -1511,6 +1525,8 @@ class RLM:
                             reached_max = True
                         continue
 
+                    if verifier_repair_history:
+                        trajectory.metadata["verifier_repair_history"] = verifier_repair_history
                     return RLMResult(
                         submitted=True,
                         payload=result.submit_payload,
@@ -1537,6 +1553,8 @@ class RLM:
             if not reached_max:
                 reached_max = True
 
+        if verifier_repair_history:
+            trajectory.metadata["verifier_repair_history"] = verifier_repair_history
         return RLMResult(
             submitted=False,
             payload=None,
@@ -1748,6 +1766,47 @@ class RLM:
             )
         return None
 
+    def _run_output_validator_context(
+        self, payload: Mapping[str, Any] | None, context: Mapping[str, Any]
+    ) -> tuple[str, dict[str, Any] | None] | None:
+        """Run an optional validator that can inspect runtime context.
+
+        ``output_validator`` is intentionally payload-only for simple answer
+        contracts. Artifact tasks often need to verify side effects (saved
+        files, database rows, interpreter state), so this opt-in hook receives
+        the same payload plus non-serialized runtime context.
+        """
+
+        if self.output_validator_context is None:
+            return None
+        try:
+            self.output_validator_context(payload or {}, context)
+        except AssertionError as exc:
+            message = str(exc) or "context validator rejected the submitted artifact/state."
+            feedback = (
+                "Your SUBMIT was rejected by the context-aware output validator:\n\n"
+                f"AssertionError: {message}\n\n"
+                f"Submitted payload preview: {_preview_payload(payload)}\n"
+                f"Context keys: {', '.join(context.keys()) or '(none)'}\n"
+                "Inspect the artifact/state, fix the issue, and call SUBMIT(...) again."
+                + self._repair_nudge_suffix("output_validator_context")
+            )
+            history_entry: dict[str, Any] = {
+                "skill": "output_validator_context",
+                "rejected_payload": dict(payload) if isinstance(payload, Mapping) else payload,
+                "assertion": message,
+                "context_keys": list(context.keys()),
+            }
+            return feedback, history_entry
+        except Exception as exc:  # noqa: BLE001 - graceful degrade for buggy validators
+            logger.warning(
+                "Context-aware output validator raised non-AssertionError %s: %s; "
+                "accepting payload (graceful degrade).",
+                type(exc).__name__,
+                exc,
+            )
+        return None
+
     def _format_feedback(
         self, result: ExecResult, turn: int, *, is_final_turn: bool = False
     ) -> str:
@@ -1932,6 +1991,16 @@ class RLM:
 
             if verifier_feedback is None:
                 verifier_feedback = self._run_output_validator(payload)
+            if verifier_feedback is None:
+                verifier_feedback = self._run_output_validator_context(
+                    payload,
+                    {
+                        "inputs": current_inputs,
+                        "attempt": attempt,
+                        "prediction": prediction,
+                        "trajectory": trajectory,
+                    },
+                )
 
             if verifier_feedback is None:
                 # All checks pass – ship the prediction.

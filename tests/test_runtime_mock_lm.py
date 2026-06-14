@@ -100,9 +100,39 @@ def test_submit_validation_allows_empty_specific_collection_outputs() -> None:
     assert result.payload == {"citations": []}
 
 
+def test_context_output_validator_can_reject_artifact_state_and_repair() -> None:
+    def validator(payload, context):
+        assert payload.get("answer") == "done"
+        assert context["inputs"]["target"] == 42
+        assert context["state"].get("artifact_value") == 42, "artifact_value must equal target"
+
+    lm = ScriptedLM(
+        [
+            "```python\nartifact_value = 7\nSUBMIT(answer='done')\n```",
+            "```python\nartifact_value = target\nSUBMIT(answer='done')\n```",
+        ]
+    )
+    rlm = RLM.from_task(
+        "Write the target into the artifact.",
+        inputs={"target": 42},
+        outputs=["answer"],
+        lm=lm,
+        max_turns=2,
+        timeout=5,
+        output_validator_context=validator,
+    )
+
+    result = rlm.run()
+
+    assert result.submitted
+    assert result.final_state["artifact_value"] == 42
+    assert "artifact_value must equal target" in lm.messages[1][-1]["content"]
+    history = result.trajectory.metadata.get("verifier_repair_history", [])
+    assert any(h.get("skill") == "output_validator_context" for h in history)
+
+
 def test_validate_submit_payload_rejects_empty_core_output_collections() -> None:
     validation = validate_submit_payload({"answer": []}, ["answer"])
 
     assert not validation.ok
     assert validation.errors == ("Required core output field 'answer' is an empty list.",)
-

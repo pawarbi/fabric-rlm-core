@@ -162,10 +162,11 @@ wb.save(path)
 
 After `wb.save(path)`, reload with `data_only=True` and print every cell in the TARGET CELL RANGE. Confirm:
 
-1. None of the values is `None`.
-2. None starts with `=` (which would mean you accidentally wrote a formula).
-3. None looks like VBA code, Power Query M, prose, or a placeholder (`"-"`, `"TBD"`).
-4. The values look reasonable (right magnitude, right type).
+1. Every target cell has the value implied by the task. Blank cells are OK only when the correct output is blank, such as unused rows after extracting a shorter filtered list.
+2. No target cell contains an unintended Excel error value like `#N/A`, `#VALUE!`, or `#REF!` unless the prompt explicitly asks for that literal error.
+3. No non-blank value starts with `=` (which would mean you accidentally wrote a formula).
+4. No non-blank value looks like VBA code, Power Query M, prose, or a placeholder (`"-"`, `"TBD"`).
+5. The values look reasonable (right magnitude, right type, correct blank positions).
 
 ```python
 wb2 = openpyxl.load_workbook(path, data_only=True)
@@ -178,13 +179,17 @@ for r in range(min_row, max_row + 1):
         v = ws2.cell(row=r, column=c).value
         coord = ws2.cell(row=r, column=c).coordinate
         print(coord, "=", repr(v))
-        assert v is not None, f"{coord} is None — write the actual computed value"
+        assert v not in ("#N/A", "#VALUE!", "#REF!", "#DIV/0!", "#NAME?"), (
+            f"{coord} contains an Excel error; compute the intended value or leave blank only if blank is correct"
+        )
+        if v is None:
+            continue
         if isinstance(v, str):
             assert not v.startswith("="), f"{coord} contains a formula string"
             forbidden = ("Sub ", "End Sub", "Power Query", "VBA", "Macro:", "let Source", "Application.", "ws.Range", "ws.Rows")
             for f in forbidden:
                 assert f not in v, f"{coord} contains code/prose ({f!r}) instead of a value"
-            assert v not in ("-", "", "TBD", "N/A", "see notes"), f"{coord} is a placeholder, recompute"
+            assert v not in ("-", "TBD", "N/A", "see notes"), f"{coord} is a placeholder, recompute"
 print("VERIFY OK")
 ```
 
