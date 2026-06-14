@@ -127,6 +127,49 @@ for i, val in enumerate(marks, start=2):     # row 2..41
 wb.save(path)                                # save back to the SAME path
 ```
 
+## Large-range / sheet-level protocol
+
+For sheet-level tasks or target ranges larger than a handful of cells, do not hand-edit scattered cells one at a time. Build a complete in-memory output table/matrix first, verify its dimensions, then write it in one pass.
+
+1. Parse the target range with `openpyxl.utils.cell.range_boundaries`.
+2. Compute the full output as `rows = [[...], [...]]`, including intentional blanks as `None`.
+3. Assert `len(rows) == target_height` and every row has `target_width`.
+4. Clear the target range before writing when the new output may be shorter than old content.
+5. Write the matrix row-by-row, preserving blanks as `None`.
+6. Reload and print summary counts: target cells, non-blank cells, formulas, Excel errors.
+
+```python
+from openpyxl.utils.cell import range_boundaries
+
+TARGET = "H2:P8"  # use the actual prompt range
+min_col, min_row, max_col, max_row = range_boundaries(TARGET)
+height = max_row - min_row + 1
+width = max_col - min_col + 1
+
+# rows must be computed from the workbook data, not copied from this example
+rows = [[None for _ in range(width)] for _ in range(height)]
+
+assert len(rows) == height, (len(rows), height)
+assert all(len(row) == width for row in rows), "output row width mismatch"
+
+for r in range(min_row, max_row + 1):
+    for c in range(min_col, max_col + 1):
+        ws.cell(r, c).value = None
+
+for i, row in enumerate(rows, start=min_row):
+    for j, value in enumerate(row, start=min_col):
+        ws.cell(i, j).value = value
+
+wb.save(path)
+```
+
+For large sheet transforms (sort, filter, merge, delete rows, reshape tables), prefer workbook operations over per-cell guessing:
+
+- Delete rows bottom-up with `ws.delete_rows`.
+- Sort data in Python using row records, then rewrite the whole target table.
+- For multi-sheet targets such as `A1:A50,Sheet2!A1:E20`, verify each range separately.
+- If a filtered output has fewer rows than the target range, write the computed rows and leave the remaining target cells blank (`None`), not `#N/A`, `"-"`, or old values.
+
 For row-deletion / row-insertion tasks, MUTATE THE STRUCTURE OF THE SHEET — do not write replacement text describing the deletion:
 
 ```python

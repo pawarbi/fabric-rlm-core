@@ -1,6 +1,13 @@
 """Public API for fabric-rlm."""
 
 from .artifacts import File, LocalArtifactStore
+from .excel_artifacts import (
+    ExcelCellValue,
+    ExcelTargetRange,
+    iter_target_cells,
+    parse_target_ranges,
+    validate_target_range_sanity,
+)
 from .interpreter import (
     ExecResult,
     Interpreter,
@@ -34,6 +41,8 @@ __all__ = [
     "AnthropicLM",
     "DivergenceError",
     "ExecResult",
+    "ExcelCellValue",
+    "ExcelTargetRange",
     "FabricLM",
     "File",
     "Interpreter",
@@ -62,11 +71,14 @@ __all__ = [
     "assert_predicate",
     "chain",
     "compose_skills",
+    "iter_target_cells",
     "list_skills",
     "load_skill",
+    "parse_target_ranges",
     "register_backend",
     "resolve_lm",
     "signature_validator",
+    "validate_target_range_sanity",
 ]
 
 # Single source of truth for the package version. pyproject.toml reads this
