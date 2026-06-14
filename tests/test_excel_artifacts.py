@@ -35,6 +35,26 @@ def test_parse_target_ranges_normalizes_single_column_row_range() -> None:
     ]
 
 
+def test_parse_target_ranges_tolerates_quoted_whole_sheet_ranges() -> None:
+    parsed = parse_target_ranges("'99250!A1:F9','99251!A1:F9','99252!A1:F8'")
+
+    assert parsed == [
+        ExcelTargetRange(sheet_name="99250", cell_range="A1:F9"),
+        ExcelTargetRange(sheet_name="99251", cell_range="A1:F9"),
+        ExcelTargetRange(sheet_name="99252", cell_range="A1:F8"),
+    ]
+
+
+def test_parse_target_ranges_tolerates_quote_between_sheet_and_range() -> None:
+    parsed = parse_target_ranges("'Sheet1!'A1:A50,'Sheet2!'A1:E20,'Sheet3!'A1:A50")
+
+    assert parsed == [
+        ExcelTargetRange(sheet_name="Sheet1", cell_range="A1:A50"),
+        ExcelTargetRange(sheet_name="Sheet2", cell_range="A1:E20"),
+        ExcelTargetRange(sheet_name="Sheet3", cell_range="A1:A50"),
+    ]
+
+
 def test_iter_target_cells_resolves_default_and_explicit_sheets(tmp_path) -> None:
     path = tmp_path / "book.xlsx"
     wb = openpyxl.Workbook()

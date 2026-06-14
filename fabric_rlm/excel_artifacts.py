@@ -151,16 +151,25 @@ def _split_range_list(position: str) -> list[str]:
 def _parse_one_range(part: str) -> ExcelTargetRange:
     sheet_name: str | None = None
     cell_range = part.strip()
+    if cell_range.startswith("'") and cell_range.endswith("'") and "!" in cell_range:
+        cell_range = cell_range[1:-1]
     if "!" in cell_range:
         sheet, cell_range = cell_range.rsplit("!", 1)
-        sheet_name = _unquote_sheet_name(sheet.strip()) or None
-    return ExcelTargetRange(sheet_name=sheet_name, cell_range=_normalize_range(cell_range.strip()))
+        sheet_name = _unquote_sheet_name(_strip_stray_quotes(sheet.strip())) or None
+    return ExcelTargetRange(
+        sheet_name=sheet_name,
+        cell_range=_normalize_range(_strip_stray_quotes(cell_range.strip())),
+    )
 
 
 def _unquote_sheet_name(sheet: str) -> str:
     if len(sheet) >= 2 and sheet[0] == "'" and sheet[-1] == "'":
         return sheet[1:-1].replace("''", "'")
     return sheet
+
+
+def _strip_stray_quotes(value: str) -> str:
+    return value.strip("'")
 
 
 def _normalize_range(cell_range: str) -> str:
