@@ -8,6 +8,7 @@ from fabric_rlm.excel_artifacts import (
     ExcelTargetRange,
     iter_target_cells,
     parse_target_ranges,
+    summarize_workbook_structure_context,
     summarize_workbook_context,
     validate_target_range_sanity,
 )
@@ -144,3 +145,27 @@ def test_summarize_workbook_context_returns_compact_targeted_sheet_evidence(tmp_
     assert "formulas: 1" in summary
     assert "row 2: A='2021-04-20' | B=133049 | C=<blank> | D=<blank> | E=17 | F=<blank>" in summary
     assert len(summary) < 2000
+
+
+def test_summarize_workbook_structure_context_omits_sample_values(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet2"
+    ws.append(["Date", "Employee Number", "Abs. Name", "Atts. Name", "Week", None])
+    ws.append(["2021-04-20", 133049, None, None, 17, None])
+    ws.append(["2021-04-21", 133049, "Sick Day", None, 17, None])
+    wb.save(path)
+
+    summary = summarize_workbook_structure_context(
+        path,
+        target_position="F2:F92",
+        default_sheet="Sheet2",
+    )
+
+    assert "WORKBOOK_STRUCTURE_CONTEXT" in summary
+    assert "target_ranges: Sheet2!F2:F92" in summary
+    assert "headers: A=Date | B=Employee Number | C=Abs. Name | D=Atts. Name | E=Week | F=<blank>" in summary
+    assert "sample_rows: omitted" in summary
+    assert "row 2:" not in summary
+    assert "Sick Day" not in summary

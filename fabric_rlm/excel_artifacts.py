@@ -175,6 +175,30 @@ def summarize_workbook_context(
     return "\n".join(lines)
 
 
+def summarize_workbook_structure_context(
+    workbook_path: str | Path,
+    *,
+    target_position: str,
+    default_sheet: str | None = None,
+    max_sample_cols: int = 12,
+) -> str:
+    """Return workbook structure only, omitting sample row values.
+
+    This lower-risk prompt context is meant to orient the model to sheets,
+    target ranges, dimensions, and headers while still forcing it to inspect
+    task-specific row values in its own first code turn.
+    """
+
+    summary = summarize_workbook_context(
+        workbook_path,
+        target_position=target_position,
+        default_sheet=default_sheet,
+        max_sample_rows=0,
+        max_sample_cols=max_sample_cols,
+    )
+    return summary.replace("WORKBOOK_CONTEXT", "WORKBOOK_STRUCTURE_CONTEXT", 1) + "\nsample_rows: omitted"
+
+
 def _split_range_list(position: str) -> list[str]:
     parts: list[str] = []
     current: list[str] = []

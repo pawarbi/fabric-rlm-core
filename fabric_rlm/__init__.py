@@ -6,6 +6,7 @@ from .excel_artifacts import (
     ExcelTargetRange,
     iter_target_cells,
     parse_target_ranges,
+    summarize_workbook_structure_context,
     summarize_workbook_context,
     validate_target_range_sanity,
 )
@@ -79,6 +80,7 @@ __all__ = [
     "register_backend",
     "resolve_lm",
     "signature_validator",
+    "summarize_workbook_structure_context",
     "summarize_workbook_context",
     "validate_target_range_sanity",
 ]
