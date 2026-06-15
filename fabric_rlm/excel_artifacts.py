@@ -146,11 +146,11 @@ def summarize_workbook_context(
     wb_formula = openpyxl.load_workbook(workbook_path, data_only=False)
     wb_values = openpyxl.load_workbook(workbook_path, data_only=True)
     targets = parse_target_ranges(target_position)
-    primary_sheet = _resolve_sheet(
+    primary_sheet = _resolve_sheets(
         wb_formula.sheetnames,
         targets[0].sheet_name if targets else None,
         default_sheet,
-    )
+    )[0]
     ws_formula = wb_formula[primary_sheet]
     ws_values = wb_values[primary_sheet]
     shown_cols = min(max(ws_formula.max_column, _max_target_column(targets)), max_sample_cols)
@@ -161,8 +161,13 @@ def summarize_workbook_context(
         f"sheets: {', '.join(wb_formula.sheetnames)}",
         "target_ranges: "
         + ", ".join(
-            f"{_resolve_sheet(wb_formula.sheetnames, target.sheet_name, default_sheet)}!{target.cell_range}"
+            f"{sheet_name}!{target.cell_range}"
             for target in targets
+            for sheet_name in _resolve_sheets(
+                wb_formula.sheetnames,
+                target.sheet_name,
+                default_sheet,
+            )
         ),
         f"active_sheet: {primary_sheet}",
         f"dimensions: {ws_formula.dimensions} rows={ws_formula.max_row} cols={ws_formula.max_column}",
@@ -203,10 +208,21 @@ def _split_range_list(position: str) -> list[str]:
     parts: list[str] = []
     current: list[str] = []
     in_quote = False
-    for ch in position.strip():
+    text = position.strip()
+    i = 0
+    while i < len(text):
+        ch = text[i]
         if ch == "'":
-            in_quote = not in_quote
+            if in_quote:
+                if i + 1 < len(text) and text[i + 1] == "'":
+                    current.extend(["'", "'"])
+                    i += 2
+                    continue
+                in_quote = False
+            elif not "".join(current).strip():
+                in_quote = True
             current.append(ch)
+            i += 1
             continue
         if ch == "," and not in_quote:
             part = "".join(current).strip()
@@ -215,6 +231,7 @@ def _split_range_list(position: str) -> list[str]:
             current = []
         else:
             current.append(ch)
+        i += 1
     part = "".join(current).strip()
     if part:
         parts.append(part)
@@ -264,17 +281,26 @@ def _normalize_range(cell_range: str) -> str:
 def _resolve_sheet(
     sheetnames: list[str], requested: str | None, default_sheet: str | None
 ) -> str:
+    return _resolve_sheets(sheetnames, requested, default_sheet)[0]
+
+
+def _resolve_sheets(
+    sheetnames: list[str], requested: str | None, default_sheet: str | None
+) -> list[str]:
     if requested:
         if requested not in sheetnames:
             raise AssertionError(f"target sheet {requested!r} not found; available sheets: {sheetnames}")
-        return requested
+        return [requested]
     if default_sheet:
-        if default_sheet not in sheetnames:
-            raise AssertionError(
-                f"default target sheet {default_sheet!r} not found; available sheets: {sheetnames}"
-            )
-        return default_sheet
-    return sheetnames[0]
+        if default_sheet in sheetnames:
+            return [default_sheet]
+        candidates = [_normalize_sheet_name(part) for part in _split_range_list(default_sheet)]
+        if candidates and all(candidate in sheetnames for candidate in candidates):
+            return candidates
+        raise AssertionError(
+            f"default target sheet {default_sheet!r} not found; available sheets: {sheetnames}"
+        )
+    return [sheetnames[0]]
 
 
 def _coord_values(range_obj: Any) -> list[tuple[str, Any]]:

@@ -66,6 +66,62 @@ def test_parse_target_ranges_tolerates_quote_between_sheet_and_range() -> None:
     ]
 
 
+def test_parse_target_ranges_tolerates_missing_opening_quote_on_first_sheet() -> None:
+    parsed = parse_target_ranges(
+        "OUT CAS'!A2:C1529,'OUT CAS'!E2:G586,'OUT CAS'!I2:K13,'OUT CAS'!L2:O8"
+    )
+
+    assert parsed == [
+        ExcelTargetRange(sheet_name="OUT CAS", cell_range="A2:C1529"),
+        ExcelTargetRange(sheet_name="OUT CAS", cell_range="E2:G586"),
+        ExcelTargetRange(sheet_name="OUT CAS", cell_range="I2:K13"),
+        ExcelTargetRange(sheet_name="OUT CAS", cell_range="L2:O8"),
+    ]
+
+
+def test_summarize_workbook_structure_context_handles_multi_sheet_default(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active.title = "Consolidated Tracker"
+    wb.active.append(["Task", "Owner", "Status", "Start", "End"])
+    for sheet_name in ["Existing Task", "Additions", "Retired"]:
+        ws = wb.create_sheet(sheet_name)
+        ws.append(["Task", "Owner", "Status", "Start", "End"])
+    wb.save(path)
+
+    summary = summarize_workbook_structure_context(
+        path,
+        target_position="A3:E11",
+        default_sheet="Consolidated Tracker,Existing Task,Additions,Retired",
+    )
+
+    assert "active_sheet: Consolidated Tracker" in summary
+    assert (
+        "target_ranges: Consolidated Tracker!A3:E11, Existing Task!A3:E11, "
+        "Additions!A3:E11, Retired!A3:E11"
+    ) in summary
+
+
+def test_summarize_workbook_structure_context_handles_quoted_multi_sheet_ranges(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active.title = "Sheet1"
+    wb.active.append(["A", "B", "C"])
+    for sheet_name in ["Sheet2", "Sheet3", "Sheet4"]:
+        ws = wb.create_sheet(sheet_name)
+        ws.append(["A", "B", "C"])
+    wb.save(path)
+
+    summary = summarize_workbook_structure_context(
+        path,
+        target_position="Sheet3'!A:G,'Sheet4'!A:G",
+        default_sheet="'Sheet3','Sheet4'",
+    )
+
+    assert "active_sheet: Sheet3" in summary
+    assert "target_ranges: Sheet3!A:G, Sheet4!A:G" in summary
+
+
 def test_iter_target_cells_resolves_default_and_explicit_sheets(tmp_path) -> None:
     path = tmp_path / "book.xlsx"
     wb = openpyxl.Workbook()
