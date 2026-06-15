@@ -126,6 +126,55 @@ def validate_target_range_sanity(
                         )
 
 
+def summarize_workbook_context(
+    workbook_path: str | Path,
+    *,
+    target_position: str,
+    default_sheet: str | None = None,
+    max_sample_rows: int = 5,
+    max_sample_cols: int = 12,
+) -> str:
+    """Return a compact, read-only workbook summary for RLM task prompts.
+
+    The summary is intentionally small and evidence-oriented: sheet names,
+    target ranges, dimensions, headers, formula/merged-cell counts, and a few
+    data-only sample rows. It gives the model workbook context without dumping
+    large sheets into the prompt.
+    """
+
+    openpyxl = _openpyxl()
+    wb_formula = openpyxl.load_workbook(workbook_path, data_only=False)
+    wb_values = openpyxl.load_workbook(workbook_path, data_only=True)
+    targets = parse_target_ranges(target_position)
+    primary_sheet = _resolve_sheet(
+        wb_formula.sheetnames,
+        targets[0].sheet_name if targets else None,
+        default_sheet,
+    )
+    ws_formula = wb_formula[primary_sheet]
+    ws_values = wb_values[primary_sheet]
+    shown_cols = min(max(ws_formula.max_column, _max_target_column(targets)), max_sample_cols)
+    shown_rows = min(ws_formula.max_row, max(1, max_sample_rows + 1))
+
+    lines = [
+        "WORKBOOK_CONTEXT",
+        f"sheets: {', '.join(wb_formula.sheetnames)}",
+        "target_ranges: "
+        + ", ".join(
+            f"{_resolve_sheet(wb_formula.sheetnames, target.sheet_name, default_sheet)}!{target.cell_range}"
+            for target in targets
+        ),
+        f"active_sheet: {primary_sheet}",
+        f"dimensions: {ws_formula.dimensions} rows={ws_formula.max_row} cols={ws_formula.max_column}",
+        f"merged_ranges: {len(ws_formula.merged_cells.ranges)}",
+        f"formulas: {_formula_count(ws_formula)}",
+        "headers: " + _format_row(ws_values, 1, shown_cols, quote_strings=False),
+    ]
+    for row in range(2, shown_rows + 1):
+        lines.append(f"row {row}: " + _format_row(ws_values, row, shown_cols, quote_strings=True))
+    return "\n".join(lines)
+
+
 def _split_range_list(position: str) -> list[str]:
     parts: list[str] = []
     current: list[str] = []
@@ -214,6 +263,46 @@ def _coord_values(range_obj: Any) -> list[tuple[str, Any]]:
         else:
             out.extend((cell.coordinate, cell.value) for cell in item)
     return out
+
+
+def _formula_count(ws: Any) -> int:
+    total = 0
+    for row in ws.iter_rows():
+        for cell in row:
+            if isinstance(cell.value, str) and cell.value.startswith("="):
+                total += 1
+    return total
+
+
+def _format_row(ws: Any, row: int, max_col: int, *, quote_strings: bool) -> str:
+    openpyxl = _openpyxl()
+    values = []
+    for col in range(1, max_col + 1):
+        letter = openpyxl.utils.get_column_letter(col)
+        values.append(
+            f"{letter}={_format_cell_value(ws.cell(row=row, column=col).value, quote_strings=quote_strings)}"
+        )
+    return " | ".join(values)
+
+
+def _format_cell_value(value: Any, *, quote_strings: bool) -> str:
+    if value is None:
+        return "<blank>"
+    if isinstance(value, str) and not quote_strings:
+        return value
+    return repr(value)
+
+
+def _max_target_column(targets: list[ExcelTargetRange]) -> int:
+    openpyxl = _openpyxl()
+    max_col = 1
+    for target in targets:
+        try:
+            _, _, end_col, _ = openpyxl.utils.cell.range_boundaries(target.cell_range)
+        except ValueError:
+            continue
+        max_col = max(max_col, int(end_col))
+    return max_col
 
 
 def _openpyxl() -> Any:

@@ -8,6 +8,7 @@ from fabric_rlm.excel_artifacts import (
     ExcelTargetRange,
     iter_target_cells,
     parse_target_ranges,
+    summarize_workbook_context,
     validate_target_range_sanity,
 )
 
@@ -112,3 +113,34 @@ def test_validate_target_range_sanity_rejects_formula_error_and_prose(tmp_path) 
     ws["A3"] = "ok"
     wb.save(path)
     validate_target_range_sanity(path, "A1:A4")
+
+
+def test_summarize_workbook_context_returns_compact_targeted_sheet_evidence(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet2"
+    ws.append(["Date", "Employee Number", "Abs. Name", "Atts. Name", "Week", None])
+    ws.append(["2021-04-20", 133049, None, None, 17, None])
+    ws.append(["2021-04-21", 133049, "Sick Day", None, 17, None])
+    ws.append(["2021-04-22", 133049, None, "Overtime", 17, None])
+    ws["G2"] = "=SUM(E2:E4)"
+    wb.create_sheet("Lookup")["A1"] = "code"
+    wb.save(path)
+
+    summary = summarize_workbook_context(
+        path,
+        target_position="F2:F92",
+        default_sheet="Sheet2",
+        max_sample_rows=3,
+    )
+
+    assert "WORKBOOK_CONTEXT" in summary
+    assert "sheets: Sheet2, Lookup" in summary
+    assert "target_ranges: Sheet2!F2:F92" in summary
+    assert "active_sheet: Sheet2" in summary
+    assert "dimensions: A1:G4 rows=4 cols=7" in summary
+    assert "headers: A=Date | B=Employee Number | C=Abs. Name | D=Atts. Name | E=Week | F=<blank>" in summary
+    assert "formulas: 1" in summary
+    assert "row 2: A='2021-04-20' | B=133049 | C=<blank> | D=<blank> | E=17 | F=<blank>" in summary
+    assert len(summary) < 2000
