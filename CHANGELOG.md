@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.6 — 2026-06-15 — Excel artifact validation and public workbook skill
+
+### Added
+
+- **Context-aware RLM output validation.** `RLM` now accepts
+  `output_validator_context`, allowing validators to inspect runtime artifacts
+  such as saved workbooks after `SUBMIT`.
+- **Excel artifact helpers.** Added `fabric_rlm.excel_artifacts` with reusable
+  target-range parsing, target-cell iteration, and artifact sanity validation
+  for workbook-writing tasks.
+
+### Changed
+
+- **`excel_modify` is the public workbook-editing skill.** The improved Excel
+  modify guidance, including literal-value guardrails and the large-range /
+  sheet-level protocol, is now packaged as `excel_modify` instead of the
+  experimental `excel_modify_gpt5` name.
+
 ## 0.2.5 — 2026-06-11 — task-constructor alias
 
 ### Added

@@ -206,3 +206,15 @@ def test_pvr_mode_full_explicit(monkeypatch) -> None:
     assert 'PLAN before action' in s.content
     assert 'VERIFY before SUBMIT' in s.content
     assert 'Honor PRIOR_ATTEMPT_FEEDBACK' in s.content
+
+
+def test_excel_modify_is_the_packaged_workbook_editing_skill() -> None:
+    loader = SkillLoader()
+
+    skill_names = set(loader.list_skills())
+    skill = loader.load("excel_modify")
+
+    assert "excel_modify" in skill_names
+    assert "excel_modify_gpt5" not in skill_names
+    assert skill.title == "excel_modify"
+    assert "Large-range / sheet-level protocol" in skill.content
