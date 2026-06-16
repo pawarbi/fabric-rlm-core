@@ -146,11 +146,11 @@ def summarize_workbook_context(
     wb_formula = openpyxl.load_workbook(workbook_path, data_only=False)
     wb_values = openpyxl.load_workbook(workbook_path, data_only=True)
     targets = parse_target_ranges(target_position)
-    primary_sheet = _resolve_sheets(
-        wb_formula.sheetnames,
-        targets[0].sheet_name if targets else None,
-        default_sheet,
-    )[0]
+    resolved_targets, missing_sheets = _resolve_context_targets(
+        wb_formula.sheetnames, targets, default_sheet
+    )
+    existing_target_sheets = [sheet for sheet, _, exists in resolved_targets if exists]
+    primary_sheet = existing_target_sheets[0] if existing_target_sheets else wb_formula.sheetnames[0]
     ws_formula = wb_formula[primary_sheet]
     ws_values = wb_values[primary_sheet]
     shown_cols = min(max(ws_formula.max_column, _max_target_column(targets)), max_sample_cols)
@@ -162,12 +162,15 @@ def summarize_workbook_context(
         "target_ranges: "
         + ", ".join(
             f"{sheet_name}!{target.cell_range}"
-            for target in targets
-            for sheet_name in _resolve_sheets(
-                wb_formula.sheetnames,
-                target.sheet_name,
-                default_sheet,
-            )
+            for sheet_name, target, _ in resolved_targets
+        ),
+        *(
+            [
+                "target_sheet_status: "
+                + "; ".join(f"{sheet} missing in current workbook" for sheet in missing_sheets)
+            ]
+            if missing_sheets
+            else []
         ),
         f"active_sheet: {primary_sheet}",
         f"dimensions: {ws_formula.dimensions} rows={ws_formula.max_row} cols={ws_formula.max_column}",
@@ -300,6 +303,35 @@ def _resolve_sheets(
         raise AssertionError(
             f"default target sheet {default_sheet!r} not found; available sheets: {sheetnames}"
         )
+    return [sheetnames[0]]
+
+
+def _resolve_context_targets(
+    sheetnames: list[str], targets: list[ExcelTargetRange], default_sheet: str | None
+) -> tuple[list[tuple[str, ExcelTargetRange, bool]], list[str]]:
+    resolved: list[tuple[str, ExcelTargetRange, bool]] = []
+    missing: list[str] = []
+    for target in targets:
+        sheet_candidates = _context_sheet_candidates(sheetnames, target.sheet_name, default_sheet)
+        for sheet_name in sheet_candidates:
+            exists = sheet_name in sheetnames
+            resolved.append((sheet_name, target, exists))
+            if not exists and sheet_name not in missing:
+                missing.append(sheet_name)
+    return resolved, missing
+
+
+def _context_sheet_candidates(
+    sheetnames: list[str], requested: str | None, default_sheet: str | None
+) -> list[str]:
+    if requested:
+        return [requested]
+    if default_sheet:
+        if default_sheet in sheetnames:
+            return [default_sheet]
+        candidates = [_normalize_sheet_name(part) for part in _split_range_list(default_sheet)]
+        if candidates:
+            return candidates
     return [sheetnames[0]]
 
 

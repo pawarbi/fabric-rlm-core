@@ -225,3 +225,43 @@ def test_summarize_workbook_structure_context_omits_sample_values(tmp_path) -> N
     assert "sample_rows: omitted" in summary
     assert "row 2:" not in summary
     assert "Sick Day" not in summary
+
+
+def test_summarize_workbook_structure_context_reports_missing_output_sheet(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Input"
+    ws.append(["Name", "Amount"])
+    ws.append(["A", 10])
+    wb.save(path)
+
+    summary = summarize_workbook_structure_context(
+        path,
+        target_position="Output!A1:B10",
+        default_sheet="Output",
+    )
+
+    assert "WORKBOOK_STRUCTURE_CONTEXT" in summary
+    assert "target_ranges: Output!A1:B10" in summary
+    assert "target_sheet_status: Output missing in current workbook" in summary
+    assert "active_sheet: Input" in summary
+    assert "dimensions: A1:B2 rows=2 cols=2" in summary
+    assert "headers: A=Name | B=Amount" in summary
+    assert "sample_rows: omitted" in summary
+
+
+def test_summarize_workbook_structure_context_reports_multiple_missing_targets(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active.title = "Data"
+    wb.active.append(["Key"])
+    wb.save(path)
+
+    summary = summarize_workbook_structure_context(
+        path,
+        target_position="Created1!A1:A5,Created2!B1:C5",
+    )
+
+    assert "target_ranges: Created1!A1:A5, Created2!B1:C5" in summary
+    assert "target_sheet_status: Created1 missing in current workbook; Created2 missing in current workbook" in summary
