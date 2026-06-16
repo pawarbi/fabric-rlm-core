@@ -8,7 +8,6 @@ from fabric_rlm.excel_artifacts import (
     ExcelTargetRange,
     iter_target_cells,
     parse_target_ranges,
-    summarize_workbook_contract_context,
     summarize_workbook_structure_context,
     summarize_workbook_context,
     validate_target_range_sanity,
@@ -39,7 +38,6 @@ def test_excel_artifact_helpers_are_public_api() -> None:
     assert fabric_rlm.parse_target_ranges("A1") == [
         fabric_rlm.ExcelTargetRange(sheet_name=None, cell_range="A1")
     ]
-    assert callable(fabric_rlm.summarize_workbook_contract_context)
 
 
 def test_parse_target_ranges_normalizes_single_column_row_range() -> None:
@@ -227,54 +225,3 @@ def test_summarize_workbook_structure_context_omits_sample_values(tmp_path) -> N
     assert "sample_rows: omitted" in summary
     assert "row 2:" not in summary
     assert "Sick Day" not in summary
-
-
-def test_summarize_workbook_contract_context_reports_target_shape_and_edges(tmp_path) -> None:
-    path = tmp_path / "book.xlsx"
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Summary"
-    ws.append(["Item", "Amount", "Status"])
-    ws.append(["A", 10, "open"])
-    ws.append(["B", 20, "closed"])
-    ws.append([None, None, None])
-    ws.append(["TOTAL", "=SUM(B2:B3)", None])
-    ws["E2"] = "source value that should not be sampled"
-    wb.save(path)
-
-    summary = summarize_workbook_contract_context(
-        path,
-        target_position="A2:C5",
-        default_sheet="Summary",
-    )
-
-    assert "WORKBOOK_CONTRACT_CONTEXT" in summary
-    assert "target_ranges: Summary!A2:C5" in summary
-    assert "Summary!A2:C5 shape=4x3 cells=12" in summary
-    assert "current_nonblank=7" in summary
-    assert "current_formulas=1" in summary
-    assert "edge_rows:" in summary
-    assert "row 2: A='A' | B=10 | C='open'" in summary
-    assert "row 5: A='TOTAL' | B='=SUM(B2:B3)' | C=<blank>" in summary
-    assert "formula_cells: B5='=SUM(B2:B3)'" in summary
-    assert "source value that should not be sampled" not in summary
-    assert "preserve target range shape" in summary
-
-
-def test_summarize_workbook_contract_context_handles_multi_sheet_targets(tmp_path) -> None:
-    path = tmp_path / "book.xlsx"
-    wb = openpyxl.Workbook()
-    wb.active.title = "First"
-    wb.active["A1"] = "left"
-    second = wb.create_sheet("Second")
-    second["B2"] = "right"
-    wb.save(path)
-
-    summary = summarize_workbook_contract_context(
-        path,
-        target_position="First!A1:A2,Second!B2:B3",
-    )
-
-    assert "target_ranges: First!A1:A2, Second!B2:B3" in summary
-    assert "First!A1:A2 shape=2x1 cells=2" in summary
-    assert "Second!B2:B3 shape=2x1 cells=2" in summary

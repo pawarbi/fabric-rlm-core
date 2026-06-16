@@ -204,88 +204,6 @@ def summarize_workbook_structure_context(
     return summary.replace("WORKBOOK_CONTEXT", "WORKBOOK_STRUCTURE_CONTEXT", 1) + "\nsample_rows: omitted"
 
 
-def summarize_workbook_contract_context(
-    workbook_path: str | Path,
-    *,
-    target_position: str,
-    default_sheet: str | None = None,
-    max_sample_cols: int = 12,
-    max_formula_cells: int = 8,
-) -> str:
-    """Return a compact target-contract summary for general Excel edit tasks.
-
-    The contract is benchmark-agnostic: it describes target range shape, edge
-    rows, formulas, and generic pre-submit checks without using any golden
-    workbook or task-specific answer data.
-    """
-
-    openpyxl = _openpyxl()
-    wb_formula = openpyxl.load_workbook(workbook_path, data_only=False)
-    wb_values = openpyxl.load_workbook(workbook_path, data_only=True)
-    targets = parse_target_ranges(target_position)
-    resolved_targets = [
-        (sheet_name, target.cell_range)
-        for target in targets
-        for sheet_name in _resolve_sheets(wb_formula.sheetnames, target.sheet_name, default_sheet)
-    ]
-    primary_sheet = resolved_targets[0][0] if resolved_targets else wb_formula.sheetnames[0]
-
-    lines = [
-        "WORKBOOK_CONTRACT_CONTEXT",
-        f"sheets: {', '.join(wb_formula.sheetnames)}",
-        "target_ranges: "
-        + ", ".join(f"{sheet_name}!{cell_range}" for sheet_name, cell_range in resolved_targets),
-        f"active_sheet: {primary_sheet}",
-        "sheet_dimensions: "
-        + "; ".join(
-            f"{ws.title}={ws.dimensions} rows={ws.max_row} cols={ws.max_column}"
-            for ws in wb_formula.worksheets
-        ),
-        "contract_checks: preserve target range shape; verify explicit cell/range requirements before submit; "
-        "preserve source order unless the task asks to sort; leave no formulas, Excel errors, placeholders, or prose/code unless requested",
-        "target_contract:",
-    ]
-
-    for sheet_name, cell_range in resolved_targets:
-        ws_formula = wb_formula[sheet_name]
-        ws_values = wb_values[sheet_name]
-        formula_cells = _coord_values(ws_formula[cell_range])
-        value_cells = _coord_values(ws_values[cell_range])
-        shape_rows, shape_cols = _cell_shape([coord for coord, _ in formula_cells])
-        nonblank = sum(1 for _, value in value_cells if value is not None)
-        formulas = [
-            (coord, value)
-            for coord, value in formula_cells
-            if isinstance(value, str) and value.startswith("=")
-        ]
-        lines.append(
-            f"- {sheet_name}!{cell_range} shape={shape_rows}x{shape_cols} "
-            f"cells={len(formula_cells)} current_nonblank={nonblank} current_formulas={len(formulas)}"
-        )
-        edge_rows = _target_edge_rows(formula_cells)
-        if edge_rows:
-            lines.append("  edge_rows:")
-            for row in edge_rows:
-                lines.append(
-                    "  "
-                    + _format_target_row(
-                        ws_formula,
-                        row,
-                        [coord for coord, _ in formula_cells],
-                        max_sample_cols=max_sample_cols,
-                    )
-                )
-        if formulas:
-            formula_text = " | ".join(
-                f"{coord}={_format_cell_value(value, quote_strings=True)}"
-                for coord, value in formulas[:max_formula_cells]
-            )
-            if len(formulas) > max_formula_cells:
-                formula_text += f" | ... (+{len(formulas) - max_formula_cells} more)"
-            lines.append(f"  formula_cells: {formula_text}")
-    return "\n".join(lines)
-
-
 def _split_range_list(position: str) -> list[str]:
     parts: list[str] = []
     current: list[str] = []
@@ -395,45 +313,6 @@ def _coord_values(range_obj: Any) -> list[tuple[str, Any]]:
         else:
             out.extend((cell.coordinate, cell.value) for cell in item)
     return out
-
-
-def _cell_shape(coords: list[str]) -> tuple[int, int]:
-    if not coords:
-        return 0, 0
-    openpyxl = _openpyxl()
-    rows: list[int] = []
-    cols: list[int] = []
-    for coord in coords:
-        row, col = openpyxl.utils.cell.coordinate_to_tuple(coord)
-        rows.append(row)
-        cols.append(col)
-    return max(rows) - min(rows) + 1, max(cols) - min(cols) + 1
-
-
-def _target_edge_rows(cells: list[tuple[str, Any]]) -> list[int]:
-    if not cells:
-        return []
-    openpyxl = _openpyxl()
-    rows = sorted({openpyxl.utils.cell.coordinate_to_tuple(coord)[0] for coord, _ in cells})
-    if len(rows) <= 2:
-        return rows
-    return [rows[0], rows[-1]]
-
-
-def _format_target_row(
-    ws: Any, row: int, coords: list[str], *, max_sample_cols: int
-) -> str:
-    openpyxl = _openpyxl()
-    cols = sorted({openpyxl.utils.cell.coordinate_to_tuple(coord)[1] for coord in coords})
-    shown_cols = cols[:max_sample_cols]
-    values = []
-    for col in shown_cols:
-        letter = openpyxl.utils.get_column_letter(col)
-        values.append(
-            f"{letter}={_format_cell_value(ws.cell(row=row, column=col).value, quote_strings=True)}"
-        )
-    suffix = f" | ... (+{len(cols) - len(shown_cols)} more cols)" if len(cols) > len(shown_cols) else ""
-    return f"row {row}: " + " | ".join(values) + suffix
 
 
 def _formula_count(ws: Any) -> int:
