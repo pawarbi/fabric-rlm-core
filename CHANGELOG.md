@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.7 — 2026-06-16 — opt-in Excel workbook structure context
+
+### Added
+
+- **Opt-in Excel workbook context.** Added
+  `add_excel_workbook_context(...)`, a convenience wrapper that prepends a
+  read-only workbook context block to an RLM task. The default mode is
+  `mode="structure"`: sheet names, target ranges, dimensions, merged/formula
+  counts, and headers only — no sample row values. `mode="full"` remains
+  available when callers explicitly want compact data-only samples.
+
+### Fixed
+
+- **Workbook context for create-output-sheet tasks.** Structural context now
+  reports missing target sheets and summarizes the existing workbook instead of
+  failing before the model can create the requested sheet. Post-submit artifact
+  validation remains strict.
+
 ## 0.2.6 — 2026-06-15 — Excel artifact validation and public workbook skill
 
 ### Added

@@ -4,8 +4,11 @@ from .artifacts import File, LocalArtifactStore
 from .excel_artifacts import (
     ExcelCellValue,
     ExcelTargetRange,
+    add_excel_workbook_context,
     iter_target_cells,
     parse_target_ranges,
+    summarize_workbook_structure_context,
+    summarize_workbook_context,
     validate_target_range_sanity,
 )
 from .interpreter import (
@@ -69,6 +72,7 @@ __all__ = [
     "assert_list_of",
     "assert_matches_regex",
     "assert_predicate",
+    "add_excel_workbook_context",
     "chain",
     "compose_skills",
     "iter_target_cells",
@@ -78,9 +82,11 @@ __all__ = [
     "register_backend",
     "resolve_lm",
     "signature_validator",
+    "summarize_workbook_structure_context",
+    "summarize_workbook_context",
     "validate_target_range_sanity",
 ]
 
 # Single source of truth for the package version. pyproject.toml reads this
 # statically via [tool.setuptools.dynamic] — bump it here and nowhere else.
-__version__ = "0.2.6"
+__version__ = "0.2.7"

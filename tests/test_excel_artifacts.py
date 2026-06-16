@@ -6,8 +6,11 @@ openpyxl = pytest.importorskip("openpyxl")
 
 from fabric_rlm.excel_artifacts import (
     ExcelTargetRange,
+    add_excel_workbook_context,
     iter_target_cells,
     parse_target_ranges,
+    summarize_workbook_structure_context,
+    summarize_workbook_context,
     validate_target_range_sanity,
 )
 
@@ -36,6 +39,7 @@ def test_excel_artifact_helpers_are_public_api() -> None:
     assert fabric_rlm.parse_target_ranges("A1") == [
         fabric_rlm.ExcelTargetRange(sheet_name=None, cell_range="A1")
     ]
+    assert fabric_rlm.add_excel_workbook_context is add_excel_workbook_context
 
 
 def test_parse_target_ranges_normalizes_single_column_row_range() -> None:
@@ -62,6 +66,62 @@ def test_parse_target_ranges_tolerates_quote_between_sheet_and_range() -> None:
         ExcelTargetRange(sheet_name="Sheet2", cell_range="A1:E20"),
         ExcelTargetRange(sheet_name="Sheet3", cell_range="A1:A50"),
     ]
+
+
+def test_parse_target_ranges_tolerates_missing_opening_quote_on_first_sheet() -> None:
+    parsed = parse_target_ranges(
+        "OUT CAS'!A2:C1529,'OUT CAS'!E2:G586,'OUT CAS'!I2:K13,'OUT CAS'!L2:O8"
+    )
+
+    assert parsed == [
+        ExcelTargetRange(sheet_name="OUT CAS", cell_range="A2:C1529"),
+        ExcelTargetRange(sheet_name="OUT CAS", cell_range="E2:G586"),
+        ExcelTargetRange(sheet_name="OUT CAS", cell_range="I2:K13"),
+        ExcelTargetRange(sheet_name="OUT CAS", cell_range="L2:O8"),
+    ]
+
+
+def test_summarize_workbook_structure_context_handles_multi_sheet_default(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active.title = "Consolidated Tracker"
+    wb.active.append(["Task", "Owner", "Status", "Start", "End"])
+    for sheet_name in ["Existing Task", "Additions", "Retired"]:
+        ws = wb.create_sheet(sheet_name)
+        ws.append(["Task", "Owner", "Status", "Start", "End"])
+    wb.save(path)
+
+    summary = summarize_workbook_structure_context(
+        path,
+        target_position="A3:E11",
+        default_sheet="Consolidated Tracker,Existing Task,Additions,Retired",
+    )
+
+    assert "active_sheet: Consolidated Tracker" in summary
+    assert (
+        "target_ranges: Consolidated Tracker!A3:E11, Existing Task!A3:E11, "
+        "Additions!A3:E11, Retired!A3:E11"
+    ) in summary
+
+
+def test_summarize_workbook_structure_context_handles_quoted_multi_sheet_ranges(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active.title = "Sheet1"
+    wb.active.append(["A", "B", "C"])
+    for sheet_name in ["Sheet2", "Sheet3", "Sheet4"]:
+        ws = wb.create_sheet(sheet_name)
+        ws.append(["A", "B", "C"])
+    wb.save(path)
+
+    summary = summarize_workbook_structure_context(
+        path,
+        target_position="Sheet3'!A:G,'Sheet4'!A:G",
+        default_sheet="'Sheet3','Sheet4'",
+    )
+
+    assert "active_sheet: Sheet3" in summary
+    assert "target_ranges: Sheet3!A:G, Sheet4!A:G" in summary
 
 
 def test_iter_target_cells_resolves_default_and_explicit_sheets(tmp_path) -> None:
@@ -112,3 +172,151 @@ def test_validate_target_range_sanity_rejects_formula_error_and_prose(tmp_path) 
     ws["A3"] = "ok"
     wb.save(path)
     validate_target_range_sanity(path, "A1:A4")
+
+
+def test_summarize_workbook_context_returns_compact_targeted_sheet_evidence(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet2"
+    ws.append(["Date", "Employee Number", "Abs. Name", "Atts. Name", "Week", None])
+    ws.append(["2021-04-20", 133049, None, None, 17, None])
+    ws.append(["2021-04-21", 133049, "Sick Day", None, 17, None])
+    ws.append(["2021-04-22", 133049, None, "Overtime", 17, None])
+    ws["G2"] = "=SUM(E2:E4)"
+    wb.create_sheet("Lookup")["A1"] = "code"
+    wb.save(path)
+
+    summary = summarize_workbook_context(
+        path,
+        target_position="F2:F92",
+        default_sheet="Sheet2",
+        max_sample_rows=3,
+    )
+
+    assert "WORKBOOK_CONTEXT" in summary
+    assert "sheets: Sheet2, Lookup" in summary
+    assert "target_ranges: Sheet2!F2:F92" in summary
+    assert "active_sheet: Sheet2" in summary
+    assert "dimensions: A1:G4 rows=4 cols=7" in summary
+    assert "headers: A=Date | B=Employee Number | C=Abs. Name | D=Atts. Name | E=Week | F=<blank>" in summary
+    assert "formulas: 1" in summary
+    assert "row 2: A='2021-04-20' | B=133049 | C=<blank> | D=<blank> | E=17 | F=<blank>" in summary
+    assert len(summary) < 2000
+
+
+def test_summarize_workbook_structure_context_omits_sample_values(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet2"
+    ws.append(["Date", "Employee Number", "Abs. Name", "Atts. Name", "Week", None])
+    ws.append(["2021-04-20", 133049, None, None, 17, None])
+    ws.append(["2021-04-21", 133049, "Sick Day", None, 17, None])
+    wb.save(path)
+
+    summary = summarize_workbook_structure_context(
+        path,
+        target_position="F2:F92",
+        default_sheet="Sheet2",
+    )
+
+    assert "WORKBOOK_STRUCTURE_CONTEXT" in summary
+    assert "target_ranges: Sheet2!F2:F92" in summary
+    assert "headers: A=Date | B=Employee Number | C=Abs. Name | D=Atts. Name | E=Week | F=<blank>" in summary
+    assert "sample_rows: omitted" in summary
+    assert "row 2:" not in summary
+    assert "Sick Day" not in summary
+
+
+def test_summarize_workbook_structure_context_reports_missing_output_sheet(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Input"
+    ws.append(["Name", "Amount"])
+    ws.append(["A", 10])
+    wb.save(path)
+
+    summary = summarize_workbook_structure_context(
+        path,
+        target_position="Output!A1:B10",
+        default_sheet="Output",
+    )
+
+    assert "WORKBOOK_STRUCTURE_CONTEXT" in summary
+    assert "target_ranges: Output!A1:B10" in summary
+    assert "target_sheet_status: Output missing in current workbook" in summary
+    assert "active_sheet: Input" in summary
+    assert "dimensions: A1:B2 rows=2 cols=2" in summary
+    assert "headers: A=Name | B=Amount" in summary
+    assert "sample_rows: omitted" in summary
+
+
+def test_summarize_workbook_structure_context_reports_multiple_missing_targets(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active.title = "Data"
+    wb.active.append(["Key"])
+    wb.save(path)
+
+    summary = summarize_workbook_structure_context(
+        path,
+        target_position="Created1!A1:A5,Created2!B1:C5",
+    )
+
+    assert "target_ranges: Created1!A1:A5, Created2!B1:C5" in summary
+    assert "target_sheet_status: Created1 missing in current workbook; Created2 missing in current workbook" in summary
+
+
+def test_add_excel_workbook_context_is_opt_in_structure_wrapper(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Input"
+    ws.append(["Name", "Amount"])
+    ws.append(["A", 10])
+    wb.save(path)
+
+    task = add_excel_workbook_context(
+        "Write the answer to Output!A1:B2.",
+        path,
+        target_position="Output!A1:B2",
+        default_sheet="Output",
+    )
+
+    assert task.startswith("WORKBOOK_STRUCTURE_CONTEXT")
+    assert "target_sheet_status: Output missing in current workbook" in task
+    assert "TASK\nWrite the answer to Output!A1:B2." in task
+    assert "row 2:" not in task
+    assert "A=Name | B=Amount" in task
+
+
+def test_add_excel_workbook_context_full_mode_includes_sample_rows(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Input"
+    ws.append(["Name", "Amount"])
+    ws.append(["A", 10])
+    wb.save(path)
+
+    task = add_excel_workbook_context(
+        "Fill B2.",
+        path,
+        target_position="B2",
+        default_sheet="Input",
+        mode="full",
+    )
+
+    assert task.startswith("WORKBOOK_CONTEXT")
+    assert "row 2: A='A' | B=10" in task
+
+
+def test_add_excel_workbook_context_rejects_unknown_mode(tmp_path) -> None:
+    path = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    wb.save(path)
+
+    with pytest.raises(ValueError, match="mode must be 'structure' or 'full'"):
+        add_excel_workbook_context("Fill A1.", path, target_position="A1", mode="contract")
