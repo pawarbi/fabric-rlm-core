@@ -38,6 +38,15 @@ def test_normalize_payload_accepts_json_string_and_dict():
     }
 
 
+def test_extract_payload_preserves_dict_submitted_as_payload_json():
+    bench = load_module()
+
+    class Result:
+        outputs = {"payload_json": {"results": [{"cdid": "D7BT"}]}}
+
+    assert bench._extract_payload(Result()) == {"results": [{"cdid": "D7BT"}]}
+
+
 def test_scores_exact_lookup_answers_by_cdid_period_and_value():
     bench = load_module()
     payload = {

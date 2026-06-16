@@ -257,7 +257,11 @@ def rlm_kwargs(task_text: str, *, lm: Any, max_turns: int, timeout: float) -> di
 def _extract_payload(result: Any) -> dict[str, Any]:
     outputs = getattr(result, "outputs", None) or getattr(result, "result", None)
     if isinstance(outputs, dict):
-        return normalize_payload(outputs.get("payload_json", next(iter(outputs.values()), None)))
+        if "payload_json" in outputs:
+            return normalize_payload(outputs["payload_json"])
+        if len(outputs) == 1:
+            return normalize_payload(next(iter(outputs.values())))
+        return normalize_payload(outputs)
     return normalize_payload(outputs)
 
 
