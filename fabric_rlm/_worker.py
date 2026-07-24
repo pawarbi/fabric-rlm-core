@@ -44,7 +44,14 @@ from pathlib import Path
 from typing import Any, Callable, get_args, get_origin
 
 from .artifacts import File, decode_from_worker_wire
-from .serializers import DEFAULT_INJECTED_NAMES, freeze, snapshot
+from .serializers import (
+    DEFAULT_INJECTED_NAMES,
+    DEFAULT_MAX_SUBMIT_BYTES,
+    SubmitPayloadTooLarge,
+    freeze,
+    freeze_submit_payload,
+    snapshot,
+)
 from .skill_loader import list_skills, load_skill
 
 
@@ -599,7 +606,10 @@ def _format_internal_traceback(exc: BaseException) -> str:
     return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip("\n")
 
 
-def _execute(code: str) -> dict[str, Any]:
+def _execute(
+    code: str,
+    max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
+) -> dict[str, Any]:
     stdout = io.StringIO()
     stderr = io.StringIO()
     try:
@@ -613,10 +623,26 @@ def _execute(code: str) -> dict[str, Any]:
             "state": _state(),
         }
     except _SubmitSignal as submit:
+        try:
+            submit_payload = freeze_submit_payload(
+                submit.payload,
+                max_bytes=max_submit_bytes,
+            )
+        except (SubmitPayloadTooLarge, TypeError, ValueError) as exc:
+            return {
+                "ok": False,
+                "submitted": False,
+                "stdout": stdout.getvalue(),
+                "stderr": stderr.getvalue(),
+                "error": f"{type(exc).__name__}: {exc}",
+                "state": _state(),
+            }
         return {
             "ok": True,
             "submitted": True,
-            "submit_payload": freeze(submit.payload),
+            # State snapshots are intentionally bounded for iterative model
+            # feedback. Final outputs are a data boundary and must be lossless.
+            "submit_payload": submit_payload,
             "stdout": stdout.getvalue(),
             "stderr": stderr.getvalue(),
             "state": _state(),
@@ -641,7 +667,13 @@ def _set_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
 def _handle_message(message: dict[str, Any]) -> dict[str, Any] | None:
     op = message.get("op")
     if op == "exec":
-        return _execute(message["code"])
+        return _execute(
+            message["code"],
+            max_submit_bytes=message.get(
+                "max_submit_bytes",
+                DEFAULT_MAX_SUBMIT_BYTES,
+            ),
+        )
     if op == "set_inputs":
         return _set_inputs(message.get("inputs", {}))
     if op == "configure_lm":
@@ -814,7 +846,10 @@ def _jsonrpc_self_test() -> dict[str, Any]:
     return info
 
 
-def _jsonrpc_execute(code: str) -> dict[str, Any]:
+def _jsonrpc_execute(
+    code: str,
+    max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
+) -> dict[str, Any]:
     """Run user code and shape the result into the dspy CodeInterpreter contract.
 
     Returns a result dict that the caller wraps in ``{"jsonrpc":"2.0","result":...}``.
@@ -828,7 +863,17 @@ def _jsonrpc_execute(code: str) -> dict[str, Any]:
     except _SubmitSignal as submit:
         # Mirrors dspy.PythonInterpreter.execute lines 538-540: SUBMIT becomes
         # a successful result with a "final" key carrying the output payload.
-        return {"final": freeze(submit.payload), "stdout": stdout.getvalue()}
+        try:
+            final = freeze_submit_payload(
+                submit.payload,
+                max_bytes=max_submit_bytes,
+            )
+        except (SubmitPayloadTooLarge, TypeError, ValueError) as exc:
+            raise _JsonRpcAppError("ValueError", str(exc)) from exc
+        return {
+            "final": final,
+            "stdout": stdout.getvalue(),
+        }
     except SyntaxError as exc:
         # Re-raise with code -32000 so the host re-raises as SyntaxError UNWRAPPED
         # (dspy.PythonInterpreter.execute line 555).
@@ -875,7 +920,13 @@ def _handle_jsonrpc(message: dict[str, Any]) -> dict[str, Any] | None:
             code = params.get("code")
             if not isinstance(code, str):
                 raise _JsonRpcAppError("ValueError", "execute: 'code' must be a string")
-            result = _jsonrpc_execute(code)
+            result = _jsonrpc_execute(
+                code,
+                max_submit_bytes=params.get(
+                    "max_submit_bytes",
+                    DEFAULT_MAX_SUBMIT_BYTES,
+                ),
+            )
         elif method == "ping":
             result = {"pong": True}
         else:
@@ -940,4 +991,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

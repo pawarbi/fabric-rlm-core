@@ -28,6 +28,7 @@ from typing import Any, Callable
 
 from .artifacts import encode_for_worker
 from .security import SecurityPolicy
+from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
 
 
 class WorkerTimeout(TimeoutError):
@@ -36,6 +37,32 @@ class WorkerTimeout(TimeoutError):
 
 class WorkerProtocolError(RuntimeError):
     """Raised when the worker exits or returns invalid protocol data."""
+
+
+def _close_worker_resources(
+    proc: subprocess.Popen[str],
+    threads: tuple[threading.Thread | None, ...],
+) -> None:
+    """Close Popen pipes after worker exit and let pump threads finish."""
+
+    if proc.stdin is not None and not proc.stdin.closed:
+        try:
+            proc.stdin.close()
+        except (OSError, ValueError):
+            pass
+    for thread in threads:
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2)
+    for stream, thread in zip((proc.stdout, proc.stderr), threads):
+        # TextIOWrapper.close() can block on the read lock held by a live
+        # pump thread. A normally exited worker produces EOF and lets the
+        # thread finish before this point; leave abnormal live-thread cleanup
+        # to process teardown rather than deadlocking shutdown.
+        if stream is not None and not stream.closed and not (thread and thread.is_alive()):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
 
 
 @dataclass
@@ -76,6 +103,7 @@ class Interpreter:
         python: str | None = None,
         cwd: str | None = None,
         security: SecurityPolicy | None = None,
+        max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
     ):
         self.timeout = timeout
         self.python = python or sys.executable
@@ -86,6 +114,7 @@ class Interpreter:
         # this None because verifier code is trusted, internal, and may need
         # APIs the policy would otherwise reject.
         self.security: SecurityPolicy | None = security
+        self.max_submit_bytes = validate_max_submit_bytes(max_submit_bytes)
         self.proc: subprocess.Popen[str] | None = None
         self._stdout_queue: queue.Queue[str | None] = queue.Queue()
         self._stdout_thread: threading.Thread | None = None
@@ -162,7 +191,13 @@ class Interpreter:
                     error=violation,
                     reached_worker=False,
                 )
-        raw = self._request({"op": "exec", "code": code})
+        raw = self._request(
+            {
+                "op": "exec",
+                "code": code,
+                "max_submit_bytes": self.max_submit_bytes,
+            }
+        )
         return ExecResult.from_response(raw)
 
     def configure_lm(self, spec: Any) -> dict[str, Any]:
@@ -179,23 +214,43 @@ class Interpreter:
         return self._request({"op": "ping"})
 
     def shutdown(self) -> None:
-        if not self.is_running:
+        proc = self.proc
+        if proc is None:
             return
         try:
-            self._send({"op": "shutdown"})
-            assert self.proc is not None
-            self.proc.wait(timeout=5)
+            if proc.poll() is None:
+                self._send({"op": "shutdown"})
+                proc.wait(timeout=5)
         except Exception:
-            self.kill()
+            try:
+                if proc.poll() is None:
+                    if os.name == "nt":
+                        proc.kill()
+                    else:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    proc.wait(timeout=5)
+            except Exception:
+                pass
+        finally:
+            _close_worker_resources(proc, (self._stdout_thread, self._stderr_thread))
+            if self.proc is proc:
+                self.proc = None
 
     def kill(self) -> None:
-        if self.proc is None or self.proc.poll() is not None:
+        proc = self.proc
+        if proc is None:
             return
-        if os.name == "nt":
-            self.proc.kill()
-        else:
-            os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
-        self.proc.wait(timeout=5)
+        try:
+            if proc.poll() is None:
+                if os.name == "nt":
+                    proc.kill()
+                else:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                proc.wait(timeout=5)
+        finally:
+            _close_worker_resources(proc, (self._stdout_thread, self._stderr_thread))
+            if self.proc is proc:
+                self.proc = None
 
     def _request(self, message: dict[str, Any]) -> dict[str, Any]:
         self._send(message)
@@ -321,6 +376,7 @@ class SubprocessPythonInterpreter:
         python: str | None = None,
         cwd: str | None = None,
         security: SecurityPolicy | None = None,
+        max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
     ) -> None:
         self.tools: dict[str, Callable[..., Any]] = dict(tools) if tools else {}
         self.output_fields = output_fields
@@ -343,6 +399,7 @@ class SubprocessPythonInterpreter:
         # See ``Interpreter.__init__`` — opt-in at this layer; ``RLM`` is the
         # public surface that defaults this on for LM-facing code.
         self.security: SecurityPolicy | None = security
+        self.max_submit_bytes = validate_max_submit_bytes(max_submit_bytes)
 
         self._proc: subprocess.Popen[str] | None = None
         self._stdout_queue: queue.Queue[str | None] = queue.Queue()
@@ -445,23 +502,27 @@ class SubprocessPythonInterpreter:
     def shutdown(self) -> None:
         proc = self._proc
         self._proc = None
-        if proc is None or proc.poll() is not None:
+        if proc is None:
             return
         try:
-            if proc.stdin is not None and not proc.stdin.closed:
+            if proc.poll() is None and proc.stdin is not None and not proc.stdin.closed:
                 proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "shutdown"}) + "\n")
                 proc.stdin.flush()
                 proc.stdin.close()
-            proc.wait(timeout=5)
+            if proc.poll() is None:
+                proc.wait(timeout=5)
         except Exception:
             try:
-                if os.name == "nt":
-                    proc.kill()
-                else:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                proc.wait(timeout=5)
+                if proc.poll() is None:
+                    if os.name == "nt":
+                        proc.kill()
+                    else:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    proc.wait(timeout=5)
             except Exception:
                 pass
+        finally:
+            _close_worker_resources(proc, (self._stdout_thread, self._stderr_thread))
 
     def __enter__(self) -> "SubprocessPythonInterpreter":
         self.start()
@@ -506,7 +567,15 @@ class SubprocessPythonInterpreter:
         self._request_id += 1
         request_id = self._request_id
         self._write_jsonrpc(
-            {"jsonrpc": "2.0", "method": "execute", "params": {"code": code}, "id": request_id}
+            {
+                "jsonrpc": "2.0",
+                "method": "execute",
+                "params": {
+                    "code": code,
+                    "max_submit_bytes": self.max_submit_bytes,
+                },
+                "id": request_id,
+            }
         )
 
         while True:
@@ -688,4 +757,3 @@ class SubprocessPythonInterpreter:
             self._stderr_buf.append(line)
             if len(self._stderr_buf) > 200:
                 self._stderr_buf.pop(0)
-

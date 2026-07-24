@@ -127,4 +127,3 @@ def decode_from_worker_wire(value: Any) -> Any:
     if isinstance(value, list):
         return [decode_from_worker_wire(v) for v in value]
     return value
-

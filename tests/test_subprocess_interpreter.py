@@ -54,6 +54,20 @@ def test_no_output_returns_empty_string() -> None:
     assert result == ""
 
 
+def test_shutdown_closes_worker_pipes() -> None:
+    interp = SubprocessPythonInterpreter()
+    interp.start()
+    proc = interp._proc
+    assert proc is not None
+
+    interp.shutdown()
+
+    assert interp._proc is None
+    assert proc.stdin is not None and proc.stdin.closed
+    assert proc.stdout is not None and proc.stdout.closed
+    assert proc.stderr is not None and proc.stderr.closed
+
+
 def test_state_persists_across_execute_calls() -> None:
     with SubprocessPythonInterpreter() as interp:
         interp.execute("x = 42")
@@ -78,6 +92,30 @@ def test_submit_after_state_setup() -> None:
         result = interp.execute("SUBMIT(answer=computed)")
     assert isinstance(result, FinalOutput)
     assert result.output == {"answer": 45}
+
+
+def test_submit_preserves_large_structured_output() -> None:
+    with SubprocessPythonInterpreter() as interp:
+        result = interp.execute(
+            "rows = [{'id': i, 'value': 'x' * 40} for i in range(500)]\n"
+            "SUBMIT(prediction={'columns': ['id', 'value'], 'rows': rows})"
+        )
+
+    assert isinstance(result, FinalOutput)
+    assert len(result.output["prediction"]["rows"]) == 500
+    assert result.output["prediction"]["rows"][-1]["id"] == 499
+
+
+def test_submit_rejects_payload_above_explicit_byte_limit() -> None:
+    with SubprocessPythonInterpreter(max_submit_bytes=100) as interp:
+        with pytest.raises(CodeInterpreterError, match="exceeds max_submit_bytes=100"):
+            interp.execute("SUBMIT(answer='é' * 100)")
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_subprocess_interpreter_rejects_nonpositive_submit_limit(limit: int) -> None:
+    with pytest.raises(ValueError, match="max_submit_bytes must be greater than zero"):
+        SubprocessPythonInterpreter(max_submit_bytes=limit)
 
 
 def test_submit_accepts_positional_args_when_output_fields_registered() -> None:

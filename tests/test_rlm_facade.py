@@ -47,6 +47,30 @@ def test_invalid_engine_rejected() -> None:
         RLM(signature="q -> answer", lm=_StubLM(), engine="bogus")
 
 
+def test_submit_byte_limit_is_configurable() -> None:
+    rlm = RLM(signature="q -> answer", lm=_StubLM(), max_submit_bytes=1234)
+
+    assert rlm.max_submit_bytes == 1234
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_rlm_rejects_nonpositive_submit_limit(limit: int) -> None:
+    with pytest.raises(ValueError, match="max_submit_bytes must be greater than zero"):
+        RLM(signature="q -> answer", lm=_StubLM(), max_submit_bytes=limit)
+
+
+def test_adaptive_engine_propagates_submit_byte_limit() -> None:
+    with pytest.warns(UserWarning, match="engine='adaptive' is experimental"):
+        rlm = RLM(
+            signature="q -> answer",
+            lm=_StubLM(),
+            engine="adaptive",
+            max_submit_bytes=1234,
+        )
+
+    assert rlm._adaptive_inner_kwargs["max_submit_bytes"] == 1234
+
+
 # ----- v7-dspy facade end-to-end ----------------------------------------------
 
 

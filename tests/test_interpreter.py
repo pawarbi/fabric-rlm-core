@@ -50,6 +50,37 @@ def test_submit_is_first_class_response() -> None:
     assert result.submit_payload == {"answer": 42, "status": "done"}
 
 
+def test_submit_preserves_large_string_and_collection_payloads() -> None:
+    with Interpreter(timeout=5) as interp:
+        result = interp.execute(
+            "rows = [[i, 'value-' + str(i)] for i in range(500)]\n"
+            "csv_text = 'header\\n' + ('x' * 10000)\n"
+            "SUBMIT(prediction=csv_text, rows=rows)"
+        )
+
+    assert result.submit_payload is not None
+    assert len(result.submit_payload["prediction"]) == 10_007
+    assert len(result.submit_payload["rows"]) == 500
+    assert result.submit_payload["rows"][-1] == [499, "value-499"]
+
+
+def test_submit_rejects_payload_above_explicit_byte_limit() -> None:
+    with Interpreter(timeout=5, max_submit_bytes=100) as interp:
+        result = interp.execute("SUBMIT(answer='é' * 100)")
+
+    assert not result.ok
+    assert not result.submitted
+    assert result.submit_payload is None
+    assert "SUBMIT payload exceeds" in result.error
+    assert "exceeds max_submit_bytes=100" in result.error
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_interpreter_rejects_nonpositive_submit_limit(limit: int) -> None:
+    with pytest.raises(ValueError, match="max_submit_bytes must be greater than zero"):
+        Interpreter(max_submit_bytes=limit)
+
+
 def test_top_level_await() -> None:
     with Interpreter(timeout=5) as interp:
         result = interp.execute("import asyncio\nawait asyncio.sleep(0)\nvalue = 123")
@@ -88,3 +119,15 @@ def test_timeout_kills_worker() -> None:
     finally:
         interp.shutdown()
 
+
+def test_shutdown_closes_worker_pipes() -> None:
+    interp = Interpreter(timeout=5).start()
+    proc = interp.proc
+    assert proc is not None
+
+    interp.shutdown()
+
+    assert interp.proc is None
+    assert proc.stdin is not None and proc.stdin.closed
+    assert proc.stdout is not None and proc.stdout.closed
+    assert proc.stderr is not None and proc.stderr.closed
