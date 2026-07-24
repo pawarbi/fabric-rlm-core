@@ -57,9 +57,9 @@ Use an RLM when:
   LM context. This is what the `data_exploration` skill was built for.
 - The answer must be computed exactly or written to a file. An LLM cannot
   reliably do arithmetic over thousands of rows or edit an `.xlsx` in place; code
-  can. On a SpreadsheetBench Verified-400 subset, `gpt-4.1-mini` with this RLM
-  and the `excel_modify` skill scored 42% vs 46% for single-shot `gpt-5`, at 4.3x
-  lower cost and 2.3x faster wall-clock (see `CHANGELOG.md` for the full bench).
+  can. On the full SpreadsheetBench Verified-400, MiniMax M3 through this RLM
+  passes 81.8 percent of questions for about $2.50 of total model spend; see
+  the benchmark section below.
 - The task is multi-step and its output is checkable. With a validator attached,
   failed attempts feed structured reflection into retries: in the ablation, a
   hard multi-step task went from ladder-exhausted failure to passing, with 68%
@@ -87,16 +87,16 @@ One task, two attempts. The task: from a 140 MB IMF CPI pull (1.5 million rows,
 report: a pivot of the 10 highest-inflation countries by year, a merged title
 cell, styled headers, and a second sheet listing every qualifying country.
 
-Attempt 1 gives gpt-5.1, the flagship, the question plus as much raw CSV as
+The first attempt gives gpt-5.1 the question plus as much raw CSV as
 fits in a prompt. Attempt 2 gives gpt-5-mini, about 5x cheaper, the same
 question through the RLM. Measured result:
 
-| arm | workbook | tokens | cost | seconds |
+| run | workbook | tokens | cost | seconds |
 |---|---|---|---|---|
 | plain call, gpt-5.1 | none | 109,480 | $0.138 | 8.4 |
 | RLM, gpt-5-mini | correct, verified | 47,642 | $0.023 | 78.4 |
 
-The flagship burned 109K tokens discovering the data was never in its context.
+gpt-5.1 burned 109K tokens discovering the data was never in its context.
 The mini model wrote DuckDB and openpyxl code in the subprocess, built the
 workbook, and a deterministic ground-truth query verified every cell. The
 failed call cost six times more than the successful one. The notebook then
@@ -104,6 +104,37 @@ pushes the same mini model through a harder task (stateful episode detection
 with tie-breaks, conditional formatting, and an embedded chart, cleared for
 about two cents) and closes with an honest skill ablation. Run it yourself:
 [examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb).
+
+### Benchmark: SpreadsheetBench Verified-400
+
+[SpreadsheetBench](https://github.com/RUCKBReasoning/SpreadsheetBench-2) tests
+whether an agent can carry out real spreadsheet-manipulation instructions,
+graded cell-exactly against golden workbooks. On the full Version 1
+Verified-400 set (all 400 questions, single attempt each, temperature 1.0,
+fabric-rlm 0.2.8 with the `excel_modify` skill):
+
+| system | model | pass rate | model spend |
+|---|---|---|---|
+| fabric-rlm | MiniMax M3 (open weights, $0.30/M in, $1.20/M out) | **81.8%** (327/400) | about $2.50 total, $0.006 per question |
+
+For context, the top of the public V1-Verified (400) leaderboard is held by
+commercial spreadsheet products: Qingqiu Agent at 98.25, ByteDance's Data
+Analysis Agent at 96.5, GPT for Excel at 92.5, WPS AI at 91.25. Our number is
+self-reported from the run logs in this repository (official submission
+planned) and comes from an open-source library driving a cheap open-weight
+model, at a cost of well under a cent per task.
+
+```mermaid
+xychart-beta
+    title "SpreadsheetBench V1 Verified-400 pass rate (percent)"
+    x-axis ["fabric-rlm + MiniMax M3", "WPS AI", "GPT for Excel", "Data Analysis Agent", "Qingqiu Agent"]
+    y-axis "pass rate" 0 --> 100
+    bar [81.8, 91.25, 92.5, 96.5, 98.25]
+```
+
+Reproduce it with
+[examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb](examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb);
+the run needs an OpenRouter key and costs a few dollars.
 
 ## How it works, in one picture
 
