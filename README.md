@@ -88,7 +88,7 @@ report: a pivot of the 10 highest-inflation countries by year, a merged title
 cell, styled headers, and a second sheet listing every qualifying country.
 
 The first attempt gives gpt-5.1 the question plus as much raw CSV as
-fits in a prompt. Attempt 2 gives gpt-5-mini, about 5x cheaper, the same
+fits in a prompt. The second gives gpt-5-mini, about 5x cheaper, the same
 question through the RLM. Measured result:
 
 | run | workbook | tokens | cost | seconds |
@@ -100,7 +100,7 @@ gpt-5.1 burned 109K tokens discovering the data was never in its context.
 The mini model wrote DuckDB and openpyxl code in the subprocess, built the
 workbook, and a deterministic ground-truth query verified every cell. The
 failed call cost six times more than the successful one. The notebook then
-pushes the same mini model through a harder task (stateful episode detection
+pushes the same mini model through a harder task (finding inflation streaks
 with tie-breaks, conditional formatting, and an embedded chart, cleared for
 about two cents) and closes with an honest skill ablation. Run it yourself:
 [examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb).
