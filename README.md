@@ -99,7 +99,10 @@ question through the RLM. Measured result:
 The flagship burned 109K tokens discovering the data was never in its context.
 The mini model wrote DuckDB and openpyxl code in the subprocess, built the
 workbook, and a deterministic ground-truth query verified every cell. The
-failed call cost six times more than the successful one. Run it yourself:
+failed call cost six times more than the successful one. The notebook then
+pushes the same mini model through a harder task (stateful episode detection
+with tie-breaks, conditional formatting, and an embedded chart, cleared for
+about two cents) and closes with an honest skill ablation. Run it yourself:
 [examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb).
 
 ## How it works, in one picture
