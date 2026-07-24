@@ -91,10 +91,10 @@ The first attempt gives gpt-5.1 the question plus as much raw CSV as
 fits in a prompt. The second gives gpt-5-mini, about 5x cheaper, the same
 question through the RLM. Measured result:
 
-| run | workbook | tokens | cost | seconds |
-|---|---|---|---|---|
-| plain call, gpt-5.1 | none | 109,480 | $0.138 | 8.4 |
-| RLM, gpt-5-mini | correct, verified | 47,642 | $0.023 | 78.4 |
+| run | result | workbook | tokens | cost | seconds |
+|---|---|---|---|---|---|
+| plain call, gpt-5.1 | failed | none | 109,480 | $0.138 | 8.4 |
+| RLM, gpt-5-mini | passed | correct, verified | 47,642 | $0.023 | 78.4 |
 
 gpt-5.1 burned 109K tokens discovering the data was never in its context.
 The mini model wrote DuckDB and openpyxl code in the subprocess, built the
