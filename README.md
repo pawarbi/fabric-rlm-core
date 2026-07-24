@@ -81,10 +81,13 @@ Skip the RLM when:
   model instead.
 
 To see the contrast yourself, run
-[examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb):
-the same model answers the same question about a 140 MB IMF CPI dataset twice,
-once as a plain LLM call and once through the RLM, and a deterministic DuckDB
-query grades both answers.
+[examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb).
+The deliverable is a formatted Excel report (a pivot with a merged title cell
+and bold headers) built from a 140 MB IMF CPI pull. A plain gpt-5.1 call cannot
+produce it and spends 109K tokens discovering the data is not in its context;
+gpt-5.1 through the RLM builds the exact workbook in 19K tokens, and even
+gpt-5-mini, about 5x cheaper, produces the identical verified result. A
+deterministic DuckDB query grades every cell.
 
 ## How it works, in one picture
 
