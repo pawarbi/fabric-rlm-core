@@ -132,6 +132,14 @@ xychart-beta
     bar [81.8, 91.25, 92.5, 96.5, 98.25]
 ```
 
+One tuning note from an A/B on 100 of these questions: the opt-in workbook
+context (`add_excel_workbook_context`, which prepends the workbook's sheet
+names, dimensions, target ranges, and headers to the task so the model does
+not have to discover them by running code) left the pass rate and cost
+unchanged but cut the mean time per question from 39 to 23 seconds, because
+the model skips its exploratory turns. Turn it on for interactive workloads;
+it makes no difference to accuracy in batch runs.
+
 Reproduce it with
 [examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb](examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb);
 the run needs an OpenRouter key and costs a few dollars.
