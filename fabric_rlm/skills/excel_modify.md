@@ -100,6 +100,8 @@ If you cannot answer all four, re-read the prompt before writing code. Do NOT gu
 - Off-by-one between Excel column letters (A, B, C…) and openpyxl 1-based indices. `ws['B3']` is column 2, row 3.
 - Reading source cells with `ws.cell(...).value` when they are formulas — you get the literal string `'=D3+F3'`, not the computed number. **Read inputs from a `data_only=True` workbook** when the source contains formulas.
 - Padding unfilled target cells with `"-"`, `""`, `"N/A"`, `"TBD"` or any placeholder. If you don't know what to write, the right answer is to recompute, not to fill with a sentinel.
+- **Writing a value as prose or the wrong storage type.** If the expected output is a percentage, rate, currency, or count, store it as a NUMBER, not a sentence or a formatted string. Inspect how comparable cells in the workbook store such values (numeric with a number format vs text) and match that convention. `0.67` with a percent format and the text `"67%"` are different answers; a label like `"67% WIN RATE"` where a value belongs scores zero.
+- **Verifying presence instead of correctness.** Reloading and confirming the target cells are filled and formula-free does not prove the values are right. Recompute a small sample of target cells by an independent method and compare; boundary rows are where near-miss failures concentrate.
 
 ## Reading source data
 
@@ -208,6 +210,7 @@ After `wb.save(path)`, reload with `data_only=True` and print every cell in the 
 3. No non-blank value starts with `=` (which would mean you accidentally wrote a formula).
 4. No non-blank value looks like VBA code, Power Query M, prose, or a placeholder (`"-"`, `"TBD"`).
 5. The values look reasonable (right magnitude, right type, correct blank positions).
+6. **Correctness spot-check**: recompute at least two target cells by an independent method (a different formula path, or a manual slice of the source rows) and assert they equal what you wrote. Always include the FIRST and LAST cells of each target range in this spot-check; off-by-one and boundary errors cluster there. If any spot-check disagrees, fix the computation and re-save before submitting.
 
 ```python
 wb2 = openpyxl.load_workbook(path, data_only=True)
