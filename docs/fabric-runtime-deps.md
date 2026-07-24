@@ -78,34 +78,25 @@ result = rlm.run({"question": "..."})
 
 ### Reference notebook
 
-`rlm_massive_log_demo_v5` in the `sandeep_ws` Fabric workspace
-(notebook id `d6f55bc7-465f-43d7-96c0-b01a95f3105f`) is the canonical working example.
-It runs `gpt-5 reasoning_effort=medium` against a 2.83 GiB Spark log without any of the
-dep cascades above.
+`examples/notebooks/rlm_spark_log_root_cause.ipynb` is a ready-to-import working
+example: it runs an RLM over a large Spark log to find a failure's root cause
+without any of the dependency cascades above.
 
 ## Don't do this
 
-- ❌ `subprocess.check_call(["pip","install","dspy>=3.0.4"])` from inside a Synapse PySpark
+- Avoid: `subprocess.check_call(["pip","install","dspy>=3.0.4"])` from inside a Synapse PySpark
   cell — the install pulls newer pydantic-core that needs `typing_extensions.Sentinel`
   which the Synapse cluster-env doesn't have.
-- ❌ `pip install --target=<cluster-env site-packages>` to "patch" a single dep — works
+- Avoid: `pip install --target=<cluster-env site-packages>` to "patch" a single dep — works
   for one package but the next transitive dep (aiohttp → yarl → multidict → ...) hits the
   same wall. Whack-a-mole.
-- ❌ `cache=False` on `FabricLM` — known to interact badly with the DSPy engine on the
+- Avoid: `cache=False` on `FabricLM` — known to interact badly with the DSPy engine on the
   jupyter_python kernel; omit it.
 
-## Helper: `scripts/build_comparison_5way_notebook.py`
+## Reproducible benchmark notebooks
 
-The notebook generator in this repo (`scripts/build_comparison_5way_notebook.py`) emits
-notebooks that follow the recipe above. It is the easiest way to produce a working Fabric
-notebook for benchmark / regression runs.
-
-```bash
-python -c "
-import json, sys, pathlib
-sys.path.insert(0, 'scripts')
-from build_comparison_5way_notebook import build
-nb = build('C', smoke_n=1, run_id='my-run', dataset='dabench', base_effort='medium')
-pathlib.Path('notebooks/my_smoke.ipynb').write_text(json.dumps(nb, indent=1))
-"
-```
+The `examples/notebooks/` directory ships ready-to-import Fabric notebooks that
+follow the recipe above — including the SpreadsheetBench runs
+(`spreadsheetbench_400_openrouter_minimax_mlflow.ipynb` and
+`ssb400_minimax_m3_fabric_repro.ipynb`). Import one and adjust the model and
+dataset cells for your run.

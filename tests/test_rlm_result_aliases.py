@@ -133,3 +133,26 @@ def test_missing_attribute_still_raises() -> None:
     result = _make_result(payload={"answer": 1})
     with pytest.raises(AttributeError):
         _ = result.nonexistent_field
+
+
+# ---- pickling / copying (must not RecursionError via __getattr__) ------------
+
+
+def test_result_is_deepcopyable() -> None:
+    import copy
+
+    result = _make_result(payload={"answer": 7}, n_turns=2)
+    clone = copy.deepcopy(result)
+    assert clone.submitted == result.submitted
+    assert clone.payload == {"answer": 7}
+    assert clone.answer == 7
+
+
+def test_result_is_picklable() -> None:
+    import pickle
+
+    result = _make_result(payload={"answer": 7, "note": "hi"}, n_turns=1)
+    restored = pickle.loads(pickle.dumps(result))
+    assert restored.payload == {"answer": 7, "note": "hi"}
+    assert restored.answer == 7
+    assert restored.n_turns == 1

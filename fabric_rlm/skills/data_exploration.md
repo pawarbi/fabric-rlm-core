@@ -77,16 +77,16 @@ After this prints, you know exactly what columns exist and which case applies (s
 
 ## Anti-patterns (these caused real production failures — do NOT repeat them)
 
-- ❌ `json_extract_scalar(...)` — that's BigQuery / Postgres syntax. **DuckDB uses `json_extract_string(...)`** for scalar extraction, or the `->>` operator.
-- ❌ `duckdb.quote_identifier(...)` — not a Python DuckDB API. Use SQL double-quotes for identifiers, or avoid building dynamic identifiers entirely (use `?` placeholders for VALUES, double-quoted literals for identifiers).
-- ❌ Assuming `read_json_auto` will produce flat columns. **Run `DESCRIBE t` first.** Heterogeneous JSONL (where rows have different schemas — e.g. application event streams, framework logs, audit feeds) collapses to a single column called `json` of type `MAP(VARCHAR, JSON)`.
-- ❌ Chained MAP brackets >1 level deep in Case B: `json['group']['subgroup']['leaf']`. The first `[]` returns a `JSON` value, NOT another MAP — the second/third `[]` silently produce SQL NULL, and `WHERE x IS NOT NULL` filters every row out. **Use the JSON arrow operators `->` and `->>` past the first level** (see Case B cookbook below).
-- ❌ Trusting a query that returned 0 rows / `SUM = 0` without re-checking your field path. If you expected matches and got none, the path is wrong. Re-inspect a sample row with `print(con.execute("SELECT json FROM t WHERE json_extract_string(json, '$.<discriminator>')='<expected_kind>' LIMIT 1").fetchone())` and re-extract.
-- ❌ `json['key']::VARCHAR` for string equality / display. Casting a `JSON` value to `VARCHAR` keeps the JSON quotes — you get the literal 7-char string `"error"` (with the quote marks), not `error`. So `WHERE json['kind']::VARCHAR = 'error'` matches **zero rows**, and your printed values look ugly. **For unquoted strings use `json_extract_string(json, '$.key')` or `(json ->> 'key')`** — both return raw VARCHAR. Reserve `::VARCHAR` cast for when you actually want the JSON-quoted form.
-- ❌ `data = open(path).read()` on a multi-MB file, then process in memory.
-- ❌ Re-streaming the SAME file in turn 1, turn 2, turn 3 to answer different sub-questions. Load into DuckDB once on turn 1.
-- ❌ Pasting raw lines into the prompt or pulling tens of thousands of matched lines into a Python list. Aggregate in code first.
-- ❌ Using pandas `read_csv` for files larger than RAM. Prefer DuckDB or polars `scan_csv` (lazy).
+- `json_extract_scalar(...)` — that's BigQuery / Postgres syntax. **DuckDB uses `json_extract_string(...)`** for scalar extraction, or the `->>` operator.
+- `duckdb.quote_identifier(...)` — not a Python DuckDB API. Use SQL double-quotes for identifiers, or avoid building dynamic identifiers entirely (use `?` placeholders for VALUES, double-quoted literals for identifiers).
+- Assuming `read_json_auto` will produce flat columns. **Run `DESCRIBE t` first.** Heterogeneous JSONL (where rows have different schemas — e.g. application event streams, framework logs, audit feeds) collapses to a single column called `json` of type `MAP(VARCHAR, JSON)`.
+- Chained MAP brackets >1 level deep in Case B: `json['group']['subgroup']['leaf']`. The first `[]` returns a `JSON` value, NOT another MAP — the second/third `[]` silently produce SQL NULL, and `WHERE x IS NOT NULL` filters every row out. **Use the JSON arrow operators `->` and `->>` past the first level** (see Case B cookbook below).
+- Trusting a query that returned 0 rows / `SUM = 0` without re-checking your field path. If you expected matches and got none, the path is wrong. Re-inspect a sample row with `print(con.execute("SELECT json FROM t WHERE json_extract_string(json, '$.<discriminator>')='<expected_kind>' LIMIT 1").fetchone())` and re-extract.
+- `json['key']::VARCHAR` for string equality / display. Casting a `JSON` value to `VARCHAR` keeps the JSON quotes — you get the literal 7-char string `"error"` (with the quote marks), not `error`. So `WHERE json['kind']::VARCHAR = 'error'` matches **zero rows**, and your printed values look ugly. **For unquoted strings use `json_extract_string(json, '$.key')` or `(json ->> 'key')`** — both return raw VARCHAR. Reserve `::VARCHAR` cast for when you actually want the JSON-quoted form.
+- `data = open(path).read()` on a multi-MB file, then process in memory.
+- Re-streaming the SAME file in turn 1, turn 2, turn 3 to answer different sub-questions. Load into DuckDB once on turn 1.
+- Pasting raw lines into the prompt or pulling tens of thousands of matched lines into a Python list. Aggregate in code first.
+- Using pandas `read_csv` for files larger than RAM. Prefer DuckDB or polars `scan_csv` (lazy).
 
 ## DuckDB JSONL: two cases you MUST handle
 
@@ -126,10 +126,10 @@ WHERE (json ->> '<discriminator>') = '<some_kind>'
 **STRING-EQUALITY GOTCHA — `::VARCHAR` keeps JSON quotes.** Casting a `JSON` value with `::VARCHAR` gives you the JSON-encoded form including the surrounding `"`. So `'error'::VARCHAR(JSON value) = '"error"'` — the literal 7-character string. A filter like `WHERE json['kind']::VARCHAR = 'error'` therefore matches **zero rows**, and printed values look ugly. For string comparisons or display, ALWAYS extract through `->>` or `json_extract_string`:
 
 ```sql
--- ❌ WRONG — matches zero rows because LHS is `"error"` (with quote marks)
+-- WRONG — matches zero rows because LHS is `"error"` (with quote marks)
 WHERE json['kind']::VARCHAR = 'error'
 
--- ✅ RIGHT — both return the unquoted VARCHAR `error`
+-- RIGHT — both return the unquoted VARCHAR `error`
 WHERE (json ->> 'kind')                       = 'error'
 WHERE json_extract_string(json, '$.kind')     = 'error'
 ```
@@ -139,13 +139,13 @@ Reserve `::VARCHAR` cast for when you actually want the raw JSON text (rare).
 **CRITICAL — going more than ONE level deep:** `json['<group>']` returns a `JSON` value, NOT another MAP. Chaining a second `['…']` against a JSON value silently returns SQL NULL, and `WHERE x IS NOT NULL` / `SUM(x)` will then drop or zero every row — you'll get an empty result that looks like a real answer. You MUST switch to the JSON arrow operators (`->` returns JSON, `->>` returns VARCHAR) or `json_extract_string` past the first hop:
 
 ```sql
--- ❌ WRONG — silently returns NULL, every WHERE / SUM is empty:
+-- WRONG — silently returns NULL, every WHERE / SUM is empty:
 json['<group>']['<subgroup>']['<leaf>']::UBIGINT
 
--- ✅ RIGHT — `->` returns JSON, `->>` returns VARCHAR; cast the leaf:
+-- RIGHT — `->` returns JSON, `->>` returns VARCHAR; cast the leaf:
 (json['<group>'] -> '<subgroup>' ->> '<leaf>')::UBIGINT
 
--- ✅ Equivalent — explicit JSON path string:
+-- Equivalent — explicit JSON path string:
 json_extract_string(json['<group>'], '$."<subgroup>"."<leaf>"')::UBIGINT
 ```
 

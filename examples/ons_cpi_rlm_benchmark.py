@@ -1,3 +1,22 @@
+"""ONS CPI RLM benchmark harness.
+
+Runs fabric-rlm against the UK Office for National Statistics (ONS) Consumer
+Price Inflation "MM23" release (a single large ``mm23.xlsx`` workbook, roughly
+4,053 series x 1,484 period rows) and scores two task types:
+
+* ``exact``     - retrieve exact values for known CDID / period pairs.
+* ``reasoning`` - answer plain-English questions, disambiguating CPI vs CPIH
+                  vs RPI and index vs rate, then look up the period.
+
+Ground truth in this file is transcribed from the ONS MM23 release for the
+March 2024 and January 2025 reference periods. Download the workbook from the
+ONS website (dataset "MM23") and pass its path with ``--workbook``.
+
+Requires ``OPENROUTER_API_KEY``. Example::
+
+    python examples/ons_cpi_rlm_benchmark.py --workbook mm23.xlsx --task exact
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -158,7 +177,10 @@ def normalize_payload(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     if isinstance(value, str) and value.strip():
-        parsed = json.loads(value)
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
         if isinstance(parsed, dict):
             return parsed
     return {}

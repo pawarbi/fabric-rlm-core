@@ -1,9 +1,9 @@
 """Corpus-regression check: SecurityPolicy.default().validate_code() must
 return ``None`` (i.e. ALLOW) for every code snippet the LM emitted across
-all saved adaptive trajectories. Historical traces live under
-``_local/bench/adaptive/results/`` on the maintainer's machine
-(gitignored); fresh checkouts fall back to the per-session
-``~/.copilot/session-state/.../files/`` tree.
+all saved adaptive trajectories. Historical traces live under a local
+benchmark directory on the maintainer's machine (gitignored) or a corpus
+directory named by the ``FABRIC_RLM_TRAJECTORY_CORPUS`` environment variable;
+fresh checkouts fall back to the committed fixtures under ``tests/fixtures``.
 
 If this test fails on a turn that an LM actually ran historically, the
 security baseline is producing a *behavioural regression* and must be
@@ -16,6 +16,7 @@ This is the empirical no-regression proof for the default-on policy.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -29,10 +30,11 @@ _REPO_TRAJ_ROOTS = [
     Path(__file__).resolve().parent / "fixtures",
 ]
 
-# Saved trajectories from prior sessions live in the agent session workspace
-# (gitignored). Walk anything we can find.
-_SESSION_TRAJ_ROOT = (
-    Path.home() / ".copilot" / "session-state"
+# Optional out-of-tree trajectory corpus (maintainer machines only). Point
+# FABRIC_RLM_TRAJECTORY_CORPUS at a directory to include it in the sweep;
+# otherwise this path will not exist and the sweep uses the repo fixtures.
+_SESSION_TRAJ_ROOT = Path(
+    os.environ.get("FABRIC_RLM_TRAJECTORY_CORPUS", "__no_such_corpus__")
 )
 
 

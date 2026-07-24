@@ -1,10 +1,8 @@
 """Engine consolidation — parity / baseline / regression tests.
 
-These tests guard the engine consolidation work described in
-``~/.copilot/session-state/.../files/engine_consolidation_plan.md``. They lock
-the post-init state of each engine variant so the consolidation work cannot
-silently change observable behavior for users who construct ``RLM(...)``
-without specifying ``engine=``.
+These tests lock the post-init state of each engine variant so the engine
+consolidation work cannot silently change observable behavior for users who
+construct ``RLM(...)`` without specifying ``engine=``.
 
 **The fingerprint contract.** Each engine variant must produce a deterministic
 ``_fingerprint`` dict capturing post-``__init__`` state. Aliases must produce

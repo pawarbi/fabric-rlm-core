@@ -21,14 +21,12 @@ pip install -e .
 ### 1b. Inside a Fabric notebook
 
 ```python
-# Temporary until 0.2.5 is on production PyPI.
-%pip install -q \
-    --index-url https://test.pypi.org/simple \
-    --extra-index-url https://pypi.org/simple \
-    fabric-rlm==0.2.5
+%pip install -q fabric-rlm
+# For the PDF notebooks, add the optional PyMuPDF extra:
+# %pip install -q fabric-rlm[pdf]
 ```
 
-> ⚠️ **Restart the Python session** after `%pip install` (Fabric ribbon →
+> **Restart the Python session** after `%pip install` (Fabric ribbon →
 > Restart session). `%pip` does not reload already-imported modules.
 
 You also need an LLM API key. The examples below use OpenRouter (any model),
@@ -61,7 +59,7 @@ python examples/simple_math/run_mock.py
 into a one-liner. No keys, no URLs, no plumbing — uses your notebook's
 identity automatically.
 
-> 🧩 **Which models can I name?** `FabricLM("...")` / `lm="fabric/..."` must
+> **Which models can I name?** `FabricLM("...")` / `lm="fabric/..."` must
 > reference a model that Fabric's prebuilt Foundry Tools host. The hosted set
 > changes over time and varies by region — check the authoritative list before
 > picking a model:
@@ -72,7 +70,7 @@ identity automatically.
 ```python
 from fabric_rlm import RLM, FabricLM
 
-lm = FabricLM("gpt-5")   # defaults: temperature=1.0, max_tokens=16000
+lm = FabricLM("gpt-5")   # reasoning model: temperature omitted automatically; max_tokens=16000
 
 rlm = RLM.task(
     task="Compute the 30th Fibonacci number using a loop.",
@@ -84,7 +82,7 @@ rlm = RLM.task(
 print(rlm(n=30).payload)   # {'fib': 832040}
 ```
 
-> 💡 **Reasoning-model handling:** `FabricLM` /
+> **Reasoning-model handling:** `FabricLM` /
 > `OpenAILM` / `resolve_lm` now detect reasoning models (gpt-5,
 > o1/o3/o4 family) and **omit `temperature` automatically** (it's
 > rejected/ignored by the API). Pass `reasoning_effort="minimal"|"low"
@@ -264,29 +262,42 @@ the runtime prepends `"VERIFIER FEEDBACK: …"` to the prompt and retries (up to
 ## 6. The SUBMIT contract
 
 Inside the model-generated Python code, the runtime injects a `SUBMIT(...)`
-function. The model MUST call it with **keyword arguments matching the
-signature output fields**:
+function. Call it with **keyword arguments matching your declared `outputs`**
+(recommended), or positional arguments in the same order:
 
 ```python
-# Model writes:
+# Model writes (declared outputs=["answer"]):
 result = sum(range(1, 101))
-SUBMIT(answer=result)        # ✅ keyword arg
-SUBMIT(result)               # ❌ positional — runtime raises a friendly TypeError
+SUBMIT(answer=result)        # keyword — recommended, unambiguous
+SUBMIT(result)               # also valid: positional maps to outputs in order
 ```
 
-After SUBMIT, the loop terminates and `result.payload` holds the dict.
+`SUBMIT` raises a `TypeError` only when you pass an unknown field name or more
+positional arguments than there are output fields; the verifier surfaces that
+and the model retries. After a valid SUBMIT the loop terminates and
+`result.payload` holds the dict.
 
 ---
 
 ## 7. Tools (sub-LM, files, custom callbacks)
 
-The model can call helper functions you expose. Two built-ins always available:
+The model can call helper functions the runtime injects. The two you'll use most:
 
 ```python
-# inside model's Python:
-ans = llm_query("Summarize: …")     # makes a sub-LM call (uses sub_lm or main lm)
-print(read_file("./data.csv"))      # reads from the host FS
+# inside the model's Python:
+
+# Recursive sub-LM call via a DSPy-style signature. Returns a result object
+# whose attributes are the signature's output fields (uses sub_lm or the main lm).
+fr = predict_sync("english -> french", english="Good morning")
+print(fr.french)
+
+# Files you bind as inputs arrive as File(...) handles, with .path, .name,
+# .read_text(), .read_bytes(), and .exists():
+#   RLM.task(..., inputs={"doc": File("/path/report.pdf")})
 ```
+
+`predict(...)` is the async form of `predict_sync(...)`. The runtime also injects
+`load_skill`, `activate_skill`, and `list_skills` for on-demand skill loading.
 
 You can also pass `sub_lm=` separately if you want a cheaper model for nested calls:
 
@@ -376,7 +387,7 @@ for h in lm.history:
 > `["router_used_task_text_fallback"]` to see what the router did.
 
 ```python
-# ✅ Recommended: explicit preload
+# Recommended: explicit preload
 rlm = RLM(..., skills=["pdf_document_analysis", "data_exploration"])
 
 # Keyword-heuristic routing; verify router_active in trajectory metadata.
@@ -464,14 +475,14 @@ Once the basic example runs:
 1. **CLI run** — `fabric-rlm run examples/simple_math/task.json` (swap the
    `lm` field in the JSON for your model), then
    `fabric-rlm trace inspect <trajectory.jsonl>` on the saved trace.
-2. **Fabric notebook recipes** — `examples/notebooks/` ships four end-to-end
-   PDF workflows (contract comparison, invoice processing, document analysis,
-   redaction) ready to import into a Fabric workspace.
+2. **Fabric notebook recipes** — `examples/notebooks/` ships minimal,
+   ready-to-import Fabric notebooks for API basics, PDF workflows, and
+   Spark-log root-cause analysis.
 3. **Long-file analysis** — point the `data_exploration` skill at a CSV/log
    too big for context (§9a): the subprocess greps/queries it; the LM never
    sees the raw bytes.
 4. **Sub-LM calls** — give the model a cheaper `sub_lm=` and a task that
-   needs per-item summarization; watch it call `llm_query()` from inside its
+   needs per-item summarization; watch it call `predict_sync()` from inside its
    own generated code (§7).
 
 ---
@@ -482,7 +493,8 @@ Once the basic example runs:
 |---|---|---|
 | `OPENROUTER_API_KEY not set` | env var missing | `$env:OPENROUTER_API_KEY = "..."` |
 | Subprocess hangs / timeouts | `max_turns` too low for task | bump `max_turns`, set `halve_max_iter_on_retry=False` |
-| `_tool_stub() requires KEYWORD arguments only` | model called `SUBMIT(x)` instead of `SUBMIT(answer=x)` | the verifier feedback fixes this on retry; no action needed |
+| `SUBMIT() got unexpected keyword argument ...` / `takes at most N positional arguments` | model's SUBMIT call doesn't match the declared `outputs=[...]` | the verifier feedback fixes this on retry; make sure `outputs=[...]` matches what the model submits |
+| `<tool>(...) requires KEYWORD arguments only, not positional` | a registered custom tool was called positionally | call registered tools with keyword arguments |
 | `payload is None`, `failure_reason="max_turns"` | model never called SUBMIT before the budget ran out | check `result.trajectory.turns`, increase `max_turns` |
 | `failure_reason="stuck_loop"` | model re-emitted identical failing code 3+ turns in a row | inspect the repeated error in the trajectory; rephrase the task or raise `stuck_loop_threshold` |
 | `failure_reason="worker_timeout"` / `"worker_error"` | a code turn exceeded `timeout` / crashed the worker | raise `timeout=`, or check the recorded turn's `error` field |

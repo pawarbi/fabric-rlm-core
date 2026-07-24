@@ -16,6 +16,7 @@ from typing import Any
 
 from .interpreter import ExecResult, Interpreter, WorkerTimeout
 from .security import SecurityPolicy
+from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +164,26 @@ def _digest_for_skill(skill: Skill) -> str:
     return "\n".join(lines)
 
 
-STDOUT_FEEDBACK_LIMIT = int(os.environ.get("FABRIC_RLM_STDOUT_LIMIT", "5000"))
-STDERR_FEEDBACK_LIMIT = int(os.environ.get("FABRIC_RLM_STDERR_LIMIT", "5000"))
-ERROR_FEEDBACK_LIMIT = int(os.environ.get("FABRIC_RLM_ERROR_LIMIT", "2000"))
+def _int_env(name: str, default: int) -> int:
+    """Read an int env var, falling back to ``default`` on missing/malformed
+    input. A bad value must never crash ``import fabric_rlm``."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        warnings.warn(
+            f"{name}={raw!r} is not a valid integer; using default {default}.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return default
+
+
+STDOUT_FEEDBACK_LIMIT = _int_env("FABRIC_RLM_STDOUT_LIMIT", 5000)
+STDERR_FEEDBACK_LIMIT = _int_env("FABRIC_RLM_STDERR_LIMIT", 5000)
+ERROR_FEEDBACK_LIMIT = _int_env("FABRIC_RLM_ERROR_LIMIT", 2000)
 
 # Default fraction of each budget reserved for the tail (freshest signal).
 # Errors lean tail-heavy: a traceback's diagnostic line is last. Read at call
@@ -379,8 +397,15 @@ class RLMResult:
         return self.payload if self.payload is not None else {}
 
     def __getattr__(self, name: str) -> Any:
-        if self.payload and name in self.payload:
-            return self.payload[name]
+        # Only reached when normal attribute lookup fails. Never satisfy dunder
+        # probes from the payload, and read ``payload`` straight from ``__dict__``
+        # so pickling/copying (which reconstruct the instance with an empty
+        # ``__dict__`` before ``payload`` is set) cannot recurse infinitely.
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        payload = self.__dict__.get("payload")
+        if payload and name in payload:
+            return payload[name]
         raise AttributeError(name)
 
     def to_dict(self) -> dict[str, Any]:
@@ -545,6 +570,10 @@ class RLM:
         ``__name__``; wrap with ``functools.wraps`` if you need to preserve
         the underlying name through a decorator. Pass ``dspy.Tool(fn,
         name='...')`` for an explicit name override.
+    max_submit_bytes : int, optional
+        Maximum UTF-8 JSON byte size for a final ``SUBMIT`` payload. Final
+        values are serialized losslessly up to this limit; larger payloads
+        fail explicitly rather than being truncated. Defaults to 64 MiB.
     """
 
     def __init__(
@@ -577,6 +606,7 @@ class RLM:
         stuck_loop_threshold: int | None = 3,
         tools: Iterable[Callable[..., Any]] | None = None,
         security: SecurityPolicy | None = None,
+        max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
     ):
         # ---- engine validation (early, before any heavy resolution) ---------
         # Resolve aliases ('default' -> 'v6-custom', 'dspy' -> 'v7-dspy')
@@ -655,6 +685,7 @@ class RLM:
         # denylist / env-strip globs. See ``fabric_rlm.security`` for the
         # honest framing of what this does and does not protect against.
         self._security: SecurityPolicy = security if security is not None else SecurityPolicy.default()
+        self.max_submit_bytes = validate_max_submit_bytes(max_submit_bytes)
         if engine == "adaptive":
             # Resolve aliases for inner_engine ONLY when it is actually used.
             # Phase 1: keeps non-adaptive callers free of new strictness on
@@ -740,6 +771,7 @@ class RLM:
                 halve_max_iter_on_retry=halve_max_iter_on_retry,
                 stuck_loop_threshold=stuck_loop_threshold,
                 security=self._security,
+                max_submit_bytes=self.max_submit_bytes,
             )
             return
 
@@ -1197,7 +1229,11 @@ class RLM:
         final_state: dict[str, Any] = {}
         task_description, _ = _task_and_outputs(self.signature, self._inline_task, self._inline_outputs)
 
-        with Interpreter(timeout=self.timeout, security=self._security) as interpreter:
+        with Interpreter(
+            timeout=self.timeout,
+            security=self._security,
+            max_submit_bytes=self.max_submit_bytes,
+        ) as interpreter:
             if self.sub_lm_spec is not None:
                 interpreter.configure_lm(self.sub_lm_spec)
             if bound_inputs:
@@ -1924,7 +1960,9 @@ class RLM:
 
         for attempt in range(MAX_VERIFIER_RETRIES + 1):
             interpreter = SubprocessPythonInterpreter(
-                timeout=self.timeout, security=self._security
+                timeout=self.timeout,
+                security=self._security,
+                max_submit_bytes=self.max_submit_bytes,
             )
             t0 = time.time()
             try:
@@ -1979,7 +2017,10 @@ class RLM:
             # today, but future contributors get a stable contract) still
             # work as authored.
             try:
-                with Interpreter(timeout=self.timeout) as verifier_interp:
+                with Interpreter(
+                    timeout=self.timeout,
+                    max_submit_bytes=self.max_submit_bytes,
+                ) as verifier_interp:
                     verifier_feedback = self._run_skill_verifiers(verifier_interp, payload)
             except Exception as exc:
                 logger.warning(

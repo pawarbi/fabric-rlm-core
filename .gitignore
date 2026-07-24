@@ -46,11 +46,3 @@ _local/
 # Notebook checkpoints
 .ipynb_checkpoints/
 
-# agent-skills (local development only, not part of the repo)
-.github/skills/
-.github/agents/
-.github/copilot-instructions.md
-.claude/
-.agents/
-.copilot/
-

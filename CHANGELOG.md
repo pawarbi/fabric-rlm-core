@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.8 — 2026-07-23 — lossless SUBMIT payloads and release hardening
+
+### Fixed
+
+- **Lossless final `SUBMIT` payloads.** Final supported strings and collections
+  are no longer truncated by the namespace snapshot limits. Iterative state
+  remains bounded, while final payloads have a configurable 64 MiB default
+  byte cap and fail explicitly when exceeded.
+- **`dspy` dependency range.** Pinned to `dspy>=3.2.1,<3.4`. The subprocess
+  interpreter mirrors dspy's kwargs-only tool dispatch (3.2.0) and JSON-RPC
+  `CodeInterpreter` messaging (3.1.3), so the previous `>=3.1.2` floor sat below
+  the protocol the runtime actually tracks. The ceiling guards against churn in
+  dspy's experimental `RLM` / `CodeInterpreter` internals.
+- **Example notebooks install from PyPI.** Every notebook now installs
+  `fabric-rlm` from PyPI (tutorials unpinned, benchmark notebooks pinned to the
+  release) instead of a TestPyPI pre-release index.
+
+### Added
+
+- Regression coverage and documentation for 10,000-character strings,
+  500-row outputs, UTF-8 byte boundaries, invalid limits, bounded snapshot
+  compatibility, and both interpreter surfaces.
+- **New example notebooks** — a minimal contract-comparison walkthrough and a
+  Spark-log root-cause analysis. The existing PDF notebooks were trimmed to
+  focused, ready-to-import recipes.
+
+### Changed
+
+- `py.typed` is now explicitly declared as package data so type checkers pick up
+  the inline types regardless of the build toolchain.
+- Documentation and packaged skill playbooks were cleaned up for the public
+  release (corrected built-in names, install commands, and cross-references).
+
 ## 0.2.7 — 2026-06-16 — opt-in Excel workbook structure context
 
 ### Added
@@ -232,11 +265,11 @@
   - Strategy F (gpt-4.1-mini + RLM + Python interpreter + `excel_modify`):
     21/50 = 42.0%, $0.51 (4.3× cheaper, 2.3× faster wall-clock)
   - Union pass rate: 29/50 = 58.0%
-  - Report: `bench/spreadsheetbench/REPORT_ssb_h2h_50q.md`
-  - Subset metadata: `bench/spreadsheetbench/ssb_subset_50.jsonl`
-  - Notebook generator: `scripts/build_ssb_notebook.py`
+  - Reproduce with the benchmark notebooks in `examples/notebooks/`
+    (`spreadsheetbench_400_openrouter_minimax_mlflow.ipynb` and
+    `ssb400_minimax_m3_fabric_repro.ipynb`).
 
-## 0.1.11 (unreleased) — PLAN / VERIFY / REFLECT (PVR) contract
+## 0.1.11 — PLAN / VERIFY / REFLECT (PVR) contract
 
 **Bug fix (dev6):** `Trajectory.__bool__` now explicitly returns `True`. Previously a `Trajectory` with zero turns evaluated as falsy because `__len__` was defined and Python falls back to it for truthiness, causing downstream `if traj: ...` guards (in benchmarks and result-collection helpers) to silently discard the trajectory's metadata — including the entire `adaptive` payload. Found while diagnosing a 5-way comparison where `EffortLadderPolicy` appeared to record 0 attempts on every question.
 
@@ -256,16 +289,16 @@ context on every failed attempt (not only validator rejections).
 
 | case | OFF pass | ON pass | OFF→ON attempts | OFF→ON tokens |
 |---|---|---|---|---|
-| easy-math, easy-csv | ✅ | ✅ | 1→1 | small overhead, no regression |
-| Backprop_hard (solvable, multi-step) | ❌ ladder exhausted | ✅ rung 3 | 7→3 | 1.28M→413K (-68%) |
-| VLIW_hard (capability ceiling) | ❌ | ❌ | 6→6 | 294K→242K (-18%) |
+| easy-math, easy-csv | pass | pass | 1→1 | small overhead, no regression |
+| Backprop_hard (solvable, multi-step) | fail ladder exhausted | pass rung 3 | 7→3 | 1.28M→413K (-68%) |
+| VLIW_hard (capability ceiling) | fail | fail | 6→6 | 294K→242K (-18%) |
 
 **OOD ablation** (structured extraction outside training distribution):
 
 | case | OFF pass | ON pass | OFF→ON attempts | OFF→ON tokens | OFF→ON elapsed |
 |---|---|---|---|---|---|
-| rfp-extract (4 fields from RFP PDF text 100KB) | ✅ | ✅ | 2→1 | 18K→4.9K (-74%) | 60.6s→7.9s |
-| spark-extract (5 fields from Spark log JSON 200KB) | ✅ | ✅ | 1→**3** | 6K→40K (+528%) | 10.1s→176s |
+| rfp-extract (4 fields from RFP PDF text 100KB) | pass | pass | 2→1 | 18K→4.9K (-74%) | 60.6s→7.9s |
+| spark-extract (5 fields from Spark log JSON 200KB) | pass | pass | 1→**3** | 6K→40K (+528%) | 10.1s→176s |
 
 The Spark-log case revealed a new failure mode: PVR's VERIFY clause can spuriously
 self-reject a correct first answer, amplifying retries on tasks the model would otherwise

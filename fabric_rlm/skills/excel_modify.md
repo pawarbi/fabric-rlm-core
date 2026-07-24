@@ -24,18 +24,18 @@ Summary: You are MODIFYING an Excel `.xlsx` workbook in place using `openpyxl`. 
 
 You never read the raw bytes back into the LM. Print only small summaries (headers, sample rows, the values you wrote) — never dump full sheets.
 
-## ⚠️ READ THIS FIRST — the #1 failure mode
+## READ THIS FIRST — the #1 failure mode
 
 **The grader compares the SAVED CELL VALUES in the TARGET CELL RANGE against expected scalars.** It is a value-by-value comparison. It does NOT execute formulas, run macros, render Power Query, or interpret prose.
 
 That means **none of the following will earn ANY credit**, even though they may look like they "describe" the right answer:
 
-- ❌ Writing VBA code as a cell string: `ws["A1"] = "Sub DeleteEmptyRows()"`
-- ❌ Writing Power Query M as a cell string: `ws["H2"] = "Power Query (M): let Source = ..."`
-- ❌ Writing prose like `ws["A1"] = "Macro: delete row when col I has value and H is blank (executed below)."`
-- ❌ Writing the *task description* into the worksheet
-- ❌ Writing labels / headers / placeholder text (`"-"`, `"TBD"`, `"see notes"`) into target cells when actual values are required
-- ❌ Writing Excel formula strings (`"=SUM(A1:A10)"`) — the grader uses `data_only=True` and reads `None`
+- Writing VBA code as a cell string: `ws["A1"] = "Sub DeleteEmptyRows()"`
+- Writing Power Query M as a cell string: `ws["H2"] = "Power Query (M): let Source = ..."`
+- Writing prose like `ws["A1"] = "Macro: delete row when col I has value and H is blank (executed below)."`
+- Writing the *task description* into the worksheet
+- Writing labels / headers / placeholder text (`"-"`, `"TBD"`, `"see notes"`) into target cells when actual values are required
+- Writing Excel formula strings (`"=SUM(A1:A10)"`) — the grader uses `data_only=True` and reads `None`
 
 **Your job is to actually perform the transformation in Python and write the resulting concrete values.** If the task is "delete rows where col I is non-empty and col H is blank", you must:
 
@@ -89,17 +89,17 @@ If you cannot answer all four, re-read the prompt before writing code. Do NOT gu
 
 ## Anti-patterns (these caused real failures — do NOT repeat them)
 
-- ❌ **Writing the solution as text.** See the "READ THIS FIRST" section above. The grader gives 0 credit for VBA / M / prose in cells.
-- ❌ Writing Excel formulas (`ws['B3'] = "=SUM(A3:A10)"`). The grader uses `openpyxl.load_workbook(path, data_only=True)`, which does NOT evaluate formulas — it returns `None` for any cell whose cached value is missing. **Write computed scalar values only**.
-- ❌ Forgetting `wb.save(path)`. Mutations to `ws` are in-memory only until you save. You must save back to the **same path** that was given to you.
-- ❌ Saving to a different filename (`out.xlsx`, `result.xlsx`, etc.). The grader inspects the original WORKBOOK PATH — overwrite it.
-- ❌ Treating the file like a JSONL / log / CSV stream. Do NOT call `open(path).read()`, `read_json_auto`, `pd.read_csv`, `json.loads`, or `for line in open(path)`. Use `openpyxl.load_workbook` (or `pandas.read_excel`).
-- ❌ Assuming the sheet name. If the prompt does not name a sheet, default to `wb.active` and print `wb.sheetnames` first to confirm there is only one sheet.
-- ❌ **Writing to the wrong cell range.** The grader inspects ONLY the TARGET CELL RANGE in the prompt. Iterate that exact range; don't spill into adjacent rows or columns. **Off-by-one in the start row is the second-most-common failure** — if the target is `F2:H10`, write to rows 2..10 inclusive, not 1..9 or 3..11.
-- ❌ Ignoring header rows. Spreadsheet data usually starts on row 2 (row 1 is the header). Inspect first; do not start computing from row 1.
-- ❌ Off-by-one between Excel column letters (A, B, C…) and openpyxl 1-based indices. `ws['B3']` is column 2, row 3.
-- ❌ Reading source cells with `ws.cell(...).value` when they are formulas — you get the literal string `'=D3+F3'`, not the computed number. **Read inputs from a `data_only=True` workbook** when the source contains formulas.
-- ❌ Padding unfilled target cells with `"-"`, `""`, `"N/A"`, `"TBD"` or any placeholder. If you don't know what to write, the right answer is to recompute, not to fill with a sentinel.
+- **Writing the solution as text.** See the "READ THIS FIRST" section above. The grader gives 0 credit for VBA / M / prose in cells.
+- Writing Excel formulas (`ws['B3'] = "=SUM(A3:A10)"`). The grader uses `openpyxl.load_workbook(path, data_only=True)`, which does NOT evaluate formulas — it returns `None` for any cell whose cached value is missing. **Write computed scalar values only**.
+- Forgetting `wb.save(path)`. Mutations to `ws` are in-memory only until you save. You must save back to the **same path** that was given to you.
+- Saving to a different filename (`out.xlsx`, `result.xlsx`, etc.). The grader inspects the original WORKBOOK PATH — overwrite it.
+- Treating the file like a JSONL / log / CSV stream. Do NOT call `open(path).read()`, `read_json_auto`, `pd.read_csv`, `json.loads`, or `for line in open(path)`. Use `openpyxl.load_workbook` (or `pandas.read_excel`).
+- Assuming the sheet name. If the prompt does not name a sheet, default to `wb.active` and print `wb.sheetnames` first to confirm there is only one sheet.
+- **Writing to the wrong cell range.** The grader inspects ONLY the TARGET CELL RANGE in the prompt. Iterate that exact range; don't spill into adjacent rows or columns. **Off-by-one in the start row is the second-most-common failure** — if the target is `F2:H10`, write to rows 2..10 inclusive, not 1..9 or 3..11.
+- Ignoring header rows. Spreadsheet data usually starts on row 2 (row 1 is the header). Inspect first; do not start computing from row 1.
+- Off-by-one between Excel column letters (A, B, C…) and openpyxl 1-based indices. `ws['B3']` is column 2, row 3.
+- Reading source cells with `ws.cell(...).value` when they are formulas — you get the literal string `'=D3+F3'`, not the computed number. **Read inputs from a `data_only=True` workbook** when the source contains formulas.
+- Padding unfilled target cells with `"-"`, `""`, `"N/A"`, `"TBD"` or any placeholder. If you don't know what to write, the right answer is to recompute, not to fill with a sentinel.
 
 ## Reading source data
 
