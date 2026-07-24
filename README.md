@@ -42,6 +42,63 @@ go back through the LM, so it works on files far larger than any context window.
   offline.
 - Runs locally too, and ships `py.typed`.
 
+## When to use an RLM (and when not to)
+
+An RLM earns its overhead when the task needs computation, iteration, or data
+that will not fit in a context window. For a quick question or a conversational
+task, a plain LLM call is cheaper and faster; the loop and the subprocess add
+nothing.
+
+Use an RLM when:
+
+- The data is larger than any context window. Multi-gigabyte Spark logs, wide
+  Excel workbooks, long JSONL streams: the model queries them with DuckDB,
+  Polars, or openpyxl inside the subprocess, and only its aggregates enter the
+  LM context. This is what the `data_exploration` skill was built for.
+- The answer must be computed exactly or written to a file. An LLM cannot
+  reliably do arithmetic over thousands of rows or edit an `.xlsx` in place; code
+  can. On a SpreadsheetBench Verified-400 subset, `gpt-4.1-mini` with this RLM
+  and the `excel_modify` skill scored 42% vs 46% for single-shot `gpt-5`, at 4.3x
+  lower cost and 2.3x faster wall-clock (see `CHANGELOG.md` for the full bench).
+- The task is multi-step and its output is checkable. With a validator attached,
+  failed attempts feed structured reflection into retries: in the ablation, a
+  hard multi-step task went from ladder-exhausted failure to passing, with 68%
+  fewer tokens.
+- You need strict multi-field extraction from long documents. The same ablation
+  measured a 74% token reduction on a 100KB RFP extraction with the
+  plan/verify contract on.
+
+Skip the RLM when:
+
+- It is a conversation, a rewrite, or a judgment call over text that fits in
+  context. There is nothing to compute, so a single LM call wins.
+- The model nails the task in one shot. The ablation caught this failure mode
+  directly: on an easy log-extraction task the verify loop spuriously re-checked
+  a correct first answer, inflating cost from 6K to 40K tokens and 10 seconds to
+  176. Correctness held, but a plain call would have been 10x cheaper.
+- The task exceeds the model's capability. The loop retries more cheaply, but it
+  does not rescue tasks the model fundamentally cannot solve; use a stronger
+  model instead.
+
+## How it works, in one picture
+
+```mermaid
+flowchart TD
+    A["Task + inputs<br/>(values and File handles)"] --> B["RLM runtime<br/>routes skills, builds the prompt"]
+    B --> C["Model writes Python"]
+    C --> D["CPython subprocess executes it<br/>pandas, DuckDB, openpyxl, Lakehouse Files"]
+    D --> E{"SUBMIT(...) called?"}
+    E -- "no" --> F["stdout, errors, and a bounded<br/>namespace snapshot go back to the model"]
+    F --> C
+    E -- "yes" --> G{"Output verifier<br/>accepts?"}
+    G -- "rejected, with feedback" --> C
+    G -- "accepted" --> H["Result payload + trajectory<br/>(inspect, save, replay)"]
+```
+
+The raw bytes of your files never enter the LM context. The model reads
+summaries, previews, and computed aggregates; the heavy lifting happens in the
+subprocess.
+
 ## Use it in a Fabric notebook
 
 Install on the Python 3.12 `jupyter_python` kernel, then restart the session:
@@ -110,12 +167,7 @@ Requires Python 3.10 or newer. Optional extras:
 | `fabric-rlm[fabric]` | SynapseML | Microsoft Fabric notebook integration |
 | `fabric-rlm[dev]` | pytest | running the test suite |
 
-## How it works
-
-Each turn, the model gets the task (plus any bound inputs and active skills),
-writes a block of Python, and the runtime runs it in the worker subprocess.
-Standard output, errors, and a bounded snapshot of the namespace go back to the
-model so it can correct course. The loop ends when the model calls `SUBMIT(...)`.
+## The worker API
 
 Inputs and files. Bind values, including large files, as inputs. Files arrive
 inside the worker as `File(...)` handles with `.path`, `.read_text()`,
