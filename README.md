@@ -80,6 +80,12 @@ Skip the RLM when:
   does not rescue tasks the model fundamentally cannot solve; use a stronger
   model instead.
 
+To see the contrast yourself, run
+[examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb):
+the same model answers the same question about a 140 MB IMF CPI dataset twice,
+once as a plain LLM call and once through the RLM, and a deterministic DuckDB
+query grades both answers.
+
 ## How it works, in one picture
 
 ```mermaid
@@ -239,9 +245,10 @@ fabric-rlm trace inspect path/to/trajectory.jsonl  # summarize and diagnose a sa
   `aiohttp.ConnectionTimeoutError`).
 - [docs/lossless-submit-payloads.md](docs/lossless-submit-payloads.md): how final
   payloads avoid namespace-snapshot truncation.
-- [examples/notebooks/](examples/notebooks/): ready-to-import Fabric recipes,
-  including the PDF workflows, the Spark-log root-cause analysis, and the
-  SpreadsheetBench benchmarks.
+- [examples/notebooks/](examples/notebooks/): ready-to-import Fabric recipes.
+  Start with `rlm_vs_plain_llm_imf_cpi.ipynb` (the with-and-without comparison)
+  and `rlm_api_tour.ipynb`, then the PDF workflows, the Spark-log root-cause
+  analysis, and the SpreadsheetBench benchmarks.
 - [CHANGELOG.md](CHANGELOG.md): release history.
 
 ## Develop
