@@ -61,16 +61,17 @@ identity automatically.
 
 > **Which models can I name?** `FabricLM("...")` / `lm="fabric/..."` must
 > reference a model that Fabric's prebuilt Foundry Tools host. The hosted set
-> changes over time and varies by region — check the authoritative list before
-> picking a model:
-> [Prebuilt AI models in Fabric](https://learn.microsoft.com/en-us/fabric/data-science/ai-services/ai-services-overview#prebuilt-ai-models-in-fabric-preview).
+> changes over time and varies by region (gpt-5 and gpt-4.1 were retired in
+> June 2026; gpt-5.1 and gpt-5-mini are current) — check the authoritative
+> list before picking a model:
+> [Fabric AI services model list](https://learn.microsoft.com/en-us/fabric/data-science/ai-services/ai-services-overview#consumption-rate).
 > For any model not on that list, use **Bring Your Own Key (BYOK)** or run
 > outside Fabric (see §3b).
 
 ```python
 from fabric_rlm import RLM, FabricLM
 
-lm = FabricLM("gpt-5")   # reasoning model: temperature omitted automatically; max_tokens=16000
+lm = FabricLM("gpt-5.1")   # reasoning model: temperature omitted automatically; max_tokens=16000
 
 rlm = RLM.task(
     task="Compute the 30th Fibonacci number using a loop.",
@@ -83,14 +84,14 @@ print(rlm(n=30).payload)   # {'fib': 832040}
 ```
 
 > **Reasoning-model handling:** `FabricLM` /
-> `OpenAILM` / `resolve_lm` now detect reasoning models (gpt-5,
+> `OpenAILM` / `resolve_lm` now detect reasoning models (gpt-5.x,
 > o1/o3/o4 family) and **omit `temperature` automatically** (it's
-> rejected/ignored by the API). Pass `reasoning_effort="minimal"|"low"
-> |"medium"|"high"` to control depth. Chat models (gpt-4.1,
-> gpt-4o, …) keep `temperature` as a normal knob.
+> rejected/ignored by the API). Pass `reasoning_effort` (e.g. "low",
+> "medium", "high"; allowed values vary by model generation) to control
+> depth. Chat models keep `temperature` as a normal knob.
 >
 > ```python
-> lm = FabricLM("gpt-5", reasoning_effort="high", max_tokens=32000)
+> lm = FabricLM("gpt-5.1", reasoning_effort="high", max_tokens=32000)
 > lm = FabricLM("gpt-4.1-mini", temperature=0.0)   # deterministic chat
 > ```
 >
@@ -101,7 +102,7 @@ print(rlm(n=30).payload)   # {'fib': 832040}
 Equivalent string-spec form (auto-routes through the same factory):
 
 ```python
-rlm = RLM.task(..., lm="fabric/gpt-5")
+rlm = RLM.task(..., lm="fabric/gpt-5.1")
 ```
 
 Equivalent verbose form (if you need to pass extra dspy.LM kwargs the helper
@@ -114,7 +115,7 @@ from synapse.ml.fabric.token_utils import TokenUtils
 
 env = get_fabric_env_config().fabric_env_config
 lm = dspy.LM(
-    "azure/gpt-5",
+    "azure/gpt-5.1",
     api_key="fabric-token",
     api_base=f"{env.ml_workload_endpoint}cognitive/openai",
     api_version="2025-04-01-preview",
@@ -131,7 +132,7 @@ import os, dspy
 from fabric_rlm import RLM
 
 lm = dspy.LM(
-    model="openrouter/openai/gpt-5",
+    model="openrouter/openai/gpt-5.1",
     api_key=os.environ["OPENROUTER_API_KEY"],
     api_base="https://openrouter.ai/api/v1",
     temperature=1.0,
@@ -181,7 +182,7 @@ validator rejects an attempt:
 | 1 | more_turns | "almost there, ran out of room" |
 | 2 | more_effort (medium reasoning_effort) | needs a bit more thinking |
 | 3 | best_of_N parallel rollouts (same cheap LM) | flaky / temperature-sensitive |
-| 4 | strong_lm (e.g. gpt-5, reasoning_effort=high) | genuinely hard |
+| 4 | strong_lm (e.g. gpt-5.1, reasoning_effort=high) | genuinely hard |
 
 ```python
 from fabric_rlm import RLM, FabricLM
@@ -195,7 +196,7 @@ rlm = RLM(
     engine="adaptive",                 # outer wrapper
     inner_engine="default",             # what each attempt uses (default)
     adaptive=dict(
-        strong_lm=FabricLM("gpt-5"),    # the rung-4 escalation LM
+        strong_lm=FabricLM("gpt-5.1"),    # the rung-4 escalation LM
         validator=my_validator,         # gates pass/fail per attempt
         max_attempts=6,                 # ≥6 needed if parallel_rollouts=3
         parallel_rollouts=3,            # rollouts at rung 3
@@ -302,7 +303,7 @@ print(fr.french)
 You can also pass `sub_lm=` separately if you want a cheaper model for nested calls:
 
 ```python
-RLM(..., lm=FabricLM("gpt-5"), sub_lm=FabricLM("gpt-5-mini"))   # in Fabric
+RLM(..., lm=FabricLM("gpt-5.1"), sub_lm=FabricLM("gpt-5-mini"))   # in Fabric
 RLM(..., lm=gpt5, sub_lm=dspy.LM("openrouter/openai/gpt-5-mini", ...))   # outside
 ```
 
@@ -411,7 +412,7 @@ from fabric_rlm import RLM, FabricLM
 rlm = RLM(
     engine="dspy",
     signature="question -> answer: str",
-    lm=FabricLM("gpt-5", max_tokens=16000),   # in Fabric — uses notebook identity
+    lm=FabricLM("gpt-5.1", max_tokens=16000),   # in Fabric — uses notebook identity
     skills=["data_exploration"],              # opt-in; teaches load-once-then-query
     enable_router=False,
 )

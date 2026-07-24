@@ -31,7 +31,7 @@ Example
 
     state = BanditState.from_path("/lakehouse/.../bandit/state.json")
     policy = EffortBanditPolicy(  # convenience subclass below
-        base_lm_spec="azure/gpt-5",
+        base_lm_spec="azure/gpt-5.1",
         base_reasoning_effort="minimal",
         parallel_rollouts=3,
         state=state,

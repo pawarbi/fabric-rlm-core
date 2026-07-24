@@ -59,7 +59,7 @@ task that needs to read CSV/parquet, use `engine="dspy"` and pass
 ```python
 from fabric_rlm import RLM, FabricLM
 
-base_lm = FabricLM("gpt-5", reasoning_effort="medium", max_tokens=16000)
+base_lm = FabricLM("gpt-5.1", reasoning_effort="medium", max_tokens=16000)
 rlm = RLM(
     signature="question -> answer",
     lm=base_lm,

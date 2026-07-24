@@ -14,11 +14,12 @@ _BACKENDS: dict[str, BackendFactory] = {}
 # Reasoning models (gpt-5, o1/o3/o4 family) override these in `_smart_defaults`.
 _DEFAULT_LM_KWARGS = {"temperature": 1.0, "max_tokens": 16_000}
 
-# Mirrors dspy 3.2's reasoning-model detector. Keep in sync with
+# Mirrors dspy 3.2's reasoning-model detector, extended to cover dotted
+# generations (gpt-5.1, gpt-5.2, ...). Keep in sync with
 # dspy/clients/lm.py:LM.__init__ "model_pattern" regex.
 _REASONING_MODEL_RE = re.compile(
     r"^(?:o[1345](?:-(?:mini|nano|pro))?(?:-\d{4}-\d{2}-\d{2})?"
-    r"|gpt-5(?!-chat)(?:-.*)?)$"
+    r"|gpt-5(?:\.\d+)?(?!-chat)(?:-.*)?)$"
 )
 
 
@@ -107,10 +108,16 @@ def _fabric_factory(model_name: str, **overrides: Any) -> Any:
 def FabricLM(model: str, **kwargs: Any) -> Any:
     """Create a DSPy LM using Fabric's built-in OpenAI endpoint.
 
+    The set of hosted models changes over time (gpt-5 and gpt-4.1 were retired
+    in June 2026; gpt-5.1 and gpt-5-mini are the current language models).
+    Check the list before pinning a model name:
+    https://learn.microsoft.com/en-us/fabric/data-science/ai-services/ai-services-overview#consumption-rate
+
     Smart defaults by model family:
-      - Reasoning (gpt-5, o1/o3/o4 family): max_tokens=16000, no temperature.
-        Pass `reasoning_effort="minimal"|"low"|"medium"|"high"` to control depth.
-      - Chat (gpt-4.1, gpt-4o, etc.): temperature=1.0, max_tokens=16000.
+      - Reasoning (gpt-5.x, gpt-5-mini, o1/o3/o4 family): max_tokens=16000,
+        no temperature. Pass `reasoning_effort` to control depth (allowed
+        values vary by model generation; see the OpenAI/Azure model docs).
+      - Chat (gpt-4o, gpt-5.1-chat, etc.): temperature=1.0, max_tokens=16000.
 
     The returned LM transparently refreshes its Azure AAD bearer token on
     401 (`AuthenticationError` from litellm) by calling Fabric's
@@ -120,9 +127,9 @@ def FabricLM(model: str, **kwargs: Any) -> Any:
 
     Examples
     --------
-    >>> lm = FabricLM("gpt-5")                                        # defaults OK
-    >>> lm = FabricLM("gpt-5", reasoning_effort="high", max_tokens=32000)
-    >>> lm = FabricLM("gpt-4.1-mini", temperature=0.0)                # determinstic chat
+    >>> lm = FabricLM("gpt-5.1")                                      # defaults OK
+    >>> lm = FabricLM("gpt-5.1", reasoning_effort="high", max_tokens=32000)
+    >>> lm = FabricLM("gpt-5-mini")                                   # cheaper tier
     """
 
     return _fabric_factory(model, **kwargs)

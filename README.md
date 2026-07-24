@@ -80,14 +80,27 @@ Skip the RLM when:
   does not rescue tasks the model fundamentally cannot solve; use a stronger
   model instead.
 
-To see the contrast yourself, run
+### A worked example
+
+One task, two attempts. The task: from a 140 MB IMF CPI pull (1.5 million rows,
+194 countries, fetched live from the public SDMX API), build a formatted Excel
+report: a pivot of the 10 highest-inflation countries by year, a merged title
+cell, styled headers, and a second sheet listing every qualifying country.
+
+Attempt 1 gives gpt-5.1, the flagship, the question plus as much raw CSV as
+fits in a prompt. Attempt 2 gives gpt-5-mini, about 5x cheaper, the same
+question through the RLM. Measured result:
+
+| arm | workbook | tokens | cost | seconds |
+|---|---|---|---|---|
+| plain call, gpt-5.1 | none | 109,480 | $0.138 | 8.4 |
+| RLM, gpt-5-mini | correct, verified | 47,642 | $0.023 | 78.4 |
+
+The flagship burned 109K tokens discovering the data was never in its context.
+The mini model wrote DuckDB and openpyxl code in the subprocess, built the
+workbook, and a deterministic ground-truth query verified every cell. The
+failed call cost six times more than the successful one. Run it yourself:
 [examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb).
-The deliverable is a formatted Excel report (a pivot with a merged title cell
-and bold headers) built from a 140 MB IMF CPI pull. A plain gpt-5.1 call cannot
-produce it and spends 109K tokens discovering the data is not in its context;
-gpt-5.1 through the RLM builds the exact workbook in 19K tokens, and even
-gpt-5-mini, about 5x cheaper, produces the identical verified result. A
-deterministic DuckDB query grades every cell.
 
 ## How it works, in one picture
 
@@ -133,7 +146,7 @@ rlm = RLM.task(
     task="Find the root cause of the failure in this Spark log.",
     inputs={"log": File("/lakehouse/default/Files/logs/app.log")},
     outputs=["root_cause"],
-    lm=FabricLM("gpt-5"),
+    lm=FabricLM("gpt-5.1"),
 )
 print(rlm.run().root_cause)
 ```
@@ -264,6 +277,22 @@ pytest -q
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
+
+## Acknowledgments
+
+This project stands on the work of others, and it matters to say so:
+
+- The Recursive Language Model paradigm comes from the paper
+  [Recursive Language Models](https://arxiv.org/abs/2512.24601) by Alex L.
+  Zhang, Tim Kraska, and Omar Khattab (MIT CSAIL), which showed that letting a
+  model programmatically examine and recursively query its own prompt beats
+  stuffing everything into context.
+- [DSPy](https://github.com/stanfordnlp/dspy) provides the RLM predictor and
+  the interpreter protocol this library plugs into, and `dspy.LM` powers every
+  model backend here.
+- [Predict-RLM](https://github.com/Trampoline-AI/predict-rlm) by Trampoline AI,
+  a production-focused RLM runtime built on DSPy signatures, inspired the
+  direction of this project.
 
 ## License
 
