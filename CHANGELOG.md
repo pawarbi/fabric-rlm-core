@@ -31,7 +31,9 @@
 - `py.typed` is now explicitly declared as package data so type checkers pick up
   the inline types regardless of the build toolchain.
 - Documentation and packaged skill playbooks were cleaned up for the public
-  release (corrected built-in names, install commands, and cross-references).
+  release (corrected built-in names, install commands, and cross-references),
+  and the `excel_modify` playbook gained value-storage and
+  verify-by-recomputation guidance.
 
 ## 0.2.7 — 2026-06-16 — opt-in Excel workbook structure context
 

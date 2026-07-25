@@ -58,7 +58,7 @@ Use an RLM when:
 - The answer must be computed exactly or written to a file. An LLM cannot
   reliably do arithmetic over thousands of rows or edit an `.xlsx` in place; code
   can. On the full SpreadsheetBench Verified-400, MiniMax M3 through this RLM
-  passes 81.8 percent of questions for about $2.50 of total model spend; see
+  passes 82.2 percent of questions for about $2.60 of total model spend; see
   the benchmark section below.
 - The task is multi-step and its output is checkable. With a validator attached,
   failed attempts feed structured reflection into retries: in the ablation, a
@@ -111,11 +111,12 @@ about two cents) and closes with an honest skill ablation. Run it yourself:
 whether an agent can carry out real spreadsheet-manipulation instructions,
 graded cell-exactly against golden workbooks. On the full Version 1
 Verified-400 set (all 400 questions, single attempt each, temperature 1.0,
-fabric-rlm 0.2.8 with the `excel_modify` skill):
+fabric-rlm 0.2.8 with the `excel_modify` skill and workbook structure context,
+model served from MiniMax's first-party endpoint):
 
 | system | model | pass rate | model spend |
 |---|---|---|---|
-| fabric-rlm | MiniMax M3 (open weights, $0.30/M in, $1.20/M out) | **81.8%** (327/400) | about $2.50 total, $0.006 per question |
+| fabric-rlm | MiniMax M3 (open weights, $0.30/M in, $1.20/M out) | **82.2%** (329/400) | $2.61 total, $0.0065 per question |
 
 For context, the top of the public V1-Verified (400) leaderboard is held by
 commercial spreadsheet products: Qingqiu Agent at 98.25, ByteDance's Data
@@ -129,7 +130,7 @@ xychart-beta
     title "SpreadsheetBench V1 Verified-400 pass rate (percent)"
     x-axis ["fabric-rlm + MiniMax M3", "WPS AI", "GPT for Excel", "Data Analysis Agent", "Qingqiu Agent"]
     y-axis "pass rate" 0 --> 100
-    bar [81.8, 91.25, 92.5, 96.5, 98.25]
+    bar [82.2, 91.25, 92.5, 96.5, 98.25]
 ```
 
 One tuning note from an A/B on 100 of these questions: the opt-in workbook
