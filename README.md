@@ -149,24 +149,6 @@ and the same Opus 4.6 inside a purpose-built scaffold reaches 95.2 percent, so t
 honest reading is that scaffolding matters more than model choice, not that one
 model beats another. All three figures are self-reported.
 
-The same pattern holds in our own controlled tests. Substituting Claude Sonnet 5
-for MiniMax M3 inside this harness, on 30 questions run concurrently with an
-identical configuration, changed nothing measurable (20 passed versus 19, paired
-p = 1.00) while costing 19 times more per question. In the IMF notebook, a direct
-gpt-5.1 call spent 109,480 tokens and produced no usable answer, where the same
-task through the RLM with gpt-5-mini finished in 47,642 tokens with a verified
-workbook. For long-context, multi-step work whose output can be checked, moving
-the computation into code and keeping the raw data out of the prompt lowers cost
-per task more than paying for a larger model does.
-
-One tuning note from an A/B on 100 of these questions: the opt-in workbook
-context (`add_excel_workbook_context`, which prepends the workbook's sheet
-names, dimensions, target ranges, and headers to the task so the model does
-not have to discover them by running code) left the pass rate and cost
-unchanged but cut the mean time per question from 39 to 23 seconds, because
-the model skips its exploratory turns. Turn it on for interactive workloads;
-it makes no difference to accuracy in batch runs.
-
 Reproduce it with
 [examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb](examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb);
 the run needs an OpenRouter key and costs a few dollars.
