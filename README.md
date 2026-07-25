@@ -133,6 +133,28 @@ xychart-beta
     bar [82.2, 91.25, 92.5, 96.5, 98.25]
 ```
 
+For scale, two vendors publish a result for Claude Opus 4.6 driven by a bare
+prompt with no agent loop: 321/400 = 80.2 percent
+([DealGlass results repo](https://github.com/arthursolwayne/spreadsheet-agents))
+and 80.25 percent (Leni). Opus 4.6 tokens are priced roughly 17 times higher on
+input and 21 times higher on output than MiniMax M3. So an open-source runtime
+driving an open-weight model with a spreadsheet skill scores slightly above a
+frontier model asked directly, at a small fraction of the per-token price. Two
+caveats worth stating plainly: that comparison is against a single-shot prompt,
+and the same Opus 4.6 inside a purpose-built scaffold reaches 95.2 percent, so the
+honest reading is that scaffolding matters more than model choice, not that one
+model beats another. All three figures are self-reported.
+
+The same pattern holds in our own controlled tests. Substituting Claude Sonnet 5
+for MiniMax M3 inside this harness, on 30 questions run concurrently with an
+identical configuration, changed nothing measurable (20 passed versus 19, paired
+p = 1.00) while costing 19 times more per question. In the IMF notebook, a direct
+gpt-5.1 call spent 109,480 tokens and produced no usable answer, where the same
+task through the RLM with gpt-5-mini finished in 47,642 tokens with a verified
+workbook. For long-context, multi-step work whose output can be checked, moving
+the computation into code and keeping the raw data out of the prompt lowers cost
+per task more than paying for a larger model does.
+
 One tuning note from an A/B on 100 of these questions: the opt-in workbook
 context (`add_excel_workbook_context`, which prepends the workbook's sheet
 names, dimensions, target ranges, and headers to the task so the model does
