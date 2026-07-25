@@ -58,7 +58,7 @@ Use an RLM when:
 - The answer must be computed exactly or written to a file. An LLM cannot
   reliably do arithmetic over thousands of rows or edit an `.xlsx` in place; code
   can. On the full SpreadsheetBench Verified-400, MiniMax M3 through this RLM
-  passes 82.2 percent of questions for about $2.60 of total model spend; see
+  passes 82.5 percent of questions for about $2.60 of total model spend; see
   the benchmark section below.
 - The task is multi-step and its output is checkable. With a validator attached,
   failed attempts feed structured reflection into retries: in the ablation, a
@@ -116,21 +116,25 @@ model served from MiniMax's first-party endpoint):
 
 | system | model | pass rate | model spend |
 |---|---|---|---|
-| fabric-rlm | MiniMax M3 (open weights, $0.30/M in, $1.20/M out) | **82.2%** (329/400) | $2.61 total, $0.0065 per question |
+| fabric-rlm | MiniMax M3 (open weights, $0.30/M in, $1.20/M out) | **82.5%** (330/400) | $2.61 total, $0.0065 per question |
+
+That 82.5 percent is the score reported by the benchmark's own
+`evaluation.py`, run unmodified over our output workbooks, so it is measured the
+same way as every figure below. It is self-reported in the sense that we ran the
+script ourselves; an official submission is planned.
 
 For context, the top of the public V1-Verified (400) leaderboard is held by
 commercial spreadsheet products: Qingqiu Agent at 98.25, ByteDance's Data
-Analysis Agent at 96.5, GPT for Excel at 92.5, WPS AI at 91.25. Our number is
-self-reported from the run logs in this repository (official submission
-planned) and comes from an open-source library driving a cheap open-weight
-model, at a cost of well under a cent per task.
+Analysis Agent at 96.5, GPT for Excel at 92.5, WPS AI at 91.25. Ours comes from
+an open-source library driving a cheap open-weight model, at a cost of well
+under a cent per task.
 
 ```mermaid
 xychart-beta
     title "SpreadsheetBench V1 Verified-400 pass rate (percent)"
     x-axis ["fabric-rlm + MiniMax M3", "WPS AI", "GPT for Excel", "Data Analysis Agent", "Qingqiu Agent"]
     y-axis "pass rate" 0 --> 100
-    bar [82.2, 91.25, 92.5, 96.5, 98.25]
+    bar [82.5, 91.25, 92.5, 96.5, 98.25]
 ```
 
 For scale, two vendors publish a result for Claude Opus 4.6 driven by a bare
