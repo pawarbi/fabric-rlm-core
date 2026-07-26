@@ -574,6 +574,17 @@ class RLM:
         Maximum UTF-8 JSON byte size for a final ``SUBMIT`` payload. Final
         values are serialized losslessly up to this limit; larger payloads
         fail explicitly rather than being truncated. Defaults to 64 MiB.
+    digest_after_turn : int, optional
+        Swap full skill bodies in the system message for short digests once a
+        skill has been present for this many turns. Defaults to ``None``, which
+        leaves the playbook intact for the whole run.
+
+        Leave it off unless you are running out of context. Rewriting the system
+        message invalidates the provider's cached prefix, and cached input is
+        billed at a tenth of fresh input on Fabric's gpt-5 series, so the tokens
+        the digest keeps get re-priced at 10x. On a 400-question benchmark run,
+        87% of prompt tokens came from cache and caching cut total cost by 51%;
+        digesting gives that back to buy context headroom you may not need.
     """
 
     def __init__(
@@ -1648,6 +1659,23 @@ class RLM:
         Mutates ``messages[0]['content']`` in-place. Idempotent: skills already
         in ``digested_skills`` are skipped. When ``force=True`` digests every
         active skill regardless.
+
+        Cost warning -- this defeats prompt caching. Providers match cached
+        prefixes byte-for-byte from the start of the prompt, so rewriting the
+        system message invalidates the cache for that request and every request
+        after it. Cached input is billed at a tenth of fresh input on Fabric's
+        gpt-5 series (4.20 vs 42.02 CU-seconds per 1k tokens), so a digest that
+        removes N tokens from the prompt re-prices the *surviving* prefix at 10x.
+        Digesting is a net loss unless the skill bodies being dropped are large
+        relative to what remains.
+
+        Measured on a 400-question benchmark run: 87% of prompt tokens were
+        served from cache, and prompt caching accounted for a 51% reduction in
+        total cost. Turn 1 was already 86% cached because the skill prefix is
+        identical across tasks -- an effect this method destroys.
+
+        Only reach for this when the prompt would otherwise exceed the context
+        window. ``digest_after_turn`` defaults to ``None`` (off) for that reason.
         """
 
         if not messages or messages[0].get("role") != "system":
