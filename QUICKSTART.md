@@ -510,7 +510,7 @@ Once the basic example runs:
 - `fabric_rlm/validators.py` — validator primitives + auto-generator
 - `fabric_rlm/security.py` — the module docstring is the authoritative
   statement of what the security baseline does and does not protect against
-- `fabric_rlm/skills/PLAYBOOK_CONTRACT.md` — how to author a skill
+- `docs/authoring-skills.md` — how to author a skill
 - `tests/test_rlm_facade.py` — minimal happy-path examples
 - `tests/test_validators.py` — validator usage patterns
 - `examples/notebooks/` — end-to-end Fabric recipes

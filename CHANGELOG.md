@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The skill-authoring documents moved out of the installed package. `SkillLoader`
+  listed `PLAYBOOK_CONTRACT` and `SKILL_TEMPLATE` as if they were loadable
+  skills, so a model calling `list_skills()` saw two entries that are
+  documentation about writing skills. They now live at
+  `docs/authoring-skills.md` and `docs/skill-template.md`, and `list_skills()`
+  returns the seven real skills.
+
 ## 0.2.9 — 2026-07-25 — installable on Windows and macOS
 
 ### Fixed

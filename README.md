@@ -272,19 +272,69 @@ running code, self-check before SUBMIT, and carry prior-attempt failures into
 retries. It is on by default. Set `FABRIC_RLM_PVR=0` to turn it off for
 token-sensitive batch runs on trivial tasks.
 
-## Bundled skills
+## Skills
 
-Skills are Markdown playbooks the router loads on demand:
+Skills are Markdown playbooks that tell the model how to do a kind of work
+properly: which library to reach for, the traps to avoid, and what to check
+before submitting. Seven ship with the package, so there is nothing to download
+or configure. Name the ones a task needs and they are prepended to the prompt;
+name none and the keyword router picks for you.
 
-- `pdf_document_analysis`: long-document analysis with PyMuPDF
-- `data_exploration`: tabular and log EDA with pandas, Polars, and DuckDB
-- `excel_extract` / `excel_modify`: read and edit `.xlsx` workbooks via openpyxl
-- `core`, `validation`, `error_handling`: default scaffolding
+```python
+from fabric_rlm import RLM, File, FabricLM
 
-Write your own by copying
-[fabric_rlm/skills/SKILL_TEMPLATE.md](fabric_rlm/skills/SKILL_TEMPLATE.md). The
-structure is documented in
-[PLAYBOOK_CONTRACT.md](fabric_rlm/skills/PLAYBOOK_CONTRACT.md).
+rlm = RLM.task(
+    task="Rebuild the summary tab from the raw export and flag any variance over 5 percent.",
+    inputs={"workbook": File("/lakehouse/default/Files/finance/q3.xlsx")},
+    outputs=["answer"],
+    lm=FabricLM("gpt-5.1"),
+    skills=["excel_modify", "data_exploration"],   # load as many as the task needs
+)
+print(rlm.run().answer)
+```
+
+| Skill | What it covers |
+|---|---|
+| `excel_modify` | Editing `.xlsx` in place with openpyxl: writing computed values rather than formula strings, merged-cell anchors, target-range discipline, verifying by reloading |
+| `excel_extract` | Reading workbooks: locating real header rows, multi-table sheets, formula versus cached value, pulling structured records out of messy layouts |
+| `data_exploration` | Files too large for context: DuckDB and Polars over CSV, Parquet and JSONL, aggregating in code so raw rows never reach the prompt |
+| `pdf_document_analysis` | Long documents with PyMuPDF: page enumeration, chunking, and per-chunk extraction |
+| `core` | The PLAN / VERIFY / REFLECT contract applied to every run |
+| `validation` | Checking an answer against the task's constraints before submitting |
+| `error_handling` | What to do when a turn raises, so the next turn fixes rather than repeats |
+
+The first four are keyword-routed, so `data_exploration` activates on a task
+mentioning logs or CSVs even if you name no skills at all. The last three are
+scaffolding and load by default.
+
+### Writing your own
+
+A skill is one Markdown file with a small frontmatter block. Put it anywhere the
+notebook can read, including Lakehouse `Files`, and point a `SkillLoader` at that
+folder:
+
+```python
+from fabric_rlm import RLM, SkillLoader, FabricLM
+
+loader = SkillLoader(skill_dir="/lakehouse/default/Files/skills")
+print(loader.list_skills())        # ['invoice_rules', 'gl_mapping']
+
+rlm = RLM.task(
+    task="Extract the vendor totals from this invoice.",
+    inputs={"doc": File("/lakehouse/default/Files/invoices/2026-07.pdf")},
+    outputs=["totals"],
+    lm=FabricLM("gpt-5.1"),
+    skill_loader=loader,
+    skills=["invoice_rules"],
+)
+```
+
+This is how house rules stop being tribal knowledge: your chart of accounts, the
+naming conventions your reports use, the columns that are always dates. Write it
+once, store it beside the data, and every run reads from the same copy.
+
+Start from [docs/skill-template.md](docs/skill-template.md); the structure is
+documented in [docs/authoring-skills.md](docs/authoring-skills.md).
 
 ## Security
 

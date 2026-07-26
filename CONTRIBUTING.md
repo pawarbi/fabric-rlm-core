@@ -29,7 +29,7 @@ suite.
 ## Skills
 
 New skills are markdown playbooks in `fabric_rlm/skills/`. Follow
-`fabric_rlm/skills/PLAYBOOK_CONTRACT.md` and copy `SKILL_TEMPLATE.md` to
+`docs/authoring-skills.md` and copy `docs/skill-template.md` to
 start. Include frontmatter (`applies_when.keywords`, `specificity`) so the
 router can score the skill, and a `## Required verifier` block when the
 output shape is checkable.
