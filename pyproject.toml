@@ -43,6 +43,12 @@ dependencies = [
   # which exists in 3.1.2. Ceiling guards against churn in dspy's experimental
   # RLM / CodeInterpreter internals that this package tracks.
   "dspy>=3.2.1,<3.4",
+  # litellm reaches us through dspy. From 1.92.0 it publishes only manylinux
+  # wheels, so pip falls back to building the sdist on Windows and macOS, which
+  # needs a Rust toolchain and breaks a plain `pip install fabric-rlm`. 1.91.4 is
+  # the last release with a universal wheel. Relax this once litellm ships
+  # Windows and macOS wheels again.
+  "litellm>=1.64,<1.92",
   "nest_asyncio>=1.6",
   "pydantic>=2",
   "typing_extensions>=4.15",

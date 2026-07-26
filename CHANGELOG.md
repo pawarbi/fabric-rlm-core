@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.9 — 2026-07-25 — installable on Windows and macOS
+
+### Fixed
+
+- **`pip install fabric-rlm` failed on Windows and macOS.** litellm, which
+  arrives through dspy, stopped publishing Windows and macOS wheels at 1.92.0,
+  so pip fell back to compiling its sdist and demanded a Rust toolchain. The
+  dependency is now pinned to `litellm>=1.64,<1.92`, the last line with a
+  universal wheel. Linux and Fabric notebooks were unaffected; every other
+  platform could not install the package at all.
+
 ## 0.2.8 — 2026-07-23 — lossless SUBMIT payloads and release hardening
 
 ### Fixed
