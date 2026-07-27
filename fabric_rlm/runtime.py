@@ -371,6 +371,11 @@ class RLMResult:
     total_reasoning_tokens: int | None = None
     total_lm_seconds: float | None = None
     total_worker_seconds: float | None = None
+    # The turn cap this run was given. Compare against ``len(turns)`` to see
+    # whether the loop finished because it was done or because it ran out of
+    # room -- models differ widely in how many turns they take for the same
+    # work, so a cap tuned on one can quietly truncate another.
+    max_turns: int | None = None
 
     @property
     def turns(self) -> list[TurnRecord]:
@@ -1375,6 +1380,7 @@ class RLM:
                         payload=None,
                         trajectory=trajectory,
                         final_state=final_state,
+                        max_turns=self.max_turns,
                         failure_reason="worker_timeout",
                         **_aggregate_trajectory_metrics(trajectory),
                     )
@@ -1411,6 +1417,7 @@ class RLM:
                         payload=None,
                         trajectory=trajectory,
                         final_state=final_state,
+                        max_turns=self.max_turns,
                         failure_reason="worker_error",
                         **_aggregate_trajectory_metrics(trajectory),
                     )
@@ -1507,7 +1514,8 @@ class RLM:
                                     payload=None,
                                     trajectory=trajectory,
                                     final_state=final_state,
-                                    failure_reason="stuck_loop",
+                                    max_turns=self.max_turns,
+                        failure_reason="stuck_loop",
                                     **_aggregate_trajectory_metrics(trajectory),
                                 )
 
@@ -1568,6 +1576,7 @@ class RLM:
                         payload=result.submit_payload,
                         trajectory=trajectory,
                         final_state=result.state,
+                        max_turns=self.max_turns,
                         **_aggregate_trajectory_metrics(trajectory),
                     )
 
@@ -1591,16 +1600,27 @@ class RLM:
 
         if verifier_repair_history:
             trajectory.metadata["verifier_repair_history"] = verifier_repair_history
+        exhausted = not (trajectory.turns and trajectory.turns[-1].validation_errors)
+        if exhausted:
+            # Say so out loud. A truncated run returns a wrong-looking answer
+            # that is indistinguishable from a wrong one, and the fix is a
+            # config change the caller can only make if they know to. How many
+            # turns a model needs for the same task varies a lot between
+            # models, so a cap that suits one can silently starve another.
+            logger.warning(
+                "RLM ran out of turns after %d of %d without calling SUBMIT. "
+                "The result is truncated, not necessarily wrong. Raise max_turns "
+                "if this recurs -- models differ in how many turns they take.",
+                len(trajectory.turns),
+                self.max_turns,
+            )
         return RLMResult(
             submitted=False,
             payload=None,
             trajectory=trajectory,
             final_state=final_state,
-            failure_reason=(
-                "output_validation_failed"
-                if trajectory.turns and trajectory.turns[-1].validation_errors
-                else "max_turns"
-            ),
+            max_turns=self.max_turns,
+            failure_reason=("max_turns" if exhausted else "output_validation_failed"),
             **_aggregate_trajectory_metrics(trajectory),
         )
 

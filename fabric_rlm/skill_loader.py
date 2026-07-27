@@ -47,21 +47,53 @@ class Skill:
 class SkillLoader:
     """Discover and load Markdown SKILL playbooks by safe name."""
 
-    def __init__(self, skill_dir: str | Path | None = None, *, package: str = "fabric_rlm.skills"):
-        self.skill_dir = Path(skill_dir) if skill_dir is not None else None
+    def __init__(
+        self,
+        skill_dir: str | Path | Iterable[str | Path] | None = None,
+        *,
+        package: str = "fabric_rlm.skills",
+        include_packaged: bool = True,
+    ):
+        """Discover skills from the package and, optionally, extra directories.
+
+        ``skill_dir`` accepts one path or several. Custom directories *layer
+        over* the packaged skills rather than replacing them, so loading a
+        custom playbook keeps ``excel_modify`` and friends available. Later
+        directories win over earlier ones, and any directory wins over the
+        package, which is what lets you override a bundled skill by name.
+
+        Pass ``include_packaged=False`` for the old replace-everything
+        behaviour, e.g. when you want a hermetic set with nothing bundled.
+        """
+
+        if skill_dir is None:
+            dirs: list[Path] = []
+        elif isinstance(skill_dir, (str, Path)):
+            dirs = [Path(skill_dir)]
+        else:
+            dirs = [Path(p) for p in skill_dir]
+        self.skill_dirs: list[Path] = dirs
         self.package = package
+        self.include_packaged = bool(include_packaged)
+
+    @property
+    def skill_dir(self) -> Path | None:
+        """First custom directory, or ``None``. Retained for compatibility."""
+
+        return self.skill_dirs[0] if self.skill_dirs else None
 
     def list_skills(self) -> list[str]:
-        if self.skill_dir is not None:
-            if not self.skill_dir.exists():
-                return []
-            names = [path.stem for path in self.skill_dir.glob("*.md") if path.is_file()]
-        else:
-            names = [
+        names: set[str] = set()
+        if self.include_packaged or not self.skill_dirs:
+            names.update(
                 entry.name.removesuffix(".md")
                 for entry in resources.files(self.package).iterdir()
                 if entry.is_file() and entry.name.endswith(".md")
-            ]
+            )
+        for directory in self.skill_dirs:
+            if not directory.exists():
+                continue
+            names.update(path.stem for path in directory.glob("*.md") if path.is_file())
         return sorted(name for name in names if _is_safe_skill_name(name))
 
     def load(self, name: str) -> Skill:
@@ -121,16 +153,24 @@ class SkillLoader:
         return "\n".join(lines)
 
     def _read_skill_text(self, name: str) -> str:
-        if self.skill_dir is not None:
-            path = self.skill_dir / f"{name}.md"
-            if not path.is_file():
-                raise FileNotFoundError(f"Unknown SKILL: {name}")
-            return path.read_text(encoding="utf-8")
+        # Custom directories take precedence, last one first, so a caller can
+        # override a bundled skill by dropping a same-named file in.
+        for directory in reversed(self.skill_dirs):
+            path = directory / f"{name}.md"
+            if path.is_file():
+                return path.read_text(encoding="utf-8")
 
-        target = resources.files(self.package).joinpath(f"{name}.md")
-        if not target.is_file():
-            raise FileNotFoundError(f"Unknown SKILL: {name}")
-        return target.read_text(encoding="utf-8")
+        if self.include_packaged or not self.skill_dirs:
+            target = resources.files(self.package).joinpath(f"{name}.md")
+            if target.is_file():
+                return target.read_text(encoding="utf-8")
+
+        where = ", ".join(str(d) for d in self.skill_dirs) or "(none)"
+        raise FileNotFoundError(
+            f"Unknown SKILL: {name} (searched dirs: {where}"
+            + (f"; package: {self.package}" if self.include_packaged or not self.skill_dirs else "")
+            + ")"
+        )
 
 
 def list_skills() -> list[str]:
