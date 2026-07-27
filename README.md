@@ -317,7 +317,7 @@ folder:
 from fabric_rlm import RLM, SkillLoader, FabricLM
 
 loader = SkillLoader(skill_dir="/lakehouse/default/Files/skills")
-print(loader.list_skills())        # ['invoice_rules', 'gl_mapping']
+print(loader.list_skills())        # your skills plus the bundled ones
 
 rlm = RLM.task(
     task="Extract the vendor totals from this invoice.",
@@ -325,9 +325,19 @@ rlm = RLM.task(
     outputs=["totals"],
     lm=FabricLM("gpt-5.1"),
     skill_loader=loader,
-    skills=["invoice_rules"],
+    skills=["invoice_rules", "pdf_document_analysis"],
 )
 ```
+
+Your folder layers over the bundled skills rather than replacing them, so you can
+mix your own with the shipped ones in the same `skills=[...]` list. Pass several
+folders as a list if you keep them apart, and a file named after a bundled skill
+overrides it. If you want only your own, pass `include_packaged=False`.
+
+If a skill needs a library fabric-rlm does not depend on, install it in the
+notebook (`%pip install python-docx`) before running. The sandbox blocks `pip`
+and `subprocess`, so a skill cannot install its own dependencies. See
+[docs/authoring-skills.md](docs/authoring-skills.md).
 
 This is how house rules stop being tribal knowledge: your chart of accounts, the
 naming conventions your reports use, the columns that are always dates. Write it

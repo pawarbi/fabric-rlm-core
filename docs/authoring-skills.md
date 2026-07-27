@@ -111,6 +111,48 @@ specificity: domain        # one of: core | domain | utility
   field rather than wrong. A loose-but-correct invariant beats a tight wrong
   one.
 
+## Third-party libraries
+
+Skills routinely need a library the package does not depend on — `python-docx`
+for Word, `python-pptx` for PowerPoint, `markitdown` for document conversion.
+Two things follow.
+
+**The sandbox cannot install anything.** `subprocess` and `pip` are blocked by
+the default `SecurityPolicy`, so a skill that opens with a runtime install
+wastes a turn and returns:
+
+```
+SecurityPolicyViolation: call to 'subprocess.run' is disabled because
+shell/subprocess execution bypasses the network and filesystem guardrails.
+```
+
+Install in the notebook environment instead, before the RLM runs, and say so in
+the skill so the model does not try:
+
+```python
+%pip install python-docx
+```
+
+**Degrade explicitly rather than assuming.** Have the skill probe once and
+branch, so a missing library produces a stated limitation instead of an empty
+result that reads like a real answer:
+
+```python
+try:
+    from docx import Document
+    HAVE_DOCX = True
+except ImportError:
+    HAVE_DOCX = False
+```
+
+Where a standard-library path exists, give it. A `.docx` is a zip of XML, so
+reading one needs no dependency at all — only writing does. A skill that offers
+the fallback keeps working in environments where the install never happened.
+
+Do not relax `SecurityPolicy.forbidden_calls` to permit the install. That
+reopens network and filesystem access for LM-emitted code, which is a poor
+trade for a file-format reader.
+
 ### Authoring rules (learned the hard way)
 
 > **Rule: quote question text verbatim.**
