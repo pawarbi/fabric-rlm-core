@@ -4,6 +4,17 @@
 
 ### Changed
 
+- **`pdf_document_analysis` now teaches locate-then-read.** The skill covered
+  page rendering and vision, but said nothing about pulling one figure out of a
+  long report, and models reliably chose the worst method: flatten every page
+  into one string and regex for a number near a label. Section labels and stock
+  phrases repeat across a document, so the first match usually comes from the
+  wrong section, and the answer that came back was confident and wrong. The
+  skill now says to locate the passage, print it, read it, and keep the source
+  sentence next to the value, and it documents an x-coordinate fallback for the
+  borderless tables `find_tables()` cannot parse. Measured on a two-source
+  extraction task with gpt-5-mini, three runs per variant: 3.0 of 12
+  document-dependent checks before, 8.3 after.
 - The skill-authoring documents moved out of the installed package. `SkillLoader`
   listed `PLAYBOOK_CONTRACT` and `SKILL_TEMPLATE` as if they were loadable
   skills, so a model calling `list_skills()` saw two entries that are
