@@ -1,15 +1,39 @@
-# fabric-rlm
+# Fabric-RLM
 
 [![CI](https://github.com/pawarbi/fabric-rlm-core/actions/workflows/test.yml/badge.svg)](https://github.com/pawarbi/fabric-rlm-core/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/fabric-rlm.svg)](https://pypi.org/project/fabric-rlm/)
 [![Python](https://img.shields.io/pypi/pyversions/fabric-rlm.svg)](https://pypi.org/project/fabric-rlm/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+
 Recursive Language Models (RLMs) for Microsoft Fabric notebooks. The model writes
 Python, the code runs in a real CPython subprocess, and the model keeps iterating
 (reading outputs, fixing its own errors) until it calls `SUBMIT(...)` with the
 answer. It also runs anywhere else CPython runs: your laptop, CI, or an Azure
 Function.
+
+Recursive Language Models were introduced by Alex L. Zhang, Tim Kraska, and Omar
+Khattab at MIT CSAIL, who define an RLM as a "general inference paradigm that
+treats long prompts as part of an external environment". Instead of loading the
+whole context into the model call, the model examines, decomposes, and recurses
+over that context programmatically. That is what makes long-context, multi-step
+work tractable when a single prompt cannot hold the data. Full citation in
+[Acknowledgments](#acknowledgments).
+
+**`fabric-rlm` is built and optimised for Fabric notebook environment**.
+
+## Start here
+
+[examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb)
+is the notebook to run first. Import it into a Fabric workspace, attach a
+Lakehouse, and it fetches its own data.
+
+It ends by reasoning over two sources at once: a 140 MB CSV of IMF price data and
+a 15-page PDF, the IMF's July 2026 World Economic Outlook Update. Together they
+come to about 79 million tokens, roughly 200 times the 400,000-token context
+window of gpt-5.1, so no prompt can hold them. The model computes a country
+table from the CSV, reads figures out of the report's prose, and combines both
+into one formatted Excel workbook, which the notebook then grades cell by cell.
 
 ## Why not dspy's RLM directly in a notebook
 
@@ -40,7 +64,8 @@ go back through the LM, so it works on files far larger than any context window.
   blocks destructive Lakehouse operations (`notebookutils.fs`, `mssparkutils`).
 - Structured trajectories you can inspect, save to the Lakehouse, and replay
   offline.
-- Runs locally too, and ships `py.typed`.
+- Plug and play : Point it to your files in the Lakehouse, define the task & contract
+- It's primarily optimised and designed for data exploration, data analysis tasks
 
 ## When to use an RLM (and when not to)
 
@@ -102,7 +127,8 @@ workbook, and a deterministic ground-truth query verified every cell. The
 failed call cost six times more than the successful one. The notebook then
 pushes the same mini model through a harder task (finding inflation streaks
 with tie-breaks, conditional formatting, and an embedded chart, cleared for
-about two cents) and closes with an honest skill ablation. Run it yourself:
+about two cents), runs an honest skill ablation, and finishes with the
+two-source task described under [Start here](#start-here). Run it yourself:
 [examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb).
 
 ### Benchmark: SpreadsheetBench Verified-400
