@@ -39,6 +39,33 @@ Summary: Discover the schema FIRST, then load once into DuckDB and query many ti
 
 You never read the raw bytes back into the LM. You write Python in the subprocess that filters/aggregates and prints only small summaries.
 
+## Gate: is this path a Delta table? (check BEFORE the discovery protocol)
+
+If the path contains `/Tables/`, starts with `abfss://`, or the directory holds a
+`_delta_log` folder, it is a **Delta table, not a file**. The discovery protocol
+below and every `read_parquet` / `read_csv` / glob pattern in this skill are the
+WRONG tools for it.
+
+A Delta directory keeps parquet files that are no longer part of the table:
+`UPDATE` / `DELETE` / `MERGE` write new files and tombstone the old ones in
+`_delta_log`. Globbing reads deleted rows back in. Measured on a 10-row table
+after one delete and one append (ground truth 6 rows, sum 1149.0):
+`read_parquet('<table>/**/*.parquet')` returned **16 rows, sum 1699.0**. It did
+not raise and it did not warn.
+
+Use `delta_scan`, which honors the log:
+
+```python
+import duckdb
+con = duckdb.connect()
+con.sql("INSTALL delta; LOAD delta;")
+print(con.sql(f"SELECT count(*) FROM delta_scan('{path}')").fetchone())
+```
+
+For anything beyond a simple scan (schema and partition discovery from metadata,
+`abfss://` tokens, time travel, joining a table to a file in `Files/`), request
+the `delta_lakehouse` skill, which covers Delta end to end and is read-only.
+
 ## Mandatory first-turn protocol (do this BEFORE writing any aggregation query)
 
 If you have not already inspected this exact file in a previous turn, your first code action MUST run the four-step discovery below. It typically takes one turn and prevents 3+ wasted turns of column-name and JSON-function errors.
@@ -83,6 +110,7 @@ After this prints, you know exactly what columns exist and which case applies (s
 - Chained MAP brackets >1 level deep in Case B: `json['group']['subgroup']['leaf']`. The first `[]` returns a `JSON` value, NOT another MAP — the second/third `[]` silently produce SQL NULL, and `WHERE x IS NOT NULL` filters every row out. **Use the JSON arrow operators `->` and `->>` past the first level** (see Case B cookbook below).
 - Trusting a query that returned 0 rows / `SUM = 0` without re-checking your field path. If you expected matches and got none, the path is wrong. Re-inspect a sample row with `print(con.execute("SELECT json FROM t WHERE json_extract_string(json, '$.<discriminator>')='<expected_kind>' LIMIT 1").fetchone())` and re-extract.
 - `json['key']::VARCHAR` for string equality / display. Casting a `JSON` value to `VARCHAR` keeps the JSON quotes — you get the literal 7-char string `"error"` (with the quote marks), not `error`. So `WHERE json['kind']::VARCHAR = 'error'` matches **zero rows**, and your printed values look ugly. **For unquoted strings use `json_extract_string(json, '$.key')` or `(json ->> 'key')`** — both return raw VARCHAR. Reserve `::VARCHAR` cast for when you actually want the JSON-quoted form.
+- `read_parquet('<path>/**/*.parquet')` against a `/Tables/` path. That is a Delta table; the glob resurrects tombstoned rows and returns an inflated answer with no error. See the Delta gate at the top of this skill.
 - `data = open(path).read()` on a multi-MB file, then process in memory.
 - Re-streaming the SAME file in turn 1, turn 2, turn 3 to answer different sub-questions. Load into DuckDB once on turn 1.
 - Pasting raw lines into the prompt or pulling tens of thousands of matched lines into a Python list. Aggregate in code first.
