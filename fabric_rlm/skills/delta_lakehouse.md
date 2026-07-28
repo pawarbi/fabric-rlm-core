@@ -65,6 +65,7 @@ say so, not to approximate it with parquet.
 | --- | --- | --- |
 | `delta_scan(path)`, or `DeltaTable(...)` as fallback | `read_parquet('<Tables path>/**/*.parquet')` | The glob reads tombstoned rows and inflates the answer with no error |
 | Call `open_delta` once, reuse the returned relation | Re-open the table for each sub-question | Re-resolving costs a turn and re-downloads the extension |
+| `attach_lakehouse(root)` when a question spans tables | Open each table and join the results in pandas | Attached views join in SQL with nothing copied into memory |
 | Print the schema before writing a query | Assume a column is called `revenue` | A guessed name errors, or silently matches the wrong column |
 | Read `num_records` from metadata first | `dt.to_pandas()` before you know the size | A fact table will exhaust memory in one call |
 | `USING SAMPLE n ROWS` to look at data | `LIMIT n` as a sample | `LIMIT` reads the first file only, so you see one partition |
@@ -112,27 +113,33 @@ def delta_opts(path):
     return {"bearer_token": _storage_token(), "use_fabric_endpoint": "true"}
 
 
+def _prepare(con, path):
+    """Load the delta extension, plus azure and a OneLake token for abfss paths."""
+    is_remote = "://" in path
+    con.sql("INSTALL delta; LOAD delta;")
+    if is_remote:
+        con.sql("INSTALL azure; LOAD azure;")
+        # ACCOUNT_NAME is 'onelake'. Do NOT set ENDPOINT to a bare hostname
+        # (see anti-patterns). Omitting ENDPOINT works: the abfss:// URL
+        # already carries the host.
+        con.execute(
+            "CREATE OR REPLACE SECRET onelake_tok "
+            "(TYPE azure, PROVIDER access_token, ACCESS_TOKEN ?, ACCOUNT_NAME 'onelake')",
+            [_storage_token()],
+        )
+    return con
+
+
 def open_delta(path, con=None):
-    """Return (con, relation_sql) for a read-only DuckDB view of a Delta table.
+    """Return (con, relation_sql) for a read-only DuckDB view of ONE Delta table.
 
     Handles both an attached-lakehouse mount and an abfss:// OneLake URL.
+    To query many tables at once, use attach_lakehouse instead.
     """
     con = con or duckdb.connect()
-    is_remote = "://" in path
 
     try:
-        con.sql("INSTALL delta; LOAD delta;")
-        if is_remote:
-            con.sql("INSTALL azure; LOAD azure;")
-            tok = _storage_token()
-            # ACCOUNT_NAME is 'onelake'. Do NOT set ENDPOINT to a bare hostname
-            # (see anti-patterns). Omitting ENDPOINT works: the abfss:// URL
-            # already carries the host.
-            con.execute(
-                "CREATE OR REPLACE SECRET onelake_tok "
-                "(TYPE azure, PROVIDER access_token, ACCESS_TOKEN ?, ACCOUNT_NAME 'onelake')",
-                [tok],
-            )
+        _prepare(con, path)
         con.sql(f"SELECT 1 FROM delta_scan('{path}') LIMIT 1")
         return con, f"delta_scan('{path}')"
     except Exception as e:
@@ -167,7 +174,124 @@ def _storage_token():
     except Exception:
         from azure.identity import DefaultAzureCredential
         return DefaultAzureCredential().get_token("https://storage.azure.com/.default").token
+
+
+def _ls(path):
+    """(name, full_path) per child. notebookutils for abfss, os for a filesystem."""
+    if "://" in path:
+        import notebookutils
+        return [(f.name.rstrip("/"), f.path.rstrip("/")) for f in notebookutils.fs.ls(path)]
+    import os
+    return [(n, f"{path}/{n}") for n in sorted(os.listdir(path))]
+
+
+def _is_table(path):
+    """A directory is a Delta table when it holds a _delta_log."""
+    try:
+        if "://" in path:
+            return any(n == "_delta_log" for n, _ in _ls(path))
+        import os
+        return os.path.isdir(os.path.join(path, "_delta_log"))
+    except Exception:
+        return False
+
+
+def find_delta_tables(root):
+    """{qualified_name: path} for every Delta table under a lakehouse or schema.
+
+    Handles both Fabric layouts, side by side: Tables/<table> becomes `name`,
+    Tables/<schema>/<table> becomes `schema.name`. Descends exactly one level,
+    so partition directories are never walked.
+    """
+    found = {}
+    for name, path in _ls(root):
+        if name.startswith("_"):
+            continue
+        if _is_table(path):
+            found[name] = path
+            continue
+        try:
+            for sub, subpath in _ls(path):
+                if not sub.startswith("_") and _is_table(subpath):
+                    found[f"{name}.{sub}"] = subpath
+        except Exception:
+            pass
+    return found
+
+
+def attach_lakehouse(root, con=None):
+    """Register every Delta table under `root` as a read-only DuckDB view.
+
+    `root` is a lakehouse Tables/ directory or a single schema inside one,
+    as a mount or an abfss:// URL. Returns (con, attached, skipped).
+    """
+    con = con or duckdb.connect()
+    _prepare(con, root)
+
+    attached, skipped = [], []
+    for qname, path in sorted(find_delta_tables(root).items()):
+        esc = path.replace("'", "''")
+        if "." in qname:
+            sch, tbl = qname.split(".", 1)
+            con.execute(f'CREATE SCHEMA IF NOT EXISTS "{sch}"')
+            target = f'"{sch}"."{tbl}"'
+        else:
+            target = f'"{qname}"'
+        try:
+            con.execute(f"CREATE OR REPLACE VIEW {target} AS SELECT * FROM delta_scan('{esc}')")
+            attached.append(qname)
+        except Exception as e:
+            # One unreadable table must not abort the whole lakehouse.
+            skipped.append((qname, f"{type(e).__name__}: {str(e)[:120]}"))
+    return con, attached, skipped
 ```
+
+## Step 1b - attach a whole lakehouse, or one schema
+
+`open_delta` is right when the question names one table. When it spans tables
+("revenue per customer", "returns by product"), do not open them one at a time.
+Point at the lakehouse and let SQL do the joins:
+
+```python
+con, attached, skipped = attach_lakehouse(
+    "abfss://<workspace>@onelake.dfs.fabric.microsoft.com/<lakehouse>.Lakehouse/Tables"
+)
+print(f"attached {len(attached)}: {attached}")
+for name, why in skipped:
+    print(f"  skipped {name}: {why}")
+
+rows = con.sql("""
+    SELECT c.name, count(*) AS orders, round(sum(o.amt), 2) AS total
+    FROM orders o
+    JOIN customers c USING (cust_id)
+    GROUP BY 1 ORDER BY total DESC LIMIT 10
+""").fetchall()
+for r in rows:
+    print(r)
+```
+
+The same call takes a mount (`/lakehouse/default/Tables`) or one schema
+(`.../Tables/dbo`) when you only want part of it.
+
+**Naming.** `Tables/orders` attaches as `orders`. `Tables/dbo/products` attaches
+as `"dbo"."products"` in a DuckDB schema of the same name, so both Fabric layouts
+coexist and cross-schema joins are ordinary SQL. Names are quoted, so spaces and
+dashes survive.
+
+**What it costs.** DuckDB binds a view when you create it, so attaching reads each
+table's `_delta_log` once. Locally that is a few milliseconds per table; over
+`abfss` it is one round trip per table, so a large lakehouse takes a moment. It
+does **not** read any data. Nothing is scanned until you query.
+
+**Eager binding is a feature here.** A table that cannot be read fails at attach
+time and lands in `skipped` with the reason, instead of ambushing you mid-query.
+One unreadable table never aborts the rest. Deletion-vector tables show up here
+when the `delta` extension is missing.
+
+**Still read-only.** These are views over `delta_scan`. Nothing is copied, nothing
+is written. Run `SELECT table_schema, table_name FROM information_schema.tables`
+to see what you have, then `DESCRIBE <table>` per table before querying, exactly
+as in Step 2.
 
 Note on tokens outside Fabric: the default `SecurityPolicy` strips `AZURE_CLIENT_*`
 and `AZURE_TENANT_*` from the worker environment, so `DefaultAzureCredential`

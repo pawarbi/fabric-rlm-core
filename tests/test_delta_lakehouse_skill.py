@@ -297,6 +297,144 @@ def test_open_delta_falls_back_to_delta_rs_when_the_extension_is_unavailable(
 
 
 @pytest.fixture
+def lakehouse(tmp_path):
+    """A Tables/ root mixing both Fabric layouts, plus decoys.
+
+    Tables/customers          flat
+    Tables/orders             flat, partitioned (must not be walked into)
+    Tables/dbo/products       schema-nested
+    Tables/dbo/returns        schema-nested
+    Tables/not_a_table/       a directory with no _delta_log
+    """
+    pa = pytest.importorskip("pyarrow")
+    dl = pytest.importorskip("deltalake")
+
+    root = tmp_path / "lh" / "Tables"
+    dl.write_deltalake(str(root / "customers"), pa.table(
+        {"cust_id": [1, 2, 3], "name": ["a", "b", "c"]}))
+    dl.write_deltalake(str(root / "orders"), pa.table(
+        {"order_id": [10, 11, 12, 13], "cust_id": [1, 1, 2, 3],
+         "amt": [5.0, 7.0, 9.0, 11.0], "region": ["e", "w", "e", "w"]}),
+        partition_by=["region"])
+    dl.write_deltalake(str(root / "dbo" / "products"), pa.table(
+        {"sku": ["x", "y"], "price": [1.5, 2.5]}))
+    dl.write_deltalake(str(root / "dbo" / "returns"), pa.table(
+        {"order_id": [11], "reason": ["damaged"]}))
+    (root / "not_a_table").mkdir(parents=True, exist_ok=True)
+    (root / "not_a_table" / "README.txt").write_text("junk", encoding="utf-8")
+    return root
+
+
+def _attach_ns():
+    ns: dict = {}
+    exec(compile(_open_delta_block(), "<delta_lakehouse skill>", "exec"), ns)
+    return ns
+
+
+def test_find_delta_tables_handles_both_layouts(lakehouse) -> None:
+    pytest.importorskip("deltalake")
+    found = _attach_ns()["find_delta_tables"](lakehouse.as_posix())
+
+    assert set(found) == {"customers", "orders", "dbo.products", "dbo.returns"}
+    assert "not_a_table" not in found, "a directory without _delta_log is not a table"
+
+
+def test_find_delta_tables_does_not_walk_into_partitions(lakehouse) -> None:
+    """`orders` is partitioned; region=... dirs must never register as tables."""
+    pytest.importorskip("deltalake")
+    found = _attach_ns()["find_delta_tables"](lakehouse.as_posix())
+    assert not [k for k in found if "region=" in k], found
+
+
+def test_attach_lakehouse_registers_everything_queryable(lakehouse, duck) -> None:
+    pytest.importorskip("deltalake")
+    con, attached, skipped = _attach_ns()["attach_lakehouse"](lakehouse.as_posix(), con=duck)
+
+    assert set(attached) == {"customers", "orders", "dbo.products", "dbo.returns"}
+    assert skipped == []
+
+    seen = {(s, t) for s, t in con.sql(
+        "SELECT table_schema, table_name FROM information_schema.tables").fetchall()}
+    assert ("main", "customers") in seen
+    assert ("main", "orders") in seen
+    assert ("dbo", "products") in seen
+
+
+def test_attached_tables_join_without_per_table_setup(lakehouse, duck) -> None:
+    """The point of attaching: joins become ordinary SQL."""
+    pytest.importorskip("deltalake")
+    con, _, _ = _attach_ns()["attach_lakehouse"](lakehouse.as_posix(), con=duck)
+
+    rows = con.sql("""
+        SELECT c.name, count(*) AS n, sum(o.amt) AS total
+        FROM orders o JOIN customers c USING (cust_id)
+        GROUP BY 1 ORDER BY 1
+    """).fetchall()
+    assert rows == [("a", 2, 12.0), ("b", 1, 9.0), ("c", 1, 11.0)]
+
+    # And across a schema boundary.
+    assert con.sql(
+        'SELECT count(*) FROM "dbo"."returns" r JOIN orders o USING (order_id)'
+    ).fetchone() == (1,)
+
+
+def test_attach_accepts_a_single_schema_root(lakehouse, duck) -> None:
+    """Point at Tables/dbo to get just that schema's tables, unqualified."""
+    pytest.importorskip("deltalake")
+    con, attached, _ = _attach_ns()["attach_lakehouse"](
+        (lakehouse / "dbo").as_posix(), con=duck)
+
+    assert set(attached) == {"products", "returns"}
+    assert con.sql("SELECT count(*) FROM products").fetchone() == (2,)
+
+
+def test_one_unreadable_table_does_not_abort_the_attach(lakehouse, duck) -> None:
+    """A broken table lands in `skipped` with a reason; the rest still attach."""
+    pytest.importorskip("deltalake")
+    broken = lakehouse / "broken"
+    (broken / "_delta_log").mkdir(parents=True)
+    (broken / "_delta_log" / "00000000000000000000.json").write_text("not json{", encoding="utf-8")
+
+    ns = _attach_ns()
+    assert "broken" in ns["find_delta_tables"](lakehouse.as_posix()), "should be detected"
+
+    con, attached, skipped = ns["attach_lakehouse"](lakehouse.as_posix(), con=duck)
+    assert "broken" in dict(skipped), f"expected broken to be skipped, got {skipped}"
+    assert {"customers", "orders", "dbo.products", "dbo.returns"} <= set(attached)
+    assert con.sql("SELECT count(*) FROM customers").fetchone() == (3,)
+
+
+def test_attach_is_read_only(lakehouse, duck) -> None:
+    dl = pytest.importorskip("deltalake")
+    before = {p: dl.DeltaTable(str(lakehouse / p.replace(".", "/"))).version()
+              for p in ("customers", "orders", "dbo.products")}
+    _attach_ns()["attach_lakehouse"](lakehouse.as_posix(), con=duck)
+    after = {p: dl.DeltaTable(str(lakehouse / p.replace(".", "/"))).version()
+             for p in before}
+    assert before == after
+
+
+def test_attach_creates_views_not_copies(lakehouse, duck) -> None:
+    """Views keep it lazy and read-only; a CTAS would copy the whole lakehouse."""
+    pytest.importorskip("deltalake")
+    con, _, _ = _attach_ns()["attach_lakehouse"](lakehouse.as_posix(), con=duck)
+    kinds = dict(con.sql(
+        "SELECT table_name, table_type FROM information_schema.tables").fetchall())
+    assert set(kinds.values()) == {"VIEW"}, kinds
+
+
+def test_skill_documents_attaching_a_lakehouse() -> None:
+    content = SkillLoader().load(SKILL).content
+    assert "## Step 1b" in content
+    body = " ".join(content.split("## Step 1b")[1].split("## Step 2")[0].split())
+    assert "attach_lakehouse" in body
+    for point in ("Naming", "costs", "Eager binding", "read-only"):
+        assert point in body, f"Step 1b lost the {point} note"
+    # The cost note must be honest about the per-table round trip.
+    assert "one round trip per table" in body
+
+
+@pytest.fixture
 def wide_table(tmp_path):
     """A partitioned table with nulls and repeated keys, for exploration checks."""
     pa = pytest.importorskip("pyarrow")
