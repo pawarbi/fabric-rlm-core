@@ -36,15 +36,25 @@ def is_reasoning_model(model: str) -> bool:
 def _smart_defaults(model: str) -> dict[str, Any]:
     """Pick sensible defaults based on model family.
 
-    - Reasoning models (gpt-5, o1/o3/o4): omit `temperature` (it's a no-op /
-      rejected on these models — the only API knob is `reasoning_effort`),
-      keep `max_tokens=16000` (dspy's hard floor; reasoning tokens count
-      against this budget).
+    - Reasoning models (gpt-5, o1/o3/o4): omit `temperature` (it is a no-op or
+      rejected on these models; the only API knob is `reasoning_effort`), keep
+      `max_tokens=16000` (dspy's hard floor; reasoning tokens count against this
+      budget), and set `reasoning_effort="medium"`.
+
+      The effort default is deliberate. Providers disagree about what an unset
+      `reasoning_effort` means: the same gpt-5 family model reached through one
+      route thinks by default and through another does not, and a model that is
+      not thinking fails multi-step document work badly while looking confident
+      (it invents plausible values rather than reporting that it could not find
+      them). Pinning the value here makes a run reproducible across routes
+      instead of inheriting whatever the endpoint happens to do. Pass
+      `reasoning_effort` explicitly to override; allowed values vary by model
+      generation, so check the OpenAI/Azure model docs.
     - Everything else: standard chat defaults (temperature=1.0,
       max_tokens=16000).
     """
     if is_reasoning_model(model):
-        return {"max_tokens": 16_000}   # NO temperature key
+        return {"max_tokens": 16_000, "reasoning_effort": "medium"}   # NO temperature key
     return dict(_DEFAULT_LM_KWARGS)
 
 
@@ -115,8 +125,12 @@ def FabricLM(model: str, **kwargs: Any) -> Any:
 
     Smart defaults by model family:
       - Reasoning (gpt-5.x, gpt-5-mini, o1/o3/o4 family): max_tokens=16000,
-        no temperature. Pass `reasoning_effort` to control depth (allowed
-        values vary by model generation; see the OpenAI/Azure model docs).
+        no temperature, `reasoning_effort="medium"`. The effort is pinned rather
+        than left to the endpoint because provider defaults differ, and a
+        reasoning model running without reasoning degrades sharply on
+        multi-step work while still sounding confident. Pass `reasoning_effort`
+        to override (allowed values vary by model generation; see the
+        OpenAI/Azure model docs).
       - Chat (gpt-4o, gpt-5.1-chat, etc.): temperature=1.0, max_tokens=16000.
 
     The returned LM transparently refreshes its Azure AAD bearer token on

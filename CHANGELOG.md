@@ -4,6 +4,22 @@
 
 ### Changed
 
+- **Reasoning models now default to `reasoning_effort="medium"`.** Previously
+  the effort was left unset, which meant the provider decided. Providers
+  disagree: the same gpt-5 family model reached through one route arrived with
+  reasoning on and through another with it off, using identical library code.
+  A reasoning model that is not reasoning does not fail loudly, it fails
+  plausibly. On a two-source document task, gpt-5.1 with the provider default
+  scored 4.0 of 12 document checks and fabricated four correctly shaped rows of
+  economies and dates that appear nowhere in the source; with the effort pinned
+  it scored 12.0 of 12 across three consecutive runs. Pinning the value makes a
+  run reproducible across routes instead of inheriting endpoint behaviour.
+
+  This affects anyone on the gpt-5 or o1/o3/o4 family who did not set
+  `reasoning_effort` explicitly: expect different cost, latency, and quality
+  after upgrading. Chat models (`gpt-4o`, `gpt-5.1-chat`) and non-OpenAI
+  backends are unchanged. Pass `reasoning_effort` to `FabricLM`, `OpenAILM`, or
+  a dict LM spec to override, including back to a provider default.
 - **`pdf_document_analysis` now teaches locate-then-read.** The skill covered
   page rendering and vision, but said nothing about pulling one figure out of a
   long report, and models reliably chose the worst method: flatten every page
