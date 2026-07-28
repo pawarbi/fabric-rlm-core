@@ -153,6 +153,44 @@ Reproduce it with
 [examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb](examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb);
 the run needs an OpenRouter key and costs a few dollars.
 
+## Benchmark: AIDABench
+
+SpreadsheetBench hands you one workbook and tells you which cells to fill.
+[AIDABench](https://arxiv.org/abs/2603.15636) is closer to real analyst work: read
+one or more source files, decide the shape of the answer yourself, and write a new
+file. **41 percent of its file-generation tasks span multiple inputs**, up to 13 in
+a single task, and the target range is never given.
+
+Same library, same MiniMax M3, no per-benchmark tuning:
+
+| split | fabric-rlm + MiniMax M3 | best in the paper | cost per task |
+|---|---|---|---|
+| File generation (261 tasks) | ~42% | 49.4% (Claude Sonnet 4.5) | $0.023 vs $0.237 |
+| Question answering (226 tasks) | 63.6% | 68.6% (Claude Sonnet 4.5) | $0.012 vs $0.122 |
+
+![AIDABench accuracy vs cost per task](docs/assets/aida-benchmark.png)
+
+Five to seven points behind the leading model at roughly a tenth of the cost, on
+both splits, mid-table against eleven published models. Cost figures price
+identical token usage at each model's published rate, so they compare workloads
+rather than observed spend.
+
+Data visualization, the third split, was **not run** — its deliverable is a chart
+image graded on presentation rubrics, which needs a vision-capable judge and
+chart-construction guidance this library does not ship.
+
+File-generation scores were checked against AIDABench's own evaluator, run
+unmodified, on a 62-task sample: 41.9 percent against our judge's 43.5 percent.
+QA was graded with their `eval_QA.py` under two different grader models, which
+agreed on 94.6 percent of answers.
+
+Everything needed to check or repeat this — runners, both graders, every
+trajectory, the grader calibration, and a frank account of the seven grading bugs
+found along the way — is in
+**[pawarbi/fabric-rlm-benchmarks](https://github.com/pawarbi/fabric-rlm-benchmarks)**.
+Single seed; two identical runs agreed on 84 percent of tasks, so treat
+differences under about ten points as noise.
+
 ## How it works, in one picture
 
 ```mermaid
