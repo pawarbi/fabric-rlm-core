@@ -32,7 +32,10 @@ from .questions import QUESTIONS, get_question, questions_sha256
 _BASELINE_PATH = Path(__file__).parent / "baselines.json"
 _PRIMARY_MODEL = os.environ.get("BEHAVIOR_PRIMARY_MODEL", "openai/gpt-4.1-mini")
 _SECONDARY_FREE_MODEL = os.environ.get(
-    "BEHAVIOR_SECONDARY_FREE_MODEL", "openai/gpt-oss-120b:free"
+    # openai/gpt-oss-120b:free was retired from OpenRouter's free tier and now
+    # 404s on every question ("use this slug instead: openai/gpt-oss-120b").
+    # Its baseline is kept in baselines.json so an explicit override still works.
+    "BEHAVIOR_SECONDARY_FREE_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free"
 )
 
 

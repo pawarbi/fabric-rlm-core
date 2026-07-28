@@ -31,6 +31,11 @@
   borderless tables `find_tables()` cannot parse. Measured on a two-source
   extraction task with gpt-5-mini, three runs per variant: 3.0 of 12
   document-dependent checks before, 8.3 after.
+- The free-tier behaviour gate targets `nvidia/nemotron-3-ultra-550b-a55b:free`.
+  OpenRouter retired `openai/gpt-oss-120b` from its free tier, so the old slug
+  404s on every question and the gate failed for anyone running the suite. The
+  new model calibrates at 5/5 on all five questions. Override with
+  `BEHAVIOR_SECONDARY_FREE_MODEL`; the old baseline is retained.
 - The skill-authoring documents moved out of the installed package. `SkillLoader`
   listed `PLAYBOOK_CONTRACT` and `SKILL_TEMPLATE` as if they were loadable
   skills, so a model calling `list_skills()` saw two entries that are
