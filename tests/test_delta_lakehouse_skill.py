@@ -423,6 +423,61 @@ def test_attach_creates_views_not_copies(lakehouse, duck) -> None:
     assert set(kinds.values()) == {"VIEW"}, kinds
 
 
+def test_attach_reports_an_unlistable_root_instead_of_crashing(duck) -> None:
+    """Reported from a real Fabric session: a bad root raised a raw Azure traceback.
+
+    find_delta_tables guarded its inner loop but not the top-level listing, so
+    attach_lakehouse died mid-cell instead of saying what was wrong.
+    """
+    pytest.importorskip("deltalake")
+    ns = _attach_ns()
+
+    boom = "HttpResponseError: Request Failed with WorkspaceId and ArtifactId " \
+           "should be either valid Guids or valid Names ErrorCode:FriendlyNameSupportDisabled"
+
+    def _explode(_path):
+        raise RuntimeError(boom)
+
+    ns["_ls"] = _explode
+    with pytest.raises(RuntimeError) as exc_info:
+        ns["attach_lakehouse"]("abfss://ws@onelake.dfs.fabric.microsoft.com/lh.Lakehouse/Tables",
+                               con=duck)
+
+    msg = str(exc_info.value)
+    assert "Cannot list" in msg
+    # The whole point: the error has to say what to do about it.
+    assert "GUID" in msg
+    assert "onelake_root" in msg
+    assert ".Lakehouse suffix after a GUID" in msg
+
+
+def test_onelake_root_does_not_suffix_a_guid() -> None:
+    """`.Lakehouse` belongs on a name; appending it to a GUID breaks the path."""
+    ns = _attach_ns()
+    guid = "0333b170-84c4-493f-9a49-515071a0040a"
+
+    assert ns["_looks_like_guid"](guid) is True
+    assert ns["_looks_like_guid"]("my_lakehouse") is False
+
+    built = ns["onelake_root"](workspace="ws-guid", lakehouse=guid)
+    assert built.endswith(f"/{guid}/Tables"), built
+    assert ".Lakehouse" not in built
+
+    named = ns["onelake_root"](workspace="ws-guid", lakehouse="my_lakehouse")
+    assert named.endswith("/my_lakehouse.Lakehouse/Tables"), named
+
+    scoped = ns["onelake_root"](workspace="ws", lakehouse=guid, schema="dbo")
+    assert scoped.endswith("/Tables/dbo")
+
+
+def test_skill_documents_the_friendly_name_trap() -> None:
+    content = SkillLoader().load(SKILL).content
+    assert "FriendlyNameSupportDisabled" in content
+    assert "valid Guids or valid Names" in content
+    body = " ".join(content.split("**OneLake `abfss://`**")[1].split("## Step 1b")[0].split())
+    assert "must NOT be appended to a GUID" in body
+
+
 def test_skill_documents_attaching_a_lakehouse() -> None:
     content = SkillLoader().load(SKILL).content
     assert "## Step 1b" in content

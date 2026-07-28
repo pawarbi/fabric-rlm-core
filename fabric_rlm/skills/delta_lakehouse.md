@@ -101,6 +101,26 @@ storage token:
 abfss://<workspace>@onelake.dfs.fabric.microsoft.com/<lakehouse>.Lakehouse/Tables/<schema>/<table>
 ```
 
+**Friendly names do not work on every tenant.** Many tenants have
+`FriendlyNameSupportDisabled`, where that URL is rejected with:
+
+```
+Request Failed with WorkspaceId and ArtifactId should be either valid Guids or valid Names
+ErrorCode:FriendlyNameSupportDisabled
+```
+
+The message reads like a validation quirk but it is a hard tenant setting. Use
+GUIDs, and note the `.Lakehouse` suffix belongs on a *name* and must NOT be
+appended to a GUID:
+
+```
+abfss://<workspaceId>@onelake.dfs.fabric.microsoft.com/<lakehouseId>/Tables/<schema>/<table>
+```
+
+`onelake_root()` below resolves both ids from `notebookutils.runtime.context`
+and builds this for you. Prefer it over hand-assembling a path. When abfss fails
+and a mount is available, the mount needs no ids at all and is the faster route.
+
 Copy this resolver verbatim. It picks the right engine for either shape:
 
 ```python
@@ -219,6 +239,39 @@ def find_delta_tables(root):
     return found
 
 
+def onelake_root(workspace=None, lakehouse=None, schema=None):
+    """Build a OneLake Tables/ root, preferring GUIDs over friendly names.
+
+    Many tenants set FriendlyNameSupportDisabled, where names in a OneLake URL
+    are rejected outright. GUIDs always work, so default to the ones the
+    notebook already knows. Note the `.Lakehouse` suffix belongs on a NAME and
+    must NOT be appended to a GUID.
+    """
+    ws, lh = workspace, lakehouse
+    if not (ws and lh):
+        # Only reach for the notebook context when something is actually missing,
+        # so explicit ids work outside Fabric too.
+        import notebookutils
+        ctx = notebookutils.runtime.context
+        ws = ws or ctx.get("currentWorkspaceId") or ctx.get("workspaceId")
+        lh = lh or ctx.get("defaultLakehouseId") or ctx.get("lakehouseId")
+        if not ws or not lh:
+            raise RuntimeError(
+                "Could not resolve workspace/lakehouse ids from "
+                f"notebookutils.runtime.context. Available keys: {sorted(ctx)}. "
+                "Pass them explicitly."
+            )
+    item = lh if _looks_like_guid(lh) else f"{lh}.Lakehouse"
+    root = f"abfss://{ws}@onelake.dfs.fabric.microsoft.com/{item}/Tables"
+    return f"{root}/{schema}" if schema else root
+
+
+def _looks_like_guid(s):
+    parts = str(s).split("-")
+    return len(parts) == 5 and len(parts[0]) == 8 and all(
+        c in "0123456789abcdefABCDEF-" for c in str(s))
+
+
 def attach_lakehouse(root, con=None):
     """Register every Delta table under `root` as a read-only DuckDB view.
 
@@ -228,8 +281,22 @@ def attach_lakehouse(root, con=None):
     con = con or duckdb.connect()
     _prepare(con, root)
 
+    try:
+        tables = find_delta_tables(root)
+    except Exception as e:
+        msg = str(e)
+        hint = ""
+        if "FriendlyNameSupportDisabled" in msg or "valid Guids or valid Names" in msg:
+            hint = (
+                " This tenant does not accept workspace or lakehouse NAMES in a OneLake "
+                "URL. Use GUIDs: abfss://<workspaceId>@onelake.dfs.fabric.microsoft.com/"
+                "<lakehouseId>/Tables, with no .Lakehouse suffix after a GUID. "
+                "onelake_root() builds this for you."
+            )
+        raise RuntimeError(f"Cannot list {root}: {type(e).__name__}: {msg[:250]}{hint}") from e
+
     attached, skipped = [], []
-    for qname, path in sorted(find_delta_tables(root).items()):
+    for qname, path in sorted(tables.items()):
         esc = path.replace("'", "''")
         if "." in qname:
             sch, tbl = qname.split(".", 1)
@@ -460,6 +527,12 @@ scope. Compute the answer in DuckDB and report it instead.
 
 - `read_parquet('<Tables path>/**/*.parquet')`. See the top of this skill. This is
   the single most likely thing to go wrong.
+- Putting workspace and lakehouse **names** in a OneLake URL without checking.
+  On a tenant with `FriendlyNameSupportDisabled` every call fails with
+  "WorkspaceId and ArtifactId should be either valid Guids or valid Names",
+  which reads like the names are malformed rather than unsupported. Use
+  `onelake_root()`, or GUIDs with no `.Lakehouse` suffix.
+- Appending `.Lakehouse` to a lakehouse **GUID**. The suffix goes on a name only.
 - Setting `ENDPOINT` to a bare hostname in the azure secret. `ENDPOINT
   'onelake.dfs.fabric.microsoft.com'` fails with `Unable parse source url ...
   relative URL without a base`, which reads like a bug rather than a config
