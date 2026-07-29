@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Token totals no longer omit LM calls that produced no runnable code.** When a
+  response arrives truncated mid-fence, or contains prose instead of a `python`
+  block, the runtime retries it rather than executing it. Those attempts never
+  became a `TurnRecord`, and since token totals were summed from the trajectory's
+  turns, the provider's charge for them vanished from `total_prompt_tokens` and
+  `total_completion_tokens`. Any run that hit either guard under-reported its
+  spend; a run where *every* response hit one reported `n_turns=0` and no tokens
+  at all while having taken a minute and cost real money. Those calls are now
+  carried alongside the trajectory and included in the totals. The turn-exhaustion
+  warning also reports attempts rather than recorded turns, so it no longer says
+  "ran out of turns after 0 of 16".
+
+  No behaviour change: the trajectory itself is unchanged, so the stuck-loop
+  circuit breaker sees exactly what it saw before, and nothing about what the
+  model is shown or generates is affected. Only the reported numbers move, and
+  they move toward what the provider actually billed.
+
 ## 0.3.0 — 2026-07-28 — reasoning effort pinned, sharper document guidance
 
 ### Changed

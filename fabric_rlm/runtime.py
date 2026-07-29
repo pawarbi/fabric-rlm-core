@@ -429,13 +429,24 @@ class RLMResult:
         }
 
 
-def _aggregate_trajectory_metrics(trajectory: Trajectory) -> dict[str, Any]:
+def _aggregate_trajectory_metrics(
+    trajectory: Trajectory,
+    unbilled: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Sum per-turn token + timing fields across the trajectory.
 
     Token aggregates are ``None`` when no turn reported usage (so we don't
     confuse "unknown" with "zero"). Timing aggregates are always summed when
     any turn was recorded.
+
+    ``unbilled`` carries usage from LM calls that never became a trajectory
+    turn: a response that was truncated mid-fence, or that contained no
+    runnable code at all. Those calls are retried rather than executed, so
+    they have no turn to hang off, but the provider still charged for them.
+    Leaving them out understated the reported spend of any run that hit either
+    guard, and made a run where *every* call hit one report zero tokens.
     """
+    extra = unbilled or []
 
     def _sum_optional(values: list[Any]) -> Any:
         present = [v for v in values if v is not None]
@@ -443,11 +454,14 @@ def _aggregate_trajectory_metrics(trajectory: Trajectory) -> dict[str, Any]:
             return None
         return sum(present)
 
-    prompts = [t.prompt_tokens for t in trajectory.turns]
-    completions = [t.completion_tokens for t in trajectory.turns]
-    cached = [t.cached_tokens for t in trajectory.turns]
-    reasoning = [t.reasoning_tokens for t in trajectory.turns]
-    lm_secs = [t.lm_call_seconds for t in trajectory.turns]
+    prompts = [t.prompt_tokens for t in trajectory.turns] + [e.get("prompt_tokens") for e in extra]
+    completions = ([t.completion_tokens for t in trajectory.turns]
+                   + [e.get("completion_tokens") for e in extra])
+    cached = [t.cached_tokens for t in trajectory.turns] + [e.get("cached_tokens") for e in extra]
+    reasoning = ([t.reasoning_tokens for t in trajectory.turns]
+                 + [e.get("reasoning_tokens") for e in extra])
+    lm_secs = ([t.lm_call_seconds for t in trajectory.turns]
+               + [e.get("lm_call_seconds") for e in extra])
     worker_secs = [t.worker_execute_seconds for t in trajectory.turns]
     return {
         "total_prompt_tokens": _sum_optional(prompts),
@@ -1256,6 +1270,9 @@ class RLM:
                 interpreter.set_inputs(bound_inputs)
 
             turn_counter = 0
+            # LM calls that never became a turn (truncated / no code block).
+            # Retried rather than executed, but still billed.
+            unbilled_calls: list[dict[str, Any]] = []
             next_turn_type = "normal"
             reached_max = False
             verifier_repair_history: list[dict[str, Any]] = []
@@ -1315,6 +1332,13 @@ class RLM:
                     messages.append({"role": "assistant", "content": response_text})
                     # truncated turns still count toward the budget to avoid loops.
                     turn_counter += 1
+                    unbilled_calls.append({
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "cached_tokens": cached_tokens,
+                        "reasoning_tokens": reasoning_tokens,
+                        "lm_call_seconds": lm_call_seconds,
+                    })
                     truncation_msg = (
                         "Your previous response was truncated before the closing code fence. "
                         "Rewrite that turn in one complete ```python block under 30 lines."
@@ -1338,6 +1362,13 @@ class RLM:
                 if selected_code is None:
                     messages.append({"role": "assistant", "content": response_text})
                     turn_counter += 1
+                    unbilled_calls.append({
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "cached_tokens": cached_tokens,
+                        "reasoning_tokens": reasoning_tokens,
+                        "lm_call_seconds": lm_call_seconds,
+                    })
                     no_code_msg = (
                         "Your previous response contained no complete ```python code block. "
                         "Reply with exactly one complete ```python block (or call SUBMIT(...) "
@@ -1393,7 +1424,7 @@ class RLM:
                         final_state=final_state,
                         max_turns=self.max_turns,
                         failure_reason="worker_timeout",
-                        **_aggregate_trajectory_metrics(trajectory),
+                        **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
                     )
                 except Exception as exc:
                     # Capture any unexpected worker/interpreter failure as a turn and stop.
@@ -1430,7 +1461,7 @@ class RLM:
                         final_state=final_state,
                         max_turns=self.max_turns,
                         failure_reason="worker_error",
-                        **_aggregate_trajectory_metrics(trajectory),
+                        **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
                     )
                 worker_execute_seconds = time.monotonic() - worker_started
                 duration = time.perf_counter() - started
@@ -1527,7 +1558,7 @@ class RLM:
                                     final_state=final_state,
                                     max_turns=self.max_turns,
                         failure_reason="stuck_loop",
-                                    **_aggregate_trajectory_metrics(trajectory),
+                                    **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
                                 )
 
                 if result.submitted:
@@ -1588,7 +1619,7 @@ class RLM:
                         trajectory=trajectory,
                         final_state=result.state,
                         max_turns=self.max_turns,
-                        **_aggregate_trajectory_metrics(trajectory),
+                        **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
                     )
 
                 messages.append({"role": "assistant", "content": response_text})
@@ -1622,7 +1653,7 @@ class RLM:
                 "RLM ran out of turns after %d of %d without calling SUBMIT. "
                 "The result is truncated, not necessarily wrong. Raise max_turns "
                 "if this recurs -- models differ in how many turns they take.",
-                len(trajectory.turns),
+                turn_counter,
                 self.max_turns,
             )
         return RLMResult(
@@ -1632,7 +1663,7 @@ class RLM:
             final_state=final_state,
             max_turns=self.max_turns,
             failure_reason=("max_turns" if exhausted else "output_validation_failed"),
-            **_aggregate_trajectory_metrics(trajectory),
+            **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
         )
 
     def _repair_nudge_suffix(self, key: str) -> str:
