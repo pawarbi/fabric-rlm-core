@@ -209,3 +209,52 @@ def test_aggregates_skip_none_turns() -> None:
     assert aggregates["total_completion_tokens"] == 5
     assert abs(aggregates["total_lm_seconds"] - 0.6) < 1e-9
     assert abs(aggregates["total_worker_seconds"] - 0.3) < 1e-9
+
+
+def test_tokens_counted_when_response_has_no_code_block(monkeypatch) -> None:
+    """LM calls that never become a turn are still billed, so still counted.
+
+    A response with no ```python block is retried rather than executed, so it
+    produces no TurnRecord to hang usage off. Before this was fixed the tokens
+    were dropped, and a run where every response was prose reported zero tokens
+    and zero turns while having spent real money.
+    """
+    _install_fake_interpreter(monkeypatch, FakeInterpreter())
+    lm = UsageScriptedLM(
+        [
+            ("I will now analyse the filing.", {"prompt_tokens": 900, "completion_tokens": 40}),
+            ("Still thinking about it.", {"prompt_tokens": 950, "completion_tokens": 30}),
+            (
+                "```python\nSUBMIT(answer=1)\n```",
+                {"prompt_tokens": 1000, "completion_tokens": 20},
+            ),
+        ]
+    )
+    rlm = RLM.from_task("Return one.", outputs=["answer"], lm=lm, max_turns=5, timeout=5)
+
+    result = rlm.run()
+
+    assert result.submitted
+    # only the executed turn is recorded ...
+    assert len(result.trajectory) == 1
+    # ... but all three LM calls are paid for, so all three are counted
+    assert result.total_prompt_tokens == 900 + 950 + 1000
+    assert result.total_completion_tokens == 40 + 30 + 20
+
+
+def test_no_code_only_run_reports_its_spend(monkeypatch) -> None:
+    """The pathological case: nothing ever executes, so nothing was recorded."""
+    _install_fake_interpreter(monkeypatch, FakeInterpreter())
+    lm = UsageScriptedLM(
+        [("prose, no code", {"prompt_tokens": 500, "completion_tokens": 10}) for _ in range(4)]
+    )
+    rlm = RLM.from_task("Return one.", outputs=["answer"], lm=lm, max_turns=2, timeout=5)
+
+    result = rlm.run()
+
+    assert not result.submitted
+    assert result.failure_reason == "max_turns"
+    assert len(result.trajectory) == 0
+    # the run cost 2 calls; reporting None or 0 here is what hid the spend
+    assert result.total_prompt_tokens == 1000
+    assert result.total_completion_tokens == 20
