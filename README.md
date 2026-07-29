@@ -405,10 +405,12 @@ measurements behind them are thinner than a default install should carry. Point 
 loader at the folder to use one:
 
 ```python
+from fabric_rlm import RLM, File, SkillLoader
+
 loader = SkillLoader(skill_dir="contrib-skills")
 
 rlm = RLM.task(
-    task="Which segment had the largest operating loss in FY2022?",
+    task="What was Boeing's FY2022 core operating loss? Report the figure with its sign.",
     inputs={"filing": File("BOEING_2022_10K.pdf")},
     outputs=["answer"],
     skill_loader=loader,

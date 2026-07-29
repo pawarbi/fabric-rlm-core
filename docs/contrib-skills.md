@@ -8,12 +8,12 @@ Nothing in this directory ships with `pip install fabric-rlm`. To use one, copy 
 file somewhere the notebook can read and point a `SkillLoader` at it:
 
 ```python
-from fabric_rlm import RLM, SkillLoader
+from fabric_rlm import RLM, File, SkillLoader
 
 loader = SkillLoader(skill_dir="contrib-skills")
 
 result = RLM.task(
-    task="Which segment had the largest operating loss in FY2022?",
+    task="What was Boeing's FY2022 core operating loss? Report the figure with its sign.",
     inputs={"filing": File("BOEING_2022_10K.pdf")},
     outputs=["answer"],
     skills=["pdf_document_analysis", "financial_documents"],
