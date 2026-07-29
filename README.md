@@ -397,6 +397,32 @@ mix your own with the shipped ones in the same `skills=[...]` list. Pass several
 folders as a list if you keep them apart, and a file named after a bundled skill
 overrides it. If you want only your own, pass `include_packaged=False`.
 
+### Contributed skills
+
+`contrib-skills/` in the repository holds playbooks that are not installed with the
+package, either because they are narrower than the bundled ones or because the
+measurements behind them are thinner than a default install should carry. Point a
+loader at the folder to use one:
+
+```python
+loader = SkillLoader(skill_dir="contrib-skills")
+
+rlm = RLM.task(
+    task="Which segment had the largest operating loss in FY2022?",
+    inputs={"filing": File("BOEING_2022_10K.pdf")},
+    outputs=["answer"],
+    skill_loader=loader,
+    skills=["pdf_document_analysis", "financial_documents"],
+)
+```
+
+`financial_documents` is the first of these: reporting conventions for 10-K, 10-Q
+and earnings releases, covering parentheses as negative, scale stated in a header,
+fiscal against calendar year, adjacent period columns and subtotal rows. It is
+scoped to financial reporting on purpose, since parentheses mean something else in
+legal and scientific documents. [docs/contrib-skills.md](docs/contrib-skills.md)
+records what it was measured on and what the measurement does not support.
+
 If a skill needs a library fabric-rlm does not depend on, install it in the
 notebook (`%pip install python-docx`) before running. The sandbox blocks `pip`
 and `subprocess`, so a skill cannot install its own dependencies. See

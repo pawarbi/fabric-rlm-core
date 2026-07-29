@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added
+
+- **`contrib-skills/financial_documents`, a domain playbook that is not installed
+  with the package.** Reporting conventions for 10-K, 10-Q, annual reports and
+  earnings releases: parentheses as negative, scale stated in a header rather than
+  beside the number, fiscal against calendar year, adjacent three-month and
+  twelve-month columns, subtotal and contra rows, restatements and non-GAAP
+  measures. Load it by pointing a `SkillLoader` at `contrib-skills/`. It declares
+  `pdf_document_analysis` as a dependency, so naming it pulls in the page mechanics
+  as well.
+
+  It sits outside the wheel because the evidence is narrow. On a 40-question set
+  built from tables in 24 SEC filings, each asking which row holds the largest or
+  smallest value in a named column, it scored 35 of 40 against 32 for
+  `pdf_document_analysis` alone, fixing 5 and breaking 2. The subset with a negative
+  candidate value went from 16 of 20 to 19 of 20, and the traces confirm the
+  mechanism: the baseline picked "Boeing Capital $199 million" as the smallest value
+  in a column that contained "(231)", reading the bracketed negative as positive.
+  The result is not significant (two-sided McNemar, p = 0.453), and because the set
+  was built to concentrate sign handling, the gain does not transfer to a general
+  accuracy figure. On FinanceBench the expected effect is closer to one question in
+  150. See `docs/contrib-skills.md`.
+
+  A generic "enumerate the candidates and compute the extreme" rule was tested on
+  the same set and rejected: 32 of 40, three fixed and three broken, because it led
+  the model to pull rows in from neighbouring tables. It is not shipped anywhere.
+
 ### Fixed
 
 - **Token totals no longer omit LM calls that produced no runnable code.** When a
