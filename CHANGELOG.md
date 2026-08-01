@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.2 — 2026-08-01 — verified execution, and a timeout that fires
+
 ### Added
 
 - **`verified_task`: blind double-solve with structural agreement and
