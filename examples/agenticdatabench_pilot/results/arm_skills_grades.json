@@ -1,0 +1,166 @@
+{
+  "num_results": 40,
+  "average_score": 0.37500484834055237,
+  "results": [
+    {
+      "id": "agriculture_03",
+      "score": 0.75
+    },
+    {
+      "id": "agriculture_24",
+      "score": 0.0
+    },
+    {
+      "id": "agriculture_25",
+      "score": 1.0
+    },
+    {
+      "id": "ecommerce_03",
+      "score": 0.14285714285714285
+    },
+    {
+      "id": "ecommerce_15",
+      "score": 0.0
+    },
+    {
+      "id": "ecommerce_26",
+      "score": 0.25
+    },
+    {
+      "id": "energy_01",
+      "score": 0.75
+    },
+    {
+      "id": "energy_03",
+      "score": 0.3333333333333333
+    },
+    {
+      "id": "entertainment_04",
+      "score": 1.0
+    },
+    {
+      "id": "entertainment_08",
+      "score": 0.0
+    },
+    {
+      "id": "financial_276",
+      "score": 0.0
+    },
+    {
+      "id": "financial_293",
+      "score": 0.0
+    },
+    {
+      "id": "financial_536",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_04",
+      "score": 0.5357142857142857
+    },
+    {
+      "id": "healthcare_14",
+      "score": 0.4166666666666667
+    },
+    {
+      "id": "healthcare_15",
+      "score": 0.0
+    },
+    {
+      "id": "loan_model_18",
+      "score": 0.6
+    },
+    {
+      "id": "loan_model_9",
+      "score": 0.595855
+    },
+    {
+      "id": "loan_risk_13",
+      "score": 0.0
+    },
+    {
+      "id": "loan_risk_44",
+      "score": 0.0
+    },
+    {
+      "id": "marketing_5",
+      "score": 0.0
+    },
+    {
+      "id": "marketing_9",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_15",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_27",
+      "score": 1.0
+    },
+    {
+      "id": "real_estate_30",
+      "score": 0.1
+    },
+    {
+      "id": "social_network_05",
+      "score": 0.3333333333333333
+    },
+    {
+      "id": "social_network_26",
+      "score": 1.0
+    },
+    {
+      "id": "social_network_27",
+      "score": 0.0
+    },
+    {
+      "id": "sports_08",
+      "score": 0.9854897272728879
+    },
+    {
+      "id": "sports_24",
+      "score": 0.4291666666666667
+    },
+    {
+      "id": "sports_25",
+      "score": 1.0
+    },
+    {
+      "id": "strategy_2",
+      "score": 0.1111111111111111
+    },
+    {
+      "id": "strategy_3",
+      "score": 0.0
+    },
+    {
+      "id": "strategy_7",
+      "score": 1.0
+    },
+    {
+      "id": "tourism_02",
+      "score": 1.0
+    },
+    {
+      "id": "tourism_29",
+      "score": 0.75
+    },
+    {
+      "id": "tourism_30",
+      "score": 0.0
+    },
+    {
+      "id": "transportation_16",
+      "score": 0.25
+    },
+    {
+      "id": "transportation_19",
+      "score": 0.0
+    },
+    {
+      "id": "transportation_23",
+      "score": 0.6666666666666666
+    }
+  ]
+}

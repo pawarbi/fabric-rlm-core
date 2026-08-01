@@ -1,0 +1,990 @@
+{
+  "num_results": 246,
+  "average_score": 0.42113937434948046,
+  "results": [
+    {
+      "id": "agriculture_02",
+      "score": 1.0
+    },
+    {
+      "id": "agriculture_03",
+      "score": 0.5
+    },
+    {
+      "id": "agriculture_04",
+      "score": 0.75
+    },
+    {
+      "id": "agriculture_06",
+      "score": 0.6
+    },
+    {
+      "id": "agriculture_07",
+      "score": 0.6666666666666666
+    },
+    {
+      "id": "agriculture_09",
+      "score": 0.0
+    },
+    {
+      "id": "agriculture_10",
+      "score": 0.5555555555555556
+    },
+    {
+      "id": "agriculture_12",
+      "score": 0.0
+    },
+    {
+      "id": "agriculture_14",
+      "score": 0.5
+    },
+    {
+      "id": "agriculture_15",
+      "score": 0.5409417768499188
+    },
+    {
+      "id": "agriculture_16",
+      "score": 0.0
+    },
+    {
+      "id": "agriculture_18",
+      "score": 0.05128205128205129
+    },
+    {
+      "id": "agriculture_20",
+      "score": 0.0
+    },
+    {
+      "id": "agriculture_21",
+      "score": 0.3333333333333333
+    },
+    {
+      "id": "agriculture_22",
+      "score": 0.5
+    },
+    {
+      "id": "agriculture_24",
+      "score": 0.0
+    },
+    {
+      "id": "agriculture_25",
+      "score": 1.0
+    },
+    {
+      "id": "agriculture_28",
+      "score": 0.0
+    },
+    {
+      "id": "agriculture_29",
+      "score": 0.8333333333333333
+    },
+    {
+      "id": "agriculture_30",
+      "score": 1.0
+    },
+    {
+      "id": "agriculture_31",
+      "score": 0.5
+    },
+    {
+      "id": "agriculture_32",
+      "score": 0.0
+    },
+    {
+      "id": "ecommerce_01",
+      "score": 0.2727272727272727
+    },
+    {
+      "id": "ecommerce_03",
+      "score": 0.0
+    },
+    {
+      "id": "ecommerce_06",
+      "score": 0.3333333333333333
+    },
+    {
+      "id": "ecommerce_07",
+      "score": 0.7
+    },
+    {
+      "id": "ecommerce_10",
+      "score": 0.0
+    },
+    {
+      "id": "ecommerce_13",
+      "score": 0.16666666666666666
+    },
+    {
+      "id": "ecommerce_14",
+      "score": 0.0
+    },
+    {
+      "id": "ecommerce_15",
+      "score": 0.0
+    },
+    {
+      "id": "ecommerce_16",
+      "score": 0.0
+    },
+    {
+      "id": "ecommerce_21",
+      "score": 0.5
+    },
+    {
+      "id": "ecommerce_26",
+      "score": 0.5
+    },
+    {
+      "id": "ecommerce_30",
+      "score": 0.6625
+    },
+    {
+      "id": "ecommerce_32",
+      "score": 0.8
+    },
+    {
+      "id": "ecommerce_35",
+      "score": 0.0
+    },
+    {
+      "id": "energy_01",
+      "score": 0.75
+    },
+    {
+      "id": "energy_03",
+      "score": 0.3333333333333333
+    },
+    {
+      "id": "energy_09",
+      "score": 0.4
+    },
+    {
+      "id": "energy_10",
+      "score": 1.0
+    },
+    {
+      "id": "entertainment_02",
+      "score": 1.0
+    },
+    {
+      "id": "entertainment_03",
+      "score": 0.0
+    },
+    {
+      "id": "entertainment_04",
+      "score": 1.0
+    },
+    {
+      "id": "entertainment_07",
+      "score": 0.5
+    },
+    {
+      "id": "entertainment_08",
+      "score": 0.0
+    },
+    {
+      "id": "financial_163",
+      "score": 0.0
+    },
+    {
+      "id": "financial_167",
+      "score": 1.0
+    },
+    {
+      "id": "financial_234",
+      "score": 1.0
+    },
+    {
+      "id": "financial_236",
+      "score": 1.0
+    },
+    {
+      "id": "financial_270",
+      "score": 0.5
+    },
+    {
+      "id": "financial_276",
+      "score": 0.0
+    },
+    {
+      "id": "financial_290",
+      "score": 0.0
+    },
+    {
+      "id": "financial_293",
+      "score": 0.0
+    },
+    {
+      "id": "financial_297",
+      "score": 1.0
+    },
+    {
+      "id": "financial_310",
+      "score": 0.0
+    },
+    {
+      "id": "financial_311",
+      "score": 0.0
+    },
+    {
+      "id": "financial_317",
+      "score": 0.6666666666666666
+    },
+    {
+      "id": "financial_318",
+      "score": 0.6666666666666666
+    },
+    {
+      "id": "financial_325",
+      "score": 1.0
+    },
+    {
+      "id": "financial_364",
+      "score": 0.0
+    },
+    {
+      "id": "financial_365",
+      "score": 0.0
+    },
+    {
+      "id": "financial_425",
+      "score": 1.0
+    },
+    {
+      "id": "financial_44",
+      "score": 1.0
+    },
+    {
+      "id": "financial_52",
+      "score": 0.0
+    },
+    {
+      "id": "financial_536",
+      "score": 0.5
+    },
+    {
+      "id": "financial_71",
+      "score": 1.0
+    },
+    {
+      "id": "financial_83",
+      "score": 1.0
+    },
+    {
+      "id": "financial_84",
+      "score": 0.0
+    },
+    {
+      "id": "financial_95",
+      "score": 1.0
+    },
+    {
+      "id": "healthcare_01",
+      "score": 0.25
+    },
+    {
+      "id": "healthcare_02",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_03",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_04",
+      "score": 0.7857142857142857
+    },
+    {
+      "id": "healthcare_05",
+      "score": 1.0
+    },
+    {
+      "id": "healthcare_06",
+      "score": 0.4166666666666667
+    },
+    {
+      "id": "healthcare_08",
+      "score": 0.55
+    },
+    {
+      "id": "healthcare_11",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_12",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_13",
+      "score": 0.5
+    },
+    {
+      "id": "healthcare_14",
+      "score": 0.4166666666666667
+    },
+    {
+      "id": "healthcare_15",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_16",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_17",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_18",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_19",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_20",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_23",
+      "score": 0.7777777777777778
+    },
+    {
+      "id": "healthcare_24",
+      "score": 1.0
+    },
+    {
+      "id": "healthcare_25",
+      "score": 0.0
+    },
+    {
+      "id": "healthcare_26",
+      "score": 0.08333333333333333
+    },
+    {
+      "id": "healthcare_27",
+      "score": 0.38571428571428573
+    },
+    {
+      "id": "healthcare_31",
+      "score": 0.625
+    },
+    {
+      "id": "healthcare_33",
+      "score": 0.0
+    },
+    {
+      "id": "loan_model_13",
+      "score": 0.6200243113361108
+    },
+    {
+      "id": "loan_model_14",
+      "score": 0.6343136971519828
+    },
+    {
+      "id": "loan_model_18",
+      "score": 0.0
+    },
+    {
+      "id": "loan_model_2",
+      "score": 0.5354293946347276
+    },
+    {
+      "id": "loan_model_20",
+      "score": 0.78
+    },
+    {
+      "id": "loan_model_3",
+      "score": 0.29144384758698494
+    },
+    {
+      "id": "loan_model_5",
+      "score": 0.48859953752919066
+    },
+    {
+      "id": "loan_model_8",
+      "score": 0.4832313006051793
+    },
+    {
+      "id": "loan_model_9",
+      "score": 0.09077460792955297
+    },
+    {
+      "id": "loan_risk_1",
+      "score": 0.0
+    },
+    {
+      "id": "loan_risk_10",
+      "score": 0.0
+    },
+    {
+      "id": "loan_risk_11",
+      "score": 1.0
+    },
+    {
+      "id": "loan_risk_13",
+      "score": 0.0
+    },
+    {
+      "id": "loan_risk_14",
+      "score": 0.0
+    },
+    {
+      "id": "loan_risk_15",
+      "score": 1.0
+    },
+    {
+      "id": "loan_risk_2",
+      "score": 1.0
+    },
+    {
+      "id": "loan_risk_20",
+      "score": 0.0
+    },
+    {
+      "id": "loan_risk_25",
+      "score": 0.6388888888888888
+    },
+    {
+      "id": "loan_risk_3",
+      "score": 0.8500000000000001
+    },
+    {
+      "id": "loan_risk_31",
+      "score": 1.0
+    },
+    {
+      "id": "loan_risk_33",
+      "score": 0.5
+    },
+    {
+      "id": "loan_risk_35",
+      "score": 0.5
+    },
+    {
+      "id": "loan_risk_36",
+      "score": 0.0
+    },
+    {
+      "id": "loan_risk_37",
+      "score": 0.0
+    },
+    {
+      "id": "loan_risk_4",
+      "score": 0.0
+    },
+    {
+      "id": "loan_risk_41",
+      "score": 1.0
+    },
+    {
+      "id": "loan_risk_42",
+      "score": 0.0
+    },
+    {
+      "id": "loan_risk_43",
+      "score": 0.0
+    },
+    {
+      "id": "loan_risk_44",
+      "score": 0.8888888888888888
+    },
+    {
+      "id": "loan_risk_5",
+      "score": 1.0
+    },
+    {
+      "id": "loan_risk_6",
+      "score": 0.8333333333333333
+    },
+    {
+      "id": "loan_risk_7",
+      "score": 1.0
+    },
+    {
+      "id": "loan_risk_8",
+      "score": 1.0
+    },
+    {
+      "id": "loan_risk_9",
+      "score": 0.0
+    },
+    {
+      "id": "marketing_12",
+      "score": 0.0
+    },
+    {
+      "id": "marketing_13",
+      "score": 0.0
+    },
+    {
+      "id": "marketing_14",
+      "score": 0.21504778808906602
+    },
+    {
+      "id": "marketing_2",
+      "score": 0.0
+    },
+    {
+      "id": "marketing_3",
+      "score": 0.0
+    },
+    {
+      "id": "marketing_4",
+      "score": 0.0
+    },
+    {
+      "id": "marketing_5",
+      "score": 0.227075
+    },
+    {
+      "id": "marketing_6",
+      "score": 0.0
+    },
+    {
+      "id": "marketing_9",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_01",
+      "score": 0.3333333333333333
+    },
+    {
+      "id": "real_estate_03",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_04",
+      "score": 1.0
+    },
+    {
+      "id": "real_estate_06",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_07",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_08",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_09",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_11",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_12",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_13",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_14",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_15",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_16",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_17",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_18",
+      "score": 0.33041354758169966
+    },
+    {
+      "id": "real_estate_19",
+      "score": 0.5
+    },
+    {
+      "id": "real_estate_21",
+      "score": 0.4
+    },
+    {
+      "id": "real_estate_22",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_25",
+      "score": 0.4
+    },
+    {
+      "id": "real_estate_26",
+      "score": 0.11809027777777778
+    },
+    {
+      "id": "real_estate_27",
+      "score": 0.5
+    },
+    {
+      "id": "real_estate_29",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_30",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_31",
+      "score": 0.0
+    },
+    {
+      "id": "real_estate_32",
+      "score": 0.8333333333333334
+    },
+    {
+      "id": "social_network_01",
+      "score": 0.0
+    },
+    {
+      "id": "social_network_02",
+      "score": 0.75
+    },
+    {
+      "id": "social_network_05",
+      "score": 0.3333333333333333
+    },
+    {
+      "id": "social_network_06",
+      "score": 0.875
+    },
+    {
+      "id": "social_network_08",
+      "score": 0.5714285714285714
+    },
+    {
+      "id": "social_network_10",
+      "score": 0.2
+    },
+    {
+      "id": "social_network_11",
+      "score": 0.0
+    },
+    {
+      "id": "social_network_16",
+      "score": 1.0
+    },
+    {
+      "id": "social_network_18",
+      "score": 1.0
+    },
+    {
+      "id": "social_network_21",
+      "score": 1.0
+    },
+    {
+      "id": "social_network_22",
+      "score": 0.8
+    },
+    {
+      "id": "social_network_23",
+      "score": 1.0
+    },
+    {
+      "id": "social_network_24",
+      "score": 1.0
+    },
+    {
+      "id": "social_network_25",
+      "score": 0.4444444444444444
+    },
+    {
+      "id": "social_network_26",
+      "score": 1.0
+    },
+    {
+      "id": "social_network_27",
+      "score": 0.0
+    },
+    {
+      "id": "social_network_30",
+      "score": 1.0
+    },
+    {
+      "id": "social_network_31",
+      "score": 1.0
+    },
+    {
+      "id": "social_network_33",
+      "score": 0.8
+    },
+    {
+      "id": "sports_06",
+      "score": 0.0
+    },
+    {
+      "id": "sports_07",
+      "score": 0.75
+    },
+    {
+      "id": "sports_08",
+      "score": 0.9854897272728879
+    },
+    {
+      "id": "sports_09",
+      "score": 0.0
+    },
+    {
+      "id": "sports_11",
+      "score": 0.8571428571428571
+    },
+    {
+      "id": "sports_13",
+      "score": 0.08333333333333333
+    },
+    {
+      "id": "sports_14",
+      "score": 0.0
+    },
+    {
+      "id": "sports_16",
+      "score": 0.3333333333333333
+    },
+    {
+      "id": "sports_17",
+      "score": 0.6916666666666667
+    },
+    {
+      "id": "sports_20",
+      "score": 0.5833333333333334
+    },
+    {
+      "id": "sports_24",
+      "score": 0.0
+    },
+    {
+      "id": "sports_25",
+      "score": 1.0
+    },
+    {
+      "id": "sports_27",
+      "score": 0.0
+    },
+    {
+      "id": "sports_28",
+      "score": 0.5
+    },
+    {
+      "id": "sports_30",
+      "score": 0.75
+    },
+    {
+      "id": "sports_32",
+      "score": 0.0
+    },
+    {
+      "id": "sports_33",
+      "score": 0.6
+    },
+    {
+      "id": "strategy_2",
+      "score": 0.7777777777777778
+    },
+    {
+      "id": "strategy_3",
+      "score": 0.0
+    },
+    {
+      "id": "strategy_5",
+      "score": 1.0
+    },
+    {
+      "id": "strategy_7",
+      "score": 0.3333333333333333
+    },
+    {
+      "id": "tourism_01",
+      "score": 0.5
+    },
+    {
+      "id": "tourism_02",
+      "score": 1.0
+    },
+    {
+      "id": "tourism_04",
+      "score": 0.0
+    },
+    {
+      "id": "tourism_05",
+      "score": 0.5
+    },
+    {
+      "id": "tourism_08",
+      "score": 0.6433333333333333
+    },
+    {
+      "id": "tourism_10",
+      "score": 0.7916666666666666
+    },
+    {
+      "id": "tourism_11",
+      "score": 0.0
+    },
+    {
+      "id": "tourism_12",
+      "score": 0.6
+    },
+    {
+      "id": "tourism_14",
+      "score": 0.0
+    },
+    {
+      "id": "tourism_15",
+      "score": 0.7727982954545455
+    },
+    {
+      "id": "tourism_16",
+      "score": 1.0
+    },
+    {
+      "id": "tourism_17",
+      "score": 0.7940397350993378
+    },
+    {
+      "id": "tourism_19",
+      "score": 0.38888888888888884
+    },
+    {
+      "id": "tourism_20",
+      "score": 0.1
+    },
+    {
+      "id": "tourism_23",
+      "score": 1.0
+    },
+    {
+      "id": "tourism_24",
+      "score": 1.0
+    },
+    {
+      "id": "tourism_25",
+      "score": 1.0
+    },
+    {
+      "id": "tourism_28",
+      "score": 0.75
+    },
+    {
+      "id": "tourism_29",
+      "score": 0.75
+    },
+    {
+      "id": "tourism_30",
+      "score": 0.0
+    },
+    {
+      "id": "tourism_31",
+      "score": 1.0
+    },
+    {
+      "id": "tourism_32",
+      "score": 0.8571428571428571
+    },
+    {
+      "id": "transportation_02",
+      "score": 0.8416988416988417
+    },
+    {
+      "id": "transportation_05",
+      "score": 0.9
+    },
+    {
+      "id": "transportation_06",
+      "score": 0.0
+    },
+    {
+      "id": "transportation_07",
+      "score": 1.0
+    },
+    {
+      "id": "transportation_08",
+      "score": 0.6111111111111112
+    },
+    {
+      "id": "transportation_10",
+      "score": 1.0
+    },
+    {
+      "id": "transportation_11",
+      "score": 0.14285714285714285
+    },
+    {
+      "id": "transportation_13",
+      "score": 0.08888888888888889
+    },
+    {
+      "id": "transportation_16",
+      "score": 0.6333333333333333
+    },
+    {
+      "id": "transportation_18",
+      "score": 0.0
+    },
+    {
+      "id": "transportation_19",
+      "score": 0.0
+    },
+    {
+      "id": "transportation_21",
+      "score": 0.0
+    },
+    {
+      "id": "transportation_22",
+      "score": 0.6666666666666666
+    },
+    {
+      "id": "transportation_23",
+      "score": 0.6666666666666666
+    },
+    {
+      "id": "transportation_24",
+      "score": 1.0
+    },
+    {
+      "id": "transportation_26",
+      "score": 0.25
+    },
+    {
+      "id": "transportation_27",
+      "score": 0.25
+    },
+    {
+      "id": "transportation_28",
+      "score": 0.08333333333333333
+    },
+    {
+      "id": "transportation_29",
+      "score": 0.7321428571428572
+    },
+    {
+      "id": "transportation_30",
+      "score": 0.0
+    },
+    {
+      "id": "transportation_31",
+      "score": 0.5
+    },
+    {
+      "id": "transportation_32",
+      "score": 0.4
+    },
+    {
+      "id": "transportation_35",
+      "score": 0.0
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "num_results": 10,
+  "average_score": 0.5511904761904762,
+  "results": [
+    {
+      "id": "social_network_18",
+      "score": 1.0
+    },
+    {
+      "id": "social_network_25",
+      "score": 1.0
+    },
+    {
+      "id": "sports_20",
+      "score": 0.5833333333333334
+    },
+    {
+      "id": "agriculture_12",
+      "score": 0.0
+    },
+    {
+      "id": "energy_09",
+      "score": 1.0
+    },
+    {
+      "id": "sports_25",
+      "score": 1.0
+    },
+    {
+      "id": "tourism_32",
+      "score": 0.42857142857142855
+    },
+    {
+      "id": "tourism_25",
+      "score": 0.5
+    },
+    {
+      "id": "real_estate_22",
+      "score": 0.0
+    },
+    {
+      "id": "agriculture_20",
+      "score": 0.0
+    }
+  ]
+}

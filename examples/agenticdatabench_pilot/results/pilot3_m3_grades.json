@@ -1,0 +1,18 @@
+{
+  "num_results": 3,
+  "average_score": 0.20370370370370372,
+  "results": [
+    {
+      "id": "agriculture_22",
+      "score": 0.5
+    },
+    {
+      "id": "strategy_2",
+      "score": 0.1111111111111111
+    },
+    {
+      "id": "strategy_3",
+      "score": 0.0
+    }
+  ]
+}
