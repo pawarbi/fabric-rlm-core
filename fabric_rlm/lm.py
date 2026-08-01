@@ -12,7 +12,16 @@ _BACKENDS: dict[str, BackendFactory] = {}
 
 # Defaults for non-reasoning chat models (gpt-4.1, gpt-4o, etc.).
 # Reasoning models (gpt-5, o1/o3/o4 family) override these in `_smart_defaults`.
-_DEFAULT_LM_KWARGS = {"temperature": 1.0, "max_tokens": 16_000}
+#
+# `timeout` bounds each REQUEST at the HTTP layer. Without it, a connection the
+# provider silently drops blocks forever: the task-level timeout is checked
+# between turns and a blocked read never returns to let it run. Observed in a
+# five-worker batch that froze 35+ minutes with zero CPU and zero spend until
+# killed. 600s is generous for a single call (reasoning models at high effort
+# stream for minutes) while turning a dead connection into an ordinary error
+# that the retry/turn machinery already handles. Callers override by passing
+# `timeout` in the spec.
+_DEFAULT_LM_KWARGS = {"temperature": 1.0, "max_tokens": 16_000, "timeout": 600}
 
 # Mirrors dspy 3.2's reasoning-model detector, extended to cover dotted
 # generations (gpt-5.1, gpt-5.2, ...). Keep in sync with
@@ -54,7 +63,8 @@ def _smart_defaults(model: str) -> dict[str, Any]:
       max_tokens=16000).
     """
     if is_reasoning_model(model):
-        return {"max_tokens": 16_000, "reasoning_effort": "medium"}   # NO temperature key
+        return {"max_tokens": 16_000, "reasoning_effort": "medium",
+                "timeout": _DEFAULT_LM_KWARGS["timeout"]}   # NO temperature key
     return dict(_DEFAULT_LM_KWARGS)
 
 

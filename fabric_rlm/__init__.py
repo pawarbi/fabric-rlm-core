@@ -28,6 +28,7 @@ from .replay_lm import (
 )
 from .runtime import RLM, RLMResult
 from .skill_loader import Skill, SkillLoader, compose_skills, list_skills, load_skill
+from .verify import VerifiedResult, answers_agree, verified_task
 from .trajectory import Issue, Trajectory, TurnRecord
 from .validators import (
     assert_in_range,

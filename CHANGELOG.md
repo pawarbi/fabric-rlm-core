@@ -4,6 +4,20 @@
 
 ### Added
 
+- **`verified_task`: blind double-solve with structural agreement and
+  reconciliation.** Solves a task twice in fresh contexts, compares the answers
+  in code (exact numbers, identical semicolon-list item sets, normalized prose),
+  and on disagreement reconciles in a third fresh context that must re-derive
+  from the data. Measured before it was written: +0.076 stratified Pass@1 over
+  single solves on a 54-query, three-runs-each benchmark A/B, at about 2.9x
+  tokens, with the reconciler choosing correctly on 68-77% of decisive pairs.
+  For read-only analytical tasks whose product is a determinate answer; the
+  module docstring states where it does not apply (side-effect tasks such as
+  workbook modification run the task multiple times; generative output never
+  agrees structurally; consistent errors agree and pass). Returns a
+  `VerifiedResult` carrying the winning `RLMResult`, the verdict, both
+  candidate answers, and every attempt for token accounting.
+
 - **`contrib-skills/financial_documents`, a domain playbook that is not installed
   with the package.** Reporting conventions for 10-K, 10-Q, annual reports and
   earnings releases: parentheses as negative, scale stated in a header rather than
@@ -30,6 +44,14 @@
   the model to pull rows in from neighbouring tables. It is not shipped anywhere.
 
 ### Fixed
+
+- **A dropped LM connection now errors instead of hanging forever.** Resolved
+  LMs carry a default per-request `timeout` (600s; override by passing
+  `timeout` in the spec). Without it, a connection the provider silently drops
+  blocks the worker indefinitely: the task-level timeout is checked between
+  turns, and a blocked HTTP read never returns to let it run. Observed as five
+  concurrent workers frozen for 35+ minutes with zero CPU and zero API spend.
+  Regression-tested against a server that accepts requests and never responds.
 
 - **Token totals no longer omit LM calls that produced no runnable code.** When a
   response arrives truncated mid-fence, or contains prose instead of a `python`
