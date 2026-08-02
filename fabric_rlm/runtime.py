@@ -625,6 +625,7 @@ class RLM:
         router_candidate_specificities: list[str] | None = None,
         router_include_dependencies: bool = True,
         reserve_finalize_turns: int = 0,
+        recover_worker_timeouts: int = 0,
         max_prompt_tokens: int | None = None,
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
@@ -765,6 +766,7 @@ class RLM:
             )
             self.router_include_dependencies = bool(router_include_dependencies)
             self.reserve_finalize_turns = max(0, int(reserve_finalize_turns))
+            self.recover_worker_timeouts = max(0, int(recover_worker_timeouts))
             self.max_prompt_tokens = max_prompt_tokens
             self.digest_after_turn = digest_after_turn
             self.output_validator = output_validator
@@ -794,6 +796,7 @@ class RLM:
                 router_candidate_specificities=router_candidate_specificities,
                 router_include_dependencies=router_include_dependencies,
                 reserve_finalize_turns=reserve_finalize_turns,
+                recover_worker_timeouts=recover_worker_timeouts,
                 max_prompt_tokens=max_prompt_tokens,
                 digest_after_turn=digest_after_turn,
                 output_validator=output_validator,
@@ -829,6 +832,7 @@ class RLM:
         )
         self.router_include_dependencies = bool(router_include_dependencies)
         self.reserve_finalize_turns = max(0, int(reserve_finalize_turns))
+        self.recover_worker_timeouts = max(0, int(recover_worker_timeouts))
         self.max_prompt_tokens = max_prompt_tokens
         self.digest_after_turn = digest_after_turn
         self.output_validator = output_validator
@@ -1277,6 +1281,7 @@ class RLM:
             reached_max = False
             verifier_repair_history: list[dict[str, Any]] = []
             self._repair_counts = {}
+            timeout_recoveries = 0
 
             while turn_counter < self.max_turns:
                 # Pre-LM-call: budget urgency hint + digest swap for the system message.
@@ -1417,6 +1422,41 @@ class RLM:
                             worker_execute_seconds=worker_execute_seconds,
                         )
                     )
+                    # A timeout kills the worker, so recovery means restarting it
+                    # and telling the model its namespace is gone. Ending the run
+                    # here instead throws away every prior turn: on a 246-task
+                    # benchmark this lost 20 tasks outright, several of which had
+                    # already done the analysis and were formatting output.
+                    if timeout_recoveries < self.recover_worker_timeouts:
+                        timeout_recoveries += 1
+                        try:
+                            interpreter.start()
+                            if self.sub_lm_spec is not None:
+                                interpreter.configure_lm(self.sub_lm_spec)
+                            if bound_inputs:
+                                interpreter.set_inputs(bound_inputs)
+                        except Exception:      # restart failed: fall through
+                            pass
+                        else:
+                            messages.append({"role": "assistant", "content": response_text})
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"Your code was still running after {self.timeout:.0f}s "
+                                    "and the worker was restarted. EVERY variable is gone; "
+                                    "inputs are re-bound and importable again.\n"
+                                    "That approach is too slow for this data. Do not repeat "
+                                    "it. Work in a way that finishes: read only the columns "
+                                    "you need, aggregate or filter in the query rather than "
+                                    "in Python, process in chunks, or sample to check your "
+                                    "logic before running on everything.\n"
+                                    f"Recovery {timeout_recoveries} of "
+                                    f"{self.recover_worker_timeouts}."
+                                ),
+                            })
+                            turn_counter += 1
+                            continue
+
                     return RLMResult(
                         submitted=False,
                         payload=None,

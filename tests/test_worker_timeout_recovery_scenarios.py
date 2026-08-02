@@ -1,0 +1,152 @@
+"""Does timeout recovery generalize past the one shape that motivated it?
+
+The motivating case was a slow full-file scan. These cover other ways a worker
+stops responding, plus the states the runtime can be in when it happens, so the
+feature is not silently specific to "pandas read a big CSV".
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from fabric_rlm import RLM, SkillLoader
+
+
+class ScriptedLM:
+    def __init__(self, turns):
+        self.turns = list(turns)
+        self.i = 0
+        self.seen: list[str] = []
+
+    def __call__(self, messages=None, prompt=None, **kwargs):
+        if messages:
+            self.seen.append(messages[-1].get("content", ""))
+        if self.i >= len(self.turns):
+            return ["SUBMIT(answer='exhausted')"]
+        turn = self.turns[self.i]
+        self.i += 1
+        return [turn]
+
+
+def code(body: str) -> str:
+    return f"```python\n{body}\n```"
+
+
+DONE = code("SUBMIT(answer='ok')")
+
+# Distinct ways a worker stops answering in time.
+HANGS = {
+    "sleep": "import time\ntime.sleep(30)",
+    "busy_loop": "x = 0\nwhile True:\n    x += 1",
+    "huge_allocation": "big = [0] * (10**9)",
+    "runaway_string": "s = 'a'\nfor _ in range(40):\n    s = s + s",
+    "blocking_read": "import sys\nsys.stdin.read()",
+    "deep_recursion": (
+        "import sys\nsys.setrecursionlimit(10**7)\n"
+        "def f(n):\n    return f(n + 1)\nf(0)"
+    ),
+}
+
+
+@pytest.mark.parametrize("name,body", sorted(HANGS.items()))
+def test_recovers_from_each_hang_shape(name, body):
+    lm = ScriptedLM([code(body), DONE])
+    result = RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=4,
+                      timeout=2, recover_worker_timeouts=1).run()
+    assert result.submitted is True, f"did not recover from {name}"
+    assert result.payload["answer"] == "ok"
+
+
+def test_recovers_after_several_good_turns():
+    """State built over earlier turns is lost; the run still finishes."""
+    lm = ScriptedLM([
+        code("a = 1\nprint(a)"),
+        code("b = a + 1\nprint(b)"),
+        code(HANGS["sleep"]),
+        code("SUBMIT(answer='after')"),
+    ])
+    result = RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=8,
+                      timeout=2, recover_worker_timeouts=1).run()
+    assert result.submitted is True
+    assert result.payload["answer"] == "after"
+
+
+def test_prior_turns_are_kept_in_the_trajectory():
+    """The point of recovering is not discarding the work already done."""
+    lm = ScriptedLM([
+        code("a = 1"),
+        code(HANGS["sleep"]),
+        code("SUBMIT(answer='kept')"),
+    ])
+    result = RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=8,
+                      timeout=2, recover_worker_timeouts=1).run()
+    turns = [t for t in result.trajectory if getattr(t, "code", None)]
+    assert len(turns) >= 3, "earlier turns were dropped"
+    assert any("Worker timed out" in (t.error or "") for t in turns)
+
+
+def test_file_inputs_are_rebound():
+    """File handles, not just plain values, must survive the restart."""
+    from fabric_rlm import File
+    import tempfile, pathlib
+
+    with tempfile.TemporaryDirectory() as tmp:
+        p = pathlib.Path(tmp) / "d.txt"
+        p.write_text("hello", encoding="utf-8")
+        lm = ScriptedLM([
+            code(HANGS["sleep"]),
+            code("SUBMIT(answer=doc.read_text())"),
+        ])
+        result = RLM.task(task="t", inputs={"doc": File(p)}, outputs=["answer"],
+                          lm=lm, max_turns=4, timeout=2,
+                          recover_worker_timeouts=1).run()
+    assert result.submitted is True
+    assert result.payload["answer"] == "hello"
+
+
+def test_multiple_recoveries_within_budget():
+    lm = ScriptedLM([
+        code(HANGS["sleep"]),
+        code(HANGS["busy_loop"]),
+        code("SUBMIT(answer='third')"),
+    ])
+    result = RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=8,
+                      timeout=2, recover_worker_timeouts=2).run()
+    assert result.submitted is True
+    assert result.payload["answer"] == "third"
+
+
+def test_recovery_respects_the_turn_budget():
+    """Recovery consumes turns; it must not loop past max_turns."""
+    lm = ScriptedLM([code(HANGS["sleep"])] * 10)
+    result = RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=3,
+                      timeout=2, recover_worker_timeouts=99).run()
+    assert result.submitted is False
+    turns = [t for t in result.trajectory if getattr(t, "code", None)]
+    assert len(turns) <= 3, "ran past max_turns"
+
+
+def test_recovery_works_with_skills_loaded():
+    lm = ScriptedLM([code(HANGS["sleep"]), DONE])
+    result = RLM.task(task="analyse this csv", outputs=["answer"], lm=lm,
+                      max_turns=4, timeout=2, recover_worker_timeouts=1,
+                      skills=["data_exploration"],
+                      skill_loader=SkillLoader()).run()
+    assert result.submitted is True
+
+
+def test_sub_lm_still_configured_after_restart():
+    """configure_lm must be re-applied, or nested predict calls break.
+
+    The sub-LM is configured inside the worker, so the spec has to be
+    serializable -- a model string, not a Python callable.
+    """
+    lm = ScriptedLM([
+        code(HANGS["sleep"]),
+        code("SUBMIT(answer=str(callable(predict_sync)))"),
+    ])
+    result = RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=4,
+                      timeout=2, recover_worker_timeouts=1,
+                      sub_lm="openai/gpt-4o-mini").run()
+    assert result.submitted is True
+    assert result.payload["answer"] == "True", "sub-LM was not reconfigured"
