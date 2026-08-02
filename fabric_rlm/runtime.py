@@ -626,6 +626,7 @@ class RLM:
         router_include_dependencies: bool = True,
         reserve_finalize_turns: int = 0,
         recover_worker_timeouts: int = 1,
+        skills_as_cards: bool = False,
         max_prompt_tokens: int | None = None,
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
@@ -767,6 +768,7 @@ class RLM:
             self.router_include_dependencies = bool(router_include_dependencies)
             self.reserve_finalize_turns = max(0, int(reserve_finalize_turns))
             self.recover_worker_timeouts = max(0, int(recover_worker_timeouts))
+            self.skills_as_cards = bool(skills_as_cards)
             self.max_prompt_tokens = max_prompt_tokens
             self.digest_after_turn = digest_after_turn
             self.output_validator = output_validator
@@ -797,6 +799,7 @@ class RLM:
                 router_include_dependencies=router_include_dependencies,
                 reserve_finalize_turns=reserve_finalize_turns,
                 recover_worker_timeouts=recover_worker_timeouts,
+                skills_as_cards=skills_as_cards,
                 max_prompt_tokens=max_prompt_tokens,
                 digest_after_turn=digest_after_turn,
                 output_validator=output_validator,
@@ -833,6 +836,7 @@ class RLM:
         self.router_include_dependencies = bool(router_include_dependencies)
         self.reserve_finalize_turns = max(0, int(reserve_finalize_turns))
         self.recover_worker_timeouts = max(0, int(recover_worker_timeouts))
+        self.skills_as_cards = bool(skills_as_cards)
         self.max_prompt_tokens = max_prompt_tokens
         self.digest_after_turn = digest_after_turn
         self.output_validator = output_validator
@@ -1232,11 +1236,24 @@ class RLM:
         else:
             self._activated_skills = set()
             skill_index = self.skill_loader.format_index() if self.enable_skill_autoloading or self.skills else None
-            preloaded_skills = (
-                compose_skills(self.skills, loader=self.skill_loader, include_dependencies=True)
-                if self.skills
-                else None
-            )
+            if self.skills and self.skills_as_cards:
+                # Advertise the chosen skills by name and summary and let the
+                # model pull a body with load_skill(name) when it decides it
+                # needs one. A preloaded body is resent on every turn, so its
+                # cost is roughly size x turns; a card is a line, and the body
+                # is paid for once if at all. Measured on AgenticDataBench,
+                # preloading the router's picks cost +124% in cache-adjusted
+                # spend and did not improve the score.
+                cards_text = "\n".join(
+                    _skill_card(self.skill_loader, name) for name in self.skills
+                )
+                preloaded_skills = None
+            else:
+                preloaded_skills = (
+                    compose_skills(self.skills, loader=self.skill_loader, include_dependencies=True)
+                    if self.skills
+                    else None
+                )
 
         messages = [
             {
@@ -2564,6 +2581,22 @@ def _call_lm_with_meta(
             return _response_to_text(response), new_entry, elapsed
 
     return _response_to_text(response), response, elapsed
+
+
+
+def _skill_card(loader: Any, name: str) -> str:
+    """One-line advertisement for a skill: name, verifier flag, summary.
+
+    Mirrors SkillRouter.card_text so both paths describe a skill the same way,
+    without requiring the router to be enabled.
+    """
+    try:
+        sk = loader.load(name)
+    except Exception:
+        return f"- {name}: (unavailable)"
+    summary = getattr(sk, "summary", None) or getattr(sk, "title", None) or name
+    tag = " [verifier]" if getattr(sk, "verifier_present", False) else ""
+    return f"- {name}{tag}: {summary}"
 
 
 def _call_lm(lm: Any, messages: list[dict[str, str]]) -> Any:
