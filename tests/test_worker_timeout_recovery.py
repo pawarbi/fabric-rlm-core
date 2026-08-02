@@ -35,10 +35,34 @@ SLOW = "```python\nimport time\ntime.sleep(30)\n```"
 FAST = "```python\nSUBMIT(answer='recovered')\n```"
 
 
-def test_timeout_is_fatal_by_default():
-    """Default stays as it was: one timeout ends the run."""
+def test_one_recovery_by_default():
+    """The default allows a single recovery.
+
+    A timeout is rare (23 of 983 task runs across four full benchmark runs)
+    but costs the whole run when fatal. One recovery buys the "tell the model
+    it was too slow and let it adapt" case; the ceiling on a doomed run is one
+    extra timeout period rather than several.
+    """
     lm = ScriptedLM([SLOW, FAST])
     result = RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=4,
+                      timeout=2).run()
+    assert result.submitted is True
+    assert result.payload["answer"] == "recovered"
+
+
+def test_opting_out_restores_fail_fast():
+    """recover_worker_timeouts=0 is the old behaviour, still available."""
+    lm = ScriptedLM([SLOW, FAST])
+    result = RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=4,
+                      timeout=2, recover_worker_timeouts=0).run()
+    assert result.submitted is False
+    assert result.failure_reason == "worker_timeout"
+
+
+def test_default_still_bounded():
+    """Two timeouts exceed the default budget of one, so the run ends."""
+    lm = ScriptedLM([SLOW, SLOW, FAST])
+    result = RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=6,
                       timeout=2).run()
     assert result.submitted is False
     assert result.failure_reason == "worker_timeout"

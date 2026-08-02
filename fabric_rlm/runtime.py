@@ -625,7 +625,7 @@ class RLM:
         router_candidate_specificities: list[str] | None = None,
         router_include_dependencies: bool = True,
         reserve_finalize_turns: int = 0,
-        recover_worker_timeouts: int = 0,
+        recover_worker_timeouts: int = 1,
         max_prompt_tokens: int | None = None,
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
