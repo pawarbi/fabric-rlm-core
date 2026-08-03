@@ -37,10 +37,17 @@ What this does not do:
   control - a firewall rule on the worker binary, a container with no network,
   a network namespace - can support a claim that the process *cannot* reach the
   network. This makes such a claim much more credible, not proven.
-* It does not empty caches. A library that already has the data on disk will
-  still find it: ``load_dataset("ag_news")`` keeps working from
-  ``~/.cache/huggingface`` with every socket refused. Redirect ``HF_HOME`` (and
-  any equivalent) as well when that matters.
+* **It is not contamination prevention.** Blocking egress does nothing about
+  data already on the machine, and redirecting ``HF_HOME`` does not fix that
+  either - it only changes where the *library* looks by default. Measured on a
+  real DataAgentBench trial: with the guard on and ``HF_HOME`` redirected, the
+  model was refused at ``urlopen``, went looking for cache directories, then
+  read ``os.path.expanduser("~/.cache/huggingface")`` by absolute path and
+  loaded all 127,600 labelled rows from disk. It never touched the network.
+
+  If a dataset must be unreachable, remove it from the filesystem. A network
+  block cannot substitute for that, and a post-hoc audit of what the model
+  actually ran is what catches it when prevention fails.
 """
 
 from __future__ import annotations

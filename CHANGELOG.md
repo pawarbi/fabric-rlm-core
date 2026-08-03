@@ -40,13 +40,22 @@
   the flag was off — so the blocked cases were falsifiable rather than passing by
   default. See `examples/notebooks/verify_block_network_fabric.ipynb`.
 
-  Three limits, documented and tested rather than implied away: `_socket.socket`
+  Three limits, documented and tested rather than implied away. `_socket.socket`
   used directly is not guarded, because a C type's methods cannot be replaced
-  from Python; nothing here constrains a C extension issuing raw syscalls, so
+  from Python. Nothing here constrains a C extension issuing raw syscalls, so
   only an OS-level control can support a claim that a process *cannot* reach the
-  network; and it does not empty caches — `load_dataset("ag_news")` keeps working
-  from `~/.cache/huggingface` with every socket refused, so redirect `HF_HOME`
-  as well when that matters.
+  network.
+
+  And most importantly: **this is not contamination prevention.** It stops data
+  arriving over the network; it does nothing about data already on the machine.
+  Redirecting `HF_HOME` does not close that either, because it only changes
+  where the *library* looks by default. Measured on a real DataAgentBench trial
+  with the guard on and `HF_HOME` redirected: the model was refused at
+  `urlopen`, went looking for cache directories, then read
+  `os.path.expanduser("~/.cache/huggingface")` by absolute path and loaded all
+  127,600 labelled rows without touching the network. If a dataset must be
+  unreachable, delete it from disk — and keep auditing what the model actually
+  ran, because that is what catches it when prevention fails.
 
 ## 0.3.3 — 2026-08-02 — a worker that stops responding no longer ends the run
 
