@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### Added
+
+- **`block_network=True` refuses network egress from the worker.** Off by
+  default: notebook code legitimately calls APIs, so this is opt-in. Loopback is
+  permitted, every other destination is refused.
+
+  `SecurityPolicy` already denies `requests`, `httpx`, `urllib.request.urlopen`
+  and `socket.socket`, but it is a **static check on the model's own source**, so
+  any library that wraps the request goes straight through it — the model's code
+  never names a denied symbol:
+
+  ```python
+  from datasets import load_dataset     # nothing denied appears here
+  load_dataset("ag_news")               # ...and it fetches anyway
+  ```
+
+  Found on DataAgentBench, where trials answered a classification question by
+  downloading the public dataset and reading its gold label column. The question
+  asks for a category that does not exist in the sanctioned stores, so fetching
+  the labels was both the easy route and exactly what the grader compared
+  against. Stopping that needs a check at the socket layer at runtime, where it
+  does not matter which library made the call.
+
+  The guard is on `connect`, not on socket construction. Denying `socket.socket`
+  and `socketpair` outright kills the worker before its first turn: asyncio's
+  Windows ProactorEventLoop builds its self-pipe with `socket.socketpair()` and
+  `nest_asyncio` creates a loop at import. That pair is two already-connected
+  loopback sockets and cannot reach a remote host.
+
+  An explicit `sub_lm=` is rejected at construction, since sub-LM calls are made
+  from inside the worker. The implicit `sub_lm_spec` set from `lm` is unaffected.
+
+  Verified 11 of 11 on a Fabric capacity, with both an OpenRouter key and the
+  built-in `FabricLM`, including a check that the worker stayed sealed during a
+  run whose LM was reachable, and a control confirming egress was available when
+  the flag was off — so the blocked cases were falsifiable rather than passing by
+  default. See `examples/notebooks/verify_block_network_fabric.ipynb`.
+
+  Three limits, documented and tested rather than implied away: `_socket.socket`
+  used directly is not guarded, because a C type's methods cannot be replaced
+  from Python; nothing here constrains a C extension issuing raw syscalls, so
+  only an OS-level control can support a claim that a process *cannot* reach the
+  network; and it does not empty caches — `load_dataset("ag_news")` keeps working
+  from `~/.cache/huggingface` with every socket refused, so redirect `HF_HOME`
+  as well when that matters.
+
 ## 0.3.3 — 2026-08-02 — a worker that stops responding no longer ends the run
 
 ### Changed
