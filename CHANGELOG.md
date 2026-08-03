@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.3 — 2026-08-02 — a worker that stops responding no longer ends the run
+
 ### Changed
 
 - **A worker timeout is now recoverable instead of fatal.** A timeout kills the
