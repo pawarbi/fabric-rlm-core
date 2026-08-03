@@ -26,6 +26,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from . import netguard
 from .artifacts import encode_for_worker
 from .security import SecurityPolicy
 from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
@@ -104,10 +105,12 @@ class Interpreter:
         cwd: str | None = None,
         security: SecurityPolicy | None = None,
         max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
+        block_network: bool = False,
     ):
         self.timeout = timeout
         self.python = python or sys.executable
         self.cwd = cwd
+        self.block_network = bool(block_network)
         # ``security`` is opt-in at this layer (None = no enforcement). The
         # public RLM facade is responsible for passing a default policy in
         # for LM-facing executions; verifier code paths intentionally leave
@@ -143,6 +146,15 @@ class Interpreter:
         # Without this branch the child inherits the parent env wholesale.
         if self.security is not None and self.security.enabled:
             kwargs["env"] = self.security.scrub_env(dict(os.environ))
+        if self.block_network:
+            # The worker installs the guard itself when it sees this. Build an
+            # env explicitly when no policy did: passing env=None inherits the
+            # parent's, and the flag would never reach the child.
+            env = kwargs.get("env")
+            if env is None:
+                env = dict(os.environ)
+            env[netguard.ENV_FLAG] = "1"
+            kwargs["env"] = env
         if os.name == "nt":
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:

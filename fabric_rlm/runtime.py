@@ -627,6 +627,7 @@ class RLM:
         reserve_finalize_turns: int = 0,
         recover_worker_timeouts: int = 1,
         skills_as_cards: bool = False,
+        block_network: bool = False,
         max_prompt_tokens: int | None = None,
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
@@ -769,6 +770,8 @@ class RLM:
             self.reserve_finalize_turns = max(0, int(reserve_finalize_turns))
             self.recover_worker_timeouts = max(0, int(recover_worker_timeouts))
             self.skills_as_cards = bool(skills_as_cards)
+            self.block_network = bool(block_network)
+            _reject_block_network_with_sub_lm(block_network, sub_lm)
             self.max_prompt_tokens = max_prompt_tokens
             self.digest_after_turn = digest_after_turn
             self.output_validator = output_validator
@@ -800,6 +803,7 @@ class RLM:
                 reserve_finalize_turns=reserve_finalize_turns,
                 recover_worker_timeouts=recover_worker_timeouts,
                 skills_as_cards=skills_as_cards,
+                block_network=block_network,
                 max_prompt_tokens=max_prompt_tokens,
                 digest_after_turn=digest_after_turn,
                 output_validator=output_validator,
@@ -837,6 +841,8 @@ class RLM:
         self.reserve_finalize_turns = max(0, int(reserve_finalize_turns))
         self.recover_worker_timeouts = max(0, int(recover_worker_timeouts))
         self.skills_as_cards = bool(skills_as_cards)
+        self.block_network = bool(block_network)
+        _reject_block_network_with_sub_lm(block_network, sub_lm)
         self.max_prompt_tokens = max_prompt_tokens
         self.digest_after_turn = digest_after_turn
         self.output_validator = output_validator
@@ -1284,6 +1290,7 @@ class RLM:
             timeout=self.timeout,
             security=self._security,
             max_submit_bytes=self.max_submit_bytes,
+            block_network=self.block_network,
         ) as interpreter:
             if self.sub_lm_spec is not None:
                 interpreter.configure_lm(self.sub_lm_spec)
@@ -2189,6 +2196,10 @@ class RLM:
                 with Interpreter(
                     timeout=self.timeout,
                     max_submit_bytes=self.max_submit_bytes,
+                    # Verifier code is trusted enough to skip the policy, but a
+                    # skill can come from anywhere, and "the sandbox has no
+                    # network" should not have a hole in it.
+                    block_network=self.block_network,
                 ) as verifier_interp:
                     verifier_feedback = self._run_skill_verifiers(verifier_interp, payload)
             except Exception as exc:
@@ -2615,6 +2626,24 @@ def _call_lm_with_meta(
 
     return _response_to_text(response), response, elapsed
 
+
+
+def _reject_block_network_with_sub_lm(block_network: Any, sub_lm: Any) -> None:
+    """A worker with no egress cannot call an LM from inside the sandbox.
+
+    Only an *explicit* ``sub_lm=`` is rejected. ``sub_lm_spec`` is also set
+    implicitly whenever ``lm`` is a spec, purely so ``call_lm()`` is available
+    if the model reaches for it; refusing on that would make ``block_network``
+    unusable for nearly everyone. Failing here beats failing on turn three with
+    a connection error the model then tries to debug.
+    """
+    if block_network and sub_lm is not None:
+        raise ValueError(
+            "block_network=True cannot be combined with an explicit sub_lm: "
+            "sub-LM calls are made from inside the worker, which has no "
+            "network egress. Drop one of the two, or route the sub-LM through "
+            "a proxy on 127.0.0.1 (loopback is permitted)."
+        )
 
 
 def _skill_card(loader: Any, name: str) -> str:

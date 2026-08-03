@@ -43,6 +43,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable, get_args, get_origin
 
+from . import netguard
 from .artifacts import File, decode_from_worker_wire
 from .serializers import (
     DEFAULT_INJECTED_NAMES,
@@ -956,6 +957,11 @@ def _handle_jsonrpc(message: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def main() -> None:
+    # Opt-in egress block. Installed here rather than at import so it lands
+    # after nest_asyncio has built its event loop, and before any user code
+    # runs. The guard permits loopback, so the ordering is belt-and-braces.
+    if os.environ.get(netguard.ENV_FLAG) == "1":
+        netguard.install()
     _install_runtime_api()
     while True:
         line = _REAL_STDIN.readline()
