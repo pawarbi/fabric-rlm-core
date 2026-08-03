@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .interpreter import ExecResult, Interpreter, WorkerTimeout
+from .interpreter import ExecResult, Interpreter, WorkerProtocolError, WorkerTimeout
 from .security import SecurityPolicy
 from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
 
@@ -1413,7 +1413,8 @@ class RLM:
                 worker_started = time.monotonic()
                 try:
                     result = interpreter.execute(code)
-                except WorkerTimeout as exc:
+                except (WorkerTimeout, WorkerProtocolError) as exc:
+                    worker_died = not isinstance(exc, WorkerTimeout)
                     worker_execute_seconds = time.monotonic() - worker_started
                     duration = time.perf_counter() - started
                     trajectory.append(
@@ -1444,9 +1445,19 @@ class RLM:
                     # here instead throws away every prior turn: on a 246-task
                     # benchmark this lost 20 tasks outright, several of which had
                     # already done the analysis and were formatting output.
+                    #
+                    # A worker that *dies* leaves the run in the same state, so it
+                    # recovers the same way. This is not hypothetical: an OOM kill
+                    # is the usual way a Fabric worker goes, and on Python 3.10 a
+                    # deep enough recursion overflows the C stack and segfaults
+                    # before any timeout can fire.
                     if timeout_recoveries < self.recover_worker_timeouts:
                         timeout_recoveries += 1
                         try:
+                            # A timed-out worker is already killed, but one that
+                            # died on a closed pipe may still be running, and
+                            # start() refuses to run twice.
+                            interpreter.kill()
                             interpreter.start()
                             if self.sub_lm_spec is not None:
                                 interpreter.configure_lm(self.sub_lm_spec)
@@ -1455,18 +1466,40 @@ class RLM:
                         except Exception:      # restart failed: fall through
                             pass
                         else:
+                            if worker_died:
+                                what_happened = (
+                                    "Your code killed the Python worker process (it ran "
+                                    "out of memory, crashed, or exited) and the worker "
+                                    "was restarted."
+                                )
+                                what_to_do = (
+                                    "That approach cannot finish as written. Do not "
+                                    "repeat it. Use far less memory: read only the "
+                                    "columns you need, process in chunks rather than "
+                                    "loading everything, avoid building large "
+                                    "intermediate copies, and check your logic on a "
+                                    "sample first. Do not call sys.exit() or os._exit()."
+                                )
+                            else:
+                                what_happened = (
+                                    f"Your code was still running after {self.timeout:.0f}s "
+                                    "and the worker was restarted."
+                                )
+                                what_to_do = (
+                                    "That approach is too slow for this data. Do not "
+                                    "repeat it. Work in a way that finishes: read only "
+                                    "the columns you need, aggregate or filter in the "
+                                    "query rather than in Python, process in chunks, or "
+                                    "sample to check your logic before running on "
+                                    "everything."
+                                )
                             messages.append({"role": "assistant", "content": response_text})
                             messages.append({
                                 "role": "user",
                                 "content": (
-                                    f"Your code was still running after {self.timeout:.0f}s "
-                                    "and the worker was restarted. EVERY variable is gone; "
+                                    f"{what_happened} EVERY variable is gone; "
                                     "inputs are re-bound and importable again.\n"
-                                    "That approach is too slow for this data. Do not repeat "
-                                    "it. Work in a way that finishes: read only the columns "
-                                    "you need, aggregate or filter in the query rather than "
-                                    "in Python, process in chunks, or sample to check your "
-                                    "logic before running on everything.\n"
+                                    f"{what_to_do}\n"
                                     f"Recovery {timeout_recoveries} of "
                                     f"{self.recover_worker_timeouts}."
                                 ),
@@ -1480,7 +1513,7 @@ class RLM:
                         trajectory=trajectory,
                         final_state=final_state,
                         max_turns=self.max_turns,
-                        failure_reason="worker_timeout",
+                        failure_reason="worker_died" if worker_died else "worker_timeout",
                         **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
                     )
                 except Exception as exc:

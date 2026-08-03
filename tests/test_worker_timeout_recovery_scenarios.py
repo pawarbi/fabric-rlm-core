@@ -57,6 +57,49 @@ def test_recovers_from_each_hang_shape(name, body):
     assert result.payload["answer"] == "ok"
 
 
+# A worker does not only hang: it also dies. An OOM kill is the usual way a
+# Fabric worker goes, and on Python 3.10 the deep_recursion case above overflows
+# the C stack and segfaults *before* the timeout fires, so it arrives here rather
+# than as a WorkerTimeout. These kill the process outright so the death path is
+# covered on every Python, not only the ones where a hang happens to crash.
+DEATHS = {
+    "hard_exit": "import os\nos._exit(1)",
+    "sys_exit": "import sys\nsys.exit(3)",
+    "segfault": "import ctypes\nctypes.string_at(0)",
+    "kill_self": (
+        "import os, signal\n"
+        "os.kill(os.getpid(), signal.SIGTERM)\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("name,body", sorted(DEATHS.items()))
+def test_recovers_when_the_worker_dies(name, body):
+    lm = ScriptedLM([code(body), DONE])
+    result = RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=4,
+                      timeout=10, recover_worker_timeouts=1).run()
+    assert result.submitted is True, f"did not recover from {name}"
+    assert result.payload["answer"] == "ok"
+
+
+def test_worker_death_is_not_reported_as_a_timeout():
+    """A crash and a hang need different advice, so they must stay distinct."""
+    lm = ScriptedLM([code(DEATHS["hard_exit"])] * 6)
+    result = RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=3,
+                      timeout=10, recover_worker_timeouts=1).run()
+    assert result.submitted is False
+    assert result.failure_reason == "worker_died"
+
+
+def test_death_recovery_tells_the_model_about_memory_not_speed():
+    lm = ScriptedLM([code(DEATHS["hard_exit"]), DONE])
+    RLM.task(task="t", outputs=["answer"], lm=lm, max_turns=4,
+             timeout=10, recover_worker_timeouts=1).run()
+    nudge = "\n".join(lm.seen)
+    assert "killed the Python worker process" in nudge
+    assert "still running after" not in nudge, "a crash was described as a timeout"
+
+
 def test_recovers_after_several_good_turns():
     """State built over earlier turns is lost; the run still finishes."""
     lm = ScriptedLM([

@@ -26,6 +26,21 @@
   Synapse executor, Lakehouse `File` inputs re-bind, and `FabricLM` keeps working
   across the restart. No measurable effect on runs that never time out.
 
+  The same recovery now also covers a worker that **dies** rather than hangs —
+  an out-of-memory kill, a segfault, or code calling `sys.exit()` — which raised
+  `WorkerProtocolError` and ended the run untouched. The model is told it
+  exhausted memory rather than that it was too slow, since the two need opposite
+  advice, and the new `failure_reason="worker_died"` keeps a crash distinct from
+  a timeout in the trajectory.
+
+  Worth stating plainly: this branch is defensive, not measured. Across 9,092
+  recorded benchmark task runs there are 2 worker timeouts and **zero** worker
+  deaths, so it is not expected to move any benchmark number. It was found
+  because Python 3.10 segfaults on deep recursion before a timeout can fire
+  (3.11 moved frames to a heap-allocated data stack, so it merely runs slowly),
+  and the death path was covered by tests that kill the worker outright so it is
+  exercised on every supported Python rather than only 3.10.
+
 ### Added
 
 - **`skills_as_cards`**, which advertises the chosen skills as one-line cards and
