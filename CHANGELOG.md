@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+### Changed
+
+- **A worker timeout is now recoverable instead of fatal.** A timeout kills the
+  worker, and the runtime used to return immediately with
+  `failure_reason="worker_timeout"`, discarding every turn already completed —
+  including tasks that had finished the analysis and were formatting output.
+  `recover_worker_timeouts` (default `1`) restarts the worker, re-applies the
+  sub-LM configuration, re-binds inputs, and tells the model its namespace is
+  gone and the approach was too slow. Recovery consumes a turn, so `max_turns`
+  still bounds it, and `recover_worker_timeouts=0` restores the old behaviour.
+
+  The default is one rather than more because each allowed recovery costs up to
+  one timeout period on a run that was doomed anyway, and the default timeout is
+  300s: a budget of two risks a ten-minute hang in an interactive notebook.
+
+  Timeouts are rare but total — 23 of 983 task runs across four full
+  AgenticDataBench runs, each losing the whole run. Tested across six ways a
+  worker stops responding (sleep, busy loop, huge allocation, runaway string
+  concatenation, blocking stdin read, deep recursion), plus recovery after
+  several good turns, `File` inputs, sub-LM reconfiguration, skills loaded, and
+  the turn budget. Verified on a Fabric capacity: the worker respawns inside the
+  Synapse executor, Lakehouse `File` inputs re-bind, and `FabricLM` keeps working
+  across the restart. No measurable effect on runs that never time out.
+
+  The same recovery now also covers a worker that **dies** rather than hangs —
+  an out-of-memory kill, a segfault, or code calling `sys.exit()` — which raised
+  `WorkerProtocolError` and ended the run untouched. The model is told it
+  exhausted memory rather than that it was too slow, since the two need opposite
+  advice, and the new `failure_reason="worker_died"` keeps a crash distinct from
+  a timeout in the trajectory.
+
+  Worth stating plainly: this branch is defensive, not measured. Across 9,092
+  recorded benchmark task runs there are 2 worker timeouts and **zero** worker
+  deaths, so it is not expected to move any benchmark number. It was found
+  because Python 3.10 segfaults on deep recursion before a timeout can fire
+  (3.11 moved frames to a heap-allocated data stack, so it merely runs slowly),
+  and the death path was covered by tests that kill the worker outright so it is
+  exercised on every supported Python rather than only 3.10.
+
+### Added
+
+- **`skills_as_cards`**, which advertises the chosen skills as one-line cards and
+  lets the model call `load_skill(name)` if it wants a body, instead of
+  preloading the full playbook. A preloaded body is resent on every turn, so its
+  cost is roughly size times turns; for `excel_modify` the prompt drops from
+  19,606 to 4,945 characters before any per-turn multiplier. Default `False`;
+  under measurement on SpreadsheetBench before any change to that default.
+
 ## 0.3.2 — 2026-08-01 — verified execution, and a timeout that fires
 
 ### Added

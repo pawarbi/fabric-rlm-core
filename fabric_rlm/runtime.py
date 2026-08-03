@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .interpreter import ExecResult, Interpreter, WorkerTimeout
+from .interpreter import ExecResult, Interpreter, WorkerProtocolError, WorkerTimeout
 from .security import SecurityPolicy
 from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
 
@@ -625,6 +625,8 @@ class RLM:
         router_candidate_specificities: list[str] | None = None,
         router_include_dependencies: bool = True,
         reserve_finalize_turns: int = 0,
+        recover_worker_timeouts: int = 1,
+        skills_as_cards: bool = False,
         max_prompt_tokens: int | None = None,
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
@@ -765,6 +767,8 @@ class RLM:
             )
             self.router_include_dependencies = bool(router_include_dependencies)
             self.reserve_finalize_turns = max(0, int(reserve_finalize_turns))
+            self.recover_worker_timeouts = max(0, int(recover_worker_timeouts))
+            self.skills_as_cards = bool(skills_as_cards)
             self.max_prompt_tokens = max_prompt_tokens
             self.digest_after_turn = digest_after_turn
             self.output_validator = output_validator
@@ -794,6 +798,8 @@ class RLM:
                 router_candidate_specificities=router_candidate_specificities,
                 router_include_dependencies=router_include_dependencies,
                 reserve_finalize_turns=reserve_finalize_turns,
+                recover_worker_timeouts=recover_worker_timeouts,
+                skills_as_cards=skills_as_cards,
                 max_prompt_tokens=max_prompt_tokens,
                 digest_after_turn=digest_after_turn,
                 output_validator=output_validator,
@@ -829,6 +835,8 @@ class RLM:
         )
         self.router_include_dependencies = bool(router_include_dependencies)
         self.reserve_finalize_turns = max(0, int(reserve_finalize_turns))
+        self.recover_worker_timeouts = max(0, int(recover_worker_timeouts))
+        self.skills_as_cards = bool(skills_as_cards)
         self.max_prompt_tokens = max_prompt_tokens
         self.digest_after_turn = digest_after_turn
         self.output_validator = output_validator
@@ -1228,11 +1236,24 @@ class RLM:
         else:
             self._activated_skills = set()
             skill_index = self.skill_loader.format_index() if self.enable_skill_autoloading or self.skills else None
-            preloaded_skills = (
-                compose_skills(self.skills, loader=self.skill_loader, include_dependencies=True)
-                if self.skills
-                else None
-            )
+            if self.skills and self.skills_as_cards:
+                # Advertise the chosen skills by name and summary and let the
+                # model pull a body with load_skill(name) when it decides it
+                # needs one. A preloaded body is resent on every turn, so its
+                # cost is roughly size x turns; a card is a line, and the body
+                # is paid for once if at all. Measured on AgenticDataBench,
+                # preloading the router's picks cost +124% in cache-adjusted
+                # spend and did not improve the score.
+                cards_text = "\n".join(
+                    _skill_card(self.skill_loader, name) for name in self.skills
+                )
+                preloaded_skills = None
+            else:
+                preloaded_skills = (
+                    compose_skills(self.skills, loader=self.skill_loader, include_dependencies=True)
+                    if self.skills
+                    else None
+                )
 
         messages = [
             {
@@ -1277,6 +1298,7 @@ class RLM:
             reached_max = False
             verifier_repair_history: list[dict[str, Any]] = []
             self._repair_counts = {}
+            timeout_recoveries = 0
 
             while turn_counter < self.max_turns:
                 # Pre-LM-call: budget urgency hint + digest swap for the system message.
@@ -1391,7 +1413,8 @@ class RLM:
                 worker_started = time.monotonic()
                 try:
                     result = interpreter.execute(code)
-                except WorkerTimeout as exc:
+                except (WorkerTimeout, WorkerProtocolError) as exc:
+                    worker_died = not isinstance(exc, WorkerTimeout)
                     worker_execute_seconds = time.monotonic() - worker_started
                     duration = time.perf_counter() - started
                     trajectory.append(
@@ -1417,13 +1440,80 @@ class RLM:
                             worker_execute_seconds=worker_execute_seconds,
                         )
                     )
+                    # A timeout kills the worker, so recovery means restarting it
+                    # and telling the model its namespace is gone. Ending the run
+                    # here instead throws away every prior turn: on a 246-task
+                    # benchmark this lost 20 tasks outright, several of which had
+                    # already done the analysis and were formatting output.
+                    #
+                    # A worker that *dies* leaves the run in the same state, so it
+                    # recovers the same way. This is not hypothetical: an OOM kill
+                    # is the usual way a Fabric worker goes, and on Python 3.10 a
+                    # deep enough recursion overflows the C stack and segfaults
+                    # before any timeout can fire.
+                    if timeout_recoveries < self.recover_worker_timeouts:
+                        timeout_recoveries += 1
+                        try:
+                            # A timed-out worker is already killed, but one that
+                            # died on a closed pipe may still be running, and
+                            # start() refuses to run twice.
+                            interpreter.kill()
+                            interpreter.start()
+                            if self.sub_lm_spec is not None:
+                                interpreter.configure_lm(self.sub_lm_spec)
+                            if bound_inputs:
+                                interpreter.set_inputs(bound_inputs)
+                        except Exception:      # restart failed: fall through
+                            pass
+                        else:
+                            if worker_died:
+                                what_happened = (
+                                    "Your code killed the Python worker process (it ran "
+                                    "out of memory, crashed, or exited) and the worker "
+                                    "was restarted."
+                                )
+                                what_to_do = (
+                                    "That approach cannot finish as written. Do not "
+                                    "repeat it. Use far less memory: read only the "
+                                    "columns you need, process in chunks rather than "
+                                    "loading everything, avoid building large "
+                                    "intermediate copies, and check your logic on a "
+                                    "sample first. Do not call sys.exit() or os._exit()."
+                                )
+                            else:
+                                what_happened = (
+                                    f"Your code was still running after {self.timeout:.0f}s "
+                                    "and the worker was restarted."
+                                )
+                                what_to_do = (
+                                    "That approach is too slow for this data. Do not "
+                                    "repeat it. Work in a way that finishes: read only "
+                                    "the columns you need, aggregate or filter in the "
+                                    "query rather than in Python, process in chunks, or "
+                                    "sample to check your logic before running on "
+                                    "everything."
+                                )
+                            messages.append({"role": "assistant", "content": response_text})
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"{what_happened} EVERY variable is gone; "
+                                    "inputs are re-bound and importable again.\n"
+                                    f"{what_to_do}\n"
+                                    f"Recovery {timeout_recoveries} of "
+                                    f"{self.recover_worker_timeouts}."
+                                ),
+                            })
+                            turn_counter += 1
+                            continue
+
                     return RLMResult(
                         submitted=False,
                         payload=None,
                         trajectory=trajectory,
                         final_state=final_state,
                         max_turns=self.max_turns,
-                        failure_reason="worker_timeout",
+                        failure_reason="worker_died" if worker_died else "worker_timeout",
                         **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
                     )
                 except Exception as exc:
@@ -2524,6 +2614,22 @@ def _call_lm_with_meta(
             return _response_to_text(response), new_entry, elapsed
 
     return _response_to_text(response), response, elapsed
+
+
+
+def _skill_card(loader: Any, name: str) -> str:
+    """One-line advertisement for a skill: name, verifier flag, summary.
+
+    Mirrors SkillRouter.card_text so both paths describe a skill the same way,
+    without requiring the router to be enabled.
+    """
+    try:
+        sk = loader.load(name)
+    except Exception:
+        return f"- {name}: (unavailable)"
+    summary = getattr(sk, "summary", None) or getattr(sk, "title", None) or name
+    tag = " [verifier]" if getattr(sk, "verifier_present", False) else ""
+    return f"- {name}{tag}: {summary}"
 
 
 def _call_lm(lm: Any, messages: list[dict[str, str]]) -> Any:
