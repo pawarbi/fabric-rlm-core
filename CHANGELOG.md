@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+## 0.3.5 — 2026-08-04 — a 17-second startup cost, removed
+
+First release published to PyPI since 0.3.2, so it also carries everything from
+0.3.3 and 0.3.4 (worker timeout recovery, `skills_as_cards`, `block_network`).
+
+### Fixed
+
+- **The worker no longer imports dspy to read a version string.** The JSON-RPC
+  startup self-test filled in a `dspy_version` diagnostic field by importing
+  dspy, which costs about 18s on a cold interpreter (litellm alone is ~9s), and
+  that self-test runs on every `SubprocessPythonInterpreter` start. Every run on
+  the dspy engine path paid it.
+
+  | | before | after |
+  | --- | --- | --- |
+  | `SubprocessPythonInterpreter` startup | 16.8s median, 34.7s max | **0.9s median** |
+  | `Interpreter` startup (no self-test) | 0.6s | unchanged |
+
+  `importlib.metadata.version("dspy")` returns the identical string in ~0.5s
+  without importing the package. dspy is still imported lazily where it is
+  actually used. The gap had been invisible because the legacy `Interpreter`
+  does not run this self-test.
+
+  It was also the flakiest thing in the test suite: a 60s startup budget against
+  a 16.8s median is only ~2x headroom, so under load startups intermittently
+  exceeded it and different tests failed on each run.
+
+- **The behaviour CI gate no longer charges environment failures to the pull
+  request.** A retired free-tier model slug 404'd on every question and each 404
+  was recorded as a failing question, so the gate reported five per-qid
+  regressions on every PR for a week. Nothing had regressed. A question that
+  never reached the model cannot be evidence for or against a regression, so the
+  gate now aborts on `runner_error` as well as `auth` and names the environment
+  as the cause. `wrong_answer` and `infra` still count, deliberately.
+
+### Added
+
+- **`RLMResult.report()`** — a deterministic account of what a run did.
+  `report()` prints it, `report(as_dict=True)` returns the facts. No model is
+  consulted and nothing is inferred, so it is safe in CI and on a long
+  trajectory.
+
+  Covers whether the run submitted and why not, turns against the ceiling,
+  tokens split by prompt/completion/cached/reasoning, the LM-versus-worker time
+  split, repair turns (submitted, but not on the first attempt), the slowest
+  turn, the last turn that errored, and hints — each tied to a fact printed
+  above it rather than guessed.
+
+- **`RLMResult.ran_any_code`** — False when no turn executed. Note this does not
+  mean the model was unreachable: an LM error raises out of `run()`, so holding
+  a result means the LM answered. It means the model replied without emitting a
+  code block.
+
 ## 0.3.4 — 2026-08-04 — opt-in network isolation for the worker
 
 ### Fixed

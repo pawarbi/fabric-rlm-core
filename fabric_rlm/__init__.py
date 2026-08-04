@@ -90,4 +90,4 @@ __all__ = [
 
 # Single source of truth for the package version. pyproject.toml reads this
 # statically via [tool.setuptools.dynamic] — bump it here and nowhere else.
-__version__ = "0.3.4"
+__version__ = "0.3.5"
