@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.3.4 — 2026-08-04 — opt-in network isolation for the worker
+
+### Fixed
+
+- **Held dspy below 3.3.** dspy 3.3.0 shipped on 2026-08-03 and broke the engine
+  path within hours on a ceiling that allowed it: RLM's `max_iterations` became
+  `max_iters`. Three further changes need handling before the ceiling goes back
+  up — `Image`/`Audio`/`File` no longer perform implicit I/O, interpreter
+  failures became terminal rather than auto-restarting, and LM errors now raise
+  DSPy exception classes rather than provider ones. Tracked in #36.
+
+- **Removed a flaky test.** The `deep_recursion` hang shape raced a 2s timeout
+  against a C-stack overflow, and which won depended on platform and Python
+  version: it failed on 3.10, passed on 3.11, then failed on windows/3.13.
+  Worker death is covered deterministically by the tests that kill the process
+  outright, so nothing is lost.
+
 ### Added
 
 - **`block_network=True` refuses network egress from the worker.** Off by
