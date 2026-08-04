@@ -401,6 +401,205 @@ class RLMResult:
         """
         return self.payload if self.payload is not None else {}
 
+    @property
+    def ran_any_code(self) -> bool:
+        """True when at least one turn executed code.
+
+        False means nothing ran, which has two quite different causes and the
+        report distinguishes them: ``max_turns`` was 0 or exhausted before any
+        code block appeared, or the model replied in prose and never emitted a
+        code block at all. Either way the run says nothing about whether the
+        model can do the task.
+
+        Note this is deliberately *not* called "reached the model". An LM error
+        (bad key, wrong provider prefix, rejected parameter) raises out of
+        ``run()`` rather than returning a result, so a result in hand means the
+        LM answered. Harnesses that wrap ``run()`` in a broad ``except`` and
+        record a row are where that distinction gets lost - and it has been lost
+        twice on this project, once when an expired key produced 37 rows scored
+        as wrong answers and moved a measured delta by four points.
+        """
+        return self.n_turns > 0
+
+    def report(self, as_dict: bool = False) -> Any:
+        """Human-readable summary of what this run did, or a dict of the facts.
+
+        Deterministic and offline: counts, splits and timings straight off the
+        trajectory. No model is consulted, nothing is inferred, and it is safe
+        to call in CI or on a 100-turn trajectory.
+
+        The fields exist because each one cost real time to reconstruct by hand
+        from raw turns: whether the run reached the model at all, whether it
+        stopped because it was done or because it ran out of turns, where the
+        time went (LM vs worker), and what share of prompt tokens were cached -
+        the last because cache-adjusted cost has reversed a conclusion here
+        before, when a naive token count overstated a feature's cost by 3x.
+        """
+        s = self.trajectory.summary()
+        turns = self.turns
+        ceiling = self.max_turns
+        hit_ceiling = bool(ceiling and self.n_turns >= ceiling and not self.submitted)
+        prompt = self.total_prompt_tokens
+        cached = self.total_cached_tokens
+        cache_share = (cached / prompt) if (prompt and cached is not None) else None
+        lm_s = self.total_lm_seconds
+        wk_s = self.total_worker_seconds
+        wall = (lm_s or 0.0) + (wk_s or 0.0)
+        timed = [t for t in turns if t.duration_s is not None]
+        slowest = max(timed, key=lambda t: t.duration_s or 0.0) if timed else None
+        errored = [t for t in turns if t.error]
+        last_error = errored[-1] if errored else None
+        # A single error class recurring on 3+ turns means the loop is not
+        # recovering from it, which is different from a turn that errored once
+        # and moved on.
+        kinds_count: dict[str, int] = {}
+        for t in errored:
+            k = (t.error or "").strip().splitlines()[-1].split(":", 1)[0].strip() or "Unknown"
+            kinds_count[k] = kinds_count.get(k, 0) + 1
+        repeated_error = next(
+            ((k, v) for k, v in sorted(kinds_count.items(), key=lambda kv: -kv[1]) if v >= 3),
+            None,
+        )
+        repairs: dict[str, int] = {}
+        for t in turns:
+            tt = getattr(t, "turn_type", "normal") or "normal"
+            if tt != "normal":
+                repairs[tt] = repairs.get(tt, 0) + 1
+
+        facts: dict[str, Any] = {
+            "submitted": self.submitted,
+            "ran_any_code": self.ran_any_code,
+            "failure_reason": self.failure_reason,
+            "turns": self.n_turns,
+            "max_turns": ceiling,
+            "hit_ceiling": hit_ceiling,
+            "errors": s.get("errors"),
+            "error_kinds": s.get("error_kinds") or {},
+            "prompt_tokens": prompt,
+            "completion_tokens": self.total_completion_tokens,
+            "cached_tokens": cached,
+            "cache_share": round(cache_share, 3) if cache_share is not None else None,
+            "reasoning_tokens": self.total_reasoning_tokens,
+            "lm_seconds": round(lm_s, 2) if lm_s is not None else None,
+            "worker_seconds": round(wk_s, 2) if wk_s is not None else None,
+            # Repair turns are the closest thing here to a signal about answer
+            # *quality* rather than run mechanics. A run can submit successfully
+            # and still have been rejected three times on the way, which is the
+            # difference between "worked" and "barely worked" - and a user whose
+            # output_validator keeps firing has a concrete thing to look at.
+            "submit_turn": next((t.turn for t in reversed(turns) if t.submitted), None),
+            "repair_turns": repairs,
+            "validation_errors": sum(
+                len(t.validation_errors or []) for t in turns
+            ),
+            "issues": [
+                {"turn": i.turn, "kind": i.kind, "message": i.message}
+                for i in self.trajectory.diagnose()
+            ],
+            "outputs": sorted(self.outputs.keys()),
+        }
+        if as_dict:
+            return facts
+
+        def n(v: Any, suffix: str = "") -> str:
+            if v is None:
+                return "n/a"
+            if isinstance(v, bool):
+                return f"{v}{suffix}"
+            if isinstance(v, int):
+                return f"{v:,}{suffix}"
+            if isinstance(v, float):
+                return f"{v:,.2f}{suffix}"
+            return f"{v}{suffix}"
+
+        lines: list[str] = []
+        if not self.ran_any_code:
+            # Lead with this: a run where nothing executed says nothing about
+            # whether the model can do the task, and reading it as a wrong
+            # answer is the mistake this guards against.
+            lines.append("NO CODE RAN - not a wrong answer, and not a model verdict.")
+            lines.append(f"  max_turns was {n(ceiling)}; the model never produced an "
+                         "executable code block.")
+            if self.failure_reason:
+                lines.append(f"  failure_reason: {self.failure_reason}")
+        elif self.submitted:
+            # The LAST submitting turn, not the first. A payload rejected by an
+            # output_validator still sets submitted on its turn, so naming the
+            # first one reports the attempt that failed rather than the one that
+            # stuck - and reads as a contradiction next to the turn count.
+            accepted = next((t.turn for t in reversed(turns) if t.submitted), None)
+            lines.append(f"SUBMITTED on turn {accepted} of {n(ceiling)}"
+                         f"  outputs: {', '.join(facts['outputs']) or '(none)'}")
+        else:
+            why = self.failure_reason or "no SUBMIT call"
+            lines.append(f"NOT SUBMITTED after {self.n_turns} turns - {why}")
+            if hit_ceiling:
+                lines.append("  Ran out of turns. Raising max_turns may be all this needs.")
+
+        lines.append(
+            f"turns {self.n_turns}"
+            + (f"/{ceiling}" if ceiling else "")
+            + f"   errors {n(s.get('errors'))}"
+            + (f" {facts['error_kinds']}" if facts["error_kinds"] else "")
+        )
+        if prompt or self.total_completion_tokens:
+            tok = f"tokens  prompt {n(prompt)}  completion {n(self.total_completion_tokens)}"
+            if cache_share is not None:
+                tok += f"  cached {cache_share:.0%} of prompt"
+            if self.total_reasoning_tokens:
+                tok += f"  reasoning {n(self.total_reasoning_tokens)}"
+            lines.append(tok)
+        if lm_s is not None or wk_s is not None:
+            share = f" ({lm_s / wall:.0%} in the model)" if wall and lm_s is not None else ""
+            lines.append(f"time    lm {n(lm_s, 's')}  worker {n(wk_s, 's')}{share}")
+        if repairs or facts["validation_errors"]:
+            bits = ", ".join(f"{k} x{v}" for k, v in sorted(repairs.items()))
+            line = f"repairs {bits or 'none'}"
+            if facts["validation_errors"]:
+                line += f"   validation errors {facts['validation_errors']}"
+            line += "   (submitted, but not on the first attempt)" if self.submitted else ""
+            lines.append(line)
+        if facts["issues"]:
+            lines.append(f"issues  {len(facts['issues'])} detected:")
+            for i in facts["issues"][:5]:
+                lines.append(f"  turn {i['turn']}: {i['kind']} - {i['message'][:80]}")
+
+        # Where to look. A line per turn is unreadable past ~15 turns, so name
+        # only the two that answer "which turn do I open first": the slowest,
+        # and the last one that errored.
+        if slowest is not None and (slowest.duration_s or 0) > 0:
+            lines.append(f"slowest turn {slowest.turn} ({slowest.duration_s:.1f}s)")
+        if last_error is not None:
+            msg = (last_error.error or "").strip().splitlines()[-1][:100]
+            lines.append(f"last error  turn {last_error.turn}: {msg}")
+
+        # What to try. Every hint is tied to a fact printed above, so none of
+        # this is a guess about intent - which matters, because a confident
+        # wrong suggestion costs more than no suggestion.
+        hints: list[str] = []
+        if hit_ceiling:
+            hints.append(f"raise max_turns - all {ceiling} were used and nothing was submitted")
+        if repeated_error:
+            hints.append(
+                f"{repeated_error[0]} recurs on {repeated_error[1]} turns; the loop is "
+                f"stuck rather than progressing - start at turn {errored[0].turn}"
+            )
+        if repairs.get("verifier_repair"):
+            hints.append("an output_validator rejected a payload; make sure its message "
+                         "says what to change, not just that it was wrong")
+        if wall > 5 and wk_s is not None and (wk_s / wall) > 0.8:
+            hints.append(f"{wk_s / wall:.0%} of the time was worker execution rather than "
+                         "the model - the bottleneck is the data work, not the LM")
+        if cache_share is not None and self.n_turns >= 4 and cache_share < 0.3:
+            hints.append(f"only {cache_share:.0%} of prompt tokens were cached across "
+                         f"{self.n_turns} turns; something in the prompt changes every turn, "
+                         "which inflates cost")
+        if hints:
+            lines.append("what to try:")
+            for h in hints:
+                lines.append(f"  - {h}")
+        return "\n".join(lines)
+
     def __getattr__(self, name: str) -> Any:
         # Only reached when normal attribute lookup fails. Never satisfy dunder
         # probes from the payload, and read ``payload`` straight from ``__dict__``
