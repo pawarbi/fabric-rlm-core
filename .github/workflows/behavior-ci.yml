@@ -84,7 +84,13 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           BEHAVIOR_CI_REQUIRED: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
-          BEHAVIOR_SECONDARY_FREE_MODEL: openai/gpt-oss-120b:free
+          # Deliberately not set. The default lives in
+          # tests/behavior/test_behavior_baseline.py, and pinning it here
+          # overrode that default: the slug was updated in the test file on
+          # 2026-07-28 when openai/gpt-oss-120b:free was retired, but this line
+          # kept forcing the dead one, so the fix did nothing and the gate went
+          # on reporting five regressions on every PR for a week.
+          # Override it here only to test a specific model on purpose.
         run: |
           pytest -q tests/behavior/test_behavior_baseline.py -m secondary_free \
             --behavior-results=behavior-secondary.json
