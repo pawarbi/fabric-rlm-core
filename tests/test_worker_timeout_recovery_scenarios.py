@@ -35,16 +35,25 @@ def code(body: str) -> str:
 DONE = code("SUBMIT(answer='ok')")
 
 # Distinct ways a worker stops answering in time.
+#
+# Unbounded recursion used to be in here and was removed: it is not reliably a
+# hang. `sys.setrecursionlimit(10**7)` plus infinite recursion races the timeout
+# against a C-stack overflow, and which one wins depends on the platform, the
+# Python version and how fast the machine is. On 3.10 it segfaulted at ~1.2s and
+# lost to a 2s timeout; on 3.11 frames moved to a heap-allocated data stack so it
+# merely ran slowly and timed out normally; on windows/3.13 it went back to
+# failing. A test whose outcome depends on which of three behaviours the platform
+# picks is testing the platform, not recovery.
+#
+# Nothing is lost by dropping it. Worker *death* is covered deterministically by
+# DEATHS below, which kills the process outright, and hangs are covered by the
+# five shapes here that hang reliably everywhere.
 HANGS = {
     "sleep": "import time\ntime.sleep(30)",
     "busy_loop": "x = 0\nwhile True:\n    x += 1",
     "huge_allocation": "big = [0] * (10**9)",
     "runaway_string": "s = 'a'\nfor _ in range(40):\n    s = s + s",
     "blocking_read": "import sys\nsys.stdin.read()",
-    "deep_recursion": (
-        "import sys\nsys.setrecursionlimit(10**7)\n"
-        "def f(n):\n    return f(n + 1)\nf(0)"
-    ),
 }
 
 
@@ -58,10 +67,11 @@ def test_recovers_from_each_hang_shape(name, body):
 
 
 # A worker does not only hang: it also dies. An OOM kill is the usual way a
-# Fabric worker goes, and on Python 3.10 the deep_recursion case above overflows
-# the C stack and segfaults *before* the timeout fires, so it arrives here rather
-# than as a WorkerTimeout. These kill the process outright so the death path is
-# covered on every Python, not only the ones where a hang happens to crash.
+# Fabric worker goes, and unbounded recursion on Python 3.10 overflows the C
+# stack and segfaults *before* any timeout fires, arriving here rather than as a
+# WorkerTimeout. That case is deliberately not in HANGS above, because which
+# behaviour it produces varies by platform. These kill the process outright, so
+# the death path is covered identically on every Python.
 DEATHS = {
     "hard_exit": "import os\nos._exit(1)",
     "sys_exit": "import sys\nsys.exit(3)",
