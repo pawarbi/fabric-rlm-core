@@ -42,7 +42,25 @@ dependencies = [
   # dispatch (3.2.0) and JSON-RPC CodeInterpreter messaging (3.1.3), neither of
   # which exists in 3.1.2. Ceiling guards against churn in dspy's experimental
   # RLM / CodeInterpreter internals that this package tracks.
-  "dspy>=3.2.1,<3.4",
+  #
+  # Held below 3.3 as of 2026-08-03. dspy 3.3.0 shipped that afternoon and
+  # turned every job red within hours, on a ceiling of <3.4 that permitted it:
+  #
+  #   * RLM's ``max_iterations`` was renamed ``max_iters``, which is the
+  #     immediate failure (``RLM.__init__() got an unexpected keyword argument``)
+  #   * ``Image``/``Audio``/``File`` no longer perform implicit I/O; construction
+  #     now needs ``Image.from_path()``. ``_wrap_single_image`` still passes a
+  #     path to the constructor, and no test covers image inputs, so that one
+  #     would have broken for users rather than in CI.
+  #   * interpreter failures became terminal instead of auto-restarting, which
+  #     is the opposite of ``recover_worker_timeouts`` on the dspy engine path
+  #   * LM errors now raise DSPy exception classes rather than provider ones,
+  #     so anything matching on provider exception names stops matching
+  #
+  # Lift the ceiling once those are handled; 3.3.0 also adds
+  # ``interpreter_factory=``, which is the hook for letting our own Interpreter
+  # drive the dspy path instead of maintaining two execution paths.
+  "dspy>=3.2.1,<3.3",
   # litellm reaches us through dspy. From 1.92.0 it publishes only manylinux
   # wheels, so pip falls back to building the sdist on Windows and macOS, which
   # needs a Rust toolchain and breaks a plain `pip install fabric-rlm`. 1.91.4 is
