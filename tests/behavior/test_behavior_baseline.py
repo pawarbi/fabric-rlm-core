@@ -87,6 +87,14 @@ def _write_results(request: pytest.FixtureRequest, payload: dict[str, Any]) -> N
     p.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
 
 
+# Error classes that mean the question never reached the model, so its outcome
+# cannot be evidence for or against a regression. "wrong_answer" is deliberately
+# absent - that is the signal this gate exists to detect. "infra" is absent too:
+# the runner already retries it once, and a genuine provider blip that survives
+# a retry is worth seeing as a failure rather than silently aborting the gate.
+_ABORT_CLASSES = frozenset({"auth", "runner_error"})
+
+
 def _run_gate(model: str, request: pytest.FixtureRequest) -> None:
     # Skip first if no baseline -- there's nothing to gate, even in CI.  This
     # also lets PR-1 (tooling-only, no committed baseline) pass on the existing
@@ -103,17 +111,27 @@ def _run_gate(model: str, request: pytest.FixtureRequest) -> None:
         res = runner_mod.run_question(
             q, model, max_turns=baseline.max_turns, timeout_s=float(baseline.timeout_s)
         )
-        if res.error_class == "auth":
-            # Credential problem, not a regression: the model never saw the
-            # question.  Fail fast and loudly with the real cause instead of
-            # burning the remaining questions and reporting per-qid
-            # "regressions" that send maintainers bisecting nothing.
+        if res.error_class in _ABORT_CLASSES:
+            # The question never reached the model, so its outcome says nothing
+            # about whether this PR changed behaviour. Fail fast and loudly with
+            # the real cause instead of burning the remaining questions and
+            # reporting per-qid "regressions" that send maintainers bisecting
+            # nothing.
+            #
+            # "auth" was handled here from the start. "runner_error" was not,
+            # and that gap ran for a week: a retired free-tier slug 404s on
+            # every question, each 404 was recorded as a failing qid, and the
+            # gate reported five regressions on every PR. Nothing had regressed.
             pytest.fail(
-                "Behavior gate aborted: the LM provider rejected the API key "
-                f"(qid {res.qid!r}: {res.reason}). "
-                "This is an environment/credentials problem, NOT a model "
-                "regression. Check OPENROUTER_API_KEY (expired/revoked keys "
-                "return 401 'User not found').",
+                f"Behavior gate aborted on {res.error_class}: the question never "
+                f"reached the model (qid {res.qid!r}).\n"
+                f"  {res.reason}\n"
+                "This is an environment problem, NOT a model regression. Common "
+                "causes: an expired or revoked OPENROUTER_API_KEY (401 'User not "
+                "found'), or a model slug that no longer exists (404 'unavailable' "
+                "- free-tier slugs get retired without notice). Check "
+                f"BEHAVIOR_SECONDARY_FREE_MODEL / the model default before "
+                "looking for a code cause.",
                 pytrace=False,
             )
         pr_results[q.qid] = res.passed
