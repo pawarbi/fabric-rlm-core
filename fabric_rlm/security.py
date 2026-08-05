@@ -443,6 +443,27 @@ def _dotted_from_attr(node: ast.AST) -> str | None:
     return ".".join(reversed(parts))
 
 
+# Denied names that collide with something the caller almost certainly wanted.
+# Without a hint the model reads "module 'fabric' is disabled (network egress
+# off)" as "the fabric module is unavailable here", concludes the whole
+# semantic-link path is blocked, and refuses the question - while
+# ``import sempy.fabric`` would have worked. Measured on a semantic-model eval:
+# 11 refusals across three runs, every one of them citing a blockage that did
+# not apply to the path it gave up on.
+_COLLISION_HINTS: dict[str, str] = {
+    "fabric": (
+        " NOTE: this rule targets the 'fabric' SSH automation package, NOT "
+        "Microsoft Fabric. For a Power BI semantic model use "
+        "`import sempy.fabric as fabric` - sempy is allowed and works here."
+    ),
+}
+
+
+def _name_collision_hint(head: str) -> str:
+    """Extra guidance when a denied name is one people reach for by mistake."""
+    return _COLLISION_HINTS.get(head, "")
+
+
 class _PolicyVisitor(ast.NodeVisitor):
     """AST visitor that enforces a :class:`SecurityPolicy`.
 
@@ -582,6 +603,7 @@ class _PolicyVisitor(ast.NodeVisitor):
                 f"use pathlib, pandas, or the existing data loaders. To enable, "
                 f"pass RLM(security=SecurityPolicy(forbidden_modules=())) — but "
                 f"verify the threat model first."
+                + _name_collision_hint(head)
             )
 
     def _check_forbidden_module(self, mod: str, *, where: str) -> None:
@@ -590,6 +612,7 @@ class _PolicyVisitor(ast.NodeVisitor):
             raise _PolicyReject(
                 f"SecurityPolicyViolation: importing '{mod}' is disabled "
                 f"(network/external IO is off by default at the {where} site)."
+                + _name_collision_hint(head)
             )
 
     def _is_getattr_call(self, node: ast.Call) -> bool:
