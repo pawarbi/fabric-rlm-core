@@ -102,6 +102,67 @@ read it and confirm the measure computes what the question asked before using
 it. When two measures could fit, prefer the one whose expression has no extra
 filters.
 
+## Look at real values before filtering on a column
+
+Names tell you a column exists. They do not tell you what is in it. Filtering on
+a value that does not exist returns blank or zero, not an error, and blank is
+easy to report as if it were an answer.
+
+Before any filter, list the actual values:
+
+```python
+vals = fabric.evaluate_dax(DATASET,
+    'EVALUATE TOPN(50, VALUES(Sales[region]))')
+print(vals)
+```
+
+The traps are all format, not spelling: `US-West` vs `US West` vs `USWest`,
+`2024` as a number vs `"2024"` as text, trailing spaces, mixed case, and codes
+that look numeric but are stored as strings with leading zeros. `evaluate_measure`'s
+`filters=` argument takes strings, so a numeric year has to match how the model
+stores it.
+
+Do the same for any column used in a join or a grouping. Two minutes of looking
+beats three turns of debugging an empty result.
+
+## Check the result before believing it
+
+A query that runs is not a query that is right. Four cheap checks, in rough
+order of how often they catch something:
+
+**1. Did the filter drop everything?** A zero or blank result after filtering
+almost always means the filter value does not match the data, not that the
+answer is zero.
+
+```python
+df = fabric.evaluate_dax(DATASET, 'EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(...), <filter>)')
+print(len(df), "rows")     # 0 rows means the filter is wrong, not the answer
+```
+
+**2. Do the parts sum to the whole?** A grouped breakdown should reconcile
+against the ungrouped total. If it does not, a group is missing, a filter is
+leaking, or the grain is wrong.
+
+```python
+total = fabric.evaluate_dax(DATASET, 'EVALUATE ROW("v", [Total Sales])')
+parts = fabric.evaluate_dax(DATASET,
+    'EVALUATE SUMMARIZECOLUMNS(Sales[region], "v", [Total Sales])')
+print(total.iloc[0, 0], parts.iloc[:, 1].sum())    # should match
+```
+
+Note a legitimate exception: rows whose grouping key is blank can be dropped by
+`SUMMARIZECOLUMNS`, so a small shortfall may be real. A large one is a bug.
+
+**3. Is the magnitude plausible?** Compare against something already known -
+row counts, another measure, an obvious upper bound. A margin of 3176% means a
+ratio was reported as a percentage without dividing, or the wrong denominator
+was used.
+
+**4. Cross-check one number a second way.** If a measure gave the answer,
+recompute that one figure from columns, or check one slice by hand. Agreement is
+cheap reassurance; disagreement means the measure does not mean what its name
+suggested.
+
 ## Prefer the model's own measures over recomputing
 
 If a measure exists for what is being asked, use it. `[Total Sales]` already
@@ -187,6 +248,9 @@ is finer than the question needs.
 ## Before SUBMIT
 
 - The number came from a query that ran, not from a guess or an estimate.
+- A blank or zero answer was checked, not assumed. Blank usually means a filter
+  matched nothing, not that the true answer is zero.
+- If the answer is a breakdown, the parts reconcile against the total.
 - If a measure was used, its expression matches what was asked.
 - Grouped answers include every group returned, not just the top few, unless
   the question asked for a top-N.
