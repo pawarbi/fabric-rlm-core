@@ -235,6 +235,31 @@ The raw bytes of your files never enter the LM context. The model reads
 summaries, previews, and computed aggregates; the heavy lifting happens in the
 subprocess.
 
+## What makes this Fabric-specific
+
+A general agent framework can read files. What it cannot do is sit inside a
+Fabric notebook where `sempy` is already in the runtime, query a Power BI
+semantic model with DAX, and combine that with files from the attached
+lakehouse in the same task, without any of it being pre-joined first.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/multisource-dark.svg">
+  <img alt="Two semantic models, five CSVs, three PDFs and two Excel files from a Fabric Lakehouse feed a single fabric-rlm task, which writes a formatted Excel workbook back to the Lakehouse." src="docs/assets/multisource-light.svg">
+</picture>
+
+Every source is bound as an input and the model decides which one answers which
+part of the brief. The semantic models are queried with DAX in the tabular
+engine, so aggregation happens where the data is and only the result comes
+back. The files are read in the subprocess. The workbook is written straight to
+`Files/`.
+
+`examples/semantic_model/` runs a smaller version of this end to end, with a
+scorecard that attributes each wrong cell to the source the agent failed to
+read. On that example, dropping the custom context skill sent the agent to Q2
+figures instead of the trailing 30 days the house convention specifies, which
+pushed one KPI over an escalation threshold in the memo. One wrong reporting
+window moved a business decision four columns downstream.
+
 ## Use it in a Fabric notebook
 
 Install on the Python 3.12 `jupyter_python` kernel, then restart the session:
