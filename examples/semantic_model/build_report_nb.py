@@ -62,7 +62,7 @@ print("arm:", ARM)
 
 CELL_INSTALL = (
     "%pip install -q reportlab pypdf openpyxl "
-    "git+https://github.com/pawarbi/fabric-rlm-core.git@feat/semantic-model-skill\n"
+    "git+https://github.com/pawarbi/fabric-rlm-core.git@feat/semantic-model-input\n"
 )
 
 # --- fixtures -------------------------------------------------------------
@@ -237,7 +237,8 @@ CELL_TASK = f'''TASK = """Produce an Excel operations review and save it to the 
 
 Data sources, all four of which you need:
 
-1. The Power BI semantic model "{{model}}" - the actual KPI values.
+1. The semantic model bound as `model` in your namespace - the actual
+   KPI values.
 2. targets.csv at {{csv}} - the target and owner for each KPI.
 3. ops_memo.pdf at {{pdf}} - narrative risk items and the escalation rule.
    Extract its text with pypdf, which is installed.
@@ -285,7 +286,7 @@ print(build_task()[:400], "...")
 '''
 
 CELL_RUN = f'''import time, os, json
-from fabric_rlm import RLM, SkillLoader
+from fabric_rlm import RLM, SemanticModel, SkillLoader
 
 with open("/lakehouse/default/Files/orkey.txt", encoding="utf-8") as fh:
     _key = fh.read().strip()
@@ -314,7 +315,10 @@ def validate(payload):
         raise ValueError(f"Workbook is missing sheet(s): {{missing}}. Found: {{wb.sheetnames}}")
 
 
-skills = ["semantic_model"] + (["report_context"] if ARM == "full" else [])
+# The semantic_model skill is not loaded here: the bound handle supplies the
+# entry point it used to describe, and measured the same with or without it.
+# report_context stays, because house conventions cannot come from an API.
+skills = ["report_context"] if ARM == "full" else []
 loader = SkillLoader("{BASE}/skills")
 
 t0 = time.time()
@@ -322,7 +326,7 @@ r = RLM.task(
     task=build_task(),
     inputs={{"targets_csv": f"{BASE}/targets.csv",
             "ops_memo_pdf": f"{BASE}/ops_memo.pdf",
-            "semantic_model": MODEL_NAME,
+            "model": SemanticModel(MODEL_NAME),
             "output_path": OUT}},
     outputs=["path", "summary"],
     lm=LM,
