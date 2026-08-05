@@ -310,6 +310,44 @@ inside the worker as `File(...)` handles with `.path`, `.read_text()`,
 `.read_bytes()`, and `.exists()`, so a Lakehouse path or a local path is just a
 file path.
 
+Semantic models. A Power BI semantic model binds the same way, and arrives as a
+connected handle:
+
+```python
+from fabric_rlm import RLM, SemanticModel
+
+RLM.task(
+    task="Which product line has the highest recurring revenue?",
+    inputs={"arr": SemanticModel("ARR Model SF (79)")},
+    outputs=["answer"],
+).run()
+```
+
+Inside the run, `arr.schema()` returns tables, measures with their DAX
+expressions and descriptions, and relationships in one call. `arr.dax("EVALUATE
+...")` returns a DataFrame, and `arr.measure(name, groupby=[...],
+filters={...})` evaluates a model measure without authoring DAX. Pass
+`workspace=` for a model outside the attached workspace.
+
+Bind several at once and the model routes between them:
+
+```python
+inputs={
+    "mfg": SemanticModel("Manufacturing Ops"),
+    "arr": SemanticModel("ARR Model SF (79)"),
+}
+```
+
+This needs a Fabric notebook, where `sempy` ships in the runtime. The dataset
+name is checked when you construct `SemanticModel`, so a typo fails on that
+line rather than several turns into a run.
+
+Why a handle rather than instructions: on a 19-question eval, a task that named
+a semantic model but gave no way in scored 7/19, with most questions using
+every available turn. Describing the entry point in a skill scored 18-19/19 but
+cost about 2.4k characters resent every turn. Binding the handle scored 18/19
+with no skill loaded, and adding the skill on top changed nothing measurable.
+
 The SUBMIT contract. The runtime injects `SUBMIT(...)`. Call it with keyword
 arguments matching your declared `outputs`, or with positional arguments in the
 same order. After a valid SUBMIT, `result.payload` holds the dict and each field
