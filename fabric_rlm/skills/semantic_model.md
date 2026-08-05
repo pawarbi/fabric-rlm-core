@@ -33,6 +33,9 @@ first, aggregate in DAX, bring back small results.
 
 Works inside a Fabric notebook, where `sempy` ships in the runtime.
 
+If the model was passed as a `SemanticModel` input, it is already bound in your
+namespace: call `.schema()` on it and skip the connection work below.
+
 ## sempy is available. Do not conclude otherwise.
 
 `import sempy.fabric` works in the execution sandbox, verified under the default
