@@ -57,10 +57,12 @@ DATASET = "<the semantic model name>"
 print(fabric.list_tables(DATASET).to_string()[:2000])
 
 m = fabric.list_measures(DATASET)
-# Expression and Description too: names routinely misdescribe what a measure
-# computes, and authors put the business meaning in Description.
+# Expression and description too: names routinely misdescribe what a measure
+# computes, and authors put the business meaning in the description.
+# Note the column is "Measure Description" here, not "Description" - asking for
+# the wrong one drops every description silently instead of raising.
 cols = [c for c in ("Table Name", "Measure Name", "Measure Expression",
-                    "Description") if c in m.columns]
+                    "Measure Description") if c in m.columns]
 print(m[cols].to_string()[:4000])
 
 print(fabric.list_relationships(DATASET).to_string()[:2000])

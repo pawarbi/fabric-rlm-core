@@ -140,11 +140,41 @@ class SemanticModel:
             out.append(view.to_string()[:max_chars])
 
         section("Tables", self.tables, ("Name", "Description"))
+        # sempy names this column "Measure Description", not "Description".
+        # Asking for the latter drops every description without erroring, which
+        # is how it went unnoticed: a trace showed the model retrying with the
+        # right name after its own first guess failed.
         section("Measures", self.measures,
-                ("Table Name", "Measure Name", "Measure Expression", "Description"))
+                ("Table Name", "Measure Name", "Measure Expression",
+                 "Measure Description", "Measure Display Folder"))
         section("Relationships", self.relationships,
                 ("From Table", "From Column", "To Table", "To Column",
                  "Multiplicity", "Cardinality"))
+
+        # Columns, compactly. A DataFrame dump of a few hundred columns blows
+        # the budget; grouped names do not. Omitting them entirely cost 16
+        # separate .columns() calls in one 12-question run.
+        out.append("\n== Columns ==")
+        try:
+            cdf = self.columns()
+            tcol = "Table Name" if "Table Name" in cdf.columns else cdf.columns[0]
+            ncol = "Column Name" if "Column Name" in cdf.columns else cdf.columns[1]
+            grouped: dict[str, list[str]] = {}
+            for _i, row in cdf.iterrows():
+                grouped.setdefault(str(row[tcol]), []).append(str(row[ncol]))
+            budget = max_chars
+            for table, names in grouped.items():
+                line = f"{table}: {', '.join(names)}"
+                if len(line) > 600:
+                    line = line[:600] + f" ... (+{len(names)} columns total)"
+                if budget - len(line) < 0:
+                    out.append(f"... ({len(grouped)} tables in total, listing truncated)")
+                    break
+                out.append(line)
+                budget -= len(line)
+        except Exception as exc:
+            out.append(f"(unavailable: {type(exc).__name__}: {exc})")
+
         return "\n".join(out)
 
     # -- querying ---------------------------------------------------------

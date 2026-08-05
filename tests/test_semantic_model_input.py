@@ -22,17 +22,42 @@ from fabric_rlm.prompts import _describe_value
 
 
 class FakeFrame:
-    """Enough DataFrame to satisfy schema()."""
+    """Enough DataFrame to satisfy schema(): columns, [], to_string, iterrows.
 
-    def __init__(self, columns, text="<rows>"):
+    Column names mirror what sempy actually returns, which matters: measures
+    carry "Measure Description", not "Description", and getting that wrong
+    drops the descriptions silently.
+    """
+
+    def __init__(self, rows, columns, label="<rows>"):
+        self._rows = [dict(r) for r in rows]
         self.columns = list(columns)
-        self._text = text
+        self._label = label
 
     def __getitem__(self, keep):
-        return FakeFrame(keep, f"{self._text}|cols={keep}")
+        if isinstance(keep, str):
+            keep = [keep]
+        return FakeFrame([{k: r.get(k) for k in keep} for r in self._rows],
+                         keep, f"{self._label}|cols={list(keep)}")
+
+    def iterrows(self):
+        return enumerate(self._rows)
 
     def to_string(self):
-        return self._text
+        return f"{self._label} {self._rows}"
+
+
+TABLES = [{"Name": "Sales", "Description": "fact"},
+          {"Name": "Owner", "Description": ""}]
+COLUMNS = [{"Table Name": "Sales", "Column Name": "Amount", "Description": ""},
+           {"Table Name": "Sales", "Column Name": "Date", "Description": ""},
+           {"Table Name": "Owner", "Column Name": "Country", "Description": "ISO"}]
+MEASURES = [{"Table Name": "Sales", "Measure Name": "Total Sales",
+             "Measure Expression": "SUM(Sales[Amount])",
+             "Measure Description": "all channels",
+             "Measure Display Folder": "Revenue"}]
+RELS = [{"From Table": "Sales", "From Column": "OwnerId",
+         "To Table": "Owner", "To Column": "Id", "Multiplicity": "m:1"}]
 
 
 @pytest.fixture
@@ -40,22 +65,20 @@ def fake_sempy(monkeypatch):
     """Install a fake sempy.fabric and record every call made to it."""
     calls: list[tuple[str, tuple, dict]] = []
 
-    def recorder(name, columns=("A",)):
+    def recorder(name, rows, columns):
         def fn(*args, **kwargs):
             calls.append((name, args, kwargs))
-            return FakeFrame(columns, f"<{name}>")
+            return FakeFrame(rows, columns, f"<{name}>")
         return fn
 
     fabric = types.ModuleType("sempy.fabric")
-    fabric.list_tables = recorder("list_tables", ("Name", "Description"))
-    fabric.list_columns = recorder("list_columns")
-    fabric.list_measures = recorder(
-        "list_measures", ("Table Name", "Measure Name", "Measure Expression", "Description"))
-    fabric.list_relationships = recorder(
-        "list_relationships", ("From Table", "To Table"))
-    fabric.evaluate_dax = recorder("evaluate_dax")
-    fabric.evaluate_measure = recorder("evaluate_measure")
-    fabric.read_table = recorder("read_table")
+    fabric.list_tables = recorder("list_tables", TABLES, list(TABLES[0]))
+    fabric.list_columns = recorder("list_columns", COLUMNS, list(COLUMNS[0]))
+    fabric.list_measures = recorder("list_measures", MEASURES, list(MEASURES[0]))
+    fabric.list_relationships = recorder("list_relationships", RELS, list(RELS[0]))
+    fabric.evaluate_dax = recorder("evaluate_dax", [{"v": 1}], ["v"])
+    fabric.evaluate_measure = recorder("evaluate_measure", [{"v": 1}], ["v"])
+    fabric.read_table = recorder("read_table", [{"v": 1}], ["v"])
 
     sempy = types.ModuleType("sempy")
     sempy.fabric = fabric
@@ -204,13 +227,46 @@ def test_schema_is_one_call_covering_the_first_turn(fake_sempy):
     for heading in ("== Tables ==", "== Measures ==", "== Relationships =="):
         assert heading in text
     assert [n for n, _a, _k in fake_sempy] == [
-        "list_tables", "list_measures", "list_relationships"]
+        "list_tables", "list_measures", "list_relationships", "list_columns"]
 
 
 def test_schema_asks_for_measure_expressions_and_descriptions(fake_sempy):
     """Names misdescribe what measures compute; descriptions carry the meaning."""
     text = SemanticModel("Sales", validate=False).schema()
-    assert "Measure Expression" in text and "Description" in text
+    assert "Measure Expression" in text and "Measure Description" in text
+
+
+def test_schema_uses_sempys_actual_measure_description_column(fake_sempy):
+    """sempy calls it "Measure Description". Asking for "Description" returns
+    nothing and raises nothing, so this failure is invisible without a check."""
+    import sempy.fabric as fabric
+
+    real = fabric.list_measures
+
+    def strict(*a, **kw):
+        frame = real(*a, **kw)
+        original = frame.__getitem__
+
+        def only_real_columns(keep):
+            missing = [c for c in keep if c not in frame.columns]
+            assert not missing, f"asked for columns that do not exist: {missing}"
+            return original(keep)
+
+        frame.__getitem__ = only_real_columns
+        return frame
+
+    fabric.list_measures = strict
+    try:
+        SemanticModel("Sales", validate=False).schema()
+    finally:
+        fabric.list_measures = real
+
+
+def test_schema_lists_columns_grouped_by_table(fake_sempy):
+    """Omitting columns cost 16 separate .columns() calls in one run."""
+    text = SemanticModel("Sales", validate=False).schema()
+    assert "== Columns ==" in text
+    assert "list_columns" in [n for n, _a, _k in fake_sempy]
 
 
 def test_schema_survives_one_section_failing(fake_sempy, monkeypatch):
