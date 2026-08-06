@@ -253,12 +253,6 @@ engine, so aggregation happens where the data is and only the result comes
 back. The files are read in the subprocess. The workbook is written straight to
 `Files/`.
 
-`examples/semantic_model/` runs a smaller version of this end to end, with a
-scorecard that attributes each wrong cell to the source the agent failed to
-read. On that example, dropping the custom context skill sent the agent to Q2
-figures instead of the trailing 30 days the house convention specifies, which
-pushed one KPI over an escalation threshold in the memo. One wrong reporting
-window moved a business decision four columns downstream.
 
 ## Use it in a Fabric notebook
 
