@@ -1,6 +1,7 @@
 """Public API for fabric-rlm."""
 
 from .artifacts import File, LocalArtifactStore
+from .ledger import Ledger, bare_numbers, cited_labels, format_value
 from .semantic_model import SemanticModel, sempy_available
 from .excel_artifacts import (
     ExcelCellValue,
@@ -54,6 +55,7 @@ __all__ = [
     "LocalArtifactStore",
     "OpenAILM",
     "Issue",
+    "Ledger",
     "ReplayInterpreter",
     "ReplayLM",
     "RLM",
@@ -63,6 +65,9 @@ __all__ = [
     "Skill",
     "SkillLoader",
     "SubprocessPythonInterpreter",
+    "bare_numbers",
+    "cited_labels",
+    "format_value",
     "sempy_available",
     "Trajectory",
     "TurnRecord",

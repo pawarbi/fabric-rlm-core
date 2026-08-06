@@ -25,6 +25,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .ledger import Ledger
+
 _SEMPY_MISSING = (
     "sempy is not importable, so a SemanticModel cannot be queried here. "
     "sempy ships in the Microsoft Fabric notebook runtime; outside Fabric, "
@@ -59,6 +61,7 @@ class SemanticModel:
     dataset: str
     workspace: str | None = None
     validate: bool | str = field(default="auto", repr=False, compare=False)
+    ledger: Ledger | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not str(self.dataset).strip():
@@ -204,6 +207,44 @@ class SemanticModel:
             kwargs["filters"] = dict(filters)
         return self._fabric.evaluate_measure(self.dataset, measure, **kwargs)
 
+    def record(
+        self,
+        label: str,
+        dax: str,
+        *,
+        format: str = "count",
+        note: str = "",
+    ) -> Any:
+        """Run a query, write what it returned to the ledger, return the value.
+
+        The recorded figure is the query result by construction. The model gets
+        the number for its own reasoning but never types it, so nothing can
+        drift between computing it and citing it later.
+
+        The query must return a single row, because a figure is one number. A
+        grouped result silently read at row zero is how three different
+        quarters once came back with the same value.
+        """
+        if self.ledger is None:
+            raise RuntimeError(
+                "This SemanticModel has no ledger. Pass one: "
+                "SemanticModel(dataset, ledger=Ledger(path))."
+            )
+        frame = self.dax(dax)
+        if len(frame) != 1:
+            raise ValueError(
+                f"record() needs a single-row query; this returned {len(frame)} "
+                "rows. Put the filter inside CALCULATE and wrap it in "
+                "EVALUATE ROW, rather than recording a grouped table."
+            )
+        value = frame.iloc[0, -1]
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            pass
+        return self.ledger.record(label, value, source=dax,
+                                  format=format, note=note)
+
     def read_table(self, table: str, num_rows: int | None = None) -> Any:
         """Read a table. Use for small dimension tables only, never a fact table."""
         kwargs: dict[str, Any] = dict(self._kw)
@@ -220,6 +261,15 @@ class SemanticModel:
         entry point does not have to be paid for in prompt tokens every turn.
         """
         where = f" workspace={self.workspace!r}" if self.workspace else ""
+        if self.ledger is not None:
+            return (
+                f"SemanticModel dataset={self.dataset!r}{where} - already "
+                'connected. Call .record(label, "EVALUATE ...") to run a query '
+                "and record what it returned, then cite it as {{label}}; "
+                ".schema() for tables, measures with their DAX, and "
+                'relationships; .dax("EVALUATE ...") -> DataFrame; '
+                ".measure(name, groupby=[...], filters={...})"
+            )
         return (
             f"SemanticModel dataset={self.dataset!r}{where} - already connected. "
             "Call .schema() for tables, measures with their DAX, and "

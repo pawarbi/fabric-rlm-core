@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .ledger import Ledger
 from .semantic_model import SemanticModel
 
 
@@ -106,9 +107,13 @@ def encode_for_worker(value: Any) -> Any:
     if isinstance(value, SemanticModel):
         # Only the coordinates cross the wire. The worker rebuilds a live
         # handle, and re-validating there would repeat a network call the
-        # parent already made.
+        # parent already made. The ledger travels as its path, so parent and
+        # worker append to the same file.
         return {"__fabric_rlm_semantic_model__": {
-            "dataset": value.dataset, "workspace": value.workspace}}
+            "dataset": value.dataset, "workspace": value.workspace,
+            "ledger": value.ledger.path if value.ledger is not None else None}}
+    if isinstance(value, Ledger):
+        return {"__fabric_rlm_ledger__": {"path": value.path}}
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     if isinstance(value, tuple):
@@ -120,7 +125,7 @@ def encode_for_worker(value: Any) -> Any:
     raise TypeError(
         f"Unsupported input type for worker binding: {type(value).__name__}. "
         "Use primitives, dict/list containers, pathlib.Path, fabric_rlm.File, "
-        "or fabric_rlm.SemanticModel."
+        "fabric_rlm.SemanticModel, or fabric_rlm.Ledger."
     )
 
 
@@ -134,11 +139,17 @@ def decode_from_worker_wire(value: Any) -> Any:
             return Path(value["__fabric_rlm_path__"])
         if "__fabric_rlm_semantic_model__" in value:
             spec = value["__fabric_rlm_semantic_model__"]
+            ledger_path = spec.get("ledger")
             return SemanticModel(
                 dataset=spec["dataset"],
                 workspace=spec.get("workspace"),
                 validate=False,
+                # reset=False: the worker must append to the run's record, not
+                # start a new one.
+                ledger=Ledger(ledger_path) if ledger_path else None,
             )
+        if "__fabric_rlm_ledger__" in value:
+            return Ledger(value["__fabric_rlm_ledger__"]["path"])
         return {k: decode_from_worker_wire(v) for k, v in value.items()}
     if isinstance(value, list):
         return [decode_from_worker_wire(v) for v in value]
