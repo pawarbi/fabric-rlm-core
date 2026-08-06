@@ -1,6 +1,7 @@
 """Public API for fabric-rlm."""
 
 from .artifacts import File, LocalArtifactStore
+from .semantic_model import SemanticModel, sempy_available
 from .excel_artifacts import (
     ExcelCellValue,
     ExcelTargetRange,
@@ -57,10 +58,12 @@ __all__ = [
     "ReplayLM",
     "RLM",
     "RLMResult",
+    "SemanticModel",
     "replay_trajectory",
     "Skill",
     "SkillLoader",
     "SubprocessPythonInterpreter",
+    "sempy_available",
     "Trajectory",
     "TurnRecord",
     "ValidationCheck",

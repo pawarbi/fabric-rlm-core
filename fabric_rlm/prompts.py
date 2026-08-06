@@ -145,6 +145,15 @@ def _task_and_outputs(
 
 
 def _describe_value(value: Any) -> str:
+    # Inputs that know how to introduce themselves get to. Used by
+    # SemanticModel, where naming the handle's methods is the difference
+    # between the model querying it and not knowing it can.
+    describe = getattr(value, "__rlm_describe__", None)
+    if callable(describe):
+        try:
+            return str(describe())
+        except Exception:
+            pass
     if isinstance(value, list):
         return f"list[{len(value)}]"
     if isinstance(value, tuple):

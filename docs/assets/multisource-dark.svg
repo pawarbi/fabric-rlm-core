@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 610" width="1060" height="610" role="img" aria-label="Several Fabric Lakehouse sources feeding one fabric-rlm task that writes a formatted Excel workbook back to the Lakehouse">
+<defs>
+<marker id="adark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6e7681"/></marker>
+</defs>
+<rect x="24" y="46" width="300" height="500" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1"/>
+<text x="44" y="78" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="start">Microsoft Fabric Lakehouse</text>
+<text x="44" y="100" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">one workspace, one attached lakehouse</text>
+<rect x="44" y="122" width="260" height="88" rx="10" fill="#121d2f" stroke="#4493f8" stroke-width="1"/>
+<text x="64" y="156" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="start">2 semantic models</text>
+<text x="64" y="180" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">Manufacturing Ops, ARR</text>
+<rect x="44" y="222" width="260" height="88" rx="10" fill="#0d1117" stroke="#3d444d" stroke-width="1"/>
+<text x="64" y="256" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="start">5 CSV</text>
+<text x="64" y="280" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">targets, headcount, FX rates</text>
+<rect x="44" y="322" width="260" height="88" rx="10" fill="#0d1117" stroke="#3d444d" stroke-width="1"/>
+<text x="64" y="356" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="start">3 PDF</text>
+<text x="64" y="380" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">board memo, audit, contract</text>
+<rect x="44" y="422" width="260" height="88" rx="10" fill="#0d1117" stroke="#3d444d" stroke-width="1"/>
+<text x="64" y="456" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="start">2 XLSX</text>
+<text x="64" y="480" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">budget, prior quarter</text>
+<path d="M332 166 C 366 166, 366 296, 392 296" fill="none" stroke="#6e7681" stroke-width="1.6" marker-end="url(#adark)" opacity="0.75"/>
+<path d="M332 266 C 366 266, 366 296, 392 296" fill="none" stroke="#6e7681" stroke-width="1.6" marker-end="url(#adark)" opacity="0.75"/>
+<path d="M332 366 C 366 366, 366 296, 392 296" fill="none" stroke="#6e7681" stroke-width="1.6" marker-end="url(#adark)" opacity="0.75"/>
+<path d="M332 466 C 366 466, 366 296, 392 296" fill="none" stroke="#6e7681" stroke-width="1.6" marker-end="url(#adark)" opacity="0.75"/>
+<rect x="400" y="118" width="372" height="356" rx="10" fill="#0d1117" stroke="#3d444d" stroke-width="1"/>
+<text x="422" y="150" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="start">fabric-rlm</text>
+<text x="422" y="172" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">one task, all sources bound at once</text>
+<rect x="418" y="188" width="336" height="268" rx="8" fill="#151b23" stroke="#3d444d" stroke-width="1"/>
+<text x="434" y="212" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="400" fill="#e6edf3" text-anchor="start">RLM.task(</text>
+<text x="434" y="234" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="400" fill="#e6edf3" text-anchor="start">  task=BRIEF,</text>
+<text x="434" y="256" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="400" fill="#e6edf3" text-anchor="start">  inputs={</text>
+<text x="434" y="278" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="400" fill="#e6edf3" text-anchor="start">    "mfg":  SemanticModel("Manufacturing Ops"),</text>
+<text x="434" y="300" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="400" fill="#e6edf3" text-anchor="start">    "arr":  SemanticModel("ARR Model SF"),</text>
+<text x="434" y="322" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="400" fill="#e6edf3" text-anchor="start">    "csvs": [File(p) for p in csv_paths],</text>
+<text x="434" y="344" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="400" fill="#e6edf3" text-anchor="start">    "pdfs": [File(p) for p in pdf_paths],</text>
+<text x="434" y="366" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="400" fill="#e6edf3" text-anchor="start">    "xlsx": [File(p) for p in xlsx_paths],</text>
+<text x="434" y="388" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="400" fill="#e6edf3" text-anchor="start">  },</text>
+<text x="434" y="410" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="400" fill="#e6edf3" text-anchor="start">  output_validator=workbook_exists,</text>
+<text x="434" y="432" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="400" fill="#e6edf3" text-anchor="start">).run()</text>
+<text x="422" y="500" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">Writes Python in a sandbox. Queries each model</text>
+<text x="422" y="520" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">with DAX, reads the files, builds the workbook.</text>
+<path d="M772 296 L 828 296" fill="none" stroke="#6e7681" stroke-width="1.8" marker-end="url(#adark)"/>
+<rect x="836" y="168" width="214" height="256" rx="10" fill="#0f2913" stroke="#3fb950" stroke-width="1"/>
+<text x="856" y="202" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="start">ops_review.xlsx</text>
+<text x="856" y="224" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">written back to the</text>
+<text x="856" y="242" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">Lakehouse</text>
+<circle cx="861" cy="274" r="2.5" fill="#3fb950"/>
+<text x="872" y="278" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="start">Summary, By Plant, Notes</text>
+<circle cx="861" cy="300" r="2.5" fill="#3fb950"/>
+<text x="872" y="304" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="start">currency, percent formats</text>
+<circle cx="861" cy="326" r="2.5" fill="#3fb950"/>
+<text x="872" y="330" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="start">frozen, sized headers</text>
+<circle cx="861" cy="352" r="2.5" fill="#3fb950"/>
+<text x="872" y="356" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#e6edf3" text-anchor="start">conditional formatting</text>
+<text x="856" y="402" font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start">Files/reports/</text>
+<rect x="24" y="562" width="1012" height="34" rx="8" fill="#151b23" stroke="#3d444d" stroke-width="1"/>
+<text x="530" y="584" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9198a1" text-anchor="middle">The model decides which source answers which part of the brief. Nothing is pre-joined.</text>
+</svg>
