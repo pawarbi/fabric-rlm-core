@@ -385,3 +385,59 @@ def test_a_file_without_a_ledger_still_reads(tmp_path):
     src = tmp_path / "memo.txt"
     src.write_text("hello", encoding="utf-8")
     assert File(str(src)).read_text() == "hello"
+
+
+# -- costs nothing when unused ---------------------------------------------
+#
+# Lineage is opt-in. A caller who never passes a ledger must get the same
+# prompt, the same behaviour and no extra I/O, so these pin the properties
+# rather than timing them - a microbenchmark of a small file read is
+# dominated by filesystem noise and measures nothing.
+
+
+def test_no_ledger_means_observe_is_never_reached(tmp_path, monkeypatch):
+    """The guard is checked before anything else happens, so a broken ledger
+    implementation cannot affect a run that does not use one."""
+    from fabric_rlm import File
+
+    def explode(*a, **k):
+        raise AssertionError("the ledger was touched without being asked for")
+
+    monkeypatch.setattr(Ledger, "observe", explode)
+    src = tmp_path / "memo.txt"
+    src.write_text("hello", encoding="utf-8")
+    assert File(str(src)).read_text() == "hello"
+
+
+def test_dax_without_a_ledger_touches_nothing(fake_sempy, monkeypatch):
+    def explode(*a, **k):
+        raise AssertionError("the ledger was touched without being asked for")
+
+    monkeypatch.setattr(Ledger, "observe", explode)
+    assert len(SemanticModel("D", validate=False).dax("EVALUATE 1")) == 1
+
+
+def test_the_prompt_is_unchanged_without_a_ledger():
+    """The input listing is what the model reads. If attaching the feature
+    changed it for callers who do not use it, behaviour would drift with it."""
+    described = SemanticModel("Sales", validate=False).__rlm_describe__()
+    assert described == (
+        "SemanticModel dataset='Sales' - already connected. "
+        "Call .schema() for tables, measures with their DAX, and "
+        'relationships; .dax("EVALUATE ...") -> DataFrame; '
+        ".measure(name, groupby=[...], filters={...}); "
+        ".tables() .columns() .measures() .relationships()"
+    )
+
+
+def test_a_file_without_a_ledger_serialises_as_it_always_did(tmp_path):
+    """No new keys on the wire for callers who do not opt in."""
+    from fabric_rlm import File
+
+    wire = encode_for_worker({"f": File(str(tmp_path / "x.txt"))})
+    assert set(wire["f"]) == {"__fabric_rlm_file__"}
+
+
+def test_a_semantic_model_without_a_ledger_serialises_a_null(tmp_path):
+    wire = encode_for_worker({"m": SemanticModel("D", validate=False)})
+    assert wire["m"]["__fabric_rlm_semantic_model__"]["ledger"] is None
