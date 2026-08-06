@@ -68,6 +68,7 @@ class Ledger:
         *,
         format: str = "count",
         note: str = "",
+        verified: bool = False,
     ) -> Any:
         """Append a fact and return its value, so a call can be used inline.
 
@@ -87,6 +88,12 @@ class Ledger:
             "source": source,
             "format": format,
             "note": note,
+            # False unless the value came from executing `source`. A caller
+            # supplying both a value and a source string is asserting, not
+            # demonstrating, and an agent asked to record at the end of a run
+            # will happily assert numbers it half-remembers - observed doing
+            # exactly that, with sources like "calc".
+            "verified": bool(verified),
         }
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, default=str) + "\n")
@@ -118,9 +125,22 @@ class Ledger:
                     continue
         return out
 
-    def facts(self) -> dict[str, dict[str, Any]]:
-        """Labelled figures only, last write wins."""
-        return {e["label"]: e for e in self.entries() if e.get("label")}
+    def facts(self, *, verified_only: bool = False) -> dict[str, dict[str, Any]]:
+        """Labelled figures, last write wins.
+
+        `verified_only` keeps just the entries whose value came from executing
+        their source. Anything a caller merely asserted is dropped, which is
+        what a citation check should use.
+        """
+        out = {e["label"]: e for e in self.entries() if e.get("label")}
+        if verified_only:
+            out = {k: v for k, v in out.items() if v.get("verified")}
+        return out
+
+    def unverified(self) -> list[str]:
+        """Labels whose value was asserted rather than produced by a source."""
+        return sorted(lb for lb, e in self.facts().items()
+                      if not e.get("verified"))
 
     def recall(self) -> str:
         """The record as text, for the model to read back before writing.
@@ -157,7 +177,7 @@ class Ledger:
 
     def missing_labels(self, text: str) -> list[str]:
         """Labels the text cites that were never recorded."""
-        facts = self.facts()
+        facts = self.facts(verified_only=True)
         return sorted({lb.strip() for lb in _PLACEHOLDER.findall(text)
                        if lb.strip() not in facts})
 

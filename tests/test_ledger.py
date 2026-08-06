@@ -235,3 +235,53 @@ def test_reset_clears_but_default_appends(tmp_path):
 def test_bad_format_is_rejected_at_write_time(ledger):
     with pytest.raises(ValueError, match="format must be one of"):
         ledger.record("x", 1, "s", format="dollars")
+
+
+# -- asserted values are not citable ---------------------------------------
+#
+# Observed: given a ledger and 26 turns, the model ignored the query-executing
+# recorder for 23 turns, then at turn 24 wrote "Record all key figures - we
+# have 3 turns left" and called the ledger's own record() with numbers recalled
+# from memory and sources like "calc". Binding the object was not enough,
+# because the task could be completed without ever touching it. So an entry now
+# carries whether its value came from running its source, and only those count.
+
+
+def test_an_asserted_value_is_marked_unverified(ledger):
+    ledger.record("claimed", 138138217, "calc")
+    assert ledger.facts()["claimed"]["verified"] is False
+    assert ledger.unverified() == ["claimed"]
+
+
+def test_a_query_result_is_marked_verified(ledger, fake_sempy):
+    SemanticModel("D", validate=False, ledger=ledger).record("real", "EVALUATE 1")
+    assert ledger.facts()["real"]["verified"] is True
+    assert ledger.unverified() == []
+
+
+def test_only_verified_entries_can_be_cited(ledger, fake_sempy):
+    ledger.record("claimed", 1, "calc")
+    SemanticModel("D", validate=False, ledger=ledger).record("real", "EVALUATE 1")
+    text = "{{claimed}} and {{real}}"
+    assert ledger.missing_labels(text) == ["claimed"], \
+        "a number the caller asserted must not satisfy a citation"
+
+
+def test_every_query_is_logged_even_without_record(ledger, fake_sempy):
+    """Recording has to be a side effect of querying, not an alternative to it:
+    the model used dax() on eight turns and record() on none."""
+    model = SemanticModel("D", validate=False, ledger=ledger)
+    model.dax('EVALUATE ROW("v", [X])')
+    sources = [e.get("source") for e in ledger.entries()]
+    assert 'EVALUATE ROW("v", [X])' in sources
+    assert ledger.facts() == {}, "an unlabelled query log is not a citable fact"
+
+
+def test_query_logging_never_breaks_the_query(ledger, fake_sempy, monkeypatch):
+    """A ledger that cannot be written must not take the run down with it."""
+    def boom(*a, **k):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(Ledger, "observe", boom)
+    model = SemanticModel("D", validate=False, ledger=ledger)
+    assert len(model.dax('EVALUATE ROW("v", [X])')) == 1

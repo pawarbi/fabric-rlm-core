@@ -187,7 +187,14 @@ class SemanticModel:
 
         Aggregate here rather than pulling rows out and aggregating in pandas.
         """
-        return self._fabric.evaluate_dax(self.dataset, query, **self._kw)
+        frame = self._fabric.evaluate_dax(self.dataset, query, **self._kw)
+        if self.ledger is not None:
+            try:
+                self.ledger.observe(f"ran a query returning {len(frame)} row(s)",
+                                    source=query)
+            except Exception:
+                pass
+        return frame
 
     def measure(
         self,
@@ -242,8 +249,8 @@ class SemanticModel:
             value = float(value)
         except (TypeError, ValueError):
             pass
-        return self.ledger.record(label, value, source=dax,
-                                  format=format, note=note)
+        return self.ledger.record(label, value, source=dax, format=format,
+                                  note=note, verified=True)
 
     def read_table(self, table: str, num_rows: int | None = None) -> Any:
         """Read a table. Use for small dimension tables only, never a fact table."""
