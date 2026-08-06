@@ -249,8 +249,8 @@ class SemanticModel:
             value = float(value)
         except (TypeError, ValueError):
             pass
-        return self.ledger.record(label, value, source=dax, format=format,
-                                  note=note, verified=True)
+        return self.ledger._append(label, value, source=dax, format=format,
+                                   note=note, verified=True)
 
     def read_table(self, table: str, num_rows: int | None = None) -> Any:
         """Read a table. Use for small dimension tables only, never a fact table."""

@@ -60,7 +60,7 @@ class Ledger:
 
     # -- writing ----------------------------------------------------------
 
-    def record(
+    def _append(
         self,
         label: str,
         value: Any,
@@ -70,12 +70,13 @@ class Ledger:
         note: str = "",
         verified: bool = False,
     ) -> Any:
-        """Append a fact and return its value, so a call can be used inline.
+        """Write an entry. Called by a source that has just run something.
 
-        Prefer the recording methods on the source itself (for a semantic
-        model, `model.record(label, dax)`), which run the query and record what
-        it actually returned. Use this directly for a figure that came from
-        somewhere the source object does not cover.
+        Deliberately not part of the surface an agent sees. Offered as
+        `record(label, value, source)` it was used twice to write down numbers
+        recalled from memory, with sources like "calc" - turns spent down a
+        path that cannot satisfy a citation, discovered only at final
+        validation. A figure enters the ledger by being produced, or not at all.
         """
         label = str(label).strip()
         if not label:
@@ -98,6 +99,39 @@ class Ledger:
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, default=str) + "\n")
         return value
+
+    def record(self, *args: Any, **kwargs: Any) -> Any:
+        """Refuse, and say what to call instead.
+
+        An agent reaching for `notes.record(label, value, ...)` is about to
+        write down a number it is holding rather than one it just produced.
+        Failing here costs it one turn; letting it through costs the run,
+        because an asserted value cannot be cited and it finds out at the end.
+        """
+        raise AttributeError(
+            "A figure cannot be written straight into the ledger. Record it "
+            "from the source that produces it - for a semantic model, "
+            'model.record("label", "EVALUATE ...") runs the query and records '
+            "what it returned. Use notes.observe(note) for a caveat or a dead "
+            "end that is not a figure."
+        )
+
+    def assert_value(
+        self,
+        label: str,
+        value: Any,
+        source: str,
+        *,
+        format: str = "count",
+        note: str = "",
+    ) -> Any:
+        """Record a figure this process did not produce, marked unverified.
+
+        For the caller that legitimately has a value from outside any source
+        object. Never citable: `missing_labels` ignores unverified entries.
+        """
+        return self._append(label, value, source, format=format, note=note,
+                            verified=False)
 
     def observe(self, note: str, source: str = "") -> None:
         """Record something that is not a figure: a dead end, a caveat, a
@@ -184,9 +218,9 @@ class Ledger:
     def __rlm_describe__(self) -> str:
         n = len(self.facts())
         return (f"Ledger at {self.path} ({n} fact(s) so far) - "
-                "record(label, value, source, format=, note=) appends a figure "
-                "and returns it; observe(note) records a dead end or caveat; "
-                "recall() reads back everything established so far")
+                "observe(note) records a dead end or a caveat; recall() reads "
+                "back everything established so far. Figures are recorded from "
+                "the source that produces them, not written here directly.")
 
     def __repr__(self) -> str:
         return f"Ledger({self.path!r})"

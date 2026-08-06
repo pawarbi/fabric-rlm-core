@@ -92,7 +92,7 @@ def test_a_worker_write_is_visible_to_the_parent(tmp_path):
     path = str(tmp_path / "f.jsonl")
     parent = Ledger(path, reset=True)
     worker = decode_from_worker_wire(encode_for_worker({"lg": parent}))["lg"]
-    worker.record("from_worker", 7, "src")
+    worker.assert_value("from_worker", 7, "src")
     assert [e["label"] for e in parent.entries()] == ["from_worker"]
 
 
@@ -122,7 +122,7 @@ def test_record_refuses_a_grouped_query(ledger, fake_sempy):
 
 
 def test_recall_reads_back_figures_and_dead_ends(ledger):
-    ledger.record("arr", 18_118_056_834.46, "dax", format="currency", note="book")
+    ledger.assert_value("arr", 18_118_056_834.46, "dax", format="currency", note="book")
     ledger.observe("New/Churn measures are blank outside a report")
     text = ledger.recall()
     assert "arr = 18118056834.46" in text
@@ -136,13 +136,13 @@ def test_observations_cannot_be_cited_as_numbers(ledger):
 
 
 def test_last_write_wins(ledger):
-    ledger.record("x", 1, "a")
-    ledger.record("x", 2, "b")
+    ledger.assert_value("x", 1, "a")
+    ledger.assert_value("x", 2, "b")
     assert ledger.facts()["x"]["value"] == 2
 
 
 def test_unreadable_lines_do_not_break_reading(ledger):
-    ledger.record("good", 1, "a")
+    ledger.assert_value("good", 1, "a")
     with open(ledger.path, "a", encoding="utf-8") as fh:
         fh.write("not json\n")
     assert [e["label"] for e in ledger.entries()] == ["good"]
@@ -152,8 +152,8 @@ def test_unreadable_lines_do_not_break_reading(ledger):
 
 
 def test_render_substitutes_and_formats(ledger):
-    ledger.record("arr", 18_118_056_834.46, "d", format="currency")
-    ledger.record("share", 0.1631, "d", format="percent")
+    ledger.assert_value("arr", 18_118_056_834.46, "d", format="currency")
+    ledger.assert_value("share", 0.1631, "d", format="percent")
     out = ledger.render("Book is {{arr}}, top ten hold {{share}}.")
     assert out == "Book is $18.1B, top ten hold 16.3%."
 
@@ -196,9 +196,9 @@ def test_bare_numbers_flags_only_what_was_typed(text, flagged):
 
 
 def test_iter_unverified_reports_drift_and_dead_sources(ledger):
-    ledger.record("ok", 100.0, "q1")
-    ledger.record("drifted", 100.0, "q2")
-    ledger.record("dead", 1.0, "q3")
+    ledger.assert_value("ok", 100.0, "q1")
+    ledger.assert_value("drifted", 100.0, "q2")
+    ledger.assert_value("dead", 1.0, "q3")
 
     def check(entry):
         if entry["source"] == "q3":
@@ -221,20 +221,20 @@ def test_describe_points_at_record_when_a_ledger_is_present(tmp_path):
 
 def test_ledger_creates_its_directory(tmp_path):
     lg = Ledger(str(tmp_path / "deep" / "nested" / "f.jsonl"))
-    lg.record("x", 1, "s")
+    lg.assert_value("x", 1, "s")
     assert lg.facts()["x"]["value"] == 1
 
 
 def test_reset_clears_but_default_appends(tmp_path):
     path = str(tmp_path / "f.jsonl")
-    Ledger(path, reset=True).record("first", 1, "s")
+    Ledger(path, reset=True).assert_value("first", 1, "s")
     assert len(Ledger(path).entries()) == 1            # default appends
     assert len(Ledger(path, reset=True).entries()) == 0
 
 
 def test_bad_format_is_rejected_at_write_time(ledger):
     with pytest.raises(ValueError, match="format must be one of"):
-        ledger.record("x", 1, "s", format="dollars")
+        ledger.assert_value("x", 1, "s", format="dollars")
 
 
 # -- asserted values are not citable ---------------------------------------
@@ -248,7 +248,7 @@ def test_bad_format_is_rejected_at_write_time(ledger):
 
 
 def test_an_asserted_value_is_marked_unverified(ledger):
-    ledger.record("claimed", 138138217, "calc")
+    ledger.assert_value("claimed", 138138217, "calc")
     assert ledger.facts()["claimed"]["verified"] is False
     assert ledger.unverified() == ["claimed"]
 
@@ -260,7 +260,7 @@ def test_a_query_result_is_marked_verified(ledger, fake_sempy):
 
 
 def test_only_verified_entries_can_be_cited(ledger, fake_sempy):
-    ledger.record("claimed", 1, "calc")
+    ledger.assert_value("claimed", 1, "calc")
     SemanticModel("D", validate=False, ledger=ledger).record("real", "EVALUATE 1")
     text = "{{claimed}} and {{real}}"
     assert ledger.missing_labels(text) == ["claimed"], \
@@ -285,3 +285,26 @@ def test_query_logging_never_breaks_the_query(ledger, fake_sempy, monkeypatch):
     monkeypatch.setattr(Ledger, "observe", boom)
     model = SemanticModel("D", validate=False, ledger=ledger)
     assert len(model.dax('EVALUATE ROW("v", [X])')) == 1
+
+
+def test_writing_a_figure_straight_into_the_ledger_is_refused(ledger):
+    """Offered as `record(label, value, source)` it was used twice to write
+    down numbers recalled from memory, with sources like "calc". Failing on the
+    spot costs one turn; letting it through costs the run, because the value
+    cannot be cited and that is only discovered at final validation."""
+    with pytest.raises(AttributeError, match="from the source that produces it"):
+        ledger.record("arr_2020Q4", 138138217, "calc")
+    assert ledger.entries() == []
+
+
+def test_the_refusal_names_the_call_to_use_instead(ledger):
+    with pytest.raises(AttributeError) as err:
+        ledger.record("x", 1, "calc")
+    assert "model.record(" in str(err.value)
+    assert "notes.observe(" in str(err.value)
+
+
+def test_describe_no_longer_advertises_recording_a_figure(ledger):
+    described = ledger.__rlm_describe__()
+    assert "observe(" in described and "recall()" in described
+    assert "record(label, value" not in described
