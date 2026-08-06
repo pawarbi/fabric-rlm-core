@@ -308,3 +308,80 @@ def test_describe_no_longer_advertises_recording_a_figure(ledger):
     described = ledger.__rlm_describe__()
     assert "observe(" in described and "recall()" in described
     assert "record(label, value" not in described
+
+
+# -- a write-up phase that never sees a number -----------------------------
+
+
+def test_brief_withholds_values(ledger, fake_sempy):
+    """A writer that cannot see a figure cannot type one, so citing is the only
+    way to get a number onto the page."""
+    m = SemanticModel("D", validate=False, ledger=ledger)
+    m.record("total", 'EVALUATE ROW("v", [X])', format="currency",
+             note="whole book, all years")
+    brief = ledger.brief()
+    assert "{{total}}" in brief
+    assert "currency" in brief
+    assert "whole book, all years" in brief
+    assert "1234" not in brief, "the value must not reach the writer"
+
+
+def test_brief_carries_observations(ledger):
+    ledger.observe("New/Churn measures blank outside a report")
+    assert "observed: New/Churn measures blank" in ledger.brief()
+
+
+def test_brief_omits_unverified_entries(ledger):
+    ledger.assert_value("claimed", 99, "calc")
+    assert "{{claimed}}" not in ledger.brief()
+
+
+def test_brief_is_honest_when_empty(ledger):
+    assert ledger.brief() == "(nothing recorded)"
+
+
+# -- lineage beyond semantic models ----------------------------------------
+
+
+def test_a_file_logs_its_own_reads(tmp_path, ledger):
+    """The pattern generalises: a bound source records its own access, so
+    lineage does not depend on the model cooperating."""
+    from fabric_rlm import File
+
+    src = tmp_path / "memo.txt"
+    src.write_text("escalation threshold 0.20", encoding="utf-8")
+    File(str(src), ledger=ledger).read_text()
+    logged = [e for e in ledger.entries() if not e.get("label")]
+    assert logged and logged[0]["source"] == str(src)
+    assert "memo.txt" in logged[0]["note"]
+
+
+def test_a_file_carries_its_ledger_across_the_wire(tmp_path, ledger):
+    from fabric_rlm import File
+
+    src = tmp_path / "memo.txt"
+    src.write_text("x", encoding="utf-8")
+    back = decode_from_worker_wire(
+        encode_for_worker({"f": File(str(src), ledger=ledger)}))["f"]
+    back.read_text()
+    assert any(e.get("source") == str(src) for e in ledger.entries())
+
+
+def test_a_figure_read_from_a_file_is_unverified(tmp_path, ledger):
+    """A number in a document cannot be re-executed. A human checks it by
+    opening the file; the machine cannot, so it is not citable."""
+    from fabric_rlm import File
+
+    src = tmp_path / "memo.txt"
+    src.write_text("threshold 0.20", encoding="utf-8")
+    File(str(src), ledger=ledger).record("threshold", 0.20, format="percent")
+    assert ledger.facts()["threshold"]["verified"] is False
+    assert ledger.missing_labels("{{threshold}}") == ["threshold"]
+
+
+def test_a_file_without_a_ledger_still_reads(tmp_path):
+    from fabric_rlm import File
+
+    src = tmp_path / "memo.txt"
+    src.write_text("hello", encoding="utf-8")
+    assert File(str(src)).read_text() == "hello"

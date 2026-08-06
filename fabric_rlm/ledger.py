@@ -192,6 +192,28 @@ class Ledger:
                 lines.append(f"- {e['note']}")
         return "\n".join(lines) or "(nothing recorded yet)"
 
+    def brief(self) -> str:
+        """What was found, without the numbers.
+
+        For a write-up phase that should cite the record rather than retype it.
+        Values are withheld deliberately: a writer that never sees a figure
+        cannot type one, so citing becomes the only way to put a number on the
+        page. Notes come through, because they carry why the figure mattered -
+        without them the report is true and lifeless.
+        """
+        lines: list[str] = []
+        for entry in self.entries():
+            label = entry.get("label")
+            if label:
+                if not entry.get("verified"):
+                    continue
+                note = entry.get("note") or ""
+                lines.append(f"{{{{{label}}}}}  ({entry.get('format', 'count')})"
+                             + (f" - {note}" if note else ""))
+            elif entry.get("note"):
+                lines.append(f"observed: {entry['note']}")
+        return "\n".join(lines) or "(nothing recorded)"
+
     # -- using ------------------------------------------------------------
 
     def render(self, text: str) -> str:

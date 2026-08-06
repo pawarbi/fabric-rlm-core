@@ -14,12 +14,31 @@ from .semantic_model import SemanticModel
 
 @dataclass(frozen=True)
 class File:
-    """Lightweight file wrapper exposed inside the RLM worker namespace."""
+    """Lightweight file wrapper exposed inside the RLM worker namespace.
+
+    Pass a `ledger` and every read is logged, the same way a SemanticModel
+    logs every query: a bound source records its own access, so lineage does
+    not depend on the model cooperating.
+
+    The caveat that does not apply to a semantic model: `open(file.path)` still
+    works and is not logged. sempy is the only way to reach a semantic model,
+    so its log is complete; a file has other doors.
+    """
 
     path: str
+    ledger: Any = None
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, ledger: Any = None):
         object.__setattr__(self, "path", str(Path(path).expanduser()))
+        object.__setattr__(self, "ledger", ledger)
+
+    def _log(self, what: str) -> None:
+        if self.ledger is None:
+            return
+        try:
+            self.ledger.observe(f"{what} {self.name}", source=self.path)
+        except Exception:
+            pass
 
     @property
     def name(self) -> str:
@@ -33,9 +52,11 @@ class File:
         return Path(self.path).exists()
 
     def read_bytes(self) -> bytes:
+        self._log("read bytes from")
         return Path(self.path).read_bytes()
 
     def read_text(self, encoding: str = "utf-8") -> str:
+        self._log("read text from")
         return Path(self.path).read_text(encoding=encoding)
 
     def write_bytes(self, data: bytes) -> None:
@@ -52,6 +73,20 @@ class File:
         mime = mime or mimetypes.guess_type(self.path)[0] or "application/octet-stream"
         encoded = base64.b64encode(self.read_bytes()).decode("ascii")
         return f"data:{mime};base64,{encoded}"
+
+    def record(self, label: str, value: Any, *, format: str = "count",
+               note: str = "") -> Any:
+        """Record a figure taken from this file, cited as coming from it.
+
+        Unlike a query, a value read out of a document cannot be re-executed,
+        so this is marked unverified: the source is checkable by a human
+        opening the file, not by the machine re-running it.
+        """
+        if self.ledger is None:
+            raise RuntimeError("This File has no ledger. Pass one: "
+                               "File(path, ledger=Ledger(...)).")
+        return self.ledger.assert_value(label, value, source=self.path,
+                                        format=format, note=note)
 
     def toDict(self) -> dict[str, str]:
         return {"name": self.name, "path": self.path}
@@ -101,6 +136,9 @@ def encode_for_worker(value: Any) -> Any:
     """Encode supported Python inputs into JSON-safe values for the worker."""
 
     if isinstance(value, File):
+        if value.ledger is not None:
+            return {"__fabric_rlm_file__": value.path,
+                    "__fabric_rlm_file_ledger__": value.ledger.path}
         return {"__fabric_rlm_file__": value.path}
     if isinstance(value, Path):
         return {"__fabric_rlm_path__": str(value)}
@@ -134,7 +172,9 @@ def decode_from_worker_wire(value: Any) -> Any:
 
     if isinstance(value, dict):
         if "__fabric_rlm_file__" in value:
-            return File(value["__fabric_rlm_file__"])
+            lg = value.get("__fabric_rlm_file_ledger__")
+            return File(value["__fabric_rlm_file__"],
+                        ledger=Ledger(lg) if lg else None)
         if "__fabric_rlm_path__" in value:
             return Path(value["__fabric_rlm_path__"])
         if "__fabric_rlm_semantic_model__" in value:
