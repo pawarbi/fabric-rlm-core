@@ -71,6 +71,7 @@ def ungrounded_figures(
     turns: Iterable[Any],
     payload: Any,
     *,
+    task: Any = None,
     allow_arithmetic: bool = True,
     ignore_below: float = _TRIVIAL,
 ) -> list[float]:
@@ -80,9 +81,16 @@ def ungrounded_figures(
     independent audit had voided, and also flagged three multi-turn runs whose
     figures were ratios this reconstruction does not reach. Read what it
     returns; do not gate on it.
+
+    Pass ``task`` (the prompt text) so its numbers count as grounded. A
+    question that says "companies above $200" licenses the answer to say
+    "$200"; without this, a pre-registered experiment saw a question falsely
+    abstain because four of five answers restated the question's own threshold.
     """
     turns = list(turns)
     seen = observed_numbers(turns)
+    if task is not None:
+        seen |= numbers_in(task)
     allowed = _with_simple_arithmetic(seen) if allow_arithmetic else seen
     claimed = numbers_in(payload if isinstance(payload, str) else _payload_text(payload))
     return sorted(
@@ -118,10 +126,22 @@ def submitted_without_evidence(turns: Iterable[Any]) -> bool:
     return not produced_output
 
 
-def evidence_report(turns: Iterable[Any], payload: Any) -> dict[str, Any]:
-    """Both checks together, shaped for a run report."""
+def evidence_report(
+    turns: Iterable[Any], payload: Any, *, task: Any = None
+) -> dict[str, Any]:
+    """Both checks together, shaped for a run report.
+
+    What this is for, measured rather than assumed: a pre-registered
+    experiment over 270 benchmark traces found the flags carry no accuracy
+    signal beyond dropping runs at random (flag-filtered vote 0.722 vs
+    matched random drop 0.725), so do not use them to pick answers. They are
+    an audit instrument: they caught 4/4 trials an external review voided for
+    answers not derived from the data, plus two the review missed. Run this
+    before submitting work anywhere a reviewer will hold the trace against
+    the answer.
+    """
     turns = list(turns)
-    ungrounded = ungrounded_figures(turns, payload)
+    ungrounded = ungrounded_figures(turns, payload, task=task)
     return {
         "observed_figures": len(observed_numbers(turns)),
         "ungrounded_figures": ungrounded,

@@ -122,3 +122,30 @@ def test_evidence_report_carries_both_checks():
 ])
 def test_payload_may_be_a_string_or_a_dict(payload):
     assert ungrounded_figures([Turn()], payload) == [336.6364]
+
+
+# -- numbers from the question are grounded --------------------------------
+
+
+def test_a_threshold_from_the_task_is_not_flagged():
+    """stockmarket_q2 in the pre-registered experiment: four of five answers
+    restated the question's own $200 threshold, were flagged for it, and the
+    question falsely abstained. The task licenses its own numbers."""
+    turns = [Turn(stdout="found 31 ETFs")]
+    task = "List NYSE Arca ETFs with price above $200."
+    assert ungrounded_figures(turns, {"answer": "31 ETFs above 200.0"},
+                              task=task) == []
+    assert ungrounded_figures(turns, {"answer": "31 ETFs above 200.0"}) == [200.0]
+
+
+def test_task_numbers_join_arithmetic():
+    turns = [Turn(stdout="total 500.0")]
+    task = "Report revenue per 100 units."
+    assert ungrounded_figures(turns, {"answer": "5.0 per unit-block"},
+                              task=task) == []
+
+
+def test_evidence_report_threads_the_task_through():
+    rep = evidence_report([Turn(stdout="x")], {"answer": "above 200.0"},
+                          task="above $200")
+    assert rep["ungrounded_figures"] == []
