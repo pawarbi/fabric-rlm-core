@@ -12,6 +12,11 @@ from .excel_artifacts import (
     summarize_workbook_context,
     validate_target_range_sanity,
 )
+from .grounding import (
+    evidence_report,
+    submitted_without_evidence,
+    ungrounded_figures,
+)
 from .interpreter import (
     ExecResult,
     Interpreter,
@@ -64,6 +69,8 @@ __all__ = [
     "SkillLoader",
     "SubprocessPythonInterpreter",
     "sempy_available",
+    "submitted_without_evidence",
+    "ungrounded_figures",
     "Trajectory",
     "TurnRecord",
     "ValidationCheck",
