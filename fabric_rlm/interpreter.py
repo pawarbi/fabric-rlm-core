@@ -36,6 +36,32 @@ class WorkerTimeout(TimeoutError):
     """Raised when the worker does not respond within the configured timeout."""
 
 
+_CONCURRENCY_MARKERS = ("ThreadPoolExecutor", "ProcessPoolExecutor",
+                        "import threading", "threading.Thread",
+                        "import multiprocessing", "multiprocessing.",
+                        "asyncio.gather", "asyncio.run")
+
+
+def concurrency_death_hint(code) -> str:
+    """Why did the worker die? If the code was threading, say so.
+
+    A worker hard-crash (GIL fatal, native segfault) costs the whole solve
+    and the model never learns why: it sees a bare protocol error and its
+    retry repeats the pattern. Observed twice in one benchmark run - both
+    times ThreadPoolExecutor around native calls. Naming the cause turns a
+    fatal into a repairable turn.
+    """
+    if not code:
+        return ""
+    hits = sorted({m for m in _CONCURRENCY_MARKERS if m in code})
+    if not hits:
+        return ""
+    return (" NOTE: this code used " + ", ".join(hits) + ". The worker is "
+            "not thread-safe for native calls (duckdb, database drivers, "
+            "predict_sync) and concurrency can crash it fatally, losing all "
+            "session state. Rewrite the work as a plain serial loop.")
+
+
 class WorkerProtocolError(RuntimeError):
     """Raised when the worker exits or returns invalid protocol data."""
 
@@ -207,6 +233,7 @@ class Interpreter:
                     error=violation,
                     reached_worker=False,
                 )
+        self._last_exec_code = code
         raw = self._request(
             {
                 "op": "exec",
@@ -289,7 +316,9 @@ class Interpreter:
             raise WorkerTimeout(f"Worker timed out after {self.timeout}s") from exc
 
         if line is None:
-            raise WorkerProtocolError(self._format_worker_exit("Worker exited without response"))
+            raise WorkerProtocolError(
+                self._format_worker_exit("Worker exited without response")
+                + concurrency_death_hint(getattr(self, "_last_exec_code", None)))
 
         try:
             return json.loads(line)
@@ -584,6 +613,7 @@ class SubprocessPythonInterpreter:
         # Send execute request. Then loop reading frames: tool_call requests
         # from worker get dispatched and replied to inline; the matching
         # execute response terminates the loop.
+        self._last_exec_code = code
         self._request_id += 1
         request_id = self._request_id
         self._write_jsonrpc(
@@ -757,6 +787,7 @@ class SubprocessPythonInterpreter:
             stderr = "\n".join(self._stderr_buf).strip()
             raise CodeInterpreterError(
                 f"Worker exited unexpectedly {context}. Worker stderr:\n{stderr}"
+                + concurrency_death_hint(getattr(self, "_last_exec_code", None))
             )
         return line.strip()
 

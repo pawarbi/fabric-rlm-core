@@ -15,7 +15,8 @@ turns. Build your answer incrementally.
 ## Sandbox API
 
 `File(path)` wraps a file path.
-`await predict(signature, instructions=None, pydantic_schemas=None, **kwargs)` calls the configured sub-LM.
+`await predict(signature, instructions=None, pydantic_schemas=None, **kwargs)` calls the configured sub-LM; `predict_sync(...)` is the synchronous form.
+Both return a Prediction OBJECT: read outputs by field name (`predict_sync("text -> label", text=t).label`), never str() the object.
 Use instructions for task-specific guidance, pydantic_schemas for typed outputs, and dspy.Image input fields for images.
 `SUBMIT(**fields)` finishes the task. You MUST call SUBMIT once ready.
 {skill_section}
