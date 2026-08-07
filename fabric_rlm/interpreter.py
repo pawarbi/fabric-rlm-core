@@ -156,7 +156,11 @@ class Interpreter:
             env[netguard.ENV_FLAG] = "1"
             kwargs["env"] = env
         if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            # CREATE_NO_WINDOW: without it, every worker spawned from a
+            # detached parent opens its own console window - a long benchmark
+            # run put dozens of empty terminals on the user's desktop.
+            kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
+                                       | subprocess.CREATE_NO_WINDOW)
         else:
             kwargs["start_new_session"] = True
 
@@ -479,7 +483,11 @@ class SubprocessPythonInterpreter:
             "env": env,
         }
         if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            # CREATE_NO_WINDOW: without it, every worker spawned from a
+            # detached parent opens its own console window - a long benchmark
+            # run put dozens of empty terminals on the user's desktop.
+            kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
+                                       | subprocess.CREATE_NO_WINDOW)
         else:
             kwargs["start_new_session"] = True
 
