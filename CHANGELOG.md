@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+## 0.4.0 — 2026-08-07 — a semantic model is now an input
+
+### Added
+
+- **`SemanticModel(dataset, workspace=)`** — bind a Power BI semantic model as
+  a task input and it arrives in the sandbox as a live handle: `.schema()` for
+  tables, measures with their DAX and descriptions, and relationships in one
+  call; `.dax("EVALUATE ...")` returning a DataFrame; `.measure(name,
+  groupby=, filters=)` with no DAX to get wrong. Several models bind at once
+  and route independently.
+
+  Why a handle rather than instructions, measured on a 19-question eval: a
+  task that named a semantic model but gave no way in scored 7/19, with most
+  questions spending every turn looking for an entry point. A skill describing
+  the entry point scored 18-19/19 at ~2.4k characters resent every turn.
+  Binding the handle scored 18/19 three runs in a row with no skill loaded,
+  and adding the skill on top changed nothing. Validation runs at
+  construction, so a typo'd dataset name fails on that line instead of ten
+  turns into a run.
+
+- **`semantic_model` skill** — the fallback for a model passed as a plain
+  name. Cut from 8.1k to 2.4k characters after measurement showed the entry
+  point carried the entire effect; now points at `SemanticModel` first.
+
+- **`fabric_rlm.grounding`** — `evidence_report()`,
+  `submitted_without_evidence()`, `ungrounded_figures()`: read a finished
+  trajectory and report answers the run never derived. On an externally
+  audited benchmark submission this catches 4/4 of the voided trials plus two
+  the audit missed. A diagnostic, never a gate: a pre-registered experiment
+  showed the flags carry no accuracy signal beyond dropping runs at random,
+  so use them to audit output before it ships, not to pick answers.
+
+- **`examples/semantic_model/`** — a semantic model, a PDF, a CSV and a
+  custom context skill combined into a formatted workbook written back to the
+  lakehouse, with a scorecard that attributes each wrong cell to the source
+  the agent failed to read. 44/44 checks with the handle bound.
+
+### Fixed
+
+- **The security message for `import fabric` no longer talks models out of
+  sempy.** The `fabric` SSH package is denied, but the denial read as "network
+  egress off" and models concluded the whole semantic-link path was
+  unavailable - eleven refusals across three eval runs, each citing a blockage
+  that did not apply. The message now names the SSH package and points at
+  `import sempy.fabric`. Give-ups fell from 12 to 1 and the mean score rose
+  11.7 to 16.5 before any skill was involved.
+
+- **`SemanticModel.schema()` asked sempy for a measure column that does not
+  exist.** sempy names it `Measure Description`, not `Description`; the wrong
+  name dropped every measure description silently. Found in a trace where the
+  model hit the same mistake, got the error our code never saw, and recovered.
+
+- **Worker subprocesses no longer open console windows on Windows.** A
+  supervised benchmark run left dozens of empty terminals on the desktop.
+  `CREATE_NO_WINDOW` on both spawn sites; Linux (including Fabric notebooks)
+  takes the unchanged path.
+
+- **A worker killed by threaded code now says so.** Concurrency around native
+  calls (duckdb, drivers, `predict_sync`) can crash the worker fatally with a
+  bare protocol error, and the model's retry repeats the pattern. Both death
+  paths now name the cause and the fix when the executed code contained
+  concurrency markers. The crash itself is tracked as #46.
+
 ## 0.3.5 — 2026-08-04 — a 17-second startup cost, removed
 
 First release published to PyPI since 0.3.2, so it also carries everything from
