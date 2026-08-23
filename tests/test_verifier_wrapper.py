@@ -23,8 +23,10 @@ class _ScriptedLM(dspy.LM):
         super().__init__(model="scripted", model_type="chat")
         self._codes = list(scripted_codes)
         self.calls = 0
+        self.requests: list[str] = []
 
     def __call__(self, prompt=None, messages=None, **kwargs):  # type: ignore[override]
+        self.requests.append(str(messages if messages is not None else prompt))
         if self._codes:
             code = self._codes.pop(0)
         else:
@@ -69,6 +71,58 @@ def test_output_validator_rejects_then_succeeds_on_retry() -> None:
     assert result.payload["answer"] == 42
     history = result.trajectory.metadata.get("verifier_repair_history", [])
     assert len(history) >= 1, "expected at least one verifier_repair history entry"
+
+
+def test_typed_output_mapping_retries_on_v7_engine() -> None:
+    lm = _ScriptedLM(
+        [
+            "SUBMIT(result='South')",
+            "SUBMIT(result={'top_region': 'South'})",
+        ]
+    )
+    rlm = RLM.task(
+        "Return a structured result.",
+        inputs={"question": "x"},
+        outputs={"result": dict},
+        lm=lm,
+        engine="dspy",
+    )
+
+    result = rlm.run()
+
+    assert result.submitted is True
+    assert result.payload == {"result": {"top_region": "South"}}
+    assert lm.calls >= 2
+
+
+def test_typed_output_mapping_prevents_dspy_bool_to_int_coercion() -> None:
+    lm = _ScriptedLM(["SUBMIT(result=True)", "SUBMIT(result=7)"])
+    result = RLM.task(
+        "Return an integer.",
+        inputs={"question": "x"},
+        outputs={"result": int},
+        lm=lm,
+        engine="dspy",
+    ).run()
+
+    assert result.submitted is True
+    assert result.payload == {"result": 7}
+    assert lm.calls >= 2
+
+
+def test_typed_output_feedback_reaches_dspy_with_numeric_only_inputs() -> None:
+    lm = _ScriptedLM(["SUBMIT(result='7')", "SUBMIT(result=7)"])
+    result = RLM.task(
+        "Return an integer.",
+        inputs={"n": 1},
+        outputs={"result": int},
+        lm=lm,
+        engine="dspy",
+    ).run()
+
+    assert result.submitted is True
+    assert result.payload == {"result": 7}
+    assert any("must be int, got str" in request for request in lm.requests[1:])
 
 
 def test_output_validator_exhausts_retries() -> None:

@@ -75,6 +75,7 @@ def build_system_prompt(
     signature: Any = None,
     inline_task: str | None = None,
     inline_outputs: list[str] | None = None,
+    inline_output_types: dict[str, type] | None = None,
     inputs: dict[str, Any] | None = None,
     skill_index: str | None = None,
     preloaded_skills: str | None = None,
@@ -84,7 +85,11 @@ def build_system_prompt(
     inputs = inputs or {}
     task_description, outputs = _task_and_outputs(signature, inline_task, inline_outputs)
     input_listing = "\n".join(f"  {name}: {_describe_value(value)}" for name, value in inputs.items())
-    output_listing = "\n".join(f"  - {name}" for name in outputs)
+    output_types = inline_output_types or {}
+    output_listing = "\n".join(
+        f"  - {name}: {output_types[name].__name__}" if name in output_types else f"  - {name}"
+        for name in outputs
+    )
     return SYSTEM_PROMPT_TEMPLATE.format(
         task_description=task_description or "(no task description)",
         input_listing=input_listing or "  (none)",

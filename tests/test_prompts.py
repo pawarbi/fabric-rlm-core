@@ -26,3 +26,13 @@ def test_initial_user_message_names_inputs() -> None:
 
     assert "question" in message
     assert "bound in your namespace" in message
+
+
+def test_prompt_includes_declared_output_types() -> None:
+    prompt = build_system_prompt(
+        inline_task="Return structured data.",
+        inline_outputs=["result"],
+        inline_output_types={"result": dict},
+    )
+
+    assert "- result: dict" in prompt

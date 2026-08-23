@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- **Typed task outputs** — pass concrete Python types as
+  `outputs={"result": dict}` to reject wrong-shaped `SUBMIT` values and give
+  the model repair feedback. Existing name-only lists remain supported.
+
 ## 0.4.0 — 2026-08-07 — a semantic model is now an input
 
 ### Added

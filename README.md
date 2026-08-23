@@ -313,6 +313,21 @@ print(rlm.run().answer)
 form. `OpenAILM`, `AnthropicLM`, and `FabricLM` are thin wrappers over `dspy.LM`,
 so any OpenAI, Anthropic, Azure, or local Ollama model works.
 
+Use a mapping when an output needs a runtime type contract:
+
+```python
+result = RLM.task(
+    task="Return the highest-revenue region and its revenue.",
+    inputs={"sales": File("sales.csv")},
+    outputs={"result": dict},
+    lm=OpenAILM("gpt-4o-mini"),
+).run()
+```
+
+If `SUBMIT(result=...)` receives the wrong type, the submission is rejected and
+the model gets repair feedback. Name-only lists such as `outputs=["answer"]`
+remain supported and do not add type enforcement.
+
 Requires Python 3.10 or newer. Optional extras:
 
 | Extra | Adds | For |
