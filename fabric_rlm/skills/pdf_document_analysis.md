@@ -36,7 +36,19 @@ Dependencies: validation
    - search this text for candidate dates, people, entities, amounts, headings, and
      requirement words;
    - do not treat raw text as the only evidence when layout matters.
-3. Render candidate or all pages at about 200 DPI and pass page images to the
+3. Check interactive form widgets before assuming a visually filled form is blank.
+   `page.get_text()` returns the template text but not widget values:
+
+```python
+form_values = {}
+for page in doc:
+    for widget in page.widgets() or []:
+        if widget.field_name and widget.field_value not in (None, ""):
+            form_values[widget.field_name] = widget.field_value
+print(form_values)
+```
+
+4. Render candidate or all pages at about 200 DPI and pass page images to the
    model when the task requires faithful layout/table interpretation:
 
 ```python
@@ -50,7 +62,7 @@ def render_page_data_uri(page, dpi=200):
     return f"data:image/png;base64,{data}"
 ```
 
-4. Chunk by page or small page ranges, not by arbitrary character windows. Keep the
+5. Chunk by page or small page ranges, not by arbitrary character windows. Keep the
    page number with every extracted fact.
 
 ## Pulling a specific fact out of a report
@@ -160,6 +172,7 @@ Before `SUBMIT()`:
 ## Pre-flight checklist
 
 - [ ] The PDF was opened with PyMuPDF and all pages were enumerated.
+- [ ] Interactive form widgets were checked for filled values.
 - [ ] Raw text was used for search, while rendered pages were used for layout or
       visually important evidence.
 - [ ] Every value taken from prose was read in its printed context, not captured

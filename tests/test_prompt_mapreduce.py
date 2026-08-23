@@ -47,6 +47,16 @@ def test_pdf_skill_teaches_bounded_fault_tolerant_gather():
     assert "return_exceptions=True" in text
 
 
+def test_pdf_skill_checks_form_widgets_before_falling_back_to_rendering():
+    text = _pdf_skill_text()
+    widget_pos = text.index("page.widgets()")
+    render_pos = text.index("Render candidate or all pages")
+
+    assert widget_pos < render_pos
+    assert "field_name" in text
+    assert "field_value" in text
+
+
 # ---------------------------------------------------------------------------
 # 2. Capability: the idiom actually runs.
 # ---------------------------------------------------------------------------
