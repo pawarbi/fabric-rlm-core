@@ -2,11 +2,23 @@
 
 ## Unreleased
 
+## 0.4.1 — 2026-08-22 — safer workers and typed outputs
+
 ### Added
 
 - **Typed task outputs** — pass concrete Python types as
   `outputs={"result": dict}` to reject wrong-shaped `SUBMIT` values and give
   the model repair feedback. Existing name-only lists remain supported.
+
+### Fixed
+
+- Worker subprocesses scrub provider keys and other secret-bearing environment
+  variables by default, including when network blocking is enabled. Explicit
+  `SecurityPolicy.disabled()` remains available for trusted workloads.
+- Sandbox guidance documents the synchronous `predict_sync(...)` entry point
+  and prediction-object field access.
+- The PDF analysis skill reads filled form widgets before falling back to
+  rendered-page analysis.
 
 ## 0.4.0 — 2026-08-07 — a semantic model is now an input
 
