@@ -42,6 +42,16 @@ _CONCURRENCY_MARKERS = ("ThreadPoolExecutor", "ProcessPoolExecutor",
                         "asyncio.gather", "asyncio.run")
 
 
+def _worker_env(
+    security: SecurityPolicy | None,
+    env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Build a child environment that is secret-safe unless explicitly disabled."""
+
+    policy = security if security is not None else SecurityPolicy.default()
+    return policy.scrub_env(env)
+
+
 def concurrency_death_hint(code) -> str:
     """Why did the worker die? If the code was threading, say so.
 
@@ -167,20 +177,12 @@ class Interpreter:
             "errors": "replace",
             "bufsize": 1,
             "cwd": self.cwd,
+            "env": _worker_env(self.security),
         }
-        # Scrub secret-bearing env vars from the worker if a policy is set.
-        # Without this branch the child inherits the parent env wholesale.
-        if self.security is not None and self.security.enabled:
-            kwargs["env"] = self.security.scrub_env(dict(os.environ))
         if self.block_network:
-            # The worker installs the guard itself when it sees this. Build an
-            # env explicitly when no policy did: passing env=None inherits the
-            # parent's, and the flag would never reach the child.
-            env = kwargs.get("env")
-            if env is None:
-                env = dict(os.environ)
+            # The worker installs the guard itself when it sees this.
+            env = kwargs["env"]
             env[netguard.ENV_FLAG] = "1"
-            kwargs["env"] = env
         if os.name == "nt":
             # CREATE_NO_WINDOW: without it, every worker spawned from a
             # detached parent opens its own console window - a long benchmark
@@ -494,11 +496,10 @@ class SubprocessPythonInterpreter:
             cmd.extend(self._extra_python_args)
         cmd.extend(["-m", "fabric_rlm._worker"])
 
-        env = {**os.environ, "PYTHONPATH": self._compute_pythonpath()}
-        if self.security is not None and self.security.enabled:
-            # Scrub secrets from the worker env. PYTHONPATH was set above and
-            # is on the policy's default keep list, so it survives the scrub.
-            env = self.security.scrub_env(env)
+        env = _worker_env(
+            self.security,
+            {**os.environ, "PYTHONPATH": self._compute_pythonpath()},
+        )
 
         kwargs: dict[str, Any] = {
             "stdin": subprocess.PIPE,
