@@ -51,7 +51,9 @@ DONE = code("SUBMIT(answer='ok')")
 HANGS = {
     "sleep": "import time\ntime.sleep(30)",
     "busy_loop": "x = 0\nwhile True:\n    x += 1",
-    "huge_allocation": "big = [0] * (10**9)",
+    # Exercise allocator-heavy code without relying on OS overcommit or OOM
+    # behavior, which differs across Python versions and CI platforms.
+    "allocation_loop": "while True:\n    bytearray(4096)",
     "runaway_string": "s = 'a'\nfor _ in range(40):\n    s = s + s",
     "blocking_read": "import sys\nsys.stdin.read()",
 }
