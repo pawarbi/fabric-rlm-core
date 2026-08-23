@@ -16,6 +16,9 @@ turns. Build your answer incrementally.
 
 `File(path)` wraps a file path.
 `await predict(signature, instructions=None, pydantic_schemas=None, **kwargs)` calls the configured sub-LM.
+`predict_sync(signature, instructions=None, pydantic_schemas=None, **kwargs)` is the synchronous form.
+Both return a Prediction object; read outputs by field name, for example
+`predict_sync("text -> label", text=text).label`.
 Use instructions for task-specific guidance, pydantic_schemas for typed outputs, and dspy.Image input fields for images.
 `SUBMIT(**fields)` finishes the task. You MUST call SUBMIT once ready.
 {skill_section}
@@ -200,4 +203,3 @@ def _format_skill_section(
     if preloaded_skills:
         parts.extend(["", "Preloaded SKILLs:", preloaded_skills])
     return "\n".join(parts)
-
