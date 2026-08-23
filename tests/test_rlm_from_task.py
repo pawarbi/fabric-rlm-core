@@ -27,6 +27,8 @@ so a substring landing in the wrong place won't false-pass.
 
 from __future__ import annotations
 
+import pytest
+
 from fabric_rlm import RLM
 from fabric_rlm.prompts import build_system_prompt
 
@@ -117,6 +119,73 @@ class TestFromTaskConstruction:
         assert rlm.max_turns == 7
         assert rlm.timeout == 11
 
+    def test_factory_accepts_typed_output_mapping(self):
+        rlm = RLM.from_task(
+            "Return a structured result.",
+            outputs={"result": dict},
+            lm=ScriptedLM([]),
+            max_turns=1,
+            timeout=5,
+        )
+
+        assert rlm._inline_outputs == ["result"]
+        assert rlm._inline_output_types == {"result": dict}
+
+    def test_typed_output_mapping_is_defensively_copied(self):
+        external = {"result": dict}
+        rlm = RLM.from_task(
+            "Return a structured result.",
+            outputs=external,
+            lm=ScriptedLM([]),
+            max_turns=1,
+            timeout=5,
+        )
+        external["result"] = str
+        external["extra"] = list
+
+        assert rlm._inline_outputs == ["result"]
+        assert rlm._inline_output_types == {"result": dict}
+
+    def test_typed_output_mapping_rejects_non_type_values(self):
+        with pytest.raises(TypeError, match="must be a Python type"):
+            RLM.from_task(
+                "Return a structured result.",
+                outputs={"result": "dict"},
+                lm=ScriptedLM([]),
+            )
+
+    def test_typed_output_mapping_rejects_invalid_field_names(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            RLM.from_task(
+                "Return a structured result.",
+                outputs={"": dict},
+                lm=ScriptedLM([]),
+            )
+
+    def test_typed_output_mapping_rejects_conflicting_explicit_signature(self):
+        with pytest.raises(ValueError, match="do not match explicit signature outputs"):
+            RLM.from_task(
+                "Return a structured result.",
+                inputs={"q": "x"},
+                outputs={"result": dict},
+                signature="q -> answer",
+                lm=ScriptedLM([]),
+                engine="dspy",
+            )
+
+    def test_typed_output_mapping_accepts_reordered_explicit_signature_outputs(self):
+        rlm = RLM.from_task(
+            "Return both outputs.",
+            inputs={"q": "x"},
+            outputs={"result": dict, "answer": str},
+            signature="q -> answer, result",
+            lm=ScriptedLM([]),
+            engine="dspy",
+        )
+
+        assert rlm._inline_outputs == ["result", "answer"]
+        assert rlm._inline_output_types == {"result": dict, "answer": str}
+
     def test_omitted_inputs_and_outputs_default_to_empty(self):
         rlm = RLM.from_task("X", lm=ScriptedLM([]), max_turns=1, timeout=5)
         assert rlm._inline_outputs == []
@@ -163,6 +232,43 @@ class TestTaskAliasConstruction:
 
         assert result.submitted
         assert result.payload == {"answer": 42}
+
+    def test_typed_output_mapping_rejects_scalar_then_accepts_object(self):
+        lm = ScriptedLM(
+            [
+                _wrap("SUBMIT(result='South')"),
+                _wrap("SUBMIT(result={'top_region': 'South'})"),
+            ]
+        )
+        rlm = RLM.task(
+            "Return the result.",
+            outputs={"result": dict},
+            lm=lm,
+            max_turns=2,
+            timeout=5,
+        )
+
+        result = rlm.run()
+
+        assert result.submitted
+        assert result.payload == {"result": {"top_region": "South"}}
+        assert result.trajectory.turns[0].validation_errors == [
+            "Required output field 'result' must be dict, got str."
+        ]
+        assert "must be dict, got str" in lm.messages[1][-1]["content"]
+
+    def test_legacy_output_list_keeps_accepting_scalar(self):
+        lm = ScriptedLM([_wrap("SUBMIT(result='South')")])
+        result = RLM.task(
+            "Return the result.",
+            outputs=["result"],
+            lm=lm,
+            max_turns=1,
+            timeout=5,
+        ).run()
+
+        assert result.submitted
+        assert result.payload == {"result": "South"}
 
     def test_task_alias_omitted_inputs_and_outputs_default_to_empty(self):
         rlm = RLM.task("X", lm=ScriptedLM([]), max_turns=1, timeout=5)

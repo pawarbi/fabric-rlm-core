@@ -980,6 +980,7 @@ class RLM:
             self._activated_skills: set[str] = set()
             self._inline_task: str | None = None
             self._inline_outputs: list[str] | None = None
+            self._inline_output_types: dict[str, type] = {}
             self._inline_inputs: dict[str, Any] = {}
             # Capture the construction args needed to spin up inner RLMs.
             # ``lm`` is preserved as the user passed it (spec or instance) so
@@ -1061,6 +1062,7 @@ class RLM:
         self._activated_skills: set[str] = set()
         self._inline_task: str | None = None
         self._inline_outputs: list[str] | None = None
+        self._inline_output_types: dict[str, type] = {}
         self._inline_inputs: dict[str, Any] = {}
 
     @classmethod
@@ -1068,7 +1070,7 @@ class RLM:
         cls,
         task: str,
         inputs: dict[str, Any] | None = None,
-        outputs: list[str] | None = None,
+        outputs: list[str] | Mapping[str, type] | None = None,
         *,
         deprecation_stacklevel: int,
         **kwargs: Any,
@@ -1105,8 +1107,19 @@ class RLM:
                 instance = cls(**kwargs)
         else:
             instance = cls(**kwargs)
+        output_names, output_types = _normalize_inline_outputs(outputs)
+        if output_types and instance.signature is not None:
+            _, signature_outputs = _task_and_outputs(instance.signature, None, None)
+            if len(output_names) != len(signature_outputs) or set(output_names) != set(
+                signature_outputs
+            ):
+                raise ValueError(
+                    f"Typed output fields {output_names!r} do not match explicit "
+                    f"signature outputs {signature_outputs!r}."
+                )
         instance._inline_task = task
-        instance._inline_outputs = list(outputs or [])
+        instance._inline_outputs = output_names
+        instance._inline_output_types = output_types
         instance._inline_inputs = dict(inputs or {})
         return instance
 
@@ -1115,9 +1128,15 @@ class RLM:
         cls,
         task: str,
         inputs: dict[str, Any] | None = None,
-        outputs: list[str] | None = None,
+        outputs: list[str] | Mapping[str, type] | None = None,
         **kwargs: Any,
     ) -> "RLM":
+        """Construct an RLM from task text and named inputs and outputs.
+
+        ``outputs`` may be a list of field names for backward-compatible,
+        name-only validation, or a mapping from field names to concrete Python
+        types for runtime type enforcement and repair feedback.
+        """
         return cls._from_task_impl(
             task,
             inputs=inputs,
@@ -1131,10 +1150,10 @@ class RLM:
         cls,
         task: str,
         inputs: dict[str, Any] | None = None,
-        outputs: list[str] | None = None,
+        outputs: list[str] | Mapping[str, type] | None = None,
         **kwargs: Any,
     ) -> "RLM":
-        """Ergonomic alias for :meth:`from_task`."""
+        """Construct an RLM using the same contract as :meth:`from_task`."""
         return cls._from_task_impl(
             task,
             inputs=inputs,
@@ -1239,6 +1258,7 @@ class RLM:
                 inner._inline_outputs = (
                     list(self._inline_outputs) if self._inline_outputs else []
                 )
+                inner._inline_output_types = dict(self._inline_output_types)
                 inner._inline_inputs = dict(self._inline_inputs or {})
             return inner
 
@@ -1467,6 +1487,7 @@ class RLM:
                     signature=self.signature,
                     inline_task=self._inline_task,
                     inline_outputs=self._inline_outputs,
+                    inline_output_types=self._inline_output_types,
                     inputs=bound_inputs,
                     skill_index=skill_index,
                     preloaded_skills=preloaded_skills,
@@ -1798,7 +1819,11 @@ class RLM:
                             self._loaded_skills.append(new_skill)
                         skill_first_seen_turn.setdefault(activated_name, turn_counter)
                 validation = (
-                    validate_submit_payload(result.submit_payload, required_output_fields)
+                    validate_submit_payload(
+                        result.submit_payload,
+                        required_output_fields,
+                        self._inline_output_types,
+                    )
                     if result.submitted
                     else OutputValidationResult()
                 )
@@ -2332,8 +2357,18 @@ class RLM:
         prediction = None
         elapsed_total = 0.0
         last_failure_reason: str | None = None
+        retry_instruction: str | None = None
 
         for attempt in range(MAX_VERIFIER_RETRIES + 1):
+            attempt_signature = signature
+            if retry_instruction:
+                attempt_signature = signature.with_instructions(
+                    (
+                        f"{signature.instructions or ''}\n\n"
+                        "REPAIR REQUIRED: The previous submission was rejected. "
+                        f"{retry_instruction}"
+                    ).strip()
+                )
             interpreter = SubprocessPythonInterpreter(
                 timeout=self.timeout,
                 security=self._security,
@@ -2343,7 +2378,7 @@ class RLM:
             try:
                 with dspy.context(lm=outer_lm):
                     dspy_rlm_kwargs: dict[str, Any] = dict(
-                        signature=signature,
+                        signature=attempt_signature,
                         sub_lm=sub_lm,
                         interpreter=interpreter,
                         max_iterations=max_iter,
@@ -2365,7 +2400,7 @@ class RLM:
                 except Exception:
                     pass
 
-            payload = self._extract_payload_from_prediction(prediction, signature)
+            payload = self._extract_payload_from_prediction(prediction, attempt_signature)
             if not payload:
                 if attempt < MAX_VERIFIER_RETRIES:
                     last_failure_reason = "dspy.RLM produced no output payload"
@@ -2377,10 +2412,37 @@ class RLM:
                     current_inputs = self._inputs_with_verifier_feedback(
                         current_inputs, feedback_text
                     )
+                    retry_instruction = (
+                        None
+                        if any(isinstance(value, str) for value in current_inputs.values())
+                        else feedback_text
+                    )
                     if self.halve_max_iter_on_retry:
                         max_iter = max(1, (max_iter + 1) // 2)
                     continue
                 last_failure_reason = "dspy.RLM produced no output payload"
+                break
+
+            validation = validate_submit_payload(
+                payload,
+                required_output_fields,
+                self._inline_output_types,
+            )
+            if not validation.ok:
+                last_failure_reason = "; ".join(validation.errors)
+                if attempt < MAX_VERIFIER_RETRIES:
+                    current_inputs = self._inputs_with_verifier_feedback(
+                        current_inputs,
+                        last_failure_reason,
+                    )
+                    retry_instruction = (
+                        None
+                        if any(isinstance(value, str) for value in current_inputs.values())
+                        else last_failure_reason
+                    )
+                    if self.halve_max_iter_on_retry:
+                        max_iter = max(1, (max_iter + 1) // 2)
+                    continue
                 break
 
             # Run verifiers + output_validator using a fresh legacy interpreter.
@@ -2446,6 +2508,11 @@ class RLM:
             # Prepend feedback to first string input we can find.
             current_inputs = self._inputs_with_verifier_feedback(
                 current_inputs, feedback_text
+            )
+            retry_instruction = (
+                None
+                if any(isinstance(value, str) for value in current_inputs.values())
+                else feedback_text
             )
             if self.halve_max_iter_on_retry:
                 max_iter = max(1, (max_iter + 1) // 2)  # ceil(remaining/2), floor 1
@@ -2585,8 +2652,8 @@ class RLM:
         inputs: dict[str, Any], feedback: str
     ) -> dict[str, Any]:
         """Return a copy of ``inputs`` with verifier feedback prepended to the
-        first string-valued field. Falls back to a new ``_verifier_feedback``
-        key (which dspy will ignore) if no string input exists."""
+        first string-valued field. Retry instructions carry feedback when no
+        string input exists."""
         new_inputs = dict(inputs)
         for key, value in new_inputs.items():
             if isinstance(value, str):
@@ -2597,7 +2664,6 @@ class RLM:
                     f"{value}"
                 )
                 return new_inputs
-        new_inputs["_verifier_feedback"] = feedback
         return new_inputs
 
     def _build_dspy_signature(
@@ -2633,6 +2699,21 @@ class RLM:
                 "RLM(engine='v7-dspy') requires either a signature (dspy.Signature or 'in -> out' string) "
                 "or from_task(task=..., inputs=..., outputs=...)."
             )
+
+        if self._inline_output_types:
+            type_contract = ", ".join(
+                f"{name} must be {expected_type.__name__}"
+                for name, expected_type in self._inline_output_types.items()
+            )
+            base = built.instructions or ""
+            built = built.with_instructions(
+                f"{base}\n\nRequired output type contract: {type_contract}.".strip()
+            )
+            for name in self._inline_output_types:
+                # Keep raw SUBMIT values intact for strict post-execution validation.
+                # DSPy's parser preserves strings only for nullable unions that include
+                # str; Any alone JSON-decodes them, and concrete types may coerce them.
+                built = built.with_updated_fields(name, type_=str | None | Any)
 
         if extra_instructions:
             base = built.instructions or ""
@@ -2701,6 +2782,7 @@ def _extract_code(text: str) -> str:
 def validate_submit_payload(
     payload: Mapping[str, Any] | None,
     required_fields: Iterable[str],
+    required_types: Mapping[str, type] | None = None,
 ) -> OutputValidationResult:
     """Validate declared SUBMIT outputs before accepting success.
 
@@ -2720,6 +2802,7 @@ def validate_submit_payload(
         return OutputValidationResult((f"SUBMIT payload must be a mapping, got {type(payload).__name__}.",))
 
     errors: list[str] = []
+    types = dict(required_types or {})
     for name in fields:
         if name not in payload:
             errors.append(f"Missing required output field {name!r}.")
@@ -2728,6 +2811,13 @@ def validate_submit_payload(
         error = _validate_required_value(name, value)
         if error:
             errors.append(error)
+            continue
+        expected_type = types.get(name)
+        if expected_type is not None and not _matches_output_type(value, expected_type):
+            errors.append(
+                f"Required output field {name!r} must be "
+                f"{expected_type.__name__}, got {type(value).__name__}."
+            )
     return OutputValidationResult(tuple(errors))
 
 
@@ -2747,6 +2837,13 @@ def _is_core_final_output_field(name: str) -> bool:
     return name.strip().lower() in CORE_FINAL_OUTPUT_FIELDS
 
 
+def _matches_output_type(value: Any, expected_type: type) -> bool:
+    strict_builtins = {bool, bytes, dict, float, int, list, set, str, tuple}
+    if expected_type in strict_builtins:
+        return type(value) is expected_type
+    return isinstance(value, expected_type)
+
+
 def _normalize_required_fields(required_fields: Iterable[str]) -> tuple[str, ...]:
     fields: list[str] = []
     for name in required_fields:
@@ -2756,6 +2853,26 @@ def _normalize_required_fields(required_fields: Iterable[str]) -> tuple[str, ...
             raise ValueError("Output field names must not be empty.")
         fields.append(name)
     return tuple(fields)
+
+
+def _normalize_inline_outputs(
+    outputs: list[str] | Mapping[str, type] | None,
+) -> tuple[list[str], dict[str, type]]:
+    if outputs is None:
+        return [], {}
+    if isinstance(outputs, Mapping):
+        fields = list(_normalize_required_fields(outputs))
+        types: dict[str, type] = {}
+        for name, expected_type in outputs.items():
+            if not isinstance(expected_type, type):
+                raise TypeError(
+                    f"Output type for {name!r} must be a Python type "
+                    "(a concrete class; parameterized generics and unions are not supported), "
+                    f"got {type(expected_type).__name__}."
+                )
+            types[name] = expected_type
+        return fields, types
+    return list(_normalize_required_fields(outputs)), {}
 
 
 def _required_output_fields(
