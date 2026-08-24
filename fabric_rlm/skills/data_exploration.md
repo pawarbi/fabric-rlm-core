@@ -59,7 +59,8 @@ Use `delta_scan`, which honors the log:
 import duckdb
 con = duckdb.connect()
 con.sql("INSTALL delta; LOAD delta;")
-print(con.sql(f"SELECT count(*) FROM delta_scan('{path}')").fetchone())
+escaped_path = path.replace("'", "''")
+print(con.sql(f"SELECT count(*) FROM delta_scan('{escaped_path}')").fetchone())
 ```
 
 For anything beyond a simple scan (schema and partition discovery from metadata,

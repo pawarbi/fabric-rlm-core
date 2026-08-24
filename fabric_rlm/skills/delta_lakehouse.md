@@ -22,7 +22,7 @@ specificity: domain
 ---
 # delta_lakehouse
 
-Summary: READ-ONLY analysis of Delta tables in a Fabric Lakehouse using DuckDB. A Delta table is a transaction log plus data files, NOT a folder of parquet. Resolve the path, discover schema and partitions from metadata, then query through `delta_scan`. Works against an attached lakehouse mount and an `abfss://` OneLake path.
+Summary: READ-ONLY analysis of Delta tables in a Fabric Lakehouse using DuckDB with a delta-rs fallback. A Delta table is a transaction log plus data files, NOT a folder of parquet. Resolve the path, discover schema and partitions from metadata, then query through a Delta-aware reader. Works against an attached lakehouse mount and an `abfss://` OneLake path.
 
 You never read raw table bytes back into the LM. You print small summaries only.
 
@@ -164,11 +164,12 @@ def open_delta(path, con=None):
     To query many tables at once, use attach_lakehouse instead.
     """
     con = con or duckdb.connect()
+    escaped_path = path.replace("'", "''")
 
     try:
         _prepare(con, path)
-        con.sql(f"SELECT 1 FROM delta_scan('{path}') LIMIT 1")
-        return con, f"delta_scan('{path}')"
+        con.sql(f"SELECT 1 FROM delta_scan('{escaped_path}') LIMIT 1")
+        return con, f"delta_scan('{escaped_path}')"
     except Exception as e:
         print(f"[delta_scan unavailable: {type(e).__name__}: {str(e)[:120]}] falling back to delta-rs")
 
@@ -671,10 +672,15 @@ corresponding rule above should be re-checked rather than left standing.
 - DuckDB's `delta` extension exposes no write path at all, which is why
   `delta_scan` is the recommended default: the fast path cannot mutate anything.
 
-Not verifiable offline, so treat as untested: a real `abfss://` read against
-OneLake with a live token. The URL form, the secret syntax, and the delta-rs
-`storage_options` keys are all confirmed to parse and reach the auth layer, but
-the end-to-end read has not been exercised against a live workspace.
+The verification notebook completed against a live OneLake `abfss://` path in
+Microsoft Fabric using a schema-enabled Lakehouse. It exercised GUID path
+construction, token retrieval, table and schema discovery, Delta metadata,
+single-table SQL, whole-schema attachment through the delta-rs fallback,
+bounded profiling, and the read-only version check.
+
+That live run did not exercise the attached `/lakehouse/default` mount or a
+table carrying deletion vectors. Those paths remain covered by local Delta
+tables and protocol-focused tests rather than the live Fabric run.
 
 ## Pre-flight checklist (before SUBMIT)
 

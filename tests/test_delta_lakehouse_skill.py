@@ -124,6 +124,7 @@ def test_data_exploration_has_the_delta_gate() -> None:
     assert "/Tables/" in gate
     assert "abfss://" in gate
     assert SKILL in gate  # points at the deep skill
+    assert "path.replace" in gate
 
 
 def test_data_exploration_flags_the_glob_anti_pattern() -> None:
@@ -153,16 +154,17 @@ def test_do_dont_table_covers_the_load_bearing_rules() -> None:
 
 
 def test_provenance_section_states_what_was_and_was_not_verified() -> None:
-    """The skill claims measured numbers; it must also admit its untested edge."""
+    """The skill claims measured numbers and must name its live-test boundary."""
     content = SkillLoader().load(SKILL).content
     prov = content.split("## Where these rules come from")[1]
 
     assert "16 rows / sum 1699.0" in prov
     assert "6 rows / sum 1149.0" in prov
     assert "relative URL without a base" in prov
-    # The honest caveat: no live OneLake read was exercised.
-    assert "Not verifiable offline" in prov
-    assert "abfss" in prov
+    assert "live OneLake" in prov
+    assert "schema-enabled Lakehouse" in prov
+    assert "did not exercise" in prov
+    assert "deletion vectors" in prov
 
 
 def _skill_code_blocks(name: str = SKILL) -> list[str]:
@@ -250,6 +252,29 @@ def test_open_delta_block_runs_against_a_mounted_style_path(delta_table, duck) -
     con, relation = ns["open_delta"](delta_table.as_posix(), con=duck)
     assert "delta_scan" in relation, "a local path must not take the remote branch"
     assert con.sql(f"SELECT count(*), sum(amt) FROM {relation}").fetchone() == (6, 1149.0)
+
+
+def test_open_delta_escapes_apostrophes_in_paths() -> None:
+    class RecordingConnection:
+        def __init__(self):
+            self.queries = []
+
+        def sql(self, query):
+            self.queries.append(query)
+
+    ns = _attach_ns()
+    ns["_prepare"] = lambda con, _path: con
+    con = RecordingConnection()
+
+    _, relation = ns["open_delta"](
+        "/lakehouse/default/Tables/o'hare", con=con
+    )
+
+    assert relation == "delta_scan('/lakehouse/default/Tables/o''hare')"
+    assert con.queries == [
+        "SELECT 1 FROM delta_scan("
+        "'/lakehouse/default/Tables/o''hare') LIMIT 1"
+    ]
 
 
 class _NoDeltaExtension:
