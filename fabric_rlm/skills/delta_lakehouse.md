@@ -286,7 +286,16 @@ def attach_lakehouse(root, con=None):
     as a mount or an abfss:// URL. Returns (con, attached, skipped).
     """
     con = con or duckdb.connect()
-    _prepare(con, root)
+    prepare_failure = None
+    try:
+        _prepare(con, root)
+    except Exception as prepare_error:
+        # open_delta has the same boundary: DuckDB setup may fail while
+        # delta-rs can still read the table correctly.
+        prepare_failure = (
+            type(prepare_error).__name__,
+            str(prepare_error)[:70],
+        )
 
     try:
         tables = find_delta_tables(root)
@@ -314,15 +323,21 @@ def attach_lakehouse(root, con=None):
             target = f"{quote_ident(sch)}.{quote_ident(tbl)}"
         else:
             target = quote_ident(qname)
-        try:
-            con.execute(f"CREATE OR REPLACE VIEW {target} AS SELECT * FROM delta_scan('{esc}')")
-            attached.append(qname)
-            continue
-        except Exception as delta_scan_error:
-            delta_scan_failure = (
-                type(delta_scan_error).__name__,
-                str(delta_scan_error)[:70],
-            )
+        if prepare_failure is None:
+            try:
+                con.execute(
+                    f"CREATE OR REPLACE VIEW {target} "
+                    f"AS SELECT * FROM delta_scan('{esc}')"
+                )
+                attached.append(qname)
+                continue
+            except Exception as delta_scan_error:
+                delta_scan_failure = (
+                    type(delta_scan_error).__name__,
+                    str(delta_scan_error)[:70],
+                )
+        else:
+            delta_scan_failure = prepare_failure
 
         try:
             from deltalake import DeltaTable

@@ -386,6 +386,31 @@ def test_attach_lakehouse_falls_back_when_delta_scan_is_unavailable(
     ).fetchone() == (1,)
 
 
+def test_attach_lakehouse_falls_back_when_prepare_fails(
+    lakehouse, duck
+) -> None:
+    pytest.importorskip("deltalake")
+    ns = _attach_ns()
+
+    def fail_prepare(_con, _path):
+        raise RuntimeError("DuckDB OneLake secret unavailable")
+
+    ns["_prepare"] = fail_prepare
+
+    con, attached, skipped = ns["attach_lakehouse"](
+        lakehouse.as_posix(), con=duck
+    )
+
+    assert set(attached) == {
+        "customers",
+        "orders",
+        "dbo.products",
+        "dbo.returns",
+    }
+    assert skipped == []
+    assert con.sql("SELECT count(*) FROM customers").fetchone() == (3,)
+
+
 def test_attached_tables_join_without_per_table_setup(lakehouse, duck) -> None:
     """The point of attaching: joins become ordinary SQL."""
     pytest.importorskip("deltalake")
