@@ -20,37 +20,69 @@ computed results rather than every raw byte.
 
 ## Quick start in Fabric
 
-Install `fabric-rlm` in a Fabric notebook, Python notebook is recommended.
+Install `fabric-rlm` in a Fabric notebook. The Python notebook experience is
+recommended for this example.
 
 ```python
-%pip install fabric-rlm
+%pip install "fabric-rlm[analytics]"
 ```
 
-After installation:
+After installation, restart the session. The example below uses the roughly
+140 MB, 1.57-million-row IMF CSV created by the
+[flagship notebook](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb). You can
+replace it with another large CSV in Lakehouse Files.
 
 ```python
 from fabric_rlm import FabricLM, File, RLM
 
 result = RLM.task(
-    task="Find the root cause of the failed Spark job and cite the relevant log lines.",
+    task="""
+    Analyze the complete IMF price dataset. Inspect its schema and confirm the
+    dimensions used. Select the monthly, all-items, year-over-year CPI series:
+    INDEX_TYPE='CPI', COICOP_1999='_T',
+    TYPE_OF_TRANSFORMATION='YOY_PCH_PA_PT', and FREQUENCY='M'. For the latest
+    complete year, calculate average inflation by country and return the 10
+    countries with the highest average. Report the matched row count, source
+    columns, and filters applied.
+    """,
     inputs={
-        "log": File("/lakehouse/default/Files/logs/application.log"),
+        "prices": File("/lakehouse/default/Files/imf_cpi.csv"),
     },
     outputs={
-        "root_cause": str,
-        "evidence": list,
+        "year": int,
+        "top_countries": list,
+        "rows_analyzed": int,
+        "source_columns": list,
+        "filters_applied": list,
     },
     lm=FabricLM("gpt-5.1"),
+    skills=["data_exploration"],
+    max_turns=8,
 ).run()
 
-print(result.root_cause)
-print(result.evidence)
+print(result.top_countries)
+print(result.filters_applied)
 ```
 
 `FabricLM` uses the model endpoint available to the Fabric capacity. The
 notebook identity supplies authentication. There is no API key to place in the
 notebook and no separate Azure OpenAI resource to configure. You can see the list of supported models [here](https://learn.microsoft.com/en-us/fabric/data-science/ai-services/ai-services-overview#consumption-rate-for-openai-language-models).
-You can also choose use any model from OpenAI, Anthropic, Foundry, OpenRouter using LiteLLM.
+You can also use models from OpenAI, Anthropic, Foundry, and OpenRouter through
+LiteLLM.
+
+### Why this works beyond the context window
+
+A CSV with 1.57 million rows cannot be placed in a model prompt. The `File`
+input passes its Lakehouse path into the Python worker instead. The model can
+write DuckDB, Polars, or pandas code to inspect the schema, filter rows, and
+calculate aggregates. Only bounded execution feedback, such as schema details,
+previews, aggregates, and errors, enters the next model call. The raw dataset
+does not enter the model prompt.
+
+This pattern also works with wide Excel workbooks, Parquet files, JSONL
+streams, PDFs, and combinations of those sources. File size is constrained by
+the libraries and compute available in the notebook session rather than the
+model's context window.
 
 ## What happens during a run
 
