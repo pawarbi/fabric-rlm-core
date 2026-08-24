@@ -296,3 +296,50 @@ def test_env_scrub_disabled_lets_secret_through(monkeypatch: pytest.MonkeyPatch)
         )
     assert result.ok
     assert "OPENAI= sk-test-leak-ok" in result.stdout
+
+
+@pytest.mark.parametrize("block_network", [False, True])
+def test_interpreter_scrubs_secrets_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    block_network: bool,
+) -> None:
+    from fabric_rlm.interpreter import Interpreter
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-secret")
+    monkeypatch.setenv("PROBE_FAKE_KEY", "sk-probe-secret")
+    monkeypatch.setenv("MY_BENIGN_VAR", "kept")
+
+    with Interpreter(timeout=30, block_network=block_network) as interp:
+        result = interp.execute(
+            "import os\n"
+            "print('OPENAI=', os.environ.get('OPENAI_API_KEY', '<missing>'))\n"
+            "print('PROBE=', os.environ.get('PROBE_FAKE_KEY', '<missing>'))\n"
+            "print('BENIGN=', os.environ.get('MY_BENIGN_VAR', '<missing>'))\n"
+        )
+
+    assert result.ok, result.error
+    assert "OPENAI= <missing>" in result.stdout
+    assert "PROBE= <missing>" in result.stdout
+    assert "BENIGN= kept" in result.stdout
+
+
+def test_subprocess_interpreter_scrubs_secrets_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fabric_rlm.interpreter import SubprocessPythonInterpreter
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-provider-secret")
+    monkeypatch.setenv("PROBE_FAKE_KEY", "sk-probe-secret")
+    monkeypatch.setenv("MY_BENIGN_VAR", "kept")
+
+    with SubprocessPythonInterpreter(timeout=30) as interp:
+        result = interp.execute(
+            "import os\n"
+            "print('OPENAI=', os.environ.get('OPENAI_API_KEY', '<missing>'))\n"
+            "print('PROBE=', os.environ.get('PROBE_FAKE_KEY', '<missing>'))\n"
+            "print('BENIGN=', os.environ.get('MY_BENIGN_VAR', '<missing>'))\n"
+        )
+
+    assert "OPENAI= <missing>" in result
+    assert "PROBE= <missing>" in result
+    assert "BENIGN= kept" in result

@@ -52,12 +52,15 @@ jobs:
       - name: Wheel content assertions (skills md + py.typed)
         run: |
           python - <<'EOF'
-          import glob, zipfile
+          import glob, pathlib, zipfile
 
           wheel = sorted(glob.glob("dist/*.whl"))[-1]
           names = zipfile.ZipFile(wheel).namelist()
-          skills = [n for n in names if n.startswith("fabric_rlm/skills/") and n.endswith(".md")]
-          assert len(skills) >= 8, f"expected bundled skill markdown in wheel, got: {skills}"
+          shipped = {n for n in names if n.startswith("fabric_rlm/skills/") and n.endswith(".md")}
+          in_repo = {f"fabric_rlm/skills/{p.name}" for p in pathlib.Path("fabric_rlm/skills").glob("*.md")}
+          assert shipped == in_repo, f"wheel skills != repo skills; missing {in_repo - shipped}, extra {shipped - in_repo}"
+          assert shipped, "no skill markdown in wheel"
+          assert not any("contrib" in n for n in names), "contrib-skills must stay out of the wheel"
           assert "fabric_rlm/py.typed" in names, "py.typed missing from wheel"
-          print(f"OK: {wheel} ships {len(skills)} skill files + py.typed")
+          print(f"OK: {wheel} ships {len(shipped)} skill files + py.typed, contrib excluded")
           EOF

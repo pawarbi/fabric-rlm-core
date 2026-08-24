@@ -43,6 +43,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable, get_args, get_origin
 
+from . import netguard
 from .artifacts import File, decode_from_worker_wire
 from .serializers import (
     DEFAULT_INJECTED_NAMES,
@@ -837,12 +838,33 @@ def _jsonrpc_self_test() -> dict[str, Any]:
         "sys_version": sys.version,
         "registered_tools": list(_registered_tools.keys()),
     }
+    # Read the version from package metadata rather than importing dspy.
+    #
+    # This one line used to cost about 17 seconds per worker start. Importing
+    # dspy takes ~18s on a cold interpreter (it pulls litellm, which alone is
+    # ~9s), and the self-test runs on every SubprocessPythonInterpreter startup
+    # - so every run on the dspy engine path paid an 18s import to fill in a
+    # diagnostic string. Measured: SubprocessPythonInterpreter startup was 16.8s
+    # median against a 60s budget, versus 0.6s for the legacy Interpreter, which
+    # does not run this self-test.
+    #
+    # It also made the test suite flaky. Under full-suite load the 60s budget
+    # was only ~2x the median, so startups intermittently blew through it and
+    # different tests in test_subprocess_interpreter.py failed on each run.
+    #
+    # importlib.metadata returns the identical string in ~0.5s without importing
+    # the package. dspy is still imported lazily where it is actually needed
+    # (predict(), signature building) - just not to report a version.
     try:
-        import dspy as _dspy
+        from importlib.metadata import version as _pkg_version
 
-        info["dspy_version"] = getattr(_dspy, "__version__", "unknown")
+        info["dspy_version"] = _pkg_version("dspy")
     except Exception:
-        info["dspy_version"] = None
+        # Not installed, or installed without metadata (editable/source trees
+        # occasionally lack it). Fall back to whatever is already imported
+        # rather than importing dspy to find out.
+        mod = sys.modules.get("dspy")
+        info["dspy_version"] = getattr(mod, "__version__", None) if mod else None
     return info
 
 
@@ -956,6 +978,11 @@ def _handle_jsonrpc(message: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def main() -> None:
+    # Opt-in egress block. Installed here rather than at import so it lands
+    # after nest_asyncio has built its event loop, and before any user code
+    # runs. The guard permits loopback, so the ordering is belt-and-braces.
+    if os.environ.get(netguard.ENV_FLAG) == "1":
+        netguard.install()
     _install_runtime_api()
     while True:
         line = _REAL_STDIN.readline()

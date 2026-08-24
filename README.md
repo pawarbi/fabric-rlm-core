@@ -1,86 +1,183 @@
-# fabric-rlm
+# Fabric-RLM
 
 [![CI](https://github.com/pawarbi/fabric-rlm-core/actions/workflows/test.yml/badge.svg)](https://github.com/pawarbi/fabric-rlm-core/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/fabric-rlm.svg)](https://pypi.org/project/fabric-rlm/)
 [![Python](https://img.shields.io/pypi/pyversions/fabric-rlm.svg)](https://pypi.org/project/fabric-rlm/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Recursive Language Models (RLMs) for Microsoft Fabric notebooks. The model writes
-Python, the code runs in a real CPython subprocess, and the model keeps iterating
-(reading outputs, fixing its own errors) until it calls `SUBMIT(...)` with the
-answer. It also runs anywhere else CPython runs: your laptop, CI, or an Azure
-Function.
 
-## Why not dspy's RLM directly in a notebook
+Run verifiable data tasks inside Microsoft Fabric.
 
-dspy ships its own `RLM`, but it executes generated code in a Deno + Pyodide
-(WASM) sandbox. That runtime is impractical to stand up in a Fabric notebook, and
-because it is WASM-isolated it cannot import the notebook's installed Python
-packages or reach the mounted Lakehouse. fabric-rlm keeps dspy's RLM loop and
-replaces the interpreter with a CPython subprocess that runs inside the notebook
-process. The model's code gets the full Python ecosystem (pandas, DuckDB, Polars,
-openpyxl, PyMuPDF) and can read and write Lakehouse `Files` paths directly. The
-raw bytes stay in the subprocess; only the model's summaries and computed results
-go back through the LM, so it works on files far larger than any context window.
+`fabric-rlm` gives a model a Python workspace next to your Fabric data. It can
+read Lakehouse files, query Power BI semantic models, calculate results, and
+write new artifacts. Output contracts and validators decide whether the work is
+accepted. Failed checks go back into the run for another attempt.
 
-## What you get
+The runtime uses a CPython subprocess inside the notebook session. pandas,
+DuckDB, Polars, openpyxl, PyMuPDF, and other installed packages remain
+available. Large files stay on disk. The model sees previews, summaries, and
+computed results rather than every raw byte.
 
-- Built for Fabric notebooks: runs where dspy's Deno/Pyodide RLM can't, and reads
-  and writes the mounted Lakehouse filesystem directly.
-- No key and no resource to provision on Fabric: `FabricLM` uses the capacity's
-  built-in Azure OpenAI endpoint (details below).
-- Real subprocess execution: full CPython, native libraries, and real files.
-- Reusable skills: Markdown playbooks for PDFs, tabular/log EDA, and Excel, with a
-  keyword router that loads only what a task needs.
-- A self-correcting loop: a PLAN / VERIFY / REFLECT contract and an output
-  verifier feed failures back to the model so it fixes its own code.
-- Three engines plus an experimental adaptive one, including native
-  `dspy.predict.RLM` interop.
-- A default security policy that scrubs secret-bearing environment variables and
-  blocks destructive Lakehouse operations (`notebookutils.fs`, `mssparkutils`).
-- Structured trajectories you can inspect, save to the Lakehouse, and replay
-  offline.
-- Runs locally too, and ships `py.typed`.
+## Quick start in Fabric
 
-## When to use an RLM (and when not to)
+Install `fabric-rlm` in a Fabric notebook. The Python notebook experience is
+recommended for this example.
 
-An RLM earns its overhead when the task needs computation, iteration, or data
-that will not fit in a context window. For a quick question or a conversational
-task, a plain LLM call is cheaper and faster; the loop and the subprocess add
-nothing.
+```python
+%pip install "fabric-rlm[analytics]"
+```
 
-Use an RLM when:
+After installation, restart the session. The example below uses the roughly
+140 MB, 1.57-million-row IMF CSV created by the
+[flagship notebook](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb). You can
+replace it with another large CSV in Lakehouse Files.
 
-- The data is larger than any context window. Multi-gigabyte Spark logs, wide
-  Excel workbooks, long JSONL streams: the model queries them with DuckDB,
-  Polars, or openpyxl inside the subprocess, and only its aggregates enter the
-  LM context. This is what the `data_exploration` skill was built for.
-- The answer must be computed exactly or written to a file. An LLM cannot
-  reliably do arithmetic over thousands of rows or edit an `.xlsx` in place; code
-  can. On the full SpreadsheetBench Verified-400, MiniMax M3 through this RLM
-  passes 82.5 percent of questions for about $2.60 of total model spend; see
-  the benchmark section below.
-- The task is multi-step and its output is checkable. With a validator attached,
-  failed attempts feed structured reflection into retries: in the ablation, a
-  hard multi-step task went from ladder-exhausted failure to passing, with 68%
-  fewer tokens.
-- You need strict multi-field extraction from long documents. The same ablation
-  measured a 74% token reduction on a 100KB RFP extraction with the
-  plan/verify contract on.
+```python
+from fabric_rlm import FabricLM, File, RLM
 
-Skip the RLM when:
+result = RLM.task(
+    task="""
+    Analyze the complete IMF price dataset. Inspect its schema and confirm the
+    dimensions used. Select the monthly, all-items, year-over-year CPI series:
+    INDEX_TYPE='CPI', COICOP_1999='_T',
+    TYPE_OF_TRANSFORMATION='YOY_PCH_PA_PT', and FREQUENCY='M'. For the latest
+    complete year, calculate average inflation by country and return the 10
+    countries with the highest average. Report the matched row count, source
+    columns, and filters applied.
+    """,
+    inputs={
+        "prices": File("/lakehouse/default/Files/imf_cpi.csv"),
+    },
+    outputs={
+        "year": int,
+        "top_countries": list,
+        "rows_analyzed": int,
+        "source_columns": list,
+        "filters_applied": list,
+    },
+    lm=FabricLM("gpt-5.1"),
+    skills=["data_exploration"],
+    max_turns=8,
+).run()
 
-- It is a conversation, a rewrite, or a judgment call over text that fits in
-  context. There is nothing to compute, so a single LM call wins.
-- The model nails the task in one shot. The ablation caught this failure mode
-  directly: on an easy log-extraction task the verify loop spuriously re-checked
-  a correct first answer, inflating cost from 6K to 40K tokens and 10 seconds to
-  176. Correctness held, but a plain call would have been 10x cheaper.
-- The task exceeds the model's capability. The loop retries more cheaply, but it
-  does not rescue tasks the model fundamentally cannot solve; use a stronger
-  model instead.
+print(result.top_countries)
+print(result.filters_applied)
+```
 
-### A worked example
+`FabricLM` uses the model endpoint available to the Fabric capacity. The
+notebook identity supplies authentication. There is no API key to place in the
+notebook and no separate Azure OpenAI resource to configure. You can see the list of supported models [here](https://learn.microsoft.com/en-us/fabric/data-science/ai-services/ai-services-overview#consumption-rate-for-openai-language-models).
+You can also use models from OpenAI, Anthropic, Foundry, and OpenRouter through
+LiteLLM.
+
+### Why this works beyond the context window
+
+A CSV with 1.57 million rows cannot be placed in a model prompt. The `File`
+input passes its Lakehouse path into the Python worker instead. The model can
+write DuckDB, Polars, or pandas code to inspect the schema, filter rows, and
+calculate aggregates. Only bounded execution feedback, such as schema details,
+previews, aggregates, and errors, enters the next model call. The raw dataset
+does not enter the model prompt.
+
+This pattern also works with wide Excel workbooks, Parquet files, JSONL
+streams, PDFs, and combinations of those sources. File size is constrained by
+the libraries and compute available in the notebook session rather than the
+model's context window.
+
+## What happens during a run
+
+1. You provide a task, named inputs, and an output contract.
+2. The model writes Python for the task.
+3. The Python runs in a persistent subprocess with access to mounted Lakehouse
+   files and installed packages.
+4. Execution output returns to the model. It can inspect results and revise the
+   code.
+5. The run calls `SUBMIT(...)`.
+6. Type checks, skill verifiers, and your validators inspect the submission.
+7. A rejected submission returns with specific repair feedback.
+8. An accepted submission becomes an `RLMResult` with the payload and full
+   trajectory.
+
+```mermaid
+flowchart LR
+    A["Task + Fabric data"] --> B["Model writes Python"]
+    B --> C["CPython subprocess"]
+    C --> D["Inspect and revise"]
+    D --> E["SUBMIT"]
+    E --> F{"Contract passes?"}
+    F -- "No" --> D
+    F -- "Yes" --> G["Result + trajectory"]
+```
+
+## Why Fabric developers use it
+
+### Work with Fabric data in place
+
+Bind Lakehouse files with `File(...)`. Bind Power BI semantic models with
+`SemanticModel(...)`. A single task can use both. DAX runs in the tabular
+engine, file processing runs in Python, and generated artifacts can be written
+back to `Files/`.
+
+### Use the Python packages already in the notebook
+
+The subprocess runs the same Python environment as the notebook. Generated code
+can import native packages and work with real file paths. This is the main
+difference from the Deno and Pyodide interpreter used by DSPy's standard RLM.
+
+### Check the work before accepting it
+
+Output mappings enforce runtime types. `output_validator` can enforce business
+rules. `output_validator_context` can inspect files and other side effects.
+Markdown skills can include their own verifier. A failed check becomes feedback
+for the next attempt.
+
+### Keep domain rules beside the data
+
+Skills are Markdown playbooks. They capture field definitions, procedures,
+tripwires, and executable checks. Store custom skills in Lakehouse Files and
+load them with `SkillLoader`. Bundled and custom skills can be used together.
+
+### Inspect each run
+
+`RLMResult` includes the submitted payload, executed turns, errors, timings,
+token usage, validation repairs, and a deterministic report. Trajectories can be
+saved and replayed without calling the model again.
+
+## Where it fits
+
+Use `fabric-rlm` for tasks that need one or more of these:
+
+- Data that is too large to place in a model prompt
+- Exact calculation across many rows or files
+- Power BI semantic model queries mixed with Lakehouse files
+- Workbook, report, or document generation
+- Multi-step analysis with checkable outputs
+- Reusable domain instructions and validation rules
+- An execution trail for debugging and review
+
+A direct model call is usually a better choice for short questions, rewriting,
+or judgment over text that already fits in context. The runtime adds Python
+execution and iterative checks, so each run takes longer than a single call.
+
+## Start with the API tour
+
+Import
+[examples/notebooks/rlm_api_tour.ipynb](examples/notebooks/rlm_api_tour.ipynb)
+into a Fabric workspace. It covers task construction, typed outputs, files,
+custom Lakehouse skills, validators, result inspection, and worker controls.
+
+The other notebooks cover PDF work, Spark log analysis, spreadsheet editing,
+semantic models, and multi-source tasks.
+
+## Measured results
+
+The benchmarks are included for readers who want the evaluation setup, costs,
+and caveats. They are not required to use the library.
+
+<details>
+<summary><strong>Open benchmark results and reproducibility notes</strong></summary>
+
+### Large-file workbook comparison
 
 One task, two attempts. The task: from a 140 MB IMF CPI pull (1.5 million rows,
 194 countries, fetched live from the public SDMX API), build a formatted Excel
@@ -102,10 +199,11 @@ workbook, and a deterministic ground-truth query verified every cell. The
 failed call cost six times more than the successful one. The notebook then
 pushes the same mini model through a harder task (finding inflation streaks
 with tie-breaks, conditional formatting, and an embedded chart, cleared for
-about two cents) and closes with an honest skill ablation. Run it yourself:
+about two cents), runs an honest skill ablation, and finishes with the
+two-source task. Run it yourself:
 [examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb).
 
-### Benchmark: SpreadsheetBench Verified-400
+### SpreadsheetBench Verified-400
 
 [SpreadsheetBench](https://github.com/RUCKBReasoning/SpreadsheetBench-2) tests
 whether an agent can carry out real spreadsheet-manipulation instructions,
@@ -153,7 +251,7 @@ Reproduce it with
 [examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb](examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb);
 the run needs an OpenRouter key and costs a few dollars.
 
-## Benchmark: AIDABench
+### AIDABench
 
 SpreadsheetBench hands you one workbook and tells you which cells to fill.
 [AIDABench](https://arxiv.org/abs/2603.15636) is closer to real analyst work: read
@@ -190,71 +288,56 @@ account of the seven grading bugs found along the way are in
 These are single-seed numbers. Two identical runs agreed on 84 percent of tasks,
 so treat differences under about ten points as noise.
 
-## How it works, in one picture
+</details>
 
-```mermaid
-flowchart TD
-    A["Task + inputs<br/>(values and File handles)"] --> B["RLM runtime<br/>routes skills, builds the prompt"]
-    B --> C["Model writes Python"]
-    C --> D["CPython subprocess executes it<br/>pandas, DuckDB, openpyxl, Lakehouse Files"]
-    D --> E{"SUBMIT(...) called?"}
-    E -- "no" --> F["stdout, errors, and a bounded<br/>namespace snapshot go back to the model"]
-    F --> C
-    E -- "yes" --> G{"Output verifier<br/>accepts?"}
-    G -- "rejected, with feedback" --> C
-    G -- "accepted" --> H["Result payload + trajectory<br/>(inspect, save, replay)"]
-```
+## Fabric data sources
 
-The raw bytes of your files never enter the LM context. The model reads
-summaries, previews, and computed aggregates; the heavy lifting happens in the
-subprocess.
+Fabric notebooks already provide mounted Lakehouse storage, `sempy`, notebook
+identity, and the Python analytics stack. `fabric-rlm` exposes those resources
+to the run through typed handles. The task can combine semantic model queries
+with CSV, PDF, Excel, Parquet, and JSONL files without building a separate
+ingestion path.
 
-## Use it in a Fabric notebook
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/multisource-dark.svg">
+  <img alt="Two semantic models, five CSVs, three PDFs and two Excel files from a Fabric Lakehouse feed a single fabric-rlm task, which writes a formatted Excel workbook back to the Lakehouse." src="docs/assets/multisource-light.svg">
+</picture>
 
-Install on the Python 3.12 `jupyter_python` kernel, then restart the session:
+Every source is bound as an input and the model decides which one answers which
+part of the brief. The semantic models are queried with DAX in the tabular
+engine, so aggregation happens where the data is and only the result comes
+back. The files are read in the subprocess. The workbook is written straight to
+`Files/`.
+
+
+## Installation
+
+Python 3.10 or newer is required. In Fabric, select the Python 3.12
+(`jupyter_python`) kernel. Install the package and restart the session:
 
 ```python
 %pip install fabric-rlm
-# For the PDF skill and PDF notebooks, add the extra:
-# %pip install fabric-rlm[pdf]
 ```
 
 If imports fail on the Synapse PySpark kernel, see
 [docs/fabric-runtime-deps.md](docs/fabric-runtime-deps.md).
 
-On a paid Fabric capacity, `FabricLM` uses the capacity's built-in Azure OpenAI
-endpoint. It discovers the endpoint through `synapse.ml.fabric` and authenticates
-with the notebook's AAD token, refreshing it automatically on long runs. You do
-not provision an Azure OpenAI resource and you do not manage an API key:
+Optional extras install packages used by specific workloads:
+
+| Extra | Adds | Use it for |
+|---|---|---|
+| `fabric-rlm[pdf]` | PyMuPDF | PDF analysis and extraction |
+| `fabric-rlm[analytics]` | DuckDB, Polars | Large CSV, Parquet, and JSONL analysis |
+| `fabric-rlm[fabric]` | SynapseML | Fabric model integration when the runtime does not provide it |
+| `fabric-rlm[dev]` | pytest and development tools | Local development |
+
+## Other Python environments
+
+The runtime also works on a laptop, in CI, or in an Azure Function. Use
+`OpenAILM` or `AnthropicLM` with the matching environment variable:
 
 ```python
-from fabric_rlm import RLM, FabricLM, File
-
-rlm = RLM.task(
-    task="Find the root cause of the failure in this Spark log.",
-    inputs={"log": File("/lakehouse/default/Files/logs/app.log")},
-    outputs=["root_cause"],
-    lm=FabricLM("gpt-5.1"),
-)
-print(rlm.run().root_cause)
-```
-
-Because the subprocess runs inside the notebook, the model's code reads and writes
-mounted Lakehouse `Files` paths directly, and traces can be written back to the
-Lakehouse. See [examples/notebooks/](examples/notebooks/) for ready-to-import
-recipes; start with `rlm_api_tour.ipynb`.
-
-## Run it locally
-
-The same code runs on your laptop, in CI, or in an Azure Function. Use `OpenAILM`
-or `AnthropicLM` with the matching API key instead of `FabricLM`:
-
-```bash
-pip install fabric-rlm
-```
-
-```python
-from fabric_rlm import RLM, OpenAILM   # set OPENAI_API_KEY in your environment
+from fabric_rlm import File, OpenAILM, RLM  # set OPENAI_API_KEY in your environment
 
 rlm = RLM.task(
     task="Sum every integer from 1 to 1,000,000 that is divisible by 3 or 5.",
@@ -268,28 +351,78 @@ print(rlm.run().answer)
 form. `OpenAILM`, `AnthropicLM`, and `FabricLM` are thin wrappers over `dspy.LM`,
 so any OpenAI, Anthropic, Azure, or local Ollama model works.
 
-Requires Python 3.10 or newer. Optional extras:
+Use a mapping when an output needs a runtime type contract:
 
-| Extra | Adds | For |
-|---|---|---|
-| `fabric-rlm[pdf]` | PyMuPDF | the `pdf_document_analysis` skill and PDF notebooks |
-| `fabric-rlm[analytics]` | DuckDB, Polars | large-file EDA with `data_exploration` |
-| `fabric-rlm[fabric]` | SynapseML | Microsoft Fabric notebook integration |
-| `fabric-rlm[dev]` | pytest | running the test suite |
+```python
+result = RLM.task(
+    task="Return the highest-revenue region and its revenue.",
+    inputs={"sales": File("sales.csv")},
+    outputs={"result": dict},
+    lm=OpenAILM("gpt-4o-mini"),
+).run()
+```
 
-## The worker API
+If `SUBMIT(result=...)` receives the wrong type, the submission is rejected and
+the model gets repair feedback. Name-only lists such as `outputs=["answer"]`
+remain supported and do not add type enforcement.
 
-Inputs and files. Bind values, including large files, as inputs. Files arrive
+## Inputs and worker API
+
+### Values and files
+
+Bind values, including large files, as inputs. Files arrive
 inside the worker as `File(...)` handles with `.path`, `.read_text()`,
 `.read_bytes()`, and `.exists()`, so a Lakehouse path or a local path is just a
 file path.
 
-The SUBMIT contract. The runtime injects `SUBMIT(...)`. Call it with keyword
-arguments matching your declared `outputs`, or with positional arguments in the
-same order. After a valid SUBMIT, `result.payload` holds the dict and each field
-is also reachable as an attribute (`result.answer`).
+### Semantic models
 
-Recursive sub-LM calls. Inside its Python, the model can call a nested LM with
+A Power BI semantic model binds the same way and arrives as a connected handle:
+
+```python
+from fabric_rlm import FabricLM, RLM, SemanticModel
+
+RLM.task(
+    task="Which product line has the highest recurring revenue?",
+    inputs={"arr": SemanticModel("ARR Model SF (79)")},
+    outputs=["answer"],
+    lm=FabricLM("gpt-5.1"),
+).run()
+```
+
+Inside the run, `arr.schema()` returns tables, measures with their DAX
+expressions and descriptions, and relationships in one call. `arr.dax("EVALUATE
+...")` returns a DataFrame, and `arr.measure(name, groupby=[...],
+filters={...})` evaluates a model measure without authoring DAX. Pass
+`workspace=` for a model outside the attached workspace.
+
+Bind several at once and the model routes between them:
+
+```python
+inputs={
+    "mfg": SemanticModel("Manufacturing Ops"),
+    "arr": SemanticModel("ARR Model SF (79)"),
+}
+```
+
+This needs a Fabric notebook, where `sempy` ships in the runtime. The dataset
+name is checked when you construct `SemanticModel`, so a typo fails on that
+line rather than several turns into a run.
+
+The handle gives generated code a clear entry point. Across two semantic models
+and two model families, tasks scored 18-19/19 and 13/15 with the handle. The
+same tasks scored 7/19 and 5/15 when they only named the semantic model.
+
+### Submission contract
+
+The runtime injects `SUBMIT(...)`. Call it with keyword arguments matching the
+declared `outputs`, or with positional arguments in the same order. After a
+valid submission, `result.payload` holds the dictionary and each field is also
+available as an attribute such as `result.answer`.
+
+### Nested model calls
+
+Inside its Python, the model can call a nested model with
 `predict_sync("english -> french", english=phrase)` (or the async `predict`),
 optionally routed to a cheaper `sub_lm=`.
 
@@ -313,9 +446,9 @@ token-sensitive batch runs on trivial tasks.
 
 Skills are Markdown playbooks that tell the model how to do a kind of work
 properly: which library to reach for, the traps to avoid, and what to check
-before submitting. Seven ship with the package, so there is nothing to download
-or configure. Name the ones a task needs and they are prepended to the prompt;
-name none and the keyword router picks for you.
+before submitting. Eight ship with the package. Name the ones a task needs and
+they are prepended to the prompt. The keyword router can also select them from
+the task and input names.
 
 ```python
 from fabric_rlm import RLM, File, FabricLM
@@ -336,13 +469,14 @@ print(rlm.run().answer)
 | `excel_extract` | Reading workbooks: locating real header rows, multi-table sheets, formula versus cached value, pulling structured records out of messy layouts |
 | `data_exploration` | Files too large for context: DuckDB and Polars over CSV, Parquet and JSONL, aggregating in code so raw rows never reach the prompt |
 | `pdf_document_analysis` | Long documents with PyMuPDF: page enumeration, chunking, and per-chunk extraction |
+| `semantic_model` | Power BI semantic model discovery, measure selection, DAX queries, and result validation |
 | `core` | The PLAN / VERIFY / REFLECT contract applied to every run |
 | `validation` | Checking an answer against the task's constraints before submitting |
 | `error_handling` | What to do when a turn raises, so the next turn fixes rather than repeats |
 
-The first four are keyword-routed, so `data_exploration` activates on a task
-mentioning logs or CSVs even if you name no skills at all. The last three are
-scaffolding and load by default.
+The five domain skills are keyword-routed. For example, `data_exploration`
+activates when a task or input name mentions logs or CSV files. The core and
+utility skills provide planning, validation, and error recovery.
 
 ### Writing your own
 
@@ -371,6 +505,34 @@ mix your own with the shipped ones in the same `skills=[...]` list. Pass several
 folders as a list if you keep them apart, and a file named after a bundled skill
 overrides it. If you want only your own, pass `include_packaged=False`.
 
+### Contributed skills
+
+`contrib-skills/` in the repository holds playbooks that are not installed with the
+package, either because they are narrower than the bundled ones or because the
+measurements behind them are thinner than a default install should carry. Point a
+loader at the folder to use one:
+
+```python
+from fabric_rlm import RLM, File, SkillLoader
+
+loader = SkillLoader(skill_dir="contrib-skills")
+
+rlm = RLM.task(
+    task="What was Boeing's FY2022 core operating loss? Report the figure with its sign.",
+    inputs={"filing": File("BOEING_2022_10K.pdf")},
+    outputs=["answer"],
+    skill_loader=loader,
+    skills=["pdf_document_analysis", "financial_documents"],
+)
+```
+
+`financial_documents` is the first of these: reporting conventions for 10-K, 10-Q
+and earnings releases, covering parentheses as negative, scale stated in a header,
+fiscal against calendar year, adjacent period columns and subtotal rows. It is
+scoped to financial reporting on purpose, since parentheses mean something else in
+legal and scientific documents. [docs/contrib-skills.md](docs/contrib-skills.md)
+records what it was measured on and what the measurement does not support.
+
 If a skill needs a library fabric-rlm does not depend on, install it in the
 notebook (`%pip install python-docx`) before running. The sandbox blocks `pip`
 and `subprocess`, so a skill cannot install its own dependencies. See
@@ -385,12 +547,12 @@ documented in [docs/authoring-skills.md](docs/authoring-skills.md).
 
 ## Security
 
-This library runs model-generated code. The default `SecurityPolicy` provides
-guardrails, not isolation: it scrubs secret-bearing environment variables from the
-worker, screens generated code through a configurable policy before it runs, and
-blocks destructive Lakehouse operations (`notebookutils.fs.rm` / `mv`,
-`mssparkutils` aliases). Read [SECURITY.md](SECURITY.md) before running untrusted
-prompts against sensitive data or credentials.
+This library runs model-generated code. The default `SecurityPolicy` scrubs
+secret-bearing environment variables from the worker, screens generated code,
+and blocks destructive Lakehouse operations such as `notebookutils.fs.rm` and
+`mssparkutils.fs.mv`. The worker remains inside the notebook trust boundary.
+Read [SECURITY.md](SECURITY.md) before using untrusted prompts with sensitive
+data or credentials.
 
 ## CLI
 
@@ -428,7 +590,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
 ## Acknowledgments
 
-This project stands on the work of others, and it matters to say so:
+fabric-rlm builds on the following work:
 
 - The Recursive Language Model paradigm comes from the paper
   [Recursive Language Models](https://arxiv.org/abs/2512.24601) by Alex L.

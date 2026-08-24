@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .semantic_model import SemanticModel
+
 
 @dataclass(frozen=True)
 class File:
@@ -101,6 +103,12 @@ def encode_for_worker(value: Any) -> Any:
         return {"__fabric_rlm_file__": value.path}
     if isinstance(value, Path):
         return {"__fabric_rlm_path__": str(value)}
+    if isinstance(value, SemanticModel):
+        # Only the coordinates cross the wire. The worker rebuilds a live
+        # handle, and re-validating there would repeat a network call the
+        # parent already made.
+        return {"__fabric_rlm_semantic_model__": {
+            "dataset": value.dataset, "workspace": value.workspace}}
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     if isinstance(value, tuple):
@@ -111,7 +119,8 @@ def encode_for_worker(value: Any) -> Any:
         return {str(k): encode_for_worker(v) for k, v in value.items()}
     raise TypeError(
         f"Unsupported input type for worker binding: {type(value).__name__}. "
-        "Use primitives, dict/list containers, pathlib.Path, or fabric_rlm.File."
+        "Use primitives, dict/list containers, pathlib.Path, fabric_rlm.File, "
+        "or fabric_rlm.SemanticModel."
     )
 
 
@@ -123,6 +132,13 @@ def decode_from_worker_wire(value: Any) -> Any:
             return File(value["__fabric_rlm_file__"])
         if "__fabric_rlm_path__" in value:
             return Path(value["__fabric_rlm_path__"])
+        if "__fabric_rlm_semantic_model__" in value:
+            spec = value["__fabric_rlm_semantic_model__"]
+            return SemanticModel(
+                dataset=spec["dataset"],
+                workspace=spec.get("workspace"),
+                validate=False,
+            )
         return {k: decode_from_worker_wire(v) for k, v in value.items()}
     if isinstance(value, list):
         return [decode_from_worker_wire(v) for v in value]

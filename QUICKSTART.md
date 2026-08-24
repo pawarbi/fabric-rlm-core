@@ -83,6 +83,23 @@ rlm = RLM.task(
 print(rlm(n=30).payload)   # {'fib': 832040}
 ```
 
+Use a mapping when the submitted value must have a specific runtime type:
+
+```python
+rlm = RLM.task(
+    task="Return the highest-revenue region and its revenue.",
+    inputs={"sales": File("sales.csv")},
+    outputs={"result": dict},
+    lm=lm,
+)
+```
+
+A wrong type is rejected with repair feedback. Contracts accept concrete
+Python types, not parameterized aliases such as `list[str]`. Built-in
+contracts are exact (`bool` is not accepted for `int`, and subclasses of
+`dict` are not accepted for `dict`); custom class contracts accept subclasses.
+Use `outputs=["result"]` when only the field name should be enforced.
+
 > **Reasoning-model handling:** `FabricLM` /
 > `OpenAILM` / `resolve_lm` now detect reasoning models (gpt-5.x,
 > o1/o3/o4 family) and **omit `temperature` automatically** (it's

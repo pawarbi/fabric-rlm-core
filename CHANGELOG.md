@@ -2,8 +2,368 @@
 
 ## Unreleased
 
+## 0.4.1 — 2026-08-22 — safer workers and typed outputs
+
+### Added
+
+- **Typed task outputs** — pass concrete Python types as
+  `outputs={"result": dict}` to reject wrong-shaped `SUBMIT` values and give
+  the model repair feedback. Existing name-only lists remain supported.
+
+### Fixed
+
+- Worker subprocesses scrub provider keys and other secret-bearing environment
+  variables by default, including when network blocking is enabled. Explicit
+  `SecurityPolicy.disabled()` remains available for trusted workloads.
+- Sandbox guidance documents the synchronous `predict_sync(...)` entry point
+  and prediction-object field access.
+- The PDF analysis skill reads filled form widgets before falling back to
+  rendered-page analysis.
+
+## 0.4.0 — 2026-08-07 — a semantic model is now an input
+
+### Added
+
+- **`SemanticModel(dataset, workspace=)`** — bind a Power BI semantic model as
+  a task input and it arrives in the sandbox as a live handle: `.schema()` for
+  tables, measures with their DAX and descriptions, and relationships in one
+  call; `.dax("EVALUATE ...")` returning a DataFrame; `.measure(name,
+  groupby=, filters=)` with no DAX to get wrong. Several models bind at once
+  and route independently.
+
+  Why a handle rather than instructions, measured on a 19-question eval: a
+  task that named a semantic model but gave no way in scored 7/19, with most
+  questions spending every turn looking for an entry point. A skill describing
+  the entry point scored 18-19/19 at ~2.4k characters resent every turn.
+  Binding the handle scored 18/19 three runs in a row with no skill loaded,
+  and adding the skill on top changed nothing. Validation runs at
+  construction, so a typo'd dataset name fails on that line instead of ten
+  turns into a run.
+
+- **`semantic_model` skill** — the fallback for a model passed as a plain
+  name. Cut from 8.1k to 2.4k characters after measurement showed the entry
+  point carried the entire effect; now points at `SemanticModel` first.
+
+- **`fabric_rlm.grounding`** — `evidence_report()`,
+  `submitted_without_evidence()`, `ungrounded_figures()`: read a finished
+  trajectory and report answers the run never derived. On an externally
+  audited benchmark submission this catches 4/4 of the voided trials plus two
+  the audit missed. A diagnostic, never a gate: a pre-registered experiment
+  showed the flags carry no accuracy signal beyond dropping runs at random,
+  so use them to audit output before it ships, not to pick answers.
+
+- **`examples/semantic_model/`** — a semantic model, a PDF, a CSV and a
+  custom context skill combined into a formatted workbook written back to the
+  lakehouse, with a scorecard that attributes each wrong cell to the source
+  the agent failed to read. 44/44 checks with the handle bound.
+
+### Fixed
+
+- **The security message for `import fabric` no longer talks models out of
+  sempy.** The `fabric` SSH package is denied, but the denial read as "network
+  egress off" and models concluded the whole semantic-link path was
+  unavailable - eleven refusals across three eval runs, each citing a blockage
+  that did not apply. The message now names the SSH package and points at
+  `import sempy.fabric`. Give-ups fell from 12 to 1 and the mean score rose
+  11.7 to 16.5 before any skill was involved.
+
+- **`SemanticModel.schema()` asked sempy for a measure column that does not
+  exist.** sempy names it `Measure Description`, not `Description`; the wrong
+  name dropped every measure description silently. Found in a trace where the
+  model hit the same mistake, got the error our code never saw, and recovered.
+
+- **Worker subprocesses no longer open console windows on Windows.** A
+  supervised benchmark run left dozens of empty terminals on the desktop.
+  `CREATE_NO_WINDOW` on both spawn sites; Linux (including Fabric notebooks)
+  takes the unchanged path.
+
+- **A worker killed by threaded code now says so.** Concurrency around native
+  calls (duckdb, drivers, `predict_sync`) can crash the worker fatally with a
+  bare protocol error, and the model's retry repeats the pattern. Both death
+  paths now name the cause and the fix when the executed code contained
+  concurrency markers. The crash itself is tracked as #46.
+
+## 0.3.5 — 2026-08-04 — a 17-second startup cost, removed
+
+First release published to PyPI since 0.3.2, so it also carries everything from
+0.3.3 and 0.3.4 (worker timeout recovery, `skills_as_cards`, `block_network`).
+
+### Fixed
+
+- **The worker no longer imports dspy to read a version string.** The JSON-RPC
+  startup self-test filled in a `dspy_version` diagnostic field by importing
+  dspy, which costs about 18s on a cold interpreter (litellm alone is ~9s), and
+  that self-test runs on every `SubprocessPythonInterpreter` start. Every run on
+  the dspy engine path paid it.
+
+  | | before | after |
+  | --- | --- | --- |
+  | `SubprocessPythonInterpreter` startup | 16.8s median, 34.7s max | **0.9s median** |
+  | `Interpreter` startup (no self-test) | 0.6s | unchanged |
+
+  `importlib.metadata.version("dspy")` returns the identical string in ~0.5s
+  without importing the package. dspy is still imported lazily where it is
+  actually used. The gap had been invisible because the legacy `Interpreter`
+  does not run this self-test.
+
+  It was also the flakiest thing in the test suite: a 60s startup budget against
+  a 16.8s median is only ~2x headroom, so under load startups intermittently
+  exceeded it and different tests failed on each run.
+
+- **The behaviour CI gate no longer charges environment failures to the pull
+  request.** A retired free-tier model slug 404'd on every question and each 404
+  was recorded as a failing question, so the gate reported five per-qid
+  regressions on every PR for a week. Nothing had regressed. A question that
+  never reached the model cannot be evidence for or against a regression, so the
+  gate now aborts on `runner_error` as well as `auth` and names the environment
+  as the cause. `wrong_answer` and `infra` still count, deliberately.
+
+### Added
+
+- **`RLMResult.report()`** — a deterministic account of what a run did.
+  `report()` prints it, `report(as_dict=True)` returns the facts. No model is
+  consulted and nothing is inferred, so it is safe in CI and on a long
+  trajectory.
+
+  Covers whether the run submitted and why not, turns against the ceiling,
+  tokens split by prompt/completion/cached/reasoning, the LM-versus-worker time
+  split, repair turns (submitted, but not on the first attempt), the slowest
+  turn, the last turn that errored, and hints — each tied to a fact printed
+  above it rather than guessed.
+
+- **`RLMResult.ran_any_code`** — False when no turn executed. Note this does not
+  mean the model was unreachable: an LM error raises out of `run()`, so holding
+  a result means the LM answered. It means the model replied without emitting a
+  code block.
+
+## 0.3.4 — 2026-08-04 — opt-in network isolation for the worker
+
+### Fixed
+
+- **Held dspy below 3.3.** dspy 3.3.0 shipped on 2026-08-03 and broke the engine
+  path within hours on a ceiling that allowed it: RLM's `max_iterations` became
+  `max_iters`. Three further changes need handling before the ceiling goes back
+  up — `Image`/`Audio`/`File` no longer perform implicit I/O, interpreter
+  failures became terminal rather than auto-restarting, and LM errors now raise
+  DSPy exception classes rather than provider ones. Tracked in #36.
+
+- **Removed a flaky test.** The `deep_recursion` hang shape raced a 2s timeout
+  against a C-stack overflow, and which won depended on platform and Python
+  version: it failed on 3.10, passed on 3.11, then failed on windows/3.13.
+  Worker death is covered deterministically by the tests that kill the process
+  outright, so nothing is lost.
+
+### Added
+
+- **`block_network=True` refuses network egress from the worker.** Off by
+  default: notebook code legitimately calls APIs, so this is opt-in. Loopback is
+  permitted, every other destination is refused.
+
+  `SecurityPolicy` already denies `requests`, `httpx`, `urllib.request.urlopen`
+  and `socket.socket`, but it is a **static check on the model's own source**, so
+  any library that wraps the request goes straight through it — the model's code
+  never names a denied symbol:
+
+  ```python
+  from datasets import load_dataset     # nothing denied appears here
+  load_dataset("ag_news")               # ...and it fetches anyway
+  ```
+
+  Found on DataAgentBench, where trials answered a classification question by
+  downloading the public dataset and reading its gold label column. The question
+  asks for a category that does not exist in the sanctioned stores, so fetching
+  the labels was both the easy route and exactly what the grader compared
+  against. Stopping that needs a check at the socket layer at runtime, where it
+  does not matter which library made the call.
+
+  The guard is on `connect`, not on socket construction. Denying `socket.socket`
+  and `socketpair` outright kills the worker before its first turn: asyncio's
+  Windows ProactorEventLoop builds its self-pipe with `socket.socketpair()` and
+  `nest_asyncio` creates a loop at import. That pair is two already-connected
+  loopback sockets and cannot reach a remote host.
+
+  An explicit `sub_lm=` is rejected at construction, since sub-LM calls are made
+  from inside the worker. The implicit `sub_lm_spec` set from `lm` is unaffected.
+
+  Verified 11 of 11 on a Fabric capacity, with both an OpenRouter key and the
+  built-in `FabricLM`, including a check that the worker stayed sealed during a
+  run whose LM was reachable, and a control confirming egress was available when
+  the flag was off — so the blocked cases were falsifiable rather than passing by
+  default. See `examples/notebooks/verify_block_network_fabric.ipynb`.
+
+  Three limits, documented and tested rather than implied away. `_socket.socket`
+  used directly is not guarded, because a C type's methods cannot be replaced
+  from Python. Nothing here constrains a C extension issuing raw syscalls, so
+  only an OS-level control can support a claim that a process *cannot* reach the
+  network.
+
+  And most importantly: **this is not contamination prevention.** It stops data
+  arriving over the network; it does nothing about data already on the machine.
+  Redirecting `HF_HOME` does not close that either, because it only changes
+  where the *library* looks by default. Measured on a real DataAgentBench trial
+  with the guard on and `HF_HOME` redirected: the model was refused at
+  `urlopen`, went looking for cache directories, then read
+  `os.path.expanduser("~/.cache/huggingface")` by absolute path and loaded all
+  127,600 labelled rows without touching the network. If a dataset must be
+  unreachable, delete it from disk — and keep auditing what the model actually
+  ran, because that is what catches it when prevention fails.
+
+## 0.3.3 — 2026-08-02 — a worker that stops responding no longer ends the run
+
 ### Changed
 
+- **A worker timeout is now recoverable instead of fatal.** A timeout kills the
+  worker, and the runtime used to return immediately with
+  `failure_reason="worker_timeout"`, discarding every turn already completed —
+  including tasks that had finished the analysis and were formatting output.
+  `recover_worker_timeouts` (default `1`) restarts the worker, re-applies the
+  sub-LM configuration, re-binds inputs, and tells the model its namespace is
+  gone and the approach was too slow. Recovery consumes a turn, so `max_turns`
+  still bounds it, and `recover_worker_timeouts=0` restores the old behaviour.
+
+  The default is one rather than more because each allowed recovery costs up to
+  one timeout period on a run that was doomed anyway, and the default timeout is
+  300s: a budget of two risks a ten-minute hang in an interactive notebook.
+
+  Timeouts are rare but total — 23 of 983 task runs across four full
+  AgenticDataBench runs, each losing the whole run. Tested across six ways a
+  worker stops responding (sleep, busy loop, huge allocation, runaway string
+  concatenation, blocking stdin read, deep recursion), plus recovery after
+  several good turns, `File` inputs, sub-LM reconfiguration, skills loaded, and
+  the turn budget. Verified on a Fabric capacity: the worker respawns inside the
+  Synapse executor, Lakehouse `File` inputs re-bind, and `FabricLM` keeps working
+  across the restart. No measurable effect on runs that never time out.
+
+  The same recovery now also covers a worker that **dies** rather than hangs —
+  an out-of-memory kill, a segfault, or code calling `sys.exit()` — which raised
+  `WorkerProtocolError` and ended the run untouched. The model is told it
+  exhausted memory rather than that it was too slow, since the two need opposite
+  advice, and the new `failure_reason="worker_died"` keeps a crash distinct from
+  a timeout in the trajectory.
+
+  Worth stating plainly: this branch is defensive, not measured. Across 9,092
+  recorded benchmark task runs there are 2 worker timeouts and **zero** worker
+  deaths, so it is not expected to move any benchmark number. It was found
+  because Python 3.10 segfaults on deep recursion before a timeout can fire
+  (3.11 moved frames to a heap-allocated data stack, so it merely runs slowly),
+  and the death path was covered by tests that kill the worker outright so it is
+  exercised on every supported Python rather than only 3.10.
+
+### Added
+
+- **`skills_as_cards`**, which advertises the chosen skills as one-line cards and
+  lets the model call `load_skill(name)` if it wants a body, instead of
+  preloading the full playbook. A preloaded body is resent on every turn, so its
+  cost is roughly size times turns; for `excel_modify` the prompt drops from
+  19,606 to 4,945 characters before any per-turn multiplier. Default `False`;
+  under measurement on SpreadsheetBench before any change to that default.
+
+## 0.3.2 — 2026-08-01 — verified execution, and a timeout that fires
+
+### Added
+
+- **`verified_task`: blind double-solve with structural agreement and
+  reconciliation.** Solves a task twice in fresh contexts, compares the answers
+  in code (exact numbers, identical semicolon-list item sets, normalized prose),
+  and on disagreement reconciles in a third fresh context that must re-derive
+  from the data. Measured before it was written: +0.076 stratified Pass@1 over
+  single solves on a 54-query, three-runs-each benchmark A/B, at about 2.9x
+  tokens, with the reconciler choosing correctly on 68-77% of decisive pairs.
+  For read-only analytical tasks whose product is a determinate answer; the
+  module docstring states where it does not apply (side-effect tasks such as
+  workbook modification run the task multiple times; generative output never
+  agrees structurally; consistent errors agree and pass). Returns a
+  `VerifiedResult` carrying the winning `RLMResult`, the verdict, both
+  candidate answers, and every attempt for token accounting.
+
+- **`contrib-skills/financial_documents`, a domain playbook that is not installed
+  with the package.** Reporting conventions for 10-K, 10-Q, annual reports and
+  earnings releases: parentheses as negative, scale stated in a header rather than
+  beside the number, fiscal against calendar year, adjacent three-month and
+  twelve-month columns, subtotal and contra rows, restatements and non-GAAP
+  measures. Load it by pointing a `SkillLoader` at `contrib-skills/`. It declares
+  `pdf_document_analysis` as a dependency, so naming it pulls in the page mechanics
+  as well.
+
+  It sits outside the wheel because the evidence is narrow. On a 40-question set
+  built from tables in 24 SEC filings, each asking which row holds the largest or
+  smallest value in a named column, it scored 35 of 40 against 32 for
+  `pdf_document_analysis` alone, fixing 5 and breaking 2. The subset with a negative
+  candidate value went from 16 of 20 to 19 of 20, and the traces confirm the
+  mechanism: the baseline picked "Boeing Capital $199 million" as the smallest value
+  in a column that contained "(231)", reading the bracketed negative as positive.
+  The result is not significant (two-sided McNemar, p = 0.453), and because the set
+  was built to concentrate sign handling, the gain does not transfer to a general
+  accuracy figure. On FinanceBench the expected effect is closer to one question in
+  150. See `docs/contrib-skills.md`.
+
+  A generic "enumerate the candidates and compute the extreme" rule was tested on
+  the same set and rejected: 32 of 40, three fixed and three broken, because it led
+  the model to pull rows in from neighbouring tables. It is not shipped anywhere.
+
+### Fixed
+
+- **A dropped LM connection now errors instead of hanging forever.** Resolved
+  LMs carry a default per-request `timeout` (600s; override by passing
+  `timeout` in the spec). Without it, a connection the provider silently drops
+  blocks the worker indefinitely: the task-level timeout is checked between
+  turns, and a blocked HTTP read never returns to let it run. Observed as five
+  concurrent workers frozen for 35+ minutes with zero CPU and zero API spend.
+  Regression-tested against a server that accepts requests and never responds.
+
+- **Token totals no longer omit LM calls that produced no runnable code.** When a
+  response arrives truncated mid-fence, or contains prose instead of a `python`
+  block, the runtime retries it rather than executing it. Those attempts never
+  became a `TurnRecord`, and since token totals were summed from the trajectory's
+  turns, the provider's charge for them vanished from `total_prompt_tokens` and
+  `total_completion_tokens`. Any run that hit either guard under-reported its
+  spend; a run where *every* response hit one reported `n_turns=0` and no tokens
+  at all while having taken a minute and cost real money. Those calls are now
+  carried alongside the trajectory and included in the totals. The turn-exhaustion
+  warning also reports attempts rather than recorded turns, so it no longer says
+  "ran out of turns after 0 of 16".
+
+  No behaviour change: the trajectory itself is unchanged, so the stuck-loop
+  circuit breaker sees exactly what it saw before, and nothing about what the
+  model is shown or generates is affected. Only the reported numbers move, and
+  they move toward what the provider actually billed.
+
+## 0.3.0 — 2026-07-28 — reasoning effort pinned, sharper document guidance
+
+### Changed
+
+- **Reasoning models now default to `reasoning_effort="medium"`.** Previously
+  the effort was left unset, which meant the provider decided. Providers
+  disagree: the same gpt-5 family model reached through one route arrived with
+  reasoning on and through another with it off, using identical library code.
+  A reasoning model that is not reasoning does not fail loudly, it fails
+  plausibly. On a two-source document task, gpt-5.1 with the provider default
+  scored 4.0 of 12 document checks and fabricated four correctly shaped rows of
+  economies and dates that appear nowhere in the source; with the effort pinned
+  it scored 12.0 of 12 across three consecutive runs. Pinning the value makes a
+  run reproducible across routes instead of inheriting endpoint behaviour.
+
+  This affects anyone on the gpt-5 or o1/o3/o4 family who did not set
+  `reasoning_effort` explicitly: expect different cost, latency, and quality
+  after upgrading. Chat models (`gpt-4o`, `gpt-5.1-chat`) and non-OpenAI
+  backends are unchanged. Pass `reasoning_effort` to `FabricLM`, `OpenAILM`, or
+  a dict LM spec to override, including back to a provider default.
+- **`pdf_document_analysis` now teaches locate-then-read.** The skill covered
+  page rendering and vision, but said nothing about pulling one figure out of a
+  long report, and models reliably chose the worst method: flatten every page
+  into one string and regex for a number near a label. Section labels and stock
+  phrases repeat across a document, so the first match usually comes from the
+  wrong section, and the answer that came back was confident and wrong. The
+  skill now says to locate the passage, print it, read it, and keep the source
+  sentence next to the value, and it documents an x-coordinate fallback for the
+  borderless tables `find_tables()` cannot parse. Measured on a two-source
+  extraction task with gpt-5-mini, three runs per variant: 3.0 of 12
+  document-dependent checks before, 8.3 after.
+- The free-tier behaviour gate targets `nvidia/nemotron-3-ultra-550b-a55b:free`.
+  OpenRouter retired `openai/gpt-oss-120b` from its free tier, so the old slug
+  404s on every question and the gate failed for anyone running the suite. The
+  new model calibrates at 5/5 on all five questions. Override with
+  `BEHAVIOR_SECONDARY_FREE_MODEL`; the old baseline is retained.
 - The skill-authoring documents moved out of the installed package. `SkillLoader`
   listed `PLAYBOOK_CONTRACT` and `SKILL_TEMPLATE` as if they were loadable
   skills, so a model calling `list_skills()` saw two entries that are

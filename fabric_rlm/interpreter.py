@@ -26,6 +26,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from . import netguard
 from .artifacts import encode_for_worker
 from .security import SecurityPolicy
 from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
@@ -33,6 +34,42 @@ from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
 
 class WorkerTimeout(TimeoutError):
     """Raised when the worker does not respond within the configured timeout."""
+
+
+_CONCURRENCY_MARKERS = ("ThreadPoolExecutor", "ProcessPoolExecutor",
+                        "import threading", "threading.Thread",
+                        "import multiprocessing", "multiprocessing.",
+                        "asyncio.gather", "asyncio.run")
+
+
+def _worker_env(
+    security: SecurityPolicy | None,
+    env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Build a child environment that is secret-safe unless explicitly disabled."""
+
+    policy = security if security is not None else SecurityPolicy.default()
+    return policy.scrub_env(env)
+
+
+def concurrency_death_hint(code) -> str:
+    """Why did the worker die? If the code was threading, say so.
+
+    A worker hard-crash (GIL fatal, native segfault) costs the whole solve
+    and the model never learns why: it sees a bare protocol error and its
+    retry repeats the pattern. Observed twice in one benchmark run - both
+    times ThreadPoolExecutor around native calls. Naming the cause turns a
+    fatal into a repairable turn.
+    """
+    if not code:
+        return ""
+    hits = sorted({m for m in _CONCURRENCY_MARKERS if m in code})
+    if not hits:
+        return ""
+    return (" NOTE: this code used " + ", ".join(hits) + ". The worker is "
+            "not thread-safe for native calls (duckdb, database drivers, "
+            "predict_sync) and concurrency can crash it fatally, losing all "
+            "session state. Rewrite the work as a plain serial loop.")
 
 
 class WorkerProtocolError(RuntimeError):
@@ -104,10 +141,12 @@ class Interpreter:
         cwd: str | None = None,
         security: SecurityPolicy | None = None,
         max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
+        block_network: bool = False,
     ):
         self.timeout = timeout
         self.python = python or sys.executable
         self.cwd = cwd
+        self.block_network = bool(block_network)
         # ``security`` is opt-in at this layer (None = no enforcement). The
         # public RLM facade is responsible for passing a default policy in
         # for LM-facing executions; verifier code paths intentionally leave
@@ -138,13 +177,18 @@ class Interpreter:
             "errors": "replace",
             "bufsize": 1,
             "cwd": self.cwd,
+            "env": _worker_env(self.security),
         }
-        # Scrub secret-bearing env vars from the worker if a policy is set.
-        # Without this branch the child inherits the parent env wholesale.
-        if self.security is not None and self.security.enabled:
-            kwargs["env"] = self.security.scrub_env(dict(os.environ))
+        if self.block_network:
+            # The worker installs the guard itself when it sees this.
+            env = kwargs["env"]
+            env[netguard.ENV_FLAG] = "1"
         if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            # CREATE_NO_WINDOW: without it, every worker spawned from a
+            # detached parent opens its own console window - a long benchmark
+            # run put dozens of empty terminals on the user's desktop.
+            kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
+                                       | subprocess.CREATE_NO_WINDOW)
         else:
             kwargs["start_new_session"] = True
 
@@ -191,6 +235,7 @@ class Interpreter:
                     error=violation,
                     reached_worker=False,
                 )
+        self._last_exec_code = code
         raw = self._request(
             {
                 "op": "exec",
@@ -273,7 +318,9 @@ class Interpreter:
             raise WorkerTimeout(f"Worker timed out after {self.timeout}s") from exc
 
         if line is None:
-            raise WorkerProtocolError(self._format_worker_exit("Worker exited without response"))
+            raise WorkerProtocolError(
+                self._format_worker_exit("Worker exited without response")
+                + concurrency_death_hint(getattr(self, "_last_exec_code", None)))
 
         try:
             return json.loads(line)
@@ -449,11 +496,10 @@ class SubprocessPythonInterpreter:
             cmd.extend(self._extra_python_args)
         cmd.extend(["-m", "fabric_rlm._worker"])
 
-        env = {**os.environ, "PYTHONPATH": self._compute_pythonpath()}
-        if self.security is not None and self.security.enabled:
-            # Scrub secrets from the worker env. PYTHONPATH was set above and
-            # is on the policy's default keep list, so it survives the scrub.
-            env = self.security.scrub_env(env)
+        env = _worker_env(
+            self.security,
+            {**os.environ, "PYTHONPATH": self._compute_pythonpath()},
+        )
 
         kwargs: dict[str, Any] = {
             "stdin": subprocess.PIPE,
@@ -467,7 +513,11 @@ class SubprocessPythonInterpreter:
             "env": env,
         }
         if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            # CREATE_NO_WINDOW: without it, every worker spawned from a
+            # detached parent opens its own console window - a long benchmark
+            # run put dozens of empty terminals on the user's desktop.
+            kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
+                                       | subprocess.CREATE_NO_WINDOW)
         else:
             kwargs["start_new_session"] = True
 
@@ -564,6 +614,7 @@ class SubprocessPythonInterpreter:
         # Send execute request. Then loop reading frames: tool_call requests
         # from worker get dispatched and replied to inline; the matching
         # execute response terminates the loop.
+        self._last_exec_code = code
         self._request_id += 1
         request_id = self._request_id
         self._write_jsonrpc(
@@ -737,6 +788,7 @@ class SubprocessPythonInterpreter:
             stderr = "\n".join(self._stderr_buf).strip()
             raise CodeInterpreterError(
                 f"Worker exited unexpectedly {context}. Worker stderr:\n{stderr}"
+                + concurrency_death_hint(getattr(self, "_last_exec_code", None))
             )
         return line.strip()
 

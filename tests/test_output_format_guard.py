@@ -18,6 +18,69 @@ from fabric_rlm.validators import (
     chain,
     infer_subquestion_count,
 )
+from fabric_rlm.runtime import validate_submit_payload
+
+
+def test_validate_submit_payload_enforces_declared_types():
+    result = validate_submit_payload(
+        {"result": "South"},
+        ["result"],
+        {"result": dict},
+    )
+
+    assert result.errors == ("Required output field 'result' must be dict, got str.",)
+
+
+@pytest.mark.parametrize(
+    ("expected_type", "value"),
+    [
+        (dict, {"top_region": "South"}),
+        (list, ["South"]),
+        (str, "South"),
+        (int, 42),
+        (float, 42.5),
+        (bool, True),
+    ],
+)
+def test_validate_submit_payload_accepts_declared_types(expected_type, value):
+    result = validate_submit_payload({"result": value}, ["result"], {"result": expected_type})
+
+    assert result.ok
+
+
+@pytest.mark.parametrize(
+    ("expected_type", "value"),
+    [
+        (dict, ["South"]),
+        (list, {"region": "South"}),
+        (str, 42),
+        (int, True),
+        (float, 42),
+        (bool, 1),
+    ],
+)
+def test_validate_submit_payload_rejects_wrong_declared_types(expected_type, value):
+    result = validate_submit_payload({"result": value}, ["result"], {"result": expected_type})
+
+    assert not result.ok
+    assert expected_type.__name__ in result.errors[0]
+    assert type(value).__name__ in result.errors[0]
+
+
+def test_validate_submit_payload_accepts_subclasses_for_custom_types():
+    class OutputBase:
+        pass
+
+    class OutputChild(OutputBase):
+        pass
+
+    result = validate_submit_payload(
+        {"result": OutputChild()},
+        ["result"],
+        {"result": OutputBase},
+    )
+
+    assert result.ok
 
 
 # ---------- infer_subquestion_count ----------

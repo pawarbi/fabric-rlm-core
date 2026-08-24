@@ -370,7 +370,7 @@ def test_adaptive_factory_propagates_inline_state_from_from_task(
         rlm = RLM.from_task(
             "Compute the answer to the question.",
             inputs={"question": "2+2?"},
-            outputs=["answer"],
+            outputs={"answer": dict},
             lm="gpt-4.1-mini",
             engine="adaptive",
             adaptive={"validator": lambda _result: True},
@@ -382,10 +382,12 @@ def test_adaptive_factory_propagates_inline_state_from_from_task(
     # built from -- otherwise it runs "blind" and produces answer=None.
     assert inner._inline_task == "Compute the answer to the question."
     assert inner._inline_outputs == ["answer"]
+    assert inner._inline_output_types == {"answer": dict}
     assert inner._inline_inputs == {"question": "2+2?"}
     # The collections must be defensive copies so inner mutations don't bleed
     # back into the outer instance (or sibling inners on subsequent attempts).
     assert inner._inline_outputs is not rlm._inline_outputs
+    assert inner._inline_output_types is not rlm._inline_output_types
     assert inner._inline_inputs is not rlm._inline_inputs
 
 

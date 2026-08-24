@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .interpreter import ExecResult, Interpreter, WorkerTimeout
+from .interpreter import ExecResult, Interpreter, WorkerProtocolError, WorkerTimeout
 from .security import SecurityPolicy
 from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
 
@@ -401,6 +401,205 @@ class RLMResult:
         """
         return self.payload if self.payload is not None else {}
 
+    @property
+    def ran_any_code(self) -> bool:
+        """True when at least one turn executed code.
+
+        False means nothing ran, which has two quite different causes and the
+        report distinguishes them: ``max_turns`` was 0 or exhausted before any
+        code block appeared, or the model replied in prose and never emitted a
+        code block at all. Either way the run says nothing about whether the
+        model can do the task.
+
+        Note this is deliberately *not* called "reached the model". An LM error
+        (bad key, wrong provider prefix, rejected parameter) raises out of
+        ``run()`` rather than returning a result, so a result in hand means the
+        LM answered. Harnesses that wrap ``run()`` in a broad ``except`` and
+        record a row are where that distinction gets lost - and it has been lost
+        twice on this project, once when an expired key produced 37 rows scored
+        as wrong answers and moved a measured delta by four points.
+        """
+        return self.n_turns > 0
+
+    def report(self, as_dict: bool = False) -> Any:
+        """Human-readable summary of what this run did, or a dict of the facts.
+
+        Deterministic and offline: counts, splits and timings straight off the
+        trajectory. No model is consulted, nothing is inferred, and it is safe
+        to call in CI or on a 100-turn trajectory.
+
+        The fields exist because each one cost real time to reconstruct by hand
+        from raw turns: whether the run reached the model at all, whether it
+        stopped because it was done or because it ran out of turns, where the
+        time went (LM vs worker), and what share of prompt tokens were cached -
+        the last because cache-adjusted cost has reversed a conclusion here
+        before, when a naive token count overstated a feature's cost by 3x.
+        """
+        s = self.trajectory.summary()
+        turns = self.turns
+        ceiling = self.max_turns
+        hit_ceiling = bool(ceiling and self.n_turns >= ceiling and not self.submitted)
+        prompt = self.total_prompt_tokens
+        cached = self.total_cached_tokens
+        cache_share = (cached / prompt) if (prompt and cached is not None) else None
+        lm_s = self.total_lm_seconds
+        wk_s = self.total_worker_seconds
+        wall = (lm_s or 0.0) + (wk_s or 0.0)
+        timed = [t for t in turns if t.duration_s is not None]
+        slowest = max(timed, key=lambda t: t.duration_s or 0.0) if timed else None
+        errored = [t for t in turns if t.error]
+        last_error = errored[-1] if errored else None
+        # A single error class recurring on 3+ turns means the loop is not
+        # recovering from it, which is different from a turn that errored once
+        # and moved on.
+        kinds_count: dict[str, int] = {}
+        for t in errored:
+            k = (t.error or "").strip().splitlines()[-1].split(":", 1)[0].strip() or "Unknown"
+            kinds_count[k] = kinds_count.get(k, 0) + 1
+        repeated_error = next(
+            ((k, v) for k, v in sorted(kinds_count.items(), key=lambda kv: -kv[1]) if v >= 3),
+            None,
+        )
+        repairs: dict[str, int] = {}
+        for t in turns:
+            tt = getattr(t, "turn_type", "normal") or "normal"
+            if tt != "normal":
+                repairs[tt] = repairs.get(tt, 0) + 1
+
+        facts: dict[str, Any] = {
+            "submitted": self.submitted,
+            "ran_any_code": self.ran_any_code,
+            "failure_reason": self.failure_reason,
+            "turns": self.n_turns,
+            "max_turns": ceiling,
+            "hit_ceiling": hit_ceiling,
+            "errors": s.get("errors"),
+            "error_kinds": s.get("error_kinds") or {},
+            "prompt_tokens": prompt,
+            "completion_tokens": self.total_completion_tokens,
+            "cached_tokens": cached,
+            "cache_share": round(cache_share, 3) if cache_share is not None else None,
+            "reasoning_tokens": self.total_reasoning_tokens,
+            "lm_seconds": round(lm_s, 2) if lm_s is not None else None,
+            "worker_seconds": round(wk_s, 2) if wk_s is not None else None,
+            # Repair turns are the closest thing here to a signal about answer
+            # *quality* rather than run mechanics. A run can submit successfully
+            # and still have been rejected three times on the way, which is the
+            # difference between "worked" and "barely worked" - and a user whose
+            # output_validator keeps firing has a concrete thing to look at.
+            "submit_turn": next((t.turn for t in reversed(turns) if t.submitted), None),
+            "repair_turns": repairs,
+            "validation_errors": sum(
+                len(t.validation_errors or []) for t in turns
+            ),
+            "issues": [
+                {"turn": i.turn, "kind": i.kind, "message": i.message}
+                for i in self.trajectory.diagnose()
+            ],
+            "outputs": sorted(self.outputs.keys()),
+        }
+        if as_dict:
+            return facts
+
+        def n(v: Any, suffix: str = "") -> str:
+            if v is None:
+                return "n/a"
+            if isinstance(v, bool):
+                return f"{v}{suffix}"
+            if isinstance(v, int):
+                return f"{v:,}{suffix}"
+            if isinstance(v, float):
+                return f"{v:,.2f}{suffix}"
+            return f"{v}{suffix}"
+
+        lines: list[str] = []
+        if not self.ran_any_code:
+            # Lead with this: a run where nothing executed says nothing about
+            # whether the model can do the task, and reading it as a wrong
+            # answer is the mistake this guards against.
+            lines.append("NO CODE RAN - not a wrong answer, and not a model verdict.")
+            lines.append(f"  max_turns was {n(ceiling)}; the model never produced an "
+                         "executable code block.")
+            if self.failure_reason:
+                lines.append(f"  failure_reason: {self.failure_reason}")
+        elif self.submitted:
+            # The LAST submitting turn, not the first. A payload rejected by an
+            # output_validator still sets submitted on its turn, so naming the
+            # first one reports the attempt that failed rather than the one that
+            # stuck - and reads as a contradiction next to the turn count.
+            accepted = next((t.turn for t in reversed(turns) if t.submitted), None)
+            lines.append(f"SUBMITTED on turn {accepted} of {n(ceiling)}"
+                         f"  outputs: {', '.join(facts['outputs']) or '(none)'}")
+        else:
+            why = self.failure_reason or "no SUBMIT call"
+            lines.append(f"NOT SUBMITTED after {self.n_turns} turns - {why}")
+            if hit_ceiling:
+                lines.append("  Ran out of turns. Raising max_turns may be all this needs.")
+
+        lines.append(
+            f"turns {self.n_turns}"
+            + (f"/{ceiling}" if ceiling else "")
+            + f"   errors {n(s.get('errors'))}"
+            + (f" {facts['error_kinds']}" if facts["error_kinds"] else "")
+        )
+        if prompt or self.total_completion_tokens:
+            tok = f"tokens  prompt {n(prompt)}  completion {n(self.total_completion_tokens)}"
+            if cache_share is not None:
+                tok += f"  cached {cache_share:.0%} of prompt"
+            if self.total_reasoning_tokens:
+                tok += f"  reasoning {n(self.total_reasoning_tokens)}"
+            lines.append(tok)
+        if lm_s is not None or wk_s is not None:
+            share = f" ({lm_s / wall:.0%} in the model)" if wall and lm_s is not None else ""
+            lines.append(f"time    lm {n(lm_s, 's')}  worker {n(wk_s, 's')}{share}")
+        if repairs or facts["validation_errors"]:
+            bits = ", ".join(f"{k} x{v}" for k, v in sorted(repairs.items()))
+            line = f"repairs {bits or 'none'}"
+            if facts["validation_errors"]:
+                line += f"   validation errors {facts['validation_errors']}"
+            line += "   (submitted, but not on the first attempt)" if self.submitted else ""
+            lines.append(line)
+        if facts["issues"]:
+            lines.append(f"issues  {len(facts['issues'])} detected:")
+            for i in facts["issues"][:5]:
+                lines.append(f"  turn {i['turn']}: {i['kind']} - {i['message'][:80]}")
+
+        # Where to look. A line per turn is unreadable past ~15 turns, so name
+        # only the two that answer "which turn do I open first": the slowest,
+        # and the last one that errored.
+        if slowest is not None and (slowest.duration_s or 0) > 0:
+            lines.append(f"slowest turn {slowest.turn} ({slowest.duration_s:.1f}s)")
+        if last_error is not None:
+            msg = (last_error.error or "").strip().splitlines()[-1][:100]
+            lines.append(f"last error  turn {last_error.turn}: {msg}")
+
+        # What to try. Every hint is tied to a fact printed above, so none of
+        # this is a guess about intent - which matters, because a confident
+        # wrong suggestion costs more than no suggestion.
+        hints: list[str] = []
+        if hit_ceiling:
+            hints.append(f"raise max_turns - all {ceiling} were used and nothing was submitted")
+        if repeated_error:
+            hints.append(
+                f"{repeated_error[0]} recurs on {repeated_error[1]} turns; the loop is "
+                f"stuck rather than progressing - start at turn {errored[0].turn}"
+            )
+        if repairs.get("verifier_repair"):
+            hints.append("an output_validator rejected a payload; make sure its message "
+                         "says what to change, not just that it was wrong")
+        if wall > 5 and wk_s is not None and (wk_s / wall) > 0.8:
+            hints.append(f"{wk_s / wall:.0%} of the time was worker execution rather than "
+                         "the model - the bottleneck is the data work, not the LM")
+        if cache_share is not None and self.n_turns >= 4 and cache_share < 0.3:
+            hints.append(f"only {cache_share:.0%} of prompt tokens were cached across "
+                         f"{self.n_turns} turns; something in the prompt changes every turn, "
+                         "which inflates cost")
+        if hints:
+            lines.append("what to try:")
+            for h in hints:
+                lines.append(f"  - {h}")
+        return "\n".join(lines)
+
     def __getattr__(self, name: str) -> Any:
         # Only reached when normal attribute lookup fails. Never satisfy dunder
         # probes from the payload, and read ``payload`` straight from ``__dict__``
@@ -429,13 +628,24 @@ class RLMResult:
         }
 
 
-def _aggregate_trajectory_metrics(trajectory: Trajectory) -> dict[str, Any]:
+def _aggregate_trajectory_metrics(
+    trajectory: Trajectory,
+    unbilled: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Sum per-turn token + timing fields across the trajectory.
 
     Token aggregates are ``None`` when no turn reported usage (so we don't
     confuse "unknown" with "zero"). Timing aggregates are always summed when
     any turn was recorded.
+
+    ``unbilled`` carries usage from LM calls that never became a trajectory
+    turn: a response that was truncated mid-fence, or that contained no
+    runnable code at all. Those calls are retried rather than executed, so
+    they have no turn to hang off, but the provider still charged for them.
+    Leaving them out understated the reported spend of any run that hit either
+    guard, and made a run where *every* call hit one report zero tokens.
     """
+    extra = unbilled or []
 
     def _sum_optional(values: list[Any]) -> Any:
         present = [v for v in values if v is not None]
@@ -443,11 +653,14 @@ def _aggregate_trajectory_metrics(trajectory: Trajectory) -> dict[str, Any]:
             return None
         return sum(present)
 
-    prompts = [t.prompt_tokens for t in trajectory.turns]
-    completions = [t.completion_tokens for t in trajectory.turns]
-    cached = [t.cached_tokens for t in trajectory.turns]
-    reasoning = [t.reasoning_tokens for t in trajectory.turns]
-    lm_secs = [t.lm_call_seconds for t in trajectory.turns]
+    prompts = [t.prompt_tokens for t in trajectory.turns] + [e.get("prompt_tokens") for e in extra]
+    completions = ([t.completion_tokens for t in trajectory.turns]
+                   + [e.get("completion_tokens") for e in extra])
+    cached = [t.cached_tokens for t in trajectory.turns] + [e.get("cached_tokens") for e in extra]
+    reasoning = ([t.reasoning_tokens for t in trajectory.turns]
+                 + [e.get("reasoning_tokens") for e in extra])
+    lm_secs = ([t.lm_call_seconds for t in trajectory.turns]
+               + [e.get("lm_call_seconds") for e in extra])
     worker_secs = [t.worker_execute_seconds for t in trajectory.turns]
     return {
         "total_prompt_tokens": _sum_optional(prompts),
@@ -611,6 +824,9 @@ class RLM:
         router_candidate_specificities: list[str] | None = None,
         router_include_dependencies: bool = True,
         reserve_finalize_turns: int = 0,
+        recover_worker_timeouts: int = 1,
+        skills_as_cards: bool = False,
+        block_network: bool = False,
         max_prompt_tokens: int | None = None,
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
@@ -751,6 +967,10 @@ class RLM:
             )
             self.router_include_dependencies = bool(router_include_dependencies)
             self.reserve_finalize_turns = max(0, int(reserve_finalize_turns))
+            self.recover_worker_timeouts = max(0, int(recover_worker_timeouts))
+            self.skills_as_cards = bool(skills_as_cards)
+            self.block_network = bool(block_network)
+            _reject_block_network_with_sub_lm(block_network, sub_lm)
             self.max_prompt_tokens = max_prompt_tokens
             self.digest_after_turn = digest_after_turn
             self.output_validator = output_validator
@@ -760,6 +980,7 @@ class RLM:
             self._activated_skills: set[str] = set()
             self._inline_task: str | None = None
             self._inline_outputs: list[str] | None = None
+            self._inline_output_types: dict[str, type] = {}
             self._inline_inputs: dict[str, Any] = {}
             # Capture the construction args needed to spin up inner RLMs.
             # ``lm`` is preserved as the user passed it (spec or instance) so
@@ -780,6 +1001,9 @@ class RLM:
                 router_candidate_specificities=router_candidate_specificities,
                 router_include_dependencies=router_include_dependencies,
                 reserve_finalize_turns=reserve_finalize_turns,
+                recover_worker_timeouts=recover_worker_timeouts,
+                skills_as_cards=skills_as_cards,
+                block_network=block_network,
                 max_prompt_tokens=max_prompt_tokens,
                 digest_after_turn=digest_after_turn,
                 output_validator=output_validator,
@@ -815,6 +1039,10 @@ class RLM:
         )
         self.router_include_dependencies = bool(router_include_dependencies)
         self.reserve_finalize_turns = max(0, int(reserve_finalize_turns))
+        self.recover_worker_timeouts = max(0, int(recover_worker_timeouts))
+        self.skills_as_cards = bool(skills_as_cards)
+        self.block_network = bool(block_network)
+        _reject_block_network_with_sub_lm(block_network, sub_lm)
         self.max_prompt_tokens = max_prompt_tokens
         self.digest_after_turn = digest_after_turn
         self.output_validator = output_validator
@@ -834,6 +1062,7 @@ class RLM:
         self._activated_skills: set[str] = set()
         self._inline_task: str | None = None
         self._inline_outputs: list[str] | None = None
+        self._inline_output_types: dict[str, type] = {}
         self._inline_inputs: dict[str, Any] = {}
 
     @classmethod
@@ -841,7 +1070,7 @@ class RLM:
         cls,
         task: str,
         inputs: dict[str, Any] | None = None,
-        outputs: list[str] | None = None,
+        outputs: list[str] | Mapping[str, type] | None = None,
         *,
         deprecation_stacklevel: int,
         **kwargs: Any,
@@ -878,8 +1107,19 @@ class RLM:
                 instance = cls(**kwargs)
         else:
             instance = cls(**kwargs)
+        output_names, output_types = _normalize_inline_outputs(outputs)
+        if output_types and instance.signature is not None:
+            _, signature_outputs = _task_and_outputs(instance.signature, None, None)
+            if len(output_names) != len(signature_outputs) or set(output_names) != set(
+                signature_outputs
+            ):
+                raise ValueError(
+                    f"Typed output fields {output_names!r} do not match explicit "
+                    f"signature outputs {signature_outputs!r}."
+                )
         instance._inline_task = task
-        instance._inline_outputs = list(outputs or [])
+        instance._inline_outputs = output_names
+        instance._inline_output_types = output_types
         instance._inline_inputs = dict(inputs or {})
         return instance
 
@@ -888,9 +1128,15 @@ class RLM:
         cls,
         task: str,
         inputs: dict[str, Any] | None = None,
-        outputs: list[str] | None = None,
+        outputs: list[str] | Mapping[str, type] | None = None,
         **kwargs: Any,
     ) -> "RLM":
+        """Construct an RLM from task text and named inputs and outputs.
+
+        ``outputs`` may be a list of field names for backward-compatible,
+        name-only validation, or a mapping from field names to concrete Python
+        types for runtime type enforcement and repair feedback.
+        """
         return cls._from_task_impl(
             task,
             inputs=inputs,
@@ -904,10 +1150,10 @@ class RLM:
         cls,
         task: str,
         inputs: dict[str, Any] | None = None,
-        outputs: list[str] | None = None,
+        outputs: list[str] | Mapping[str, type] | None = None,
         **kwargs: Any,
     ) -> "RLM":
-        """Ergonomic alias for :meth:`from_task`."""
+        """Construct an RLM using the same contract as :meth:`from_task`."""
         return cls._from_task_impl(
             task,
             inputs=inputs,
@@ -1012,6 +1258,7 @@ class RLM:
                 inner._inline_outputs = (
                     list(self._inline_outputs) if self._inline_outputs else []
                 )
+                inner._inline_output_types = dict(self._inline_output_types)
                 inner._inline_inputs = dict(self._inline_inputs or {})
             return inner
 
@@ -1214,11 +1461,24 @@ class RLM:
         else:
             self._activated_skills = set()
             skill_index = self.skill_loader.format_index() if self.enable_skill_autoloading or self.skills else None
-            preloaded_skills = (
-                compose_skills(self.skills, loader=self.skill_loader, include_dependencies=True)
-                if self.skills
-                else None
-            )
+            if self.skills and self.skills_as_cards:
+                # Advertise the chosen skills by name and summary and let the
+                # model pull a body with load_skill(name) when it decides it
+                # needs one. A preloaded body is resent on every turn, so its
+                # cost is roughly size x turns; a card is a line, and the body
+                # is paid for once if at all. Measured on AgenticDataBench,
+                # preloading the router's picks cost +124% in cache-adjusted
+                # spend and did not improve the score.
+                cards_text = "\n".join(
+                    _skill_card(self.skill_loader, name) for name in self.skills
+                )
+                preloaded_skills = None
+            else:
+                preloaded_skills = (
+                    compose_skills(self.skills, loader=self.skill_loader, include_dependencies=True)
+                    if self.skills
+                    else None
+                )
 
         messages = [
             {
@@ -1227,6 +1487,7 @@ class RLM:
                     signature=self.signature,
                     inline_task=self._inline_task,
                     inline_outputs=self._inline_outputs,
+                    inline_output_types=self._inline_output_types,
                     inputs=bound_inputs,
                     skill_index=skill_index,
                     preloaded_skills=preloaded_skills,
@@ -1249,6 +1510,7 @@ class RLM:
             timeout=self.timeout,
             security=self._security,
             max_submit_bytes=self.max_submit_bytes,
+            block_network=self.block_network,
         ) as interpreter:
             if self.sub_lm_spec is not None:
                 interpreter.configure_lm(self.sub_lm_spec)
@@ -1256,10 +1518,14 @@ class RLM:
                 interpreter.set_inputs(bound_inputs)
 
             turn_counter = 0
+            # LM calls that never became a turn (truncated / no code block).
+            # Retried rather than executed, but still billed.
+            unbilled_calls: list[dict[str, Any]] = []
             next_turn_type = "normal"
             reached_max = False
             verifier_repair_history: list[dict[str, Any]] = []
             self._repair_counts = {}
+            timeout_recoveries = 0
 
             while turn_counter < self.max_turns:
                 # Pre-LM-call: budget urgency hint + digest swap for the system message.
@@ -1315,6 +1581,13 @@ class RLM:
                     messages.append({"role": "assistant", "content": response_text})
                     # truncated turns still count toward the budget to avoid loops.
                     turn_counter += 1
+                    unbilled_calls.append({
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "cached_tokens": cached_tokens,
+                        "reasoning_tokens": reasoning_tokens,
+                        "lm_call_seconds": lm_call_seconds,
+                    })
                     truncation_msg = (
                         "Your previous response was truncated before the closing code fence. "
                         "Rewrite that turn in one complete ```python block under 30 lines."
@@ -1338,6 +1611,13 @@ class RLM:
                 if selected_code is None:
                     messages.append({"role": "assistant", "content": response_text})
                     turn_counter += 1
+                    unbilled_calls.append({
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "cached_tokens": cached_tokens,
+                        "reasoning_tokens": reasoning_tokens,
+                        "lm_call_seconds": lm_call_seconds,
+                    })
                     no_code_msg = (
                         "Your previous response contained no complete ```python code block. "
                         "Reply with exactly one complete ```python block (or call SUBMIT(...) "
@@ -1360,7 +1640,8 @@ class RLM:
                 worker_started = time.monotonic()
                 try:
                     result = interpreter.execute(code)
-                except WorkerTimeout as exc:
+                except (WorkerTimeout, WorkerProtocolError) as exc:
+                    worker_died = not isinstance(exc, WorkerTimeout)
                     worker_execute_seconds = time.monotonic() - worker_started
                     duration = time.perf_counter() - started
                     trajectory.append(
@@ -1386,14 +1667,81 @@ class RLM:
                             worker_execute_seconds=worker_execute_seconds,
                         )
                     )
+                    # A timeout kills the worker, so recovery means restarting it
+                    # and telling the model its namespace is gone. Ending the run
+                    # here instead throws away every prior turn: on a 246-task
+                    # benchmark this lost 20 tasks outright, several of which had
+                    # already done the analysis and were formatting output.
+                    #
+                    # A worker that *dies* leaves the run in the same state, so it
+                    # recovers the same way. This is not hypothetical: an OOM kill
+                    # is the usual way a Fabric worker goes, and on Python 3.10 a
+                    # deep enough recursion overflows the C stack and segfaults
+                    # before any timeout can fire.
+                    if timeout_recoveries < self.recover_worker_timeouts:
+                        timeout_recoveries += 1
+                        try:
+                            # A timed-out worker is already killed, but one that
+                            # died on a closed pipe may still be running, and
+                            # start() refuses to run twice.
+                            interpreter.kill()
+                            interpreter.start()
+                            if self.sub_lm_spec is not None:
+                                interpreter.configure_lm(self.sub_lm_spec)
+                            if bound_inputs:
+                                interpreter.set_inputs(bound_inputs)
+                        except Exception:      # restart failed: fall through
+                            pass
+                        else:
+                            if worker_died:
+                                what_happened = (
+                                    "Your code killed the Python worker process (it ran "
+                                    "out of memory, crashed, or exited) and the worker "
+                                    "was restarted."
+                                )
+                                what_to_do = (
+                                    "That approach cannot finish as written. Do not "
+                                    "repeat it. Use far less memory: read only the "
+                                    "columns you need, process in chunks rather than "
+                                    "loading everything, avoid building large "
+                                    "intermediate copies, and check your logic on a "
+                                    "sample first. Do not call sys.exit() or os._exit()."
+                                )
+                            else:
+                                what_happened = (
+                                    f"Your code was still running after {self.timeout:.0f}s "
+                                    "and the worker was restarted."
+                                )
+                                what_to_do = (
+                                    "That approach is too slow for this data. Do not "
+                                    "repeat it. Work in a way that finishes: read only "
+                                    "the columns you need, aggregate or filter in the "
+                                    "query rather than in Python, process in chunks, or "
+                                    "sample to check your logic before running on "
+                                    "everything."
+                                )
+                            messages.append({"role": "assistant", "content": response_text})
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"{what_happened} EVERY variable is gone; "
+                                    "inputs are re-bound and importable again.\n"
+                                    f"{what_to_do}\n"
+                                    f"Recovery {timeout_recoveries} of "
+                                    f"{self.recover_worker_timeouts}."
+                                ),
+                            })
+                            turn_counter += 1
+                            continue
+
                     return RLMResult(
                         submitted=False,
                         payload=None,
                         trajectory=trajectory,
                         final_state=final_state,
                         max_turns=self.max_turns,
-                        failure_reason="worker_timeout",
-                        **_aggregate_trajectory_metrics(trajectory),
+                        failure_reason="worker_died" if worker_died else "worker_timeout",
+                        **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
                     )
                 except Exception as exc:
                     # Capture any unexpected worker/interpreter failure as a turn and stop.
@@ -1430,7 +1778,7 @@ class RLM:
                         final_state=final_state,
                         max_turns=self.max_turns,
                         failure_reason="worker_error",
-                        **_aggregate_trajectory_metrics(trajectory),
+                        **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
                     )
                 worker_execute_seconds = time.monotonic() - worker_started
                 duration = time.perf_counter() - started
@@ -1471,7 +1819,11 @@ class RLM:
                             self._loaded_skills.append(new_skill)
                         skill_first_seen_turn.setdefault(activated_name, turn_counter)
                 validation = (
-                    validate_submit_payload(result.submit_payload, required_output_fields)
+                    validate_submit_payload(
+                        result.submit_payload,
+                        required_output_fields,
+                        self._inline_output_types,
+                    )
                     if result.submitted
                     else OutputValidationResult()
                 )
@@ -1527,7 +1879,7 @@ class RLM:
                                     final_state=final_state,
                                     max_turns=self.max_turns,
                         failure_reason="stuck_loop",
-                                    **_aggregate_trajectory_metrics(trajectory),
+                                    **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
                                 )
 
                 if result.submitted:
@@ -1588,7 +1940,7 @@ class RLM:
                         trajectory=trajectory,
                         final_state=result.state,
                         max_turns=self.max_turns,
-                        **_aggregate_trajectory_metrics(trajectory),
+                        **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
                     )
 
                 messages.append({"role": "assistant", "content": response_text})
@@ -1622,7 +1974,7 @@ class RLM:
                 "RLM ran out of turns after %d of %d without calling SUBMIT. "
                 "The result is truncated, not necessarily wrong. Raise max_turns "
                 "if this recurs -- models differ in how many turns they take.",
-                len(trajectory.turns),
+                turn_counter,
                 self.max_turns,
             )
         return RLMResult(
@@ -1632,7 +1984,7 @@ class RLM:
             final_state=final_state,
             max_turns=self.max_turns,
             failure_reason=("max_turns" if exhausted else "output_validation_failed"),
-            **_aggregate_trajectory_metrics(trajectory),
+            **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
         )
 
     def _repair_nudge_suffix(self, key: str) -> str:
@@ -2005,8 +2357,18 @@ class RLM:
         prediction = None
         elapsed_total = 0.0
         last_failure_reason: str | None = None
+        retry_instruction: str | None = None
 
         for attempt in range(MAX_VERIFIER_RETRIES + 1):
+            attempt_signature = signature
+            if retry_instruction:
+                attempt_signature = signature.with_instructions(
+                    (
+                        f"{signature.instructions or ''}\n\n"
+                        "REPAIR REQUIRED: The previous submission was rejected. "
+                        f"{retry_instruction}"
+                    ).strip()
+                )
             interpreter = SubprocessPythonInterpreter(
                 timeout=self.timeout,
                 security=self._security,
@@ -2016,7 +2378,7 @@ class RLM:
             try:
                 with dspy.context(lm=outer_lm):
                     dspy_rlm_kwargs: dict[str, Any] = dict(
-                        signature=signature,
+                        signature=attempt_signature,
                         sub_lm=sub_lm,
                         interpreter=interpreter,
                         max_iterations=max_iter,
@@ -2038,7 +2400,7 @@ class RLM:
                 except Exception:
                     pass
 
-            payload = self._extract_payload_from_prediction(prediction, signature)
+            payload = self._extract_payload_from_prediction(prediction, attempt_signature)
             if not payload:
                 if attempt < MAX_VERIFIER_RETRIES:
                     last_failure_reason = "dspy.RLM produced no output payload"
@@ -2050,10 +2412,37 @@ class RLM:
                     current_inputs = self._inputs_with_verifier_feedback(
                         current_inputs, feedback_text
                     )
+                    retry_instruction = (
+                        None
+                        if any(isinstance(value, str) for value in current_inputs.values())
+                        else feedback_text
+                    )
                     if self.halve_max_iter_on_retry:
                         max_iter = max(1, (max_iter + 1) // 2)
                     continue
                 last_failure_reason = "dspy.RLM produced no output payload"
+                break
+
+            validation = validate_submit_payload(
+                payload,
+                required_output_fields,
+                self._inline_output_types,
+            )
+            if not validation.ok:
+                last_failure_reason = "; ".join(validation.errors)
+                if attempt < MAX_VERIFIER_RETRIES:
+                    current_inputs = self._inputs_with_verifier_feedback(
+                        current_inputs,
+                        last_failure_reason,
+                    )
+                    retry_instruction = (
+                        None
+                        if any(isinstance(value, str) for value in current_inputs.values())
+                        else last_failure_reason
+                    )
+                    if self.halve_max_iter_on_retry:
+                        max_iter = max(1, (max_iter + 1) // 2)
+                    continue
                 break
 
             # Run verifiers + output_validator using a fresh legacy interpreter.
@@ -2068,6 +2457,10 @@ class RLM:
                 with Interpreter(
                     timeout=self.timeout,
                     max_submit_bytes=self.max_submit_bytes,
+                    # Verifier code is trusted enough to skip the policy, but a
+                    # skill can come from anywhere, and "the sandbox has no
+                    # network" should not have a hole in it.
+                    block_network=self.block_network,
                 ) as verifier_interp:
                     verifier_feedback = self._run_skill_verifiers(verifier_interp, payload)
             except Exception as exc:
@@ -2115,6 +2508,11 @@ class RLM:
             # Prepend feedback to first string input we can find.
             current_inputs = self._inputs_with_verifier_feedback(
                 current_inputs, feedback_text
+            )
+            retry_instruction = (
+                None
+                if any(isinstance(value, str) for value in current_inputs.values())
+                else feedback_text
             )
             if self.halve_max_iter_on_retry:
                 max_iter = max(1, (max_iter + 1) // 2)  # ceil(remaining/2), floor 1
@@ -2254,8 +2652,8 @@ class RLM:
         inputs: dict[str, Any], feedback: str
     ) -> dict[str, Any]:
         """Return a copy of ``inputs`` with verifier feedback prepended to the
-        first string-valued field. Falls back to a new ``_verifier_feedback``
-        key (which dspy will ignore) if no string input exists."""
+        first string-valued field. Retry instructions carry feedback when no
+        string input exists."""
         new_inputs = dict(inputs)
         for key, value in new_inputs.items():
             if isinstance(value, str):
@@ -2266,7 +2664,6 @@ class RLM:
                     f"{value}"
                 )
                 return new_inputs
-        new_inputs["_verifier_feedback"] = feedback
         return new_inputs
 
     def _build_dspy_signature(
@@ -2302,6 +2699,21 @@ class RLM:
                 "RLM(engine='v7-dspy') requires either a signature (dspy.Signature or 'in -> out' string) "
                 "or from_task(task=..., inputs=..., outputs=...)."
             )
+
+        if self._inline_output_types:
+            type_contract = ", ".join(
+                f"{name} must be {expected_type.__name__}"
+                for name, expected_type in self._inline_output_types.items()
+            )
+            base = built.instructions or ""
+            built = built.with_instructions(
+                f"{base}\n\nRequired output type contract: {type_contract}.".strip()
+            )
+            for name in self._inline_output_types:
+                # Keep raw SUBMIT values intact for strict post-execution validation.
+                # DSPy's parser preserves strings only for nullable unions that include
+                # str; Any alone JSON-decodes them, and concrete types may coerce them.
+                built = built.with_updated_fields(name, type_=str | None | Any)
 
         if extra_instructions:
             base = built.instructions or ""
@@ -2370,6 +2782,7 @@ def _extract_code(text: str) -> str:
 def validate_submit_payload(
     payload: Mapping[str, Any] | None,
     required_fields: Iterable[str],
+    required_types: Mapping[str, type] | None = None,
 ) -> OutputValidationResult:
     """Validate declared SUBMIT outputs before accepting success.
 
@@ -2389,6 +2802,7 @@ def validate_submit_payload(
         return OutputValidationResult((f"SUBMIT payload must be a mapping, got {type(payload).__name__}.",))
 
     errors: list[str] = []
+    types = dict(required_types or {})
     for name in fields:
         if name not in payload:
             errors.append(f"Missing required output field {name!r}.")
@@ -2397,6 +2811,13 @@ def validate_submit_payload(
         error = _validate_required_value(name, value)
         if error:
             errors.append(error)
+            continue
+        expected_type = types.get(name)
+        if expected_type is not None and not _matches_output_type(value, expected_type):
+            errors.append(
+                f"Required output field {name!r} must be "
+                f"{expected_type.__name__}, got {type(value).__name__}."
+            )
     return OutputValidationResult(tuple(errors))
 
 
@@ -2416,6 +2837,13 @@ def _is_core_final_output_field(name: str) -> bool:
     return name.strip().lower() in CORE_FINAL_OUTPUT_FIELDS
 
 
+def _matches_output_type(value: Any, expected_type: type) -> bool:
+    strict_builtins = {bool, bytes, dict, float, int, list, set, str, tuple}
+    if expected_type in strict_builtins:
+        return type(value) is expected_type
+    return isinstance(value, expected_type)
+
+
 def _normalize_required_fields(required_fields: Iterable[str]) -> tuple[str, ...]:
     fields: list[str] = []
     for name in required_fields:
@@ -2425,6 +2853,26 @@ def _normalize_required_fields(required_fields: Iterable[str]) -> tuple[str, ...
             raise ValueError("Output field names must not be empty.")
         fields.append(name)
     return tuple(fields)
+
+
+def _normalize_inline_outputs(
+    outputs: list[str] | Mapping[str, type] | None,
+) -> tuple[list[str], dict[str, type]]:
+    if outputs is None:
+        return [], {}
+    if isinstance(outputs, Mapping):
+        fields = list(_normalize_required_fields(outputs))
+        types: dict[str, type] = {}
+        for name, expected_type in outputs.items():
+            if not isinstance(expected_type, type):
+                raise TypeError(
+                    f"Output type for {name!r} must be a Python type "
+                    "(a concrete class; parameterized generics and unions are not supported), "
+                    f"got {type(expected_type).__name__}."
+                )
+            types[name] = expected_type
+        return fields, types
+    return list(_normalize_required_fields(outputs)), {}
 
 
 def _required_output_fields(
@@ -2493,6 +2941,40 @@ def _call_lm_with_meta(
             return _response_to_text(response), new_entry, elapsed
 
     return _response_to_text(response), response, elapsed
+
+
+
+def _reject_block_network_with_sub_lm(block_network: Any, sub_lm: Any) -> None:
+    """A worker with no egress cannot call an LM from inside the sandbox.
+
+    Only an *explicit* ``sub_lm=`` is rejected. ``sub_lm_spec`` is also set
+    implicitly whenever ``lm`` is a spec, purely so ``call_lm()`` is available
+    if the model reaches for it; refusing on that would make ``block_network``
+    unusable for nearly everyone. Failing here beats failing on turn three with
+    a connection error the model then tries to debug.
+    """
+    if block_network and sub_lm is not None:
+        raise ValueError(
+            "block_network=True cannot be combined with an explicit sub_lm: "
+            "sub-LM calls are made from inside the worker, which has no "
+            "network egress. Drop one of the two, or route the sub-LM through "
+            "a proxy on 127.0.0.1 (loopback is permitted)."
+        )
+
+
+def _skill_card(loader: Any, name: str) -> str:
+    """One-line advertisement for a skill: name, verifier flag, summary.
+
+    Mirrors SkillRouter.card_text so both paths describe a skill the same way,
+    without requiring the router to be enabled.
+    """
+    try:
+        sk = loader.load(name)
+    except Exception:
+        return f"- {name}: (unavailable)"
+    summary = getattr(sk, "summary", None) or getattr(sk, "title", None) or name
+    tag = " [verifier]" if getattr(sk, "verifier_present", False) else ""
+    return f"- {name}{tag}: {summary}"
 
 
 def _call_lm(lm: Any, messages: list[dict[str, str]]) -> Any:
