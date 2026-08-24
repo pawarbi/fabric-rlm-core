@@ -20,14 +20,13 @@ computed results rather than every raw byte.
 
 ## Quick start in Fabric
 
-Use a Fabric notebook with an attached Lakehouse. Select the Python 3.12
-(`jupyter_python`) kernel before installing the package.
+Install `fabric-rlm` in a Fabric notebook, Python notebook is recommended.
 
 ```python
 %pip install fabric-rlm
 ```
 
-Restart the session after the install, then run:
+After installation:
 
 ```python
 from fabric_rlm import FabricLM, File, RLM
@@ -50,7 +49,8 @@ print(result.evidence)
 
 `FabricLM` uses the model endpoint available to the Fabric capacity. The
 notebook identity supplies authentication. There is no API key to place in the
-notebook and no separate Azure OpenAI resource to configure.
+notebook and no separate Azure OpenAI resource to configure. You can see the list of supported models [here](https://learn.microsoft.com/en-us/fabric/data-science/ai-services/ai-services-overview#consumption-rate-for-openai-language-models).
+You can also choose use any model from OpenAI, Anthropic, Foundry, OpenRouter using LiteLLM.
 
 ## What happens during a run
 
