@@ -162,10 +162,19 @@ def _describe_value(value: Any) -> str:
             return str(describe())
         except Exception:
             pass
-    if isinstance(value, list):
-        return f"list[{len(value)}]"
-    if isinstance(value, tuple):
-        return f"tuple[{len(value)}]"
+    if isinstance(value, (list, tuple)):
+        kind = type(value).__name__
+        described_items = []
+        for index, item in enumerate(value[:10]):
+            item_describe = getattr(item, "__rlm_describe__", None)
+            if not callable(item_describe):
+                continue
+            try:
+                described_items.append(f"    [{index}] {item_describe()}")
+            except Exception:
+                continue
+        suffix = "\n" + "\n".join(described_items) if described_items else ""
+        return f"{kind}[{len(value)}]{suffix}"
     if isinstance(value, dict):
         return f"dict keys={list(value.keys())[:20]}"
     if hasattr(value, "path"):

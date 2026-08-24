@@ -153,6 +153,19 @@ def test_do_dont_table_covers_the_load_bearing_rules() -> None:
         assert rule in table, f"Do/Don't table lost the {rule} rule"
 
 
+def test_skill_prioritizes_resolved_lakehouse_catalogs_and_portable_queries() -> None:
+    content = SkillLoader().load(SKILL).content
+    normalized = " ".join(content.split())
+
+    assert "LakehouseSource" in content
+    assert "list_sources" in content
+    assert "find_sources" in content
+    assert "Do not call `notebookutils`" in normalized
+    assert "catalog's `columns` metadata" in normalized
+    assert "date - INTERVAL 11 MONTH" in content
+    assert "date_add('month', -11, date)" in content
+
+
 def test_provenance_section_states_what_was_and_was_not_verified() -> None:
     """The skill claims measured numbers and must name its live-test boundary."""
     content = SkillLoader().load(SKILL).content

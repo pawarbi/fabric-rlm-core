@@ -408,6 +408,18 @@ Automatic Delta schema discovery requires `fabric-rlm[analytics]`. Outside a
 Fabric notebook, or when you already maintain a catalog, pass `catalog=[...]`
 to bypass discovery.
 
+Inside the worker, use the resolved catalog helpers instead of trying to call
+Fabric discovery APIs again:
+
+```python
+lakehouse.list_sources(kind="delta")
+lakehouse.find_sources("usage")
+lakehouse.find_sources("customer_id", kind="delta")
+```
+
+Catalog searches match source names, paths, columns, and data types. They do
+not widen the Tables or Files scopes supplied by the caller.
+
 ### Semantic models
 
 A Power BI semantic model binds the same way and arrives as a connected handle:
@@ -452,6 +464,27 @@ The runtime injects `SUBMIT(...)`. Call it with keyword arguments matching the
 declared `outputs`, or with positional arguments in the same order. After a
 valid submission, `result.payload` holds the dictionary and each field is also
 available as an attribute such as `result.answer`.
+
+### Inspect a run
+
+In a Fabric or Jupyter notebook, render an interactive turn timeline:
+
+```python
+result.inspect()
+```
+
+Each turn expands to show the observable model response, executed code, output,
+errors, validator feedback, submitted payload, timing, and token usage. Slow,
+error, repair, and submission turns are labeled in the timeline. Model-provider
+private chain-of-thought is not exposed.
+
+The inspector is dependency-free and escapes trajectory content before
+rendering. Save the same view as a standalone file when you need to share or
+archive it:
+
+```python
+result.inspect().save_html("rlm-run.html")
+```
 
 ### Nested model calls
 

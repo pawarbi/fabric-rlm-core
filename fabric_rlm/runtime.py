@@ -12,12 +12,15 @@ import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .interpreter import ExecResult, Interpreter, WorkerProtocolError, WorkerTimeout
 from .lakehouse import resolve_lakehouse_inputs
 from .security import SecurityPolicy
 from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
+
+if TYPE_CHECKING:
+    from .inspector import RunInspector
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +603,26 @@ class RLMResult:
             for h in hints:
                 lines.append(f"  - {h}")
         return "\n".join(lines)
+
+    def inspect(
+        self,
+        *,
+        max_chars: int = 20_000,
+        slow_turn_seconds: float = 10.0,
+    ) -> "RunInspector":
+        """Return an interactive notebook view of this run's observable turns.
+
+        The returned object renders automatically as HTML in Jupyter and Fabric
+        notebooks. It can also be exported with ``.save_html(path)``.
+        """
+
+        from .inspector import RunInspector
+
+        return RunInspector(
+            self,
+            max_chars=max_chars,
+            slow_turn_seconds=slow_turn_seconds,
+        )
 
     def __getattr__(self, name: str) -> Any:
         # Only reached when normal attribute lookup fails. Never satisfy dunder

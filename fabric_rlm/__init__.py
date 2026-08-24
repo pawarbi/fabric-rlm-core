@@ -25,6 +25,7 @@ from .interpreter import (
     WorkerProtocolError,
     WorkerTimeout,
 )
+from .inspector import RunInspector
 from .lm import AnthropicLM, FabricLM, OpenAILM, register_backend, resolve_lm
 from .metrics import ValidationCheck, ValidationReport
 from .replay_lm import (
@@ -65,6 +66,7 @@ __all__ = [
     "ReplayLM",
     "RLM",
     "RLMResult",
+    "RunInspector",
     "SemanticModel",
     "replay_trajectory",
     "Skill",

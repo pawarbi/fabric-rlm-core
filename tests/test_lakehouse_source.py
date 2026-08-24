@@ -174,6 +174,105 @@ def test_lakehouse_source_freezes_as_compact_catalog_input() -> None:
     }
 
 
+def test_lakehouse_source_lists_and_filters_resolved_catalog() -> None:
+    source = LakehouseSource(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+        catalog=[
+            {
+                "kind": "delta",
+                "name": "dbo.orders",
+                "path": "abfss://root/Tables/dbo/orders",
+                "columns": [["order_id", "BIGINT"], ["amount", "DOUBLE"]],
+            },
+            {
+                "kind": "csv",
+                "name": "files.data.targets",
+                "path": "abfss://root/Files/data/targets.csv",
+                "columns": [["region", "VARCHAR"]],
+            },
+        ],
+    )
+
+    assert [item["name"] for item in source.list_sources()] == [
+        "dbo.orders",
+        "files.data.targets",
+    ]
+    assert [item["name"] for item in source.list_sources(kind="DELTA")] == [
+        "dbo.orders"
+    ]
+
+
+def test_lakehouse_source_finds_sources_by_name_path_or_column() -> None:
+    source = LakehouseSource(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+        catalog=[
+            {
+                "kind": "delta",
+                "name": "dbo.usage_logs",
+                "path": "abfss://root/Tables/dbo/usage_logs",
+                "columns": [["user_id", "BIGINT"], ["api_calls", "BIGINT"]],
+            },
+            {
+                "kind": "csv",
+                "name": "files.data.support",
+                "path": "abfss://root/Files/data/support.csv",
+                "columns": [["ticket_id", "VARCHAR"]],
+            },
+        ],
+    )
+
+    assert source.find_sources("usage")[0]["name"] == "dbo.usage_logs"
+    assert source.find_sources("api_calls")[0]["name"] == "dbo.usage_logs"
+    assert source.find_sources("Files/data")[0]["name"] == "files.data.support"
+    assert source.find_sources("ticket", kind="delta") == ()
+
+
+def test_lakehouse_source_catalog_helpers_return_defensive_copies() -> None:
+    source = LakehouseSource(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+        catalog=[
+            {
+                "kind": "delta",
+                "name": "dbo.orders",
+                "path": "abfss://root/Tables/dbo/orders",
+                "columns": [["order_id", "BIGINT"]],
+            }
+        ],
+    )
+
+    listed = source.list_sources()
+    listed[0]["columns"][0][0] = "changed"
+
+    assert source.catalog[0]["columns"][0][0] == "order_id"
+
+
+def test_lakehouse_source_description_explains_resolved_worker_contract() -> None:
+    source = LakehouseSource(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+        catalog=[
+            {"kind": "delta", "name": "dbo.orders", "path": "abfss://orders"}
+        ],
+    )
+
+    description = source.__rlm_describe__()
+
+    assert "resolved" in description
+    assert "1 source" in description
+    assert "list_sources" in description
+    assert "find_sources" in description
+    assert "Do not call notebookutils" in description
+
+
+def test_lakehouse_source_find_requires_a_non_empty_query() -> None:
+    source = LakehouseSource(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+        catalog=[],
+    )
+
+    with pytest.raises(ValueError, match="query"):
+        source.find_sources(" ")
+
+
 class _Item:
     def __init__(self, path: str, *, is_dir: bool):
         self.path = path

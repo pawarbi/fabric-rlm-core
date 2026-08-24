@@ -36,3 +36,22 @@ def test_prompt_includes_declared_output_types() -> None:
     )
 
     assert "- result: dict" in prompt
+
+
+def test_prompt_describes_each_self_describing_input_in_a_list() -> None:
+    class Source:
+        def __init__(self, label: str):
+            self.label = label
+
+        def __rlm_describe__(self) -> str:
+            return f"source {self.label}"
+
+    prompt = build_system_prompt(
+        inline_task="Compare sources.",
+        inline_outputs=["answer"],
+        inputs={"sources": [Source("sales"), Source("support")]},
+    )
+
+    assert "sources: list[2]" in prompt
+    assert "[0] source sales" in prompt
+    assert "[1] source support" in prompt

@@ -26,6 +26,25 @@ Summary: READ-ONLY analysis of Delta tables in a Fabric Lakehouse using DuckDB w
 
 You never read raw table bytes back into the LM. You print small summaries only.
 
+## When a LakehouseSource is already bound
+
+A bound `LakehouseSource` is resolved in the parent Fabric process before the
+isolated worker starts. Its catalog is the discovery boundary and already
+contains source names, direct paths, kinds, and columns.
+
+```python
+all_sources = lakehouse.list_sources()
+delta_sources = lakehouse.list_sources(kind="delta")
+usage_candidates = lakehouse.find_sources("usage", kind="delta")
+```
+
+Use `list_sources()` or `find_sources()` first, select only the entries relevant
+to the question, and query each selected entry's `path`. Use the catalog's
+`columns` metadata to plan joins before opening tables. Do not call `notebookutils`
+from the worker to rediscover a resolved `LakehouseSource`;
+Fabric workload credentials may be unavailable there, and rediscovery wastes
+turns even when it succeeds. Never widen beyond the supplied catalog.
+
 ## READ THIS FIRST - the failure that returns a wrong answer silently
 
 A Delta table directory contains parquet files that are no longer part of the
@@ -66,9 +85,11 @@ say so, not to approximate it with parquet.
 | `delta_scan(path)`, or `DeltaTable(...)` as fallback | `read_parquet('<Tables path>/**/*.parquet')` | The glob reads tombstoned rows and inflates the answer with no error |
 | Call `open_delta` once, reuse the returned relation | Re-open the table for each sub-question | Re-resolving costs a turn and re-downloads the extension |
 | `attach_lakehouse(root)` when a question spans tables | Open each table and join the results in pandas | Attached views join in SQL with nothing copied into memory |
+| Plan with catalog columns, then open only selected sources | Open every source just to inspect schemas | Catalog metadata is already available and remote table setup can dominate runtime |
 | Print the schema before writing a query | Assume a column is called `revenue` | A guessed name errors, or silently matches the wrong column |
 | Read `num_records` from metadata first | `dt.to_pandas()` before you know the size | A fact table will exhaust memory in one call |
 | `USING SAMPLE n ROWS` to look at data | `LIMIT n` as a sample | `LIMIT` reads the first file only, so you see one partition |
+| `date - INTERVAL 11 MONTH` | `date_add('month', -11, date)` | DuckDB's `date_add` accepts `(date, interval)`, not the Spark/SQL Server three-argument form |
 | `count(DISTINCT col)` when it matters | Trust `approx_unique` as exact | It is a HyperLogLog estimate and can exceed the row count |
 | Print `fetchall()` rows yourself | `relation.show()` | Box-drawing characters crash on cp1252 stdout |
 | `con.register("name", dataset)` | Put a bare Python variable name in the SQL | Replacement scan reads the *calling* frame, so it breaks inside a helper |

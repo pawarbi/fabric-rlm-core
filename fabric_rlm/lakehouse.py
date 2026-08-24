@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 from collections import deque
 from collections.abc import Iterator
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -140,6 +141,57 @@ class LakehouseSource:
         if self.is_resolved:
             return self
         return build_lakehouse_catalog(self)
+
+    def list_sources(self, *, kind: str | None = None) -> tuple[dict[str, Any], ...]:
+        """Return catalog entries, optionally filtered by source kind."""
+
+        catalog = self.resolve().catalog or ()
+        normalized_kind = str(kind).strip().lower() if kind is not None else None
+        return tuple(
+            deepcopy(entry)
+            for entry in catalog
+            if normalized_kind is None
+            or str(entry.get("kind", "")).lower() == normalized_kind
+        )
+
+    def find_sources(
+        self,
+        query: str,
+        *,
+        kind: str | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        """Find catalog entries by name, path, column, or data type."""
+
+        normalized_query = str(query).strip().lower()
+        if not normalized_query:
+            raise ValueError("LakehouseSource find_sources query must be non-empty.")
+        matches = []
+        for entry in self.list_sources(kind=kind):
+            searchable = " ".join(
+                [
+                    str(entry.get("name", "")),
+                    str(entry.get("path", "")),
+                    str(entry.get("columns", "")),
+                ]
+            ).lower()
+            if normalized_query in searchable:
+                matches.append(entry)
+        return tuple(matches)
+
+    def __rlm_describe__(self) -> str:
+        state = (
+            f"resolved metadata catalog with {len(self.catalog or ())} "
+            f"source{'s' if len(self.catalog or ()) != 1 else ''}"
+            if self.is_resolved
+            else "unresolved source (resolved automatically before worker startup)"
+        )
+        return (
+            f"LakehouseSource: {state}. Catalog entries are dictionaries with "
+            "kind, name, path, and columns. Use .list_sources(kind=...) or "
+            ".find_sources(query, kind=...) to choose relevant sources, then query "
+            "their direct paths. Do not call notebookutils from the worker; the "
+            "catalog is already resolved."
+        )
 
     def __repr__(self) -> str:
         state = f"{len(self.catalog)} sources" if self.is_resolved else "auto"
