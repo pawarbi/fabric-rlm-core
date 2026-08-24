@@ -360,6 +360,32 @@ def test_attach_lakehouse_registers_everything_queryable(lakehouse, duck) -> Non
     assert ("dbo", "products") in seen
 
 
+def test_attach_lakehouse_falls_back_when_delta_scan_is_unavailable(
+    lakehouse, duck
+) -> None:
+    pytest.importorskip("deltalake")
+    duck.execute("SET autoinstall_known_extensions = false")
+    duck.execute("SET autoload_known_extensions = false")
+    ns = _attach_ns()
+    ns["_prepare"] = lambda con, _path: con
+
+    con, attached, skipped = ns["attach_lakehouse"](
+        lakehouse.as_posix(), con=duck
+    )
+
+    assert set(attached) == {
+        "customers",
+        "orders",
+        "dbo.products",
+        "dbo.returns",
+    }
+    assert skipped == []
+    assert con.sql("SELECT count(*) FROM customers").fetchone() == (3,)
+    assert con.sql(
+        'SELECT count(*) FROM "dbo"."returns"'
+    ).fetchone() == (1,)
+
+
 def test_attached_tables_join_without_per_table_setup(lakehouse, duck) -> None:
     """The point of attaching: joins become ordinary SQL."""
     pytest.importorskip("deltalake")

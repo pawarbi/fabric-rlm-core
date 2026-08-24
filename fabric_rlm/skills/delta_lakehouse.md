@@ -295,21 +295,47 @@ def attach_lakehouse(root, con=None):
             )
         raise RuntimeError(f"Cannot list {root}: {type(e).__name__}: {msg[:250]}{hint}") from e
 
+    def quote_ident(name):
+        return '"' + name.replace('"', '""') + '"'
+
     attached, skipped = [], []
-    for qname, path in sorted(tables.items()):
+    for index, (qname, path) in enumerate(sorted(tables.items())):
         esc = path.replace("'", "''")
         if "." in qname:
             sch, tbl = qname.split(".", 1)
-            con.execute(f'CREATE SCHEMA IF NOT EXISTS "{sch}"')
-            target = f'"{sch}"."{tbl}"'
+            con.execute(f"CREATE SCHEMA IF NOT EXISTS {quote_ident(sch)}")
+            target = f"{quote_ident(sch)}.{quote_ident(tbl)}"
         else:
-            target = f'"{qname}"'
+            target = quote_ident(qname)
         try:
             con.execute(f"CREATE OR REPLACE VIEW {target} AS SELECT * FROM delta_scan('{esc}')")
             attached.append(qname)
-        except Exception as e:
+            continue
+        except Exception as delta_scan_error:
+            delta_scan_failure = (
+                type(delta_scan_error).__name__,
+                str(delta_scan_error)[:70],
+            )
+
+        try:
+            from deltalake import DeltaTable
+
+            dt = DeltaTable(path, storage_options=delta_opts(path))
+            source = f"__fabric_rlm_delta_{index}"
+            con.register(source, dt.to_pyarrow_dataset())
+            con.execute(
+                f"CREATE OR REPLACE VIEW {target} "
+                f"AS SELECT * FROM {quote_ident(source)}"
+            )
+            attached.append(qname)
+        except Exception as delta_rs_error:
             # One unreadable table must not abort the whole lakehouse.
-            skipped.append((qname, f"{type(e).__name__}: {str(e)[:120]}"))
+            skipped.append((
+                qname,
+                f"delta_scan {delta_scan_failure[0]}: "
+                f"{delta_scan_failure[1]}; delta-rs "
+                f"{type(delta_rs_error).__name__}: {str(delta_rs_error)[:70]}",
+            ))
     return con, attached, skipped
 ```
 
