@@ -157,6 +157,19 @@ def test_delta_verification_notebook_installs_analytics_and_fails_on_gaps():
     )
 
 
+def test_delta_verification_uses_configured_abfss_root_without_attachment():
+    notebook = json.loads(
+        (
+            NOTEBOOK_DIR / "verify_delta_lakehouse_skill_in_fabric.ipynb"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert (
+        'ABFSS_PATH.split("/Tables/", 1)[0]'
+        in _source(notebook)
+    )
+
+
 def test_public_notebooks_do_not_invite_keys_in_source():
     offenders = []
     literal_assignment = re.compile(
