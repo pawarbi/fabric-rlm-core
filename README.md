@@ -114,10 +114,11 @@ flowchart LR
 
 ### Work with Fabric data in place
 
-Bind Lakehouse files with `File(...)`. Bind Power BI semantic models with
-`SemanticModel(...)`. A single task can use both. DAX runs in the tabular
-engine, file processing runs in Python, and generated artifacts can be written
-back to `Files/`.
+Bind individual Lakehouse files with `File(...)`, discover Delta tables and
+Files with `LakehouseSource(...)`, or connect Power BI semantic models with
+`SemanticModel(...)`. A single task can use all three. DAX runs in the tabular
+engine, Delta reads honor the transaction log, file processing runs in Python,
+and generated artifacts can be written back to `Files/`.
 
 ### Use the Python packages already in the notebook
 
@@ -375,6 +376,37 @@ Bind values, including large files, as inputs. Files arrive
 inside the worker as `File(...)` handles with `.path`, `.read_text()`,
 `.read_bytes()`, and `.exists()`, so a Lakehouse path or a local path is just a
 file path.
+
+### Lakehouses
+
+`LakehouseSource` builds a metadata catalog in the parent Fabric notebook, then
+passes that catalog and the direct OneLake paths to the isolated worker. The
+model can choose relevant Delta tables and Files without you naming each table:
+
+```python
+from fabric_rlm import FabricLM, LakehouseSource, RLM
+
+source = LakehouseSource(
+    "abfss://workspace-id@onelake.dfs.fabric.microsoft.com/lakehouse-id",
+    tables="Tables",
+    files="Files/data",
+)
+
+result = RLM.task(
+    task="Which customer segments have declining usage and rising support demand?",
+    inputs={"lakehouse": source},
+    outputs={"answer": dict, "sources_used": list},
+    lm=FabricLM("gpt-5.1"),
+).run()
+```
+
+The root may use workspace and Lakehouse names or GUIDs. You can also pass a
+path ending in `/Tables`, `/Tables/<schema>`,
+`/Tables/<schema>/<table>`, or `/Files/<path>` to narrow discovery. Multiple
+`LakehouseSource` objects can be nested in input lists or dictionaries.
+Automatic Delta schema discovery requires `fabric-rlm[analytics]`. Outside a
+Fabric notebook, or when you already maintain a catalog, pass `catalog=[...]`
+to bypass discovery.
 
 ### Semantic models
 

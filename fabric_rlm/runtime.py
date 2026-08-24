@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .interpreter import ExecResult, Interpreter, WorkerProtocolError, WorkerTimeout
+from .lakehouse import resolve_lakehouse_inputs
 from .security import SecurityPolicy
 from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
 
@@ -1391,6 +1392,7 @@ class RLM:
         bound_inputs = dict(self._inline_inputs)
         if inputs:
             bound_inputs.update(inputs)
+        bound_inputs = resolve_lakehouse_inputs(bound_inputs)
 
         if self.engine == "adaptive":
             return self._run_adaptive(bound_inputs)

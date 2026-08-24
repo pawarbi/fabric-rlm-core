@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from fabric_rlm import LakehouseSource
+from fabric_rlm import LakehouseSource, RLM
 from fabric_rlm.artifacts import decode_from_worker_wire, encode_for_worker
+from fabric_rlm.lakehouse import LakehouseDiscoveryError, resolve_lakehouse_inputs
 
 
 def test_lakehouse_source_is_public_and_normalizes_scopes() -> None:
@@ -112,6 +113,15 @@ def test_lakehouse_source_validates_catalog_entries() -> None:
         )
 
 
+@pytest.mark.parametrize("scope", ["../Tables", "Files/../secrets", r"Files\data"])
+def test_lakehouse_source_rejects_unsafe_relative_scopes(scope: str) -> None:
+    with pytest.raises(ValueError, match="relative paths"):
+        LakehouseSource(
+            "abfss://ws@onelake.dfs.fabric.microsoft.com/lh",
+            tables=scope,
+        )
+
+
 def test_explicit_catalog_round_trips_through_worker_wire() -> None:
     source = LakehouseSource(
         "abfss://workspace-id@onelake.dfs.fabric.microsoft.com/lakehouse-id",
@@ -161,4 +171,289 @@ def test_lakehouse_source_freezes_as_compact_catalog_input() -> None:
                 "columns": [["order_id", "BIGINT"]],
             }
         ],
+    }
+
+
+class _Item:
+    def __init__(self, path: str, *, is_dir: bool):
+        self.path = path
+        self.name = path.rstrip("/").rsplit("/", 1)[-1]
+        self.isDir = is_dir
+
+
+class _FakeFS:
+    def __init__(self, listings: dict[str, list[_Item]], heads: dict[str, str] | None = None):
+        self.listings = listings
+        self.heads = heads or {}
+
+    def ls(self, path: str):
+        if path not in self.listings:
+            raise FileNotFoundError(path)
+        return self.listings[path]
+
+    def head(self, path: str, _max_bytes: int):
+        return self.heads[path]
+
+
+def test_explicit_catalog_bypasses_auto_discovery(monkeypatch) -> None:
+    source = LakehouseSource(
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh",
+        catalog=[{"kind": "delta", "name": "orders", "path": "abfss://orders"}],
+    )
+    monkeypatch.setattr(
+        "fabric_rlm.lakehouse.build_lakehouse_catalog",
+        lambda _source: pytest.fail("explicit catalog must bypass discovery"),
+    )
+
+    assert source.resolve() is source
+
+
+def test_auto_discovery_builds_delta_and_files_catalog(monkeypatch) -> None:
+    root = "abfss://ws@onelake.dfs.fabric.microsoft.com/lh"
+    tables = f"{root}/Tables"
+    dbo = f"{tables}/dbo"
+    orders = f"{dbo}/orders"
+    products = f"{tables}/products"
+    files = f"{root}/Files/data"
+    nested = f"{files}/archive"
+    orders_csv = f"{files}/orders.csv"
+    readme = f"{nested}/README.txt"
+    fs = _FakeFS(
+        {
+            tables: [_Item(dbo, is_dir=True), _Item(products, is_dir=True)],
+            dbo: [_Item(orders, is_dir=True)],
+            orders: [_Item(f"{orders}/_delta_log", is_dir=True)],
+            products: [_Item(f"{products}/_delta_log", is_dir=True)],
+            files: [_Item(orders_csv, is_dir=False), _Item(nested, is_dir=True)],
+            nested: [_Item(readme, is_dir=False)],
+        },
+        {orders_csv: "order_id,amount\n1,10.5\n"},
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
+    monkeypatch.setattr(
+        "fabric_rlm.lakehouse._read_delta_columns",
+        lambda path: [["id", "BIGINT"], ["source", path]],
+    )
+
+    resolved = LakehouseSource(root, files="Files/data").resolve()
+
+    assert resolved.is_resolved
+    assert [entry["name"] for entry in resolved.catalog] == [
+        "dbo.orders",
+        "files.data.archive.README",
+        "files.data.orders",
+        "products",
+    ]
+    assert resolved.catalog[0]["kind"] == "delta"
+    assert resolved.catalog[0]["columns"][0] == ["id", "BIGINT"]
+    csv_entry = next(entry for entry in resolved.catalog if entry["kind"] == "csv")
+    assert csv_entry["columns"] == [
+        ["order_id", "UNKNOWN"],
+        ["amount", "UNKNOWN"],
+    ]
+
+
+def test_specific_delta_table_scope_resolves_without_sibling_discovery(
+    monkeypatch,
+) -> None:
+    table = (
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/"
+        "lh/Tables/dbo/orders"
+    )
+    fs = _FakeFS({table: [_Item(f"{table}/_delta_log", is_dir=True)]})
+    monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
+    monkeypatch.setattr(
+        "fabric_rlm.lakehouse._read_delta_columns",
+        lambda _path: [["order_id", "BIGINT"]],
+    )
+
+    resolved = LakehouseSource(table).resolve()
+
+    assert resolved.catalog == (
+        {
+            "kind": "delta",
+            "name": "dbo.orders",
+            "path": table,
+            "columns": [["order_id", "BIGINT"]],
+        },
+    )
+
+
+def test_auto_discovery_fails_when_scope_is_inaccessible(monkeypatch) -> None:
+    source = LakehouseSource(
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables"
+    )
+    monkeypatch.setattr(
+        "fabric_rlm.lakehouse._get_fs",
+        lambda: _FakeFS({}),
+    )
+
+    with pytest.raises(LakehouseDiscoveryError, match="could not be listed"):
+        source.resolve()
+
+
+def test_auto_discovery_fails_instead_of_truncating_catalog(monkeypatch) -> None:
+    root = "abfss://ws@onelake.dfs.fabric.microsoft.com/lh"
+    tables = f"{root}/Tables"
+    first = f"{tables}/first"
+    second = f"{tables}/second"
+    fs = _FakeFS(
+        {
+            tables: [_Item(first, is_dir=True), _Item(second, is_dir=True)],
+            first: [_Item(f"{first}/_delta_log", is_dir=True)],
+            second: [_Item(f"{second}/_delta_log", is_dir=True)],
+        }
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
+    monkeypatch.setattr(
+        "fabric_rlm.lakehouse._read_delta_columns",
+        lambda _path: [],
+    )
+
+    with pytest.raises(LakehouseDiscoveryError, match="max_sources=1"):
+        LakehouseSource(root, max_sources=1).resolve()
+
+
+def test_auto_discovery_stops_when_source_limit_is_exceeded(monkeypatch) -> None:
+    root = "abfss://ws@onelake.dfs.fabric.microsoft.com/lh"
+    tables = f"{root}/Tables"
+    first = f"{tables}/first"
+    second = f"{tables}/second"
+    unread = f"{tables}/must-not-be-read"
+    fs = _FakeFS(
+        {
+            tables: [
+                _Item(first, is_dir=True),
+                _Item(second, is_dir=True),
+                _Item(unread, is_dir=True),
+            ],
+            first: [_Item(f"{first}/_delta_log", is_dir=True)],
+            second: [_Item(f"{second}/_delta_log", is_dir=True)],
+        }
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
+    monkeypatch.setattr("fabric_rlm.lakehouse._read_delta_columns", lambda _path: [])
+
+    with pytest.raises(LakehouseDiscoveryError, match="max_sources=1"):
+        LakehouseSource(root, max_sources=1).resolve()
+
+
+def test_file_discovery_fails_instead_of_silently_truncating_depth(
+    monkeypatch,
+) -> None:
+    root = "abfss://ws@onelake.dfs.fabric.microsoft.com/lh"
+    scope = f"{root}/Files"
+    listings = {}
+    current = scope
+    for depth in range(10):
+        child = f"{current}/level{depth}"
+        listings[current] = [_Item(child, is_dir=True)]
+        current = child
+    monkeypatch.setattr(
+        "fabric_rlm.lakehouse._get_fs",
+        lambda: _FakeFS(listings),
+    )
+
+    with pytest.raises(LakehouseDiscoveryError, match="maximum depth"):
+        LakehouseSource(f"{root}/Files").resolve()
+
+
+def test_delta_discovery_fails_instead_of_silently_truncating_depth(
+    monkeypatch,
+) -> None:
+    root = "abfss://ws@onelake.dfs.fabric.microsoft.com/lh"
+    scope = f"{root}/Tables"
+    listings = {}
+    current = scope
+    for depth in range(5):
+        child = f"{current}/level{depth}"
+        listings[current] = [_Item(child, is_dir=True)]
+        current = child
+    monkeypatch.setattr(
+        "fabric_rlm.lakehouse._get_fs",
+        lambda: _FakeFS(listings),
+    )
+
+    with pytest.raises(LakehouseDiscoveryError, match="maximum depth"):
+        LakehouseSource(f"{root}/Tables").resolve()
+
+
+def test_extensionless_file_under_dotted_folder_keeps_full_name(monkeypatch) -> None:
+    root = "abfss://ws@onelake.dfs.fabric.microsoft.com/lh"
+    scope = f"{root}/Files/data.v1"
+    readme = f"{scope}/README"
+    monkeypatch.setattr(
+        "fabric_rlm.lakehouse._get_fs",
+        lambda: _FakeFS({scope: [_Item(readme, is_dir=False)]}),
+    )
+
+    resolved = LakehouseSource(scope).resolve()
+
+    assert resolved.catalog[0]["name"] == "files.data.v1.README"
+
+
+def test_nested_lakehouse_inputs_resolve_in_parent(monkeypatch) -> None:
+    unresolved = LakehouseSource(
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh"
+    )
+    resolved = LakehouseSource(
+        unresolved.root,
+        catalog=[{"kind": "delta", "name": "orders", "path": "abfss://orders"}],
+    )
+    monkeypatch.setattr(LakehouseSource, "resolve", lambda self: resolved)
+
+    inputs = {"primary": unresolved, "others": [unresolved]}
+    output = resolve_lakehouse_inputs(inputs)
+
+    assert output == {"primary": resolved, "others": [resolved]}
+
+
+def test_rlm_resolves_lakehouse_before_worker_binding(monkeypatch) -> None:
+    unresolved = LakehouseSource(
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh"
+    )
+    resolved = LakehouseSource(
+        unresolved.root,
+        catalog=[
+            {
+                "kind": "delta",
+                "name": "dbo.orders",
+                "path": "abfss://orders",
+                "columns": [["order_id", "BIGINT"]],
+            }
+        ],
+    )
+    calls = []
+
+    def resolve(source):
+        calls.append(source)
+        return resolved
+
+    monkeypatch.setattr(LakehouseSource, "resolve", resolve)
+
+    class ScriptedLM:
+        def __call__(self, *, messages):
+            return (
+                "```python\n"
+                "SUBMIT(answer={"
+                "'type': type(source).__name__, "
+                "'resolved': source.is_resolved, "
+                "'count': len(source.catalog)"
+                "})\n```"
+            )
+
+    result = RLM.task(
+        task="Inspect the Lakehouse source.",
+        inputs={"source": unresolved},
+        outputs={"answer": dict},
+        lm=ScriptedLM(),
+        max_turns=1,
+        timeout=10,
+    ).run()
+
+    assert calls == [unresolved]
+    assert result.outputs["answer"] == {
+        "type": "LakehouseSource",
+        "resolved": True,
+        "count": 1,
     }
