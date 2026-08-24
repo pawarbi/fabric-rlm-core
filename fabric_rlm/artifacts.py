@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .lakehouse import LakehouseSource
 from .semantic_model import SemanticModel
 
 
@@ -109,6 +110,16 @@ def encode_for_worker(value: Any) -> Any:
         # parent already made.
         return {"__fabric_rlm_semantic_model__": {
             "dataset": value.dataset, "workspace": value.workspace}}
+    if isinstance(value, LakehouseSource):
+        return {
+            "__fabric_rlm_lakehouse_source__": {
+                "root": value.root,
+                "tables": list(value.tables),
+                "files": list(value.files),
+                "catalog": [dict(item) for item in value.catalog or ()],
+                "max_sources": value.max_sources,
+            }
+        }
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     if isinstance(value, tuple):
@@ -120,7 +131,7 @@ def encode_for_worker(value: Any) -> Any:
     raise TypeError(
         f"Unsupported input type for worker binding: {type(value).__name__}. "
         "Use primitives, dict/list containers, pathlib.Path, fabric_rlm.File, "
-        "or fabric_rlm.SemanticModel."
+        "fabric_rlm.SemanticModel, or fabric_rlm.LakehouseSource."
     )
 
 
@@ -138,6 +149,15 @@ def decode_from_worker_wire(value: Any) -> Any:
                 dataset=spec["dataset"],
                 workspace=spec.get("workspace"),
                 validate=False,
+            )
+        if "__fabric_rlm_lakehouse_source__" in value:
+            spec = value["__fabric_rlm_lakehouse_source__"]
+            return LakehouseSource(
+                root=spec["root"],
+                tables=spec.get("tables"),
+                files=spec.get("files"),
+                catalog=spec.get("catalog", []),
+                max_sources=spec.get("max_sources", 200),
             )
         return {k: decode_from_worker_wire(v) for k, v in value.items()}
     if isinstance(value, list):

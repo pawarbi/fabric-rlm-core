@@ -1,6 +1,7 @@
 """Public API for fabric-rlm."""
 
 from .artifacts import File, LocalArtifactStore
+from .lakehouse import LakehouseSource
 from .semantic_model import SemanticModel, sempy_available
 from .excel_artifacts import (
     ExcelCellValue,
@@ -57,6 +58,7 @@ __all__ = [
     "File",
     "Interpreter",
     "LocalArtifactStore",
+    "LakehouseSource",
     "OpenAILM",
     "Issue",
     "ReplayInterpreter",
