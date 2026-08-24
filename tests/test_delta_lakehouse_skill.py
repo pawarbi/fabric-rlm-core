@@ -824,8 +824,9 @@ def test_open_delta_branches_on_url_shape() -> None:
     assert "INSTALL azure" in src
     assert "PROVIDER access_token" in src
     assert "ACCOUNT_NAME 'onelake'" in src
-    # The token is bound as a parameter, never interpolated into the SQL text.
-    assert "ACCESS_TOKEN ?" in src
+    # Fabric rejects parameters in CREATE SECRET, so quote the token safely.
+    assert "_storage_token().replace(\"'\", \"''\")" in src
+    assert "ACCESS_TOKEN '{token}'" in src
 
 
 def test_metadata_only_discovery_matches_a_full_scan(delta_table, duck) -> None:
@@ -968,6 +969,39 @@ def test_prepare_reuses_an_existing_onelake_secret() -> None:
         ExistingSecretConnection(),
         "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables",
     )
+
+
+def test_prepare_creates_secret_without_parameterized_ddl() -> None:
+    """Fabric DuckDB rejects a parameter placeholder inside CREATE SECRET."""
+
+    class SecretCountResult:
+        @staticmethod
+        def fetchone():
+            return (0,)
+
+    class FabricConnection:
+        def __init__(self):
+            self.secret_query = None
+
+        def sql(self, query):
+            if "duckdb_secrets()" in query:
+                return SecretCountResult()
+            return None
+
+        def execute(self, query, params=None):
+            if params:
+                raise RuntimeError("Parser Error: syntax error at or near \"?\"")
+            self.secret_query = query
+
+    ns = _attach_ns()
+    ns["_storage_token"] = lambda: "token'with-quote"
+    con = FabricConnection()
+
+    assert ns["_prepare"](
+        con,
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables",
+    ) is con
+    assert "ACCESS_TOKEN 'token''with-quote'" in con.secret_query
 
 
 def test_azure_secret_form_in_the_skill_is_accepted_by_duckdb(duck) -> None:

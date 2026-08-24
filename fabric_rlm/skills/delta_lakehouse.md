@@ -149,10 +149,11 @@ def _prepare(con, path):
             "WHERE name = 'onelake_tok'"
         ).fetchone()[0]
         if not has_secret:
+            token = _storage_token().replace("'", "''")
             con.execute(
                 "CREATE SECRET onelake_tok "
-                "(TYPE azure, PROVIDER access_token, ACCESS_TOKEN ?, ACCOUNT_NAME 'onelake')",
-                [_storage_token()],
+                "(TYPE azure, PROVIDER access_token, "
+                f"ACCESS_TOKEN '{token}', ACCOUNT_NAME 'onelake')"
             )
     return con
 
