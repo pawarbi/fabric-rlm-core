@@ -892,6 +892,34 @@ def test_examples_write_outputs_to_files_not_tables() -> None:
 # --------------------------------------------------------------------------
 
 
+def test_prepare_reuses_an_existing_onelake_secret() -> None:
+    class ExistingSecretResult:
+        @staticmethod
+        def fetchone():
+            return (1,)
+
+    class ExistingSecretConnection:
+        @staticmethod
+        def sql(query):
+            if "duckdb_secrets()" in query:
+                return ExistingSecretResult()
+            return None
+
+        @staticmethod
+        def execute(*_args, **_kwargs):
+            raise AssertionError("an active OneLake secret must not be replaced")
+
+    ns = _attach_ns()
+    ns["_storage_token"] = lambda: pytest.fail(
+        "an existing secret must not request a replacement token"
+    )
+
+    assert ns["_prepare"](
+        ExistingSecretConnection(),
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables",
+    )
+
+
 def test_azure_secret_form_in_the_skill_is_accepted_by_duckdb(duck) -> None:
     """The CREATE SECRET the skill prescribes must parse. No network needed."""
     con = duck

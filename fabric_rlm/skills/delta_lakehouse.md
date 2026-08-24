@@ -142,11 +142,18 @@ def _prepare(con, path):
         # ACCOUNT_NAME is 'onelake'. Do NOT set ENDPOINT to a bare hostname
         # (see anti-patterns). Omitting ENDPOINT works: the abfss:// URL
         # already carries the host.
-        con.execute(
-            "CREATE OR REPLACE SECRET onelake_tok "
-            "(TYPE azure, PROVIDER access_token, ACCESS_TOKEN ?, ACCOUNT_NAME 'onelake')",
-            [_storage_token()],
-        )
+        # DuckDB cannot replace a secret while an active view is using it.
+        # Reuse the session secret when several tables share one connection.
+        has_secret = con.sql(
+            "SELECT count(*) FROM duckdb_secrets() "
+            "WHERE name = 'onelake_tok'"
+        ).fetchone()[0]
+        if not has_secret:
+            con.execute(
+                "CREATE SECRET onelake_tok "
+                "(TYPE azure, PROVIDER access_token, ACCESS_TOKEN ?, ACCOUNT_NAME 'onelake')",
+                [_storage_token()],
+            )
     return con
 
 
