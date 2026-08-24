@@ -9,9 +9,10 @@
 Run verifiable data tasks inside Microsoft Fabric.
 
 `fabric-rlm` gives a model a Python workspace next to your Fabric data. It can
-read Lakehouse files, query Power BI semantic models, calculate results, and
-write new artifacts. Output contracts and validators decide whether the work is
-accepted. Failed checks go back into the run for another attempt.
+read Lakehouse files, analyze Delta tables, query Power BI semantic models,
+calculate results, and write new artifacts. Output contracts and validators
+decide whether the work is accepted. Failed checks go back into the run for
+another attempt.
 
 The runtime uses a CPython subprocess inside the notebook session. pandas,
 DuckDB, Polars, openpyxl, PyMuPDF, and other installed packages remain
@@ -468,13 +469,14 @@ print(rlm.run().answer)
 | `excel_modify` | Editing `.xlsx` in place with openpyxl: writing computed values rather than formula strings, merged-cell anchors, target-range discipline, verifying by reloading |
 | `excel_extract` | Reading workbooks: locating real header rows, multi-table sheets, formula versus cached value, pulling structured records out of messy layouts |
 | `data_exploration` | Files too large for context: DuckDB and Polars over CSV, Parquet and JSONL, aggregating in code so raw rows never reach the prompt |
+| `delta_lakehouse` | Read-only Delta table discovery and analysis through mounted Lakehouse paths or OneLake `abfss://` paths |
 | `pdf_document_analysis` | Long documents with PyMuPDF: page enumeration, chunking, and per-chunk extraction |
 | `semantic_model` | Power BI semantic model discovery, measure selection, DAX queries, and result validation |
 | `core` | The PLAN / VERIFY / REFLECT contract applied to every run |
 | `validation` | Checking an answer against the task's constraints before submitting |
 | `error_handling` | What to do when a turn raises, so the next turn fixes rather than repeats |
 
-The five domain skills are keyword-routed. For example, `data_exploration`
+The six domain skills are keyword-routed. For example, `data_exploration`
 activates when a task or input name mentions logs or CSV files. The core and
 utility skills provide planning, validation, and error recovery.
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- **`delta_lakehouse` skill** — read-only discovery and analysis of Fabric
+  Lakehouse Delta tables through mounted paths or OneLake `abfss://` paths.
+  The `analytics` extra includes delta-rs as a fallback when DuckDB cannot
+  download its Delta extension.
+
 ## 0.4.1 — 2026-08-22 — safer workers and typed outputs
 
 ### Added

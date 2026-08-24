@@ -138,6 +138,25 @@ def test_release_verification_notebooks_fail_the_run_on_failed_checks(
     assert failure_assertion in "".join(final_code_cell["source"])
 
 
+def test_delta_verification_notebook_installs_analytics_and_fails_on_gaps():
+    notebook = json.loads(
+        (
+            NOTEBOOK_DIR / "verify_delta_lakehouse_skill_in_fabric.ipynb"
+        ).read_text(encoding="utf-8")
+    )
+    source = _source(notebook)
+    final_code_cell = next(
+        cell
+        for cell in reversed(notebook["cells"])
+        if cell.get("cell_type") == "code"
+    )
+
+    assert f"fabric-rlm[analytics]=={fabric_rlm.__version__}" in source
+    assert 'assert tally.get("FAIL", 0) == 0' in "".join(
+        final_code_cell["source"]
+    )
+
+
 def test_public_notebooks_do_not_invite_keys_in_source():
     offenders = []
     literal_assignment = re.compile(
