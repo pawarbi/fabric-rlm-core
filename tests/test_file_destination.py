@@ -11,6 +11,7 @@ from urllib.request import url2pathname
 import pytest
 
 from fabric_rlm import FileDestination
+from fabric_rlm import artifacts
 
 
 ROOT = (
@@ -18,7 +19,7 @@ ROOT = (
     "lakehouse/Files/published"
 )
 fabric_runtime_only = pytest.mark.skipif(
-    os.name != "posix" or not hasattr(os, "memfd_create"),
+    os.name != "posix",
     reason="secure OneLake publication requires the Linux Fabric runtime",
 )
 
@@ -71,6 +72,62 @@ class FakeFabricFs:
                 isDir=False,
             )
         ]
+
+
+def test_sealable_memfd_uses_libc_when_python_does_not_expose_it(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    class FakeMemfdCreate:
+        argtypes = None
+        restype = None
+
+        def __call__(self, name, flags):
+            calls.append((name, flags))
+            return 37
+
+    fake_memfd_create = FakeMemfdCreate()
+    monkeypatch.delattr(artifacts.os, "memfd_create", raising=False)
+    monkeypatch.setattr(
+        artifacts.ctypes,
+        "CDLL",
+        lambda *args, **kwargs: SimpleNamespace(
+            memfd_create=fake_memfd_create
+        ),
+    )
+
+    assert artifacts._create_sealable_memfd("fabric-rlm-publish") == 37
+    assert calls == [
+        (
+            b"fabric-rlm-publish",
+            artifacts._MFD_CLOEXEC | artifacts._MFD_ALLOW_SEALING,
+        )
+    ]
+
+
+def test_sealable_memfd_surfaces_libc_errno(monkeypatch) -> None:
+    class FailedMemfdCreate:
+        argtypes = None
+        restype = None
+
+        def __call__(self, _name, _flags):
+            return -1
+
+    monkeypatch.delattr(artifacts.os, "memfd_create", raising=False)
+    monkeypatch.setattr(
+        artifacts.ctypes,
+        "CDLL",
+        lambda *args, **kwargs: SimpleNamespace(
+            memfd_create=FailedMemfdCreate()
+        ),
+    )
+    monkeypatch.setattr(artifacts.ctypes, "get_errno", lambda: 38)
+
+    with pytest.raises(OSError) as exc_info:
+        artifacts._create_sealable_memfd("fabric-rlm-publish")
+
+    assert exc_info.value.errno == 38
 
 
 @fabric_runtime_only

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import ctypes
 import mimetypes
 import os
 import shutil
@@ -23,6 +24,8 @@ from .semantic_model import SemanticModel
 
 _HOST_FILE_TRANSPORT: Callable[..., dict[str, Any]] | None = None
 _DEFAULT_MAX_FILE_BYTES = 256 * 1024 * 1024
+_MFD_CLOEXEC = 0x0001
+_MFD_ALLOW_SEALING = 0x0002
 
 
 def _configure_host_file_transport(
@@ -433,7 +436,6 @@ def _sealed_staged_snapshot(
 
     if (
         os.name != "posix"
-        or not hasattr(os, "memfd_create")
         or not hasattr(os, "O_DIRECTORY")
         or not hasattr(os, "O_NOFOLLOW")
     ):
@@ -487,10 +489,7 @@ def _sealed_staged_snapshot(
         ):
             raise PermissionError("Published artifacts must be stable regular files.")
 
-        snapshot_descriptor = os.memfd_create(
-            "fabric-rlm-publish",
-            flags=os.MFD_ALLOW_SEALING,
-        )
+        snapshot_descriptor = _create_sealable_memfd("fabric-rlm-publish")
         size = 0
         while chunk := os.read(source_descriptor, 1024 * 1024):
             size += len(chunk)
@@ -536,6 +535,30 @@ def _sealed_staged_snapshot(
         ):
             if descriptor is not None:
                 os.close(descriptor)
+
+
+def _create_sealable_memfd(name: str) -> int:
+    """Create a sealable Linux memory file across Python runtime builds."""
+
+    flags = _MFD_CLOEXEC | _MFD_ALLOW_SEALING
+    python_memfd_create = getattr(os, "memfd_create", None)
+    if python_memfd_create is not None:
+        return python_memfd_create(name, flags=flags)
+
+    try:
+        libc_memfd_create = ctypes.CDLL(None, use_errno=True).memfd_create
+    except AttributeError as exc:
+        raise RuntimeError(
+            "Secure FileDestination publication requires Linux memfd support."
+        ) from exc
+
+    libc_memfd_create.argtypes = [ctypes.c_char_p, ctypes.c_uint]
+    libc_memfd_create.restype = ctypes.c_int
+    descriptor = libc_memfd_create(name.encode("ascii"), flags)
+    if descriptor < 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+    return descriptor
 
 
 def _remote_file_size(fs: Any, path: str) -> int:
