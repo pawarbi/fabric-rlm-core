@@ -303,10 +303,35 @@ def test_lakehouse_query_allows_internal_side_effect_free_window_functions(
     assert result["rows"] == [[1, 1], [2, 2], [3, 3]]
 
 
-def test_catalog_validation_allows_functions_classified_as_window() -> None:
+@pytest.mark.parametrize(
+    ("window_type", "function_name"),
+    [
+        ("WINDOW_CUME_DIST", "cume_dist"),
+        ("WINDOW_FIRST_VALUE", "first_value"),
+        ("WINDOW_LAG", "lag"),
+        ("WINDOW_LAST_VALUE", "last_value"),
+        ("WINDOW_LEAD", "lead"),
+        ("WINDOW_NTH_VALUE", "nth_value"),
+        ("WINDOW_NTILE", "ntile"),
+        ("WINDOW_PERCENT_RANK", "percent_rank"),
+        ("WINDOW_RANK", "rank"),
+        ("WINDOW_RANK_DENSE", "dense_rank"),
+        ("WINDOW_ROW_NUMBER", "row_number"),
+    ],
+)
+def test_catalog_validation_allows_builtin_window_missing_from_function_catalog(
+    window_type: str,
+    function_name: str,
+) -> None:
     document = json.loads(_serialized_select("values"))
     document["statements"][0]["node"]["select_list"] = [
-        {"class": "WINDOW", "function_name": "row_number", "schema": "", "catalog": ""}
+        {
+            "class": "WINDOW",
+            "type": window_type,
+            "function_name": function_name,
+            "schema": "",
+            "catalog": "",
+        }
     ]
 
     class _Cursor:
@@ -325,17 +350,16 @@ def test_catalog_validation_allows_functions_classified_as_window() -> None:
             if sql == "SELECT json_serialize_sql(?)":
                 return _Cursor(serialized=json.dumps(document))
             if sql.startswith("SELECT DISTINCT function_name "):
-                rows = [("row_number",)] if "'window'" in sql else []
-                return _Cursor(rows=rows)
+                return _Cursor()
             raise AssertionError(f"Unexpected SQL: {sql}")
 
     assert (
         lakehouse_module._validate_catalog_query(
             _Connection(),
-            "SELECT row_number() OVER () FROM values",
+            f"SELECT {function_name}() OVER () FROM values",
             aliases=["values"],
         )
-        == "SELECT row_number() OVER () FROM values"
+        == f"SELECT {function_name}() OVER () FROM values"
     )
 
 

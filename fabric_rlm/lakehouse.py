@@ -36,6 +36,21 @@ _UNSAFE_SCALAR_FUNCTION = re.compile(
     r")$",
     re.IGNORECASE,
 )
+_SAFE_BUILTIN_WINDOWS = frozenset(
+    {
+        ("WINDOW_CUME_DIST", "cume_dist"),
+        ("WINDOW_FIRST_VALUE", "first_value"),
+        ("WINDOW_LAG", "lag"),
+        ("WINDOW_LAST_VALUE", "last_value"),
+        ("WINDOW_LEAD", "lead"),
+        ("WINDOW_NTH_VALUE", "nth_value"),
+        ("WINDOW_NTILE", "ntile"),
+        ("WINDOW_PERCENT_RANK", "percent_rank"),
+        ("WINDOW_RANK", "rank"),
+        ("WINDOW_RANK_DENSE", "dense_rank"),
+        ("WINDOW_ROW_NUMBER", "row_number"),
+    }
+)
 _LAKEHOUSE_SCOPE_SEGMENTS = frozenset({"Tables", "Files"})
 
 
@@ -449,13 +464,21 @@ def _validate_query_functions(
         return
     if not isinstance(value, dict):
         return
-    if value.get("class") in {"FUNCTION", "WINDOW"}:
+    expression_class = value.get("class")
+    if expression_class in {"FUNCTION", "WINDOW"}:
         function_name = str(value.get("function_name", ""))
+        builtin_window = (
+            str(value.get("type", "")),
+            function_name.casefold(),
+        ) in _SAFE_BUILTIN_WINDOWS
         if (
             value.get("schema")
             or value.get("catalog")
             or _UNSAFE_SCALAR_FUNCTION.fullmatch(function_name)
-            or function_name.casefold() not in safe_functions
+            or (
+                function_name.casefold() not in safe_functions
+                and not (expression_class == "WINDOW" and builtin_window)
+            )
         ):
             raise _query_error()
     for item in value.values():
