@@ -115,10 +115,40 @@ flowchart LR
 ### Work with Fabric data in place
 
 Bind individual Lakehouse files with `File(...)`, discover Delta tables and
-Files with `LakehouseSource(...)`, or connect Power BI semantic models with
-`SemanticModel(...)`. A single task can use all three. DAX runs in the tabular
-engine, Delta reads honor the transaction log, file processing runs in Python,
-and generated artifacts can be written back to `Files/`.
+Files with `LakehouseSource(...)`, publish generated files with
+`FileDestination(...)`, or connect Power BI semantic models with
+`SemanticModel(...)`. A single task can combine these handles. DAX runs in the
+tabular engine, Delta reads honor the transaction log, file processing runs in
+Python, and generated artifacts can be written back to `Files/` without giving
+the isolated worker OneLake credentials.
+
+```python
+from fabric_rlm import FileDestination
+
+with FileDestination(
+    "abfss://<workspace-id>@onelake.dfs.fabric.microsoft.com/"
+    "<lakehouse-id>/Files/reports"
+) as destination:
+    result = RLM.task(
+        task=(
+            "Create a formatted revenue workbook. Save it to a staged file, "
+            "verify it by reopening it, then publish it through destination."
+        ),
+        inputs={"lakehouse": lakehouse, "destination": destination},
+        outputs={"workbook_path": str, "summary": dict, "sources_used": list},
+        skills=["excel_modify", "delta_lakehouse"],
+        lm=FabricLM("gpt-5.1"),
+    ).run()
+```
+
+Worker code uses `destination.stage("revenue.xlsx")` for the local openpyxl
+path and `destination.publish(staged)` after verification. The trusted parent
+performs the final copy and returns a manifest containing `path`, `name`, and
+`size`. Publishing refuses path traversal, files outside the private staging
+area, oversized files, and accidental overwrites. The context manager removes
+local staging files whether the run succeeds or fails. Pass
+`overwrite=True` to `destination.publish(...)` only when replacing an existing
+OneLake file is intentional.
 
 ### Use the Python packages already in the notebook
 

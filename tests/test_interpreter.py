@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from fabric_rlm import File, Interpreter, LakehouseSource, WorkerTimeout
+from fabric_rlm import (
+    File,
+    FileDestination,
+    Interpreter,
+    LakehouseSource,
+    WorkerTimeout,
+)
 
 
 def test_interpreter_persists_state() -> None:
@@ -181,6 +187,71 @@ def test_lakehouse_query_rejects_worker_catalog_tampering(monkeypatch) -> None:
             "lakehouse.query("
             "\"SELECT * FROM companies\", "
             "sources={\"companies\": \"dbo.companies\"})"
+        )
+
+    assert not result.ok
+    assert "not bound to this worker" in (result.error or "")
+
+
+def test_file_publish_runs_in_parent_for_bound_destination(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    destination = FileDestination(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse/Files"
+    )
+    observed = {}
+
+    def fake_publish(bound_destination, *, local_path, relative_path, overwrite):
+        observed.update(
+            destination=bound_destination,
+            local_path=local_path,
+            relative_path=relative_path,
+            overwrite=overwrite,
+        )
+        return {"path": "abfss://lakehouse/Files/report.xlsx", "name": "report.xlsx", "size": 8}
+
+    monkeypatch.setattr("fabric_rlm.interpreter.publish_file", fake_publish)
+
+    with Interpreter(timeout=5) as interp:
+        interp.set_inputs({"destination": destination})
+        result = interp.execute(
+            "staged = destination.stage('report.xlsx')\n"
+            "staged.write_bytes(b'workbook')\n"
+            "published = destination.publish(staged)\n"
+            "print(published['path'])"
+        )
+
+    assert result.ok
+    assert result.stdout.strip() == "abfss://lakehouse/Files/report.xlsx"
+    assert observed == {
+        "destination": destination,
+        "local_path": observed["local_path"],
+        "relative_path": "report.xlsx",
+        "overwrite": False,
+    }
+    assert Path(observed["local_path"]).parent == Path(destination.staging_root)
+
+
+def test_file_publish_rejects_worker_destination_tampering(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    destination = FileDestination(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse/Files"
+    )
+    monkeypatch.setattr(
+        "fabric_rlm.interpreter.publish_file",
+        lambda *_args, **_kwargs: pytest.fail("tampered destination must not publish"),
+    )
+
+    with Interpreter(timeout=5) as interp:
+        interp.set_inputs({"destination": destination})
+        result = interp.execute(
+            "object.__setattr__(destination, 'root', 'abfss://other/Files')\n"
+            "staged = destination.stage('report.xlsx')\n"
+            "staged.write_bytes(b'workbook')\n"
+            "destination.publish(staged)"
         )
 
     assert not result.ok

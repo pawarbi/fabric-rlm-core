@@ -44,7 +44,11 @@ from pathlib import Path
 from typing import Any, Callable, get_args, get_origin
 
 from . import netguard
-from .artifacts import File, decode_from_worker_wire
+from .artifacts import (
+    File,
+    _configure_host_file_transport,
+    decode_from_worker_wire,
+)
 from .lakehouse import _configure_host_query_transport
 from .serializers import (
     DEFAULT_INJECTED_NAMES,
@@ -808,6 +812,16 @@ def _lakehouse_query_transport(**kwargs: Any) -> dict[str, Any]:
     return result
 
 
+def _file_publish_transport(**kwargs: Any) -> dict[str, Any]:
+    value = _make_tool_stub("__fabric_rlm_file_publish__")(**kwargs)
+    if not isinstance(value, str):
+        raise RuntimeError("File publish host returned an invalid response.")
+    result = json.loads(value)
+    if not isinstance(result, dict):
+        raise RuntimeError("File publish host returned an invalid response.")
+    return result
+
+
 def _install_registered_tool_stubs() -> None:
     for name in _registered_tools:
         _namespace[name] = _make_tool_stub(name)
@@ -997,6 +1011,7 @@ def main() -> None:
     if os.environ.get(netguard.ENV_FLAG) == "1":
         netguard.install()
     _configure_host_query_transport(_lakehouse_query_transport)
+    _configure_host_file_transport(_file_publish_transport)
     _install_runtime_api()
     while True:
         line = _REAL_STDIN.readline()

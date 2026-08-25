@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from . import netguard
-from .artifacts import encode_for_worker
+from .artifacts import FileDestination, encode_for_worker, publish_file
 from .lakehouse import LakehouseSource, execute_lakehouse_query
 from .security import SecurityPolicy
 from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
@@ -78,6 +78,7 @@ class WorkerProtocolError(RuntimeError):
 
 
 _LAKEHOUSE_QUERY_TOOL = "__fabric_rlm_lakehouse_query__"
+_FILE_PUBLISH_TOOL = "__fabric_rlm_file_publish__"
 
 
 def _collect_lakehouse_sources(value: Any) -> list[LakehouseSource]:
@@ -94,6 +95,24 @@ def _collect_lakehouse_sources(value: Any) -> list[LakehouseSource]:
             source
             for item in value
             for source in _collect_lakehouse_sources(item)
+        ]
+    return []
+
+
+def _collect_file_destinations(value: Any) -> list[FileDestination]:
+    if isinstance(value, FileDestination):
+        return [value]
+    if isinstance(value, dict):
+        return [
+            destination
+            for item in value.values()
+            for destination in _collect_file_destinations(item)
+        ]
+    if isinstance(value, (list, tuple)):
+        return [
+            destination
+            for item in value
+            for destination in _collect_file_destinations(item)
         ]
     return []
 
@@ -121,6 +140,37 @@ def _execute_bound_lakehouse_query(
         sql=kwargs.get("sql", ""),
         sources=kwargs.get("sources", {}),
         max_rows=kwargs.get("max_rows", 1_000),
+    )
+
+
+def _execute_bound_file_publish(
+    bound_destinations: list[FileDestination],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    root = kwargs.get("root")
+    staging_root = kwargs.get("staging_root")
+    staging_identity = kwargs.get("staging_identity")
+    max_bytes = kwargs.get("max_bytes")
+    destination = next(
+        (
+            candidate
+            for candidate in bound_destinations
+            if candidate.root == root
+            and candidate.staging_root == staging_root
+            and list(candidate._staging_identity) == staging_identity
+            and candidate.max_bytes == max_bytes
+        ),
+        None,
+    )
+    if destination is None:
+        raise PermissionError(
+            "FileDestination is not bound to this worker or was modified."
+        )
+    return publish_file(
+        destination,
+        local_path=kwargs.get("local_path", ""),
+        relative_path=kwargs.get("relative_path", ""),
+        overwrite=kwargs.get("overwrite", False),
     )
 
 
@@ -208,6 +258,7 @@ class Interpreter:
         self._stderr_buf: list[str] = []
         self._stderr_thread: threading.Thread | None = None
         self._lakehouse_sources: list[LakehouseSource] = []
+        self._file_destinations: list[FileDestination] = []
 
     @property
     def is_running(self) -> bool:
@@ -300,6 +351,7 @@ class Interpreter:
 
     def set_inputs(self, inputs: dict[str, Any]) -> dict[str, Any]:
         self._lakehouse_sources = _collect_lakehouse_sources(inputs)
+        self._file_destinations = _collect_file_destinations(inputs)
         encoded = {name: encode_for_worker(value) for name, value in inputs.items()}
         return self._request({"op": "set_inputs", "inputs": encoded})
 
@@ -309,12 +361,18 @@ class Interpreter:
         name = params.get("name")
         kwargs = params.get("kwargs", {}) or {}
         try:
-            if name != _LAKEHOUSE_QUERY_TOOL:
+            if name == _LAKEHOUSE_QUERY_TOOL:
+                result = _execute_bound_lakehouse_query(
+                    self._lakehouse_sources,
+                    kwargs,
+                )
+            elif name == _FILE_PUBLISH_TOOL:
+                result = _execute_bound_file_publish(
+                    self._file_destinations,
+                    kwargs,
+                )
+            else:
                 raise WorkerProtocolError(f"Unknown internal worker tool: {name}")
-            result = _execute_bound_lakehouse_query(
-                self._lakehouse_sources,
-                kwargs,
-            )
             response = {
                 "jsonrpc": "2.0",
                 "result": {
@@ -542,6 +600,7 @@ class SubprocessPythonInterpreter:
         self._tools_registered = False
         self._request_id = 0
         self._lakehouse_sources: list[LakehouseSource] = []
+        self._file_destinations: list[FileDestination] = []
 
         # Diagnostics populated by start():
         self._spawn_cmd: list[str] | None = None
@@ -696,30 +755,34 @@ class SubprocessPythonInterpreter:
             self._register_tools()
 
         if variables:
-            lakehouse_variables = {
+            bound_variables = {
                 name: value
                 for name, value in variables.items()
                 if _collect_lakehouse_sources(value)
+                or _collect_file_destinations(value)
             }
             ordinary_variables = {
                 name: value
                 for name, value in variables.items()
-                if name not in lakehouse_variables
+                if name not in bound_variables
             }
-            if lakehouse_variables:
+            if bound_variables:
                 self._lakehouse_sources = _collect_lakehouse_sources(
-                    lakehouse_variables
+                    bound_variables
+                )
+                self._file_destinations = _collect_file_destinations(
+                    bound_variables
                 )
                 self._send_jsonrpc(
                     "set_inputs",
                     {
                         "inputs": {
                             name: encode_for_worker(value)
-                            for name, value in lakehouse_variables.items()
+                            for name, value in bound_variables.items()
                         }
                     },
                     timeout=self.timeout,
-                    context="binding Lakehouse inputs",
+                    context="binding parent-backed inputs",
                 )
             if ordinary_variables:
                 code = self._inject_variables(code, ordinary_variables) + "\n" + code
@@ -825,6 +888,11 @@ class SubprocessPythonInterpreter:
             if name == _LAKEHOUSE_QUERY_TOOL:
                 result = _execute_bound_lakehouse_query(
                     self._lakehouse_sources,
+                    kwargs,
+                )
+            elif name == _FILE_PUBLISH_TOOL:
+                result = _execute_bound_file_publish(
+                    self._file_destinations,
                     kwargs,
                 )
             elif name not in self.tools:

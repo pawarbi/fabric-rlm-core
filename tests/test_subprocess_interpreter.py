@@ -21,7 +21,7 @@ from dspy.primitives.code_interpreter import (
     FinalOutput,
 )
 
-from fabric_rlm import LakehouseSource
+from fabric_rlm import FileDestination, LakehouseSource
 from fabric_rlm.interpreter import SubprocessPythonInterpreter
 
 
@@ -284,6 +284,34 @@ def test_lakehouse_query_callback_is_available_with_bound_variables(
         )
 
     assert result.strip() == "North America"
+
+
+def test_file_publish_callback_is_available_with_bound_variables(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    destination = FileDestination(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse/Files"
+    )
+    monkeypatch.setattr(
+        "fabric_rlm.interpreter.publish_file",
+        lambda *_args, **_kwargs: {
+            "path": "abfss://lakehouse/Files/report.xlsx",
+            "name": "report.xlsx",
+            "size": 8,
+        },
+    )
+
+    with SubprocessPythonInterpreter() as interp:
+        result = interp.execute(
+            "staged = destination.stage('report.xlsx')\n"
+            "staged.write_bytes(b'workbook')\n"
+            "published = destination.publish(staged)\n"
+            "print(published['path'])",
+            variables={"destination": destination},
+        )
+
+    assert result.strip() == "abfss://lakehouse/Files/report.xlsx"
 
 
 def test_send_jsonrpc_services_worker_callback_before_its_response(monkeypatch) -> None:

@@ -218,3 +218,5 @@ def test_excel_modify_is_the_packaged_workbook_editing_skill() -> None:
     assert "excel_modify_gpt5" not in skill_names
     assert skill.title == "excel_modify"
     assert "Large-range / sheet-level protocol" in skill.content
+    assert "FileDestination" in skill.content
+    assert ".publish(" in skill.content

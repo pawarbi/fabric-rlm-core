@@ -24,6 +24,29 @@ Summary: You are MODIFYING an Excel `.xlsx` workbook in place using `openpyxl`. 
 
 You never read the raw bytes back into the LM. Print only small summaries (headers, sample rows, the values you wrote) — never dump full sheets.
 
+## Publishing a new workbook to OneLake
+
+When the inputs include a `FileDestination`, do not pass its `abfss://` root to
+openpyxl, pandas, notebookutils, or a storage SDK. Credentials intentionally
+remain in the trusted parent process.
+
+1. Create a local staged file with `destination.stage("report.xlsx")`.
+2. Save and reopen that staged path with openpyxl.
+3. After verification, call `destination.publish(staged)`.
+4. Submit the returned manifest's `path` as the final workbook path.
+
+```python
+staged = destination.stage("regional_revenue.xlsx")
+wb.save(staged.path)
+verified = openpyxl.load_workbook(staged.path, data_only=True)
+# Validate the saved workbook here.
+artifact = destination.publish(staged)
+SUBMIT(workbook_path=artifact["path"])
+```
+
+Never submit the staged local path as the final artifact. Publication must
+succeed before claiming that the workbook exists in OneLake.
+
 ## READ THIS FIRST — the #1 failure mode
 
 **The grader compares the SAVED CELL VALUES in the TARGET CELL RANGE against expected scalars.** It is a value-by-value comparison. It does NOT execute formulas, run macros, render Power Query, or interpret prose.
