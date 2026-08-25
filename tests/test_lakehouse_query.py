@@ -172,6 +172,8 @@ def test_lakehouse_query_rejects_dynamic_sql_that_reads_local_files(
         "SELECT * FROM parquet_metadata('private.parquet')",
         "SELECT (SELECT count(*) FROM query('SELECT * FROM companies'))",
         "SELECT * FROM (SELECT * FROM query('SELECT * FROM companies')) nested",
+        "SELECT * FROM unnest([1, 2, 3])",
+        "SELECT * FROM generate_series(1, 10)",
     ],
 )
 def test_lakehouse_query_rejects_all_user_table_functions(sql: str, tmp_path) -> None:
@@ -219,10 +221,71 @@ def test_lakehouse_query_allows_ctes_derived_from_authorized_sources(
 
 
 @pytest.mark.parametrize(
+    ("operator", "expected"),
+    [
+        ("UNION", [[1], [2], [3]]),
+        ("EXCEPT", [[1]]),
+        ("INTERSECT", [[2]]),
+    ],
+)
+def test_lakehouse_query_allows_set_operations_over_authorized_sources(
+    operator: str,
+    expected: list[list[int]],
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "values.csv"
+    csv_path.write_text("value\n1\n2\n3\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.values", "path": str(csv_path)}],
+    )
+
+    result = source.query(
+        f"""
+        SELECT value FROM values WHERE value <= 2
+        {operator}
+        SELECT value FROM values WHERE value >= 2
+        ORDER BY value
+        """,
+        sources={"values": "files.values"},
+    )
+
+    assert result["rows"] == expected
+
+
+def test_lakehouse_query_allows_bounded_recursive_ctes_from_authorized_sources(
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "values.csv"
+    csv_path.write_text("value\n1\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.values", "path": str(csv_path)}],
+    )
+
+    result = source.query(
+        """
+        WITH RECURSIVE running(value, depth) AS (
+            SELECT value, 1 FROM values
+            UNION ALL
+            SELECT value + 1, depth + 1
+            FROM running
+            WHERE depth < 3
+        )
+        SELECT value FROM running ORDER BY value
+        """,
+        sources={"values": "files.values"},
+    )
+
+    assert result["rows"] == [[1], [2], [3]]
+
+
+@pytest.mark.parametrize(
     "sql",
     [
         "SELECT unregistered_transform(id) FROM companies",
         "SELECT current_query() FROM companies",
+        "SELECT unregistered_transform(id) OVER () FROM companies",
     ],
 )
 def test_lakehouse_query_rejects_unrecognized_or_side_effecting_functions(

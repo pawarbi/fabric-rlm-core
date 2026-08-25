@@ -449,7 +449,7 @@ def _validate_query_functions(
         return
     if not isinstance(value, dict):
         return
-    if value.get("class") == "FUNCTION":
+    if value.get("class") in {"FUNCTION", "WINDOW"}:
         function_name = str(value.get("function_name", ""))
         if (
             value.get("schema")
@@ -488,7 +488,13 @@ def _validate_query_node(node: Any, allowed_relations: frozenset[str]) -> None:
     node_type = str(node.get("type", ""))
     if node_type == "SELECT_NODE":
         _validate_query_relation(node.get("from_table"), scoped_relations)
-    elif node_type in {"UNION_NODE", "EXCEPT_NODE", "INTERSECT_NODE"}:
+    elif node_type in {
+        "SET_OPERATION_NODE",
+        "RECURSIVE_CTE_NODE",
+        "UNION_NODE",
+        "EXCEPT_NODE",
+        "INTERSECT_NODE",
+    }:
         _validate_query_node(node.get("left"), scoped_relations)
         _validate_query_node(node.get("right"), scoped_relations)
     else:
