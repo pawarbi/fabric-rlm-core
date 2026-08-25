@@ -626,6 +626,13 @@ class RLMResult:
             expanded=expanded,
         )
 
+    def __getattribute__(self, name: str) -> Any:
+        if name == "inspect":
+            payload = object.__getattribute__(self, "__dict__").get("payload")
+            if isinstance(payload, dict) and name in payload:
+                return payload[name]
+        return object.__getattribute__(self, name)
+
     def __getattr__(self, name: str) -> Any:
         # Only reached when normal attribute lookup fails. Never satisfy dunder
         # probes from the payload, and read ``payload`` straight from ``__dict__``
