@@ -624,7 +624,7 @@ def test_file_destination_fails_closed_without_secure_linux_runtime(
     destination = FileDestination(ROOT)
     staged = destination.stage("report.xlsx")
     staged.write_bytes(b"workbook")
-    monkeypatch.setattr("fabric_rlm.artifacts.os.name", "nt")
+    monkeypatch.delattr("fabric_rlm.artifacts.os.O_DIRECTORY", raising=False)
 
     with pytest.raises(RuntimeError, match="Linux Fabric runtime"):
         destination.publish(staged)
