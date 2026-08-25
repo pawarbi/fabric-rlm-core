@@ -130,6 +130,45 @@ def test_sealable_memfd_surfaces_libc_errno(monkeypatch) -> None:
     assert exc_info.value.errno == 38
 
 
+def test_seal_memfd_uses_linux_constants_missing_from_python() -> None:
+    calls = []
+    expected_seals = (
+        artifacts._F_SEAL_SEAL
+        | artifacts._F_SEAL_SHRINK
+        | artifacts._F_SEAL_GROW
+        | artifacts._F_SEAL_WRITE
+    )
+
+    def fake_fcntl(descriptor, command, argument=None):
+        calls.append((descriptor, command, argument))
+        if command == artifacts._F_GET_SEALS:
+            return expected_seals
+        return 0
+
+    artifacts._seal_memfd(
+        37,
+        SimpleNamespace(fcntl=fake_fcntl),
+    )
+
+    assert calls == [
+        (37, artifacts._F_ADD_SEALS, expected_seals),
+        (37, artifacts._F_GET_SEALS, None),
+    ]
+
+
+def test_seal_memfd_rejects_incomplete_seals() -> None:
+    def fake_fcntl(_descriptor, command, _argument=None):
+        if command == artifacts._F_GET_SEALS:
+            return artifacts._F_SEAL_WRITE
+        return 0
+
+    with pytest.raises(RuntimeError, match="could not be sealed"):
+        artifacts._seal_memfd(
+            37,
+            SimpleNamespace(fcntl=fake_fcntl),
+        )
+
+
 @fabric_runtime_only
 def test_file_destination_stages_and_publishes_to_onelake(
     monkeypatch,

@@ -26,6 +26,12 @@ _HOST_FILE_TRANSPORT: Callable[..., dict[str, Any]] | None = None
 _DEFAULT_MAX_FILE_BYTES = 256 * 1024 * 1024
 _MFD_CLOEXEC = 0x0001
 _MFD_ALLOW_SEALING = 0x0002
+_F_ADD_SEALS = 1033
+_F_GET_SEALS = 1034
+_F_SEAL_SEAL = 0x0001
+_F_SEAL_SHRINK = 0x0002
+_F_SEAL_GROW = 0x0004
+_F_SEAL_WRITE = 0x0008
 
 
 def _configure_host_file_transport(
@@ -516,13 +522,7 @@ def _sealed_staged_snapshot(
                 "Staged artifact changed while it was being published."
             )
 
-        seals = (
-            fcntl.F_SEAL_SEAL
-            | fcntl.F_SEAL_SHRINK
-            | fcntl.F_SEAL_GROW
-            | fcntl.F_SEAL_WRITE
-        )
-        fcntl.fcntl(snapshot_descriptor, fcntl.F_ADD_SEALS, seals)
+        _seal_memfd(snapshot_descriptor, fcntl)
         snapshot_stat = os.fstat(snapshot_descriptor)
         if snapshot_stat.st_size != size:
             raise RuntimeError("Immutable artifact snapshot size is inconsistent.")
@@ -559,6 +559,16 @@ def _create_sealable_memfd(name: str) -> int:
         error_number = ctypes.get_errno()
         raise OSError(error_number, os.strerror(error_number))
     return descriptor
+
+
+def _seal_memfd(descriptor: int, fcntl_module: Any) -> None:
+    """Seal a Linux memory file even when Python omits the Linux constants."""
+
+    seals = _F_SEAL_SEAL | _F_SEAL_SHRINK | _F_SEAL_GROW | _F_SEAL_WRITE
+    fcntl_module.fcntl(descriptor, _F_ADD_SEALS, seals)
+    applied = fcntl_module.fcntl(descriptor, _F_GET_SEALS)
+    if applied & seals != seals:
+        raise RuntimeError("Immutable artifact snapshot could not be sealed.")
 
 
 def _remote_file_size(fs: Any, path: str) -> int:
