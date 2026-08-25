@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from fabric_rlm import File, Interpreter, WorkerTimeout
+from fabric_rlm import File, Interpreter, LakehouseSource, WorkerTimeout
 
 
 def test_interpreter_persists_state() -> None:
@@ -108,6 +108,83 @@ def test_set_inputs_decodes_file(tmp_path: Path) -> None:
 
     assert result.ok
     assert result.state["text"] == "fabric"
+
+
+def test_lakehouse_query_runs_in_parent_without_exposing_credentials(
+    monkeypatch,
+) -> None:
+    source = LakehouseSource(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+        catalog=[
+            {
+                "kind": "delta",
+                "name": "dbo.companies",
+                "path": "abfss://workspace/lakehouse/Tables/dbo/companies",
+            }
+        ],
+    )
+    observed = {}
+
+    def fake_query(bound_source, *, sql, sources, max_rows):
+        observed.update(
+            source=bound_source,
+            sql=sql,
+            sources=sources,
+            max_rows=max_rows,
+        )
+        return {"columns": ["region"], "rows": [["North America"]], "truncated": False}
+
+    monkeypatch.setattr(
+        "fabric_rlm.interpreter.execute_lakehouse_query",
+        fake_query,
+    )
+
+    with Interpreter(timeout=5) as interp:
+        interp.set_inputs({"lakehouse": source})
+        result = interp.execute(
+            "data = lakehouse.query("
+            "\"SELECT region FROM companies\", "
+            "sources={\"companies\": \"dbo.companies\"})\n"
+            "print(data['rows'][0][0])"
+        )
+
+    assert result.ok
+    assert result.stdout.strip() == "North America"
+    assert observed == {
+        "source": source,
+        "sql": "SELECT region FROM companies",
+        "sources": {"companies": "dbo.companies"},
+        "max_rows": 1000,
+    }
+
+
+def test_lakehouse_query_rejects_worker_catalog_tampering(monkeypatch) -> None:
+    source = LakehouseSource(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+        catalog=[
+            {
+                "kind": "delta",
+                "name": "dbo.companies",
+                "path": "abfss://workspace/lakehouse/Tables/dbo/companies",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "fabric_rlm.interpreter.execute_lakehouse_query",
+        lambda *_args, **_kwargs: pytest.fail("tampered source must not execute"),
+    )
+
+    with Interpreter(timeout=5) as interp:
+        interp.set_inputs({"lakehouse": source})
+        result = interp.execute(
+            "lakehouse.catalog[0]['path'] = 'abfss://other/private'\n"
+            "lakehouse.query("
+            "\"SELECT * FROM companies\", "
+            "sources={\"companies\": \"dbo.companies\"})"
+        )
+
+    assert not result.ok
+    assert "not bound to this worker" in (result.error or "")
 
 
 def test_timeout_kills_worker() -> None:

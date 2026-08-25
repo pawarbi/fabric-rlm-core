@@ -21,6 +21,7 @@ from dspy.primitives.code_interpreter import (
     FinalOutput,
 )
 
+from fabric_rlm import LakehouseSource
 from fabric_rlm.interpreter import SubprocessPythonInterpreter
 
 
@@ -249,6 +250,40 @@ def test_tool_error_propagates_to_user_code() -> None:
         with pytest.raises(CodeInterpreterError) as exc_info:
             interp.execute("failing_tool()")
     assert "boom" in str(exc_info.value).lower()
+
+
+def test_lakehouse_query_callback_is_available_with_bound_variables(
+    monkeypatch,
+) -> None:
+    source = LakehouseSource(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+        catalog=[
+            {
+                "kind": "delta",
+                "name": "dbo.companies",
+                "path": "abfss://workspace/lakehouse/Tables/dbo/companies",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "fabric_rlm.interpreter.execute_lakehouse_query",
+        lambda *_args, **_kwargs: {
+            "columns": ["region"],
+            "rows": [["North America"]],
+            "truncated": False,
+        },
+    )
+
+    with SubprocessPythonInterpreter() as interp:
+        result = interp.execute(
+            "data = lakehouse.query("
+            "\"SELECT region FROM companies\", "
+            "sources={\"companies\": \"dbo.companies\"})\n"
+            "print(data['rows'][0][0])",
+            variables={"lakehouse": source},
+        )
+
+    assert result.strip() == "North America"
 
 
 # ----- Lifecycle ---------------------------------------------------------------
