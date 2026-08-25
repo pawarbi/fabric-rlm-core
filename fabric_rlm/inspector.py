@@ -33,8 +33,11 @@ _STYLES = """
   font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overflow: hidden;
 }
+.frlm-inspector-summary { cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 14px 16px; }
+.frlm-inspector-summary:hover { background: var(--frlm-surface); }
+.frlm-inspector-title { font-size: 18px; font-weight: 600; margin-right: auto; }
+.frlm-inspector-content { border-top: 1px solid var(--frlm-border); }
 .frlm-header { padding: 16px; border-bottom: 1px solid var(--frlm-border); }
-.frlm-header h2 { font-size: 18px; margin: 0 0 4px; }
 .frlm-subtitle { color: var(--frlm-muted); margin: 0; }
 .frlm-summary { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px; }
 .frlm-metric { background: var(--frlm-surface); border: 1px solid var(--frlm-border); border-radius: 4px; padding: 6px 10px; }
@@ -88,6 +91,7 @@ class RunInspector:
     result: "RLMResult"
     max_chars: int = 20_000
     slow_turn_seconds: float = 10.0
+    expanded: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -102,6 +106,8 @@ class RunInspector:
             or self.slow_turn_seconds <= 0
         ):
             raise ValueError("slow_turn_seconds must be greater than zero.")
+        if not isinstance(self.expanded, bool):
+            raise ValueError("expanded must be a bool.")
 
     def _text(self, value: Any) -> str:
         text = "" if value is None else str(value)
@@ -204,13 +210,19 @@ class RunInspector:
             )
         else:
             turns = '<div class="frlm-empty">No executable turns were recorded.</div>'
+        opened = " open" if self.expanded else ""
         return (
-            f"{_STYLES}<section class=\"frlm-inspector\" aria-label=\"RLM run inspector\">"
-            "<header class=\"frlm-header\"><h2>RLM run inspector</h2>"
+            f'{_STYLES}<details class="frlm-inspector"{opened}>'
+            '<summary class="frlm-inspector-summary">'
+            '<span class="frlm-inspector-title">RLM run inspector</span>'
+            f'<span class="frlm-badge {status_class}">{escape(status)}</span>'
+            f'<span class="frlm-neutral">{self.result.n_turns} turns</span>'
+            "</summary><div class=\"frlm-inspector-content\">"
+            "<header class=\"frlm-header\">"
             "<p class=\"frlm-subtitle\">Observable model responses, code, execution, "
             "validation, and performance by turn.</p></header>"
             f'<div class="frlm-summary">{cards}</div>'
-            f'<div class="frlm-turns">{turns}</div></section>'
+            f'<div class="frlm-turns">{turns}</div></div></details>'
         )
 
     def _repr_html_(self) -> str:

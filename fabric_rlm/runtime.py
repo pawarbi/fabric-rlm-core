@@ -609,6 +609,7 @@ class RLMResult:
         *,
         max_chars: int = 20_000,
         slow_turn_seconds: float = 10.0,
+        expanded: bool = False,
     ) -> "RunInspector":
         """Return an interactive notebook view of this run's observable turns.
 
@@ -622,6 +623,7 @@ class RLMResult:
             self,
             max_chars=max_chars,
             slow_turn_seconds=slow_turn_seconds,
+            expanded=expanded,
         )
 
     def __getattr__(self, name: str) -> Any:
