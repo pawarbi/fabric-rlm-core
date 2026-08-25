@@ -23,13 +23,12 @@ _MAX_QUERY_ROWS = 10_000
 _MAX_QUERY_CHARS = 100_000
 _MAX_QUERY_RESULT_BYTES = 5 * 1024 * 1024
 _SAFE_ALIAS = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_UNSAFE_QUERY = re.compile(
-    r"\b(?:"
-    r"pragma|attach|detach|copy|install|load|export|import|call|"
-    r"duckdb_[A-Za-z0-9_]*|glob|query_table|sniff_csv|"
-    r"getenv|current_setting|[A-Za-z0-9_]*(?:secret|credential|token)[A-Za-z0-9_]*|"
-    r"read_[A-Za-z0-9_]*|[A-Za-z0-9_]+_scan"
-    r")\s*(?:\(|\b)",
+_UNSAFE_SCALAR_FUNCTION = re.compile(
+    r"^(?:"
+    r"getenv|current_setting|"
+    r"duckdb_[A-Za-z0-9_]*|"
+    r"[A-Za-z0-9_]*(?:secret|credential|token)[A-Za-z0-9_]*"
+    r")$",
     re.IGNORECASE,
 )
 
@@ -300,7 +299,7 @@ def _quote_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _validate_catalog_query(sql: str) -> str:
+def _normalize_catalog_query(sql: str) -> str:
     normalized = str(sql).strip()
     if (
         not normalized
@@ -309,8 +308,178 @@ def _validate_catalog_query(sql: str) -> str:
         or not re.match(r"^(?:SELECT|WITH)\b", normalized, re.IGNORECASE)
     ):
         raise ValueError("LakehouseSource.query requires a read-only catalog query.")
-    if _UNSAFE_QUERY.search(normalized):
+    return normalized
+
+
+def _query_error() -> ValueError:
+    return ValueError("LakehouseSource.query requires a read-only catalog query.")
+
+
+def _validate_query_functions(
+    value: Any,
+    safe_functions: frozenset[str],
+) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _validate_query_functions(item, safe_functions)
+        return
+    if not isinstance(value, dict):
+        return
+    if value.get("class") == "FUNCTION":
+        function_name = str(value.get("function_name", ""))
+        if (
+            value.get("schema")
+            or value.get("catalog")
+            or _UNSAFE_SCALAR_FUNCTION.fullmatch(function_name)
+            or function_name.casefold() not in safe_functions
+        ):
+            raise _query_error()
+    for item in value.values():
+        _validate_query_functions(item, safe_functions)
+
+
+def _validate_query_node(node: Any, allowed_relations: frozenset[str]) -> None:
+    if not isinstance(node, dict):
+        raise _query_error()
+
+    cte_map = node.get("cte_map", {})
+    cte_entries = cte_map.get("map", []) if isinstance(cte_map, dict) else None
+    if not isinstance(cte_entries, list):
         raise ValueError("LakehouseSource.query requires a read-only catalog query.")
+    cte_names = {
+        str(entry.get("key", "")).casefold()
+        for entry in cte_entries
+        if isinstance(entry, dict) and str(entry.get("key", ""))
+    }
+    if len(cte_names) != len(cte_entries):
+        raise _query_error()
+    scoped_relations = allowed_relations | frozenset(cte_names)
+
+    for entry in cte_entries:
+        value = entry.get("value")
+        query = value.get("query") if isinstance(value, dict) else None
+        query_node = query.get("node") if isinstance(query, dict) else None
+        _validate_query_node(query_node, scoped_relations)
+
+    node_type = str(node.get("type", ""))
+    if node_type == "SELECT_NODE":
+        _validate_query_relation(node.get("from_table"), scoped_relations)
+    elif node_type in {"UNION_NODE", "EXCEPT_NODE", "INTERSECT_NODE"}:
+        _validate_query_node(node.get("left"), scoped_relations)
+        _validate_query_node(node.get("right"), scoped_relations)
+    else:
+        raise _query_error()
+
+    _validate_expression_subqueries(
+        node,
+        scoped_relations,
+        skip_keys={"cte_map", "from_table", "left", "right"},
+    )
+
+
+def _validate_expression_subqueries(
+    value: Any,
+    allowed_relations: frozenset[str],
+    *,
+    skip_keys: set[str] | None = None,
+) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _validate_expression_subqueries(item, allowed_relations)
+        return
+    if not isinstance(value, dict):
+        return
+    query = value.get("subquery")
+    if isinstance(query, dict) and isinstance(query.get("node"), dict):
+        _validate_query_node(query["node"], allowed_relations)
+    for key, item in value.items():
+        if skip_keys and key in skip_keys:
+            continue
+        _validate_expression_subqueries(item, allowed_relations)
+
+
+def _validate_query_relation(
+    relation: Any,
+    allowed_relations: frozenset[str],
+) -> None:
+    if relation is None:
+        return
+    if not isinstance(relation, dict):
+        raise _query_error()
+
+    relation_type = str(relation.get("type", ""))
+    if relation_type == "EMPTY":
+        return
+    if relation_type == "BASE_TABLE":
+        table_name = str(relation.get("table_name", "")).casefold()
+        if (
+            not table_name
+            or relation.get("catalog_name")
+            or relation.get("schema_name")
+            or relation.get("at_clause") is not None
+            or table_name not in allowed_relations
+        ):
+            raise _query_error()
+        return
+    if relation_type == "JOIN":
+        _validate_query_relation(relation.get("left"), allowed_relations)
+        _validate_query_relation(relation.get("right"), allowed_relations)
+        _validate_expression_subqueries(relation.get("condition"), allowed_relations)
+        return
+    if relation_type == "SUBQUERY":
+        query = relation.get("subquery")
+        node = query.get("node") if isinstance(query, dict) else None
+        _validate_query_node(node, allowed_relations)
+        return
+    if relation_type == "EXPRESSION_LIST":
+        _validate_expression_subqueries(relation.get("values"), allowed_relations)
+        return
+    if relation_type == "PIVOT":
+        _validate_query_relation(relation.get("source"), allowed_relations)
+        _validate_expression_subqueries(relation, allowed_relations)
+        return
+    raise _query_error()
+
+
+def _validate_catalog_query(
+    con: Any,
+    sql: str,
+    *,
+    aliases: Sequence[str],
+) -> str:
+    normalized = _normalize_catalog_query(sql)
+    alias_names = [str(alias).casefold() for alias in aliases]
+    if len(set(alias_names)) != len(alias_names):
+        raise ValueError("LakehouseSource.query source aliases must be unique.")
+    try:
+        payload = con.execute(
+            "SELECT json_serialize_sql(?)",
+            [normalized],
+        ).fetchone()
+        document = json.loads(payload[0]) if payload else None
+        safe_functions = frozenset(
+            str(row[0]).casefold()
+            for row in con.execute(
+                "SELECT DISTINCT function_name "
+                "FROM duckdb_functions() "
+                "WHERE function_type IN ('scalar', 'aggregate') "
+                "AND internal "
+                "AND NOT coalesce(has_side_effects, false)"
+            ).fetchall()
+        )
+    except Exception as exc:
+        raise _query_error() from exc
+    if (
+        not isinstance(document, dict)
+        or document.get("error") is not False
+        or not isinstance(document.get("statements"), list)
+        or len(document["statements"]) != 1
+    ):
+        raise _query_error()
+    _validate_query_functions(document, safe_functions)
+    statement = document["statements"][0]
+    node = statement.get("node") if isinstance(statement, dict) else None
+    _validate_query_node(node, frozenset(alias_names))
     return normalized
 
 
@@ -344,7 +513,6 @@ def execute_lakehouse_query(
     if not isinstance(sources, Mapping) or not sources:
         raise ValueError("LakehouseSource.query requires at least one named source.")
 
-    normalized_sql = _validate_catalog_query(sql)
     resolved = source.resolve()
     catalog = {str(entry["name"]): entry for entry in resolved.catalog or ()}
     selected: list[tuple[str, dict[str, Any]]] = []
@@ -369,6 +537,11 @@ def execute_lakehouse_query(
     con = duckdb.connect()
     token: str | None = None
     try:
+        normalized_sql = _validate_catalog_query(
+            con,
+            sql,
+            aliases=[alias for alias, _ in selected],
+        )
         statements = con.extract_statements(normalized_sql)
         if (
             len(statements) != 1

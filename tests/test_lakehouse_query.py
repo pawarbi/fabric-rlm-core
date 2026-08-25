@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from types import SimpleNamespace
 
@@ -83,6 +84,107 @@ def test_lakehouse_query_rejects_external_or_non_query_sql(sql: str) -> None:
         source.query(sql, sources={"companies": "files.companies"})
 
 
+def test_lakehouse_query_rejects_dynamic_sql_that_reads_local_files(
+    tmp_path,
+) -> None:
+    payload_path = tmp_path / "payload.txt"
+    payload_path.write_text("must-not-be-readable", encoding="utf-8")
+    csv_path = tmp_path / "companies.csv"
+    csv_path.write_text("id\n1\n", encoding="utf-8")
+    escaped_path = str(payload_path).replace("\\", "/").replace("'", "''")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.companies", "path": str(csv_path)}
+        ],
+    )
+
+    with pytest.raises(ValueError, match="read-only catalog query"):
+        source.query(
+            "SELECT * FROM query("
+            "'SELECT content FROM rea' || "
+            f"'d_text(''{escaped_path}'')'"
+            ")",
+            sources={"companies": "files.companies"},
+        )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM parquet_metadata('private.parquet')",
+        "SELECT (SELECT count(*) FROM query('SELECT * FROM companies'))",
+        "SELECT * FROM (SELECT * FROM query('SELECT * FROM companies')) nested",
+    ],
+)
+def test_lakehouse_query_rejects_all_user_table_functions(sql: str, tmp_path) -> None:
+    csv_path = tmp_path / "companies.csv"
+    csv_path.write_text("id\n1\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.companies", "path": str(csv_path)}
+        ],
+    )
+
+    with pytest.raises(ValueError, match="read-only catalog query"):
+        source.query(sql, sources={"companies": "files.companies"})
+
+
+def test_lakehouse_query_allows_ctes_derived_from_authorized_sources(
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "companies.csv"
+    csv_path.write_text("region,mrr\nNorth America,10\nEurope,7\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.companies", "path": str(csv_path)}
+        ],
+    )
+
+    result = source.query(
+        """
+        WITH regional AS (
+            SELECT region, SUM(mrr) AS total_mrr
+            FROM companies
+            GROUP BY region
+        )
+        SELECT region, total_mrr
+        FROM regional
+        WHERE total_mrr >= (SELECT MIN(mrr) FROM companies)
+        ORDER BY total_mrr DESC
+        """,
+        sources={"companies": "files.companies"},
+    )
+
+    assert result["rows"] == [["North America", 10], ["Europe", 7]]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT unregistered_transform(id) FROM companies",
+        "SELECT current_query() FROM companies",
+    ],
+)
+def test_lakehouse_query_rejects_unrecognized_or_side_effecting_functions(
+    sql: str,
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "companies.csv"
+    csv_path.write_text("id\n1\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.companies", "path": str(csv_path)}
+        ],
+    )
+
+    with pytest.raises(ValueError, match="read-only catalog query"):
+        source.query(sql, sources={"companies": "files.companies"})
+
+
 def test_lakehouse_query_rejects_unbounded_result_limits() -> None:
     source = LakehouseSource(
         "file:///lakehouse",
@@ -153,6 +255,34 @@ def test_lakehouse_query_redacts_storage_token_from_errors(monkeypatch) -> None:
     class _Statement:
         type = "StatementType.SELECT"
 
+    class _Cursor:
+        def fetchone(self):
+            return (
+                json.dumps(
+                    {
+                        "error": False,
+                        "statements": [
+                            {
+                                "node": {
+                                    "type": "SELECT_NODE",
+                                    "cte_map": {"map": []},
+                                    "from_table": {
+                                        "type": "BASE_TABLE",
+                                        "table_name": "values",
+                                        "catalog_name": "",
+                                        "schema_name": "",
+                                        "at_clause": None,
+                                    },
+                                }
+                            }
+                        ],
+                    }
+                ),
+            )
+
+        def fetchall(self):
+            return []
+
     class _Connection:
         def extract_statements(self, _sql):
             return [_Statement()]
@@ -160,7 +290,11 @@ def test_lakehouse_query_redacts_storage_token_from_errors(monkeypatch) -> None:
         def sql(self, _sql):
             return None
 
-        def execute(self, sql):
+        def execute(self, sql, _parameters=None):
+            if sql == "SELECT json_serialize_sql(?)" or sql.startswith(
+                "SELECT DISTINCT function_name "
+            ):
+                return _Cursor()
             if sql.startswith("CREATE TEMP VIEW"):
                 raise RuntimeError(f"storage failure for {token}")
             return self
