@@ -434,8 +434,8 @@ def _sealed_staged_snapshot(
     if (
         os.name != "posix"
         or not hasattr(os, "memfd_create")
-        or os.open not in os.supports_dir_fd
-        or os.stat not in os.supports_dir_fd
+        or not hasattr(os, "O_DIRECTORY")
+        or not hasattr(os, "O_NOFOLLOW")
     ):
         raise RuntimeError(
             "Secure FileDestination publication requires the Linux Fabric runtime."
