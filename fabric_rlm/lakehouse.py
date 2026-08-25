@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
+from urllib.parse import urlsplit
 
 
 class LakehouseDiscoveryError(RuntimeError):
@@ -35,6 +36,7 @@ _UNSAFE_SCALAR_FUNCTION = re.compile(
     r")$",
     re.IGNORECASE,
 )
+_LAKEHOUSE_SCOPE_SEGMENTS = frozenset({"Tables", "Files"})
 
 
 def _configure_host_query_transport(
@@ -44,6 +46,86 @@ def _configure_host_query_transport(
 
     global _HOST_QUERY_TRANSPORT
     _HOST_QUERY_TRANSPORT = transport
+
+
+def _normalize_lakehouse_uri(root: str) -> str:
+    supplied = str(root)
+    if (
+        not supplied
+        or supplied != supplied.strip()
+        or any(ord(char) < 32 for char in supplied)
+        or "%" in supplied
+        or "\\" in supplied
+    ):
+        raise ValueError(
+            "LakehouseSource root must be a canonical OneLake ABFSS or file URI."
+        )
+    value = supplied[:-1] if supplied.endswith("/") else supplied
+    if not value or value.endswith("/"):
+        raise ValueError(
+            "LakehouseSource root must be a canonical OneLake ABFSS or file URI."
+        )
+    try:
+        parts = urlsplit(value)
+        hostname = parts.hostname
+        username = parts.username
+        password = parts.password
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError(
+            "LakehouseSource root must be a canonical OneLake ABFSS or file URI."
+        ) from exc
+
+    path_parts = parts.path.split("/")
+    invalid_common = (
+        bool(parts.query)
+        or bool(parts.fragment)
+        or not parts.path.startswith("/")
+        or "//" in parts.path
+        or any(part in {"", ".", ".."} for part in path_parts[1:])
+    )
+    if parts.scheme.casefold() == "abfss":
+        workspace, separator, host = parts.netloc.rpartition("@")
+        invalid = (
+            invalid_common
+            or not separator
+            or not workspace
+            or hostname is None
+            or hostname.casefold() != "onelake.dfs.fabric.microsoft.com"
+            or not username
+            or password is not None
+            or port is not None
+            or len(path_parts) < 2
+            or not path_parts[1]
+        )
+        if invalid:
+            raise ValueError(
+                "LakehouseSource root must be a canonical OneLake ABFSS or file URI."
+            )
+        value = f"abfss://{workspace}@{host.casefold()}{parts.path}"
+    elif parts.scheme.casefold() == "file":
+        if invalid_common or parts.netloc not in {"", "localhost"}:
+            raise ValueError(
+                "LakehouseSource root must be a canonical OneLake ABFSS or file URI."
+            )
+    else:
+        raise ValueError(
+            "LakehouseSource root must be a canonical OneLake ABFSS or file URI."
+        )
+
+    scope_positions = [
+        index
+        for index, segment in enumerate(path_parts[1:])
+        if segment in _LAKEHOUSE_SCOPE_SEGMENTS
+    ]
+    if (
+        len(scope_positions) > 1
+        or (scope_positions and scope_positions[0] == 0)
+    ):
+        raise ValueError(
+            "LakehouseSource root must be a canonical OneLake ABFSS or file URI."
+        )
+    return value
 
 
 def _split_lakehouse_scope(path: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
@@ -67,24 +149,36 @@ def _normalize_scopes(
     value: str | Sequence[str] | None,
     *,
     default: tuple[str, ...],
+    kind: str,
 ) -> tuple[str, ...]:
-    if value is None:
-        return default
-    values = (value,) if isinstance(value, str) else tuple(value)
-    normalized = tuple(str(item).strip().strip("/") for item in values)
-    if any(not item for item in normalized):
-        raise ValueError("LakehouseSource scopes must be non-empty paths.")
-    if any(
-        "\\" in item
-        or ":" in item
-        or any(part in {"", ".", ".."} for part in item.split("/"))
-        for item in normalized
-    ):
-        raise ValueError(
-            "LakehouseSource scopes must be safe relative paths without "
-            "backslashes or parent-directory segments."
-        )
-    return normalized
+    values = default if value is None else (
+        (value,) if isinstance(value, str) else tuple(value)
+    )
+    normalized: list[str] = []
+    for item in values:
+        supplied = str(item)
+        path = supplied.strip("/")
+        parts = path.split("/")
+        if (
+            not path
+            or supplied != supplied.strip()
+            or any(ord(char) < 32 for char in supplied)
+            or "%" in supplied
+            or "\\" in supplied
+            or ":" in supplied
+            or "?" in supplied
+            or "#" in supplied
+            or "//" in supplied
+            or any(part in {"", ".", ".."} for part in parts)
+            or parts[0] != kind
+            or any(part in _LAKEHOUSE_SCOPE_SEGMENTS for part in parts[1:])
+        ):
+            raise ValueError(
+                "LakehouseSource scopes must be safe relative paths without "
+                "backslashes, encoded paths, or parent-directory segments."
+            )
+        normalized.append(path)
+    return tuple(normalized)
 
 
 def _normalize_catalog(
@@ -128,9 +222,10 @@ class LakehouseSource:
         catalog: Sequence[Mapping[str, Any]] | None = None,
         max_sources: int = 200,
     ) -> None:
-        supplied_path = str(root).strip().rstrip("/")
-        if not supplied_path:
+        supplied_path = str(root)
+        if not supplied_path.strip():
             raise ValueError("LakehouseSource requires a non-empty root.")
+        supplied_path = _normalize_lakehouse_uri(supplied_path)
         normalized_root, inferred_tables, inferred_files = _split_lakehouse_scope(
             supplied_path
         )
@@ -143,12 +238,12 @@ class LakehouseSource:
         object.__setattr__(
             self,
             "tables",
-            _normalize_scopes(tables, default=inferred_tables),
+            _normalize_scopes(tables, default=inferred_tables, kind="Tables"),
         )
         object.__setattr__(
             self,
             "files",
-            _normalize_scopes(files, default=inferred_files),
+            _normalize_scopes(files, default=inferred_files, kind="Files"),
         )
         object.__setattr__(self, "catalog", _normalize_catalog(catalog))
         object.__setattr__(self, "max_sources", max_sources)

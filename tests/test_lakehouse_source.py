@@ -176,13 +176,58 @@ def test_lakehouse_source_validates_catalog_entries() -> None:
         )
 
 
-@pytest.mark.parametrize("scope", ["../Tables", "Files/../secrets", r"Files\data"])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "../Tables",
+        "Files/../secrets",
+        r"Files\data",
+        "Tables/%2e%2e/private",
+        "Tables//private",
+        "Tables/private?version=1",
+        "Tables/private#fragment",
+        "Tables/dbo/Files/private",
+        "Files/data/Tables/private",
+    ],
+)
 def test_lakehouse_source_rejects_unsafe_relative_scopes(scope: str) -> None:
     with pytest.raises(ValueError, match="relative paths"):
         LakehouseSource(
             "abfss://ws@onelake.dfs.fabric.microsoft.com/lh",
             tables=scope,
         )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables/../Files/private",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables/%2e%2e/Files/private",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables/dbo/Files/private",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh//Tables",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables?version=1",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables#fragment",
+    ],
+)
+def test_lakehouse_source_rejects_unsafe_inferred_scopes(path: str) -> None:
+    with pytest.raises(ValueError, match="canonical|relative paths"):
+        LakehouseSource(path, catalog=[])
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        "abfss://onelake.dfs.fabric.microsoft.com/lh",
+        "abfss://@onelake.dfs.fabric.microsoft.com/lh",
+        "abfss://ws@other.example/lh",
+        "abfss://user:password@onelake.dfs.fabric.microsoft.com/lh",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com:443/lh",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/",
+    ],
+)
+def test_lakehouse_source_rejects_malformed_abfss_roots(root: str) -> None:
+    with pytest.raises(ValueError, match="canonical"):
+        LakehouseSource(root, catalog=[])
 
 
 def test_explicit_catalog_round_trips_through_worker_wire() -> None:
