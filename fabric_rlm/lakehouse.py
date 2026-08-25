@@ -194,7 +194,32 @@ def _normalize_catalog(
                 "Each LakehouseSource catalog entry requires kind, name, and path."
             )
         normalized.append(item)
+    _require_unique_catalog_names(normalized)
     return tuple(normalized)
+
+
+def _require_unique_catalog_names(
+    catalog: Sequence[Mapping[str, Any]],
+    *,
+    discovery: bool = False,
+) -> None:
+    names: dict[str, tuple[str, str]] = {}
+    for entry in catalog:
+        name = str(entry.get("name", ""))
+        path = str(entry.get("path", ""))
+        normalized_name = name.casefold()
+        prior = names.get(normalized_name)
+        if prior is not None:
+            if discovery:
+                raise LakehouseDiscoveryError(
+                    f"Lakehouse discovery produced duplicate catalog name {name!r} "
+                    f"for {prior[1]!r} and {path!r}."
+                )
+            raise ValueError(
+                "LakehouseSource catalog entries require unique names "
+                f"(case-insensitive); {prior[0]!r} conflicts with {name!r}."
+            )
+        names[normalized_name] = (name, path)
 
 
 @dataclass(frozen=True)
@@ -669,7 +694,9 @@ def execute_lakehouse_query(
         raise ValueError("LakehouseSource.query requires at least one named source.")
 
     resolved = source.resolve()
-    catalog = {str(entry["name"]): entry for entry in resolved.catalog or ()}
+    catalog_entries = resolved.catalog or ()
+    _require_unique_catalog_names(catalog_entries)
+    catalog = {str(entry["name"]): entry for entry in catalog_entries}
     selected: list[tuple[str, dict[str, Any]]] = []
     for alias, catalog_name in sources.items():
         alias_text = str(alias)
@@ -916,6 +943,7 @@ def build_lakehouse_catalog(source: LakehouseSource) -> LakehouseSource:
         raise LakehouseDiscoveryError(
             "Lakehouse discovery found no Delta tables or files in the supplied scopes."
         )
+    _require_unique_catalog_names(catalog, discovery=True)
     return LakehouseSource(
         source.root,
         tables=source.tables,

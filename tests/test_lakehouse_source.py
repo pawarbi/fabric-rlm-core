@@ -176,6 +176,25 @@ def test_lakehouse_source_validates_catalog_entries() -> None:
         )
 
 
+def test_lakehouse_source_rejects_duplicate_explicit_catalog_names() -> None:
+    with pytest.raises(ValueError, match="unique names"):
+        LakehouseSource(
+            "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+            catalog=[
+                {
+                    "kind": "csv",
+                    "name": "files.orders",
+                    "path": "abfss://root/Files/orders.csv",
+                },
+                {
+                    "kind": "parquet",
+                    "name": "Files.Orders",
+                    "path": "abfss://root/Files/orders.parquet",
+                },
+            ],
+        )
+
+
 @pytest.mark.parametrize(
     "scope",
     [
@@ -402,6 +421,26 @@ class _FakeFS:
 
     def head(self, path: str, _max_bytes: int):
         return self.heads[path]
+
+
+def test_auto_discovery_rejects_duplicate_normalized_names(monkeypatch) -> None:
+    root = "abfss://ws@onelake.dfs.fabric.microsoft.com/lh"
+    files = f"{root}/Files"
+    csv_path = f"{files}/orders.csv"
+    parquet_path = f"{files}/orders.parquet"
+    fs = _FakeFS(
+        {
+            files: [
+                _Item(csv_path, is_dir=False),
+                _Item(parquet_path, is_dir=False),
+            ]
+        },
+        {csv_path: "order_id\n1\n"},
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
+
+    with pytest.raises(LakehouseDiscoveryError, match="duplicate catalog name"):
+        LakehouseSource(root, tables=[], files="Files").resolve()
 
 
 def test_explicit_catalog_bypasses_auto_discovery(monkeypatch) -> None:

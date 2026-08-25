@@ -100,6 +100,24 @@ def test_lakehouse_query_rejects_sources_outside_the_catalog() -> None:
         )
 
 
+def test_lakehouse_query_rejects_catalog_name_collisions_after_construction() -> None:
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.orders", "path": "orders.csv"},
+            {"kind": "parquet", "name": "files.customers", "path": "customers.parquet"},
+        ],
+    )
+    assert source.catalog is not None
+    source.catalog[1]["name"] = "Files.Orders"
+
+    with pytest.raises(ValueError, match="unique names"):
+        source.query(
+            "SELECT * FROM orders",
+            sources={"orders": "files.orders"},
+        )
+
+
 @pytest.mark.parametrize(
     "sql",
     [
