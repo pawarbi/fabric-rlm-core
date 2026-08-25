@@ -466,7 +466,14 @@ Catalog searches match source names, paths, columns, and data types. They do
 not widen the Tables or Files scopes supplied by the caller. `query()` runs in
 the trusted parent process against only the named catalog entries and returns
 bounded JSON-safe rows, so Fabric storage credentials are never exposed to the
-isolated model-generated worker.
+isolated model-generated worker. Queries are parsed before execution: every
+relation must resolve to a supplied alias or a CTE derived from one, and
+user-authored table functions, dynamic SQL, external paths, and unrecognized or
+side-effecting functions fail closed. The parent also applies a 30-second
+deadline, a 256 MiB DuckDB memory limit with temporary spill disabled, a
+10,000-row ceiling, and a 5 MiB serialized-result ceiling. Results are fetched
+and sized one row at a time so an oversized scalar or row is rejected before
+the complete result is materialized.
 
 ### Semantic models
 
@@ -534,6 +541,10 @@ archive it:
 ```python
 result.inspect().save_html("rlm-run.html")
 ```
+
+Submitted fields normally remain available as result attributes. If an output
+is named `inspect`, `result.inspect` is that submitted value; use
+`RLMResult.inspect(result)` to open the run inspector for that result.
 
 ### Nested model calls
 

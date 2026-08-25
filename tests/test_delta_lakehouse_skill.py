@@ -149,7 +149,13 @@ def test_do_dont_table_covers_the_load_bearing_rules() -> None:
     for row in rows[2:]:
         assert row.count("|") >= 4, f"row missing the why column: {row}"
 
-    for rule in ("read_parquet", "con.register", "ACCESS_TOKEN ?", "ENDPOINT", "num_records"):
+    for rule in (
+        "read_parquet",
+        "con.register",
+        "does not accept parameter placeholders",
+        "ENDPOINT",
+        "num_records",
+    ):
         assert rule in table, f"Do/Don't table lost the {rule} rule"
 
 
@@ -1029,10 +1035,11 @@ def test_azure_secret_form_in_the_skill_is_accepted_by_duckdb(duck) -> None:
     except Exception as exc:  # pragma: no cover - offline machine
         pytest.skip(f"azure extension unavailable: {exc}")
 
+    token = "dummy-token".replace("'", "''")
     con.execute(
         "CREATE OR REPLACE SECRET onelake_tok "
-        "(TYPE azure, PROVIDER access_token, ACCESS_TOKEN ?, ACCOUNT_NAME 'onelake')",
-        ["dummy-token"],
+        "(TYPE azure, PROVIDER access_token, "
+        f"ACCESS_TOKEN '{token}', ACCOUNT_NAME 'onelake')"
     )
     assert con.sql("SELECT count(*) FROM duckdb_secrets()").fetchone()[0] >= 1
 
