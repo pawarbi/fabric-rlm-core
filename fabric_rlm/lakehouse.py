@@ -3,15 +3,39 @@
 from __future__ import annotations
 
 import csv
+import datetime as dt
+import decimal
+import re
 from collections import deque
 from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 
 class LakehouseDiscoveryError(RuntimeError):
     """Raised when a Lakehouse scope cannot produce a complete catalog."""
+
+
+_HOST_QUERY_TRANSPORT: Callable[..., dict[str, Any]] | None = None
+_SAFE_ALIAS = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_UNSAFE_QUERY = re.compile(
+    r"\b(?:"
+    r"pragma|attach|detach|copy|install|load|export|import|call|"
+    r"duckdb_[A-Za-z0-9_]*|glob|query_table|"
+    r"read_[A-Za-z0-9_]*|[A-Za-z0-9_]+_scan"
+    r")\s*(?:\(|\b)",
+    re.IGNORECASE,
+)
+
+
+def _configure_host_query_transport(
+    transport: Callable[..., dict[str, Any]] | None,
+) -> None:
+    """Configure the worker-only transport used by ``LakehouseSource.query``."""
+
+    global _HOST_QUERY_TRANSPORT
+    _HOST_QUERY_TRANSPORT = transport
 
 
 def _split_lakehouse_scope(path: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
@@ -178,6 +202,36 @@ class LakehouseSource:
                 matches.append(entry)
         return tuple(matches)
 
+    def query(
+        self,
+        sql: str,
+        *,
+        sources: Mapping[str, str],
+        max_rows: int = 1_000,
+    ) -> dict[str, Any]:
+        """Run bounded read-only SQL against named entries in this catalog.
+
+        In an isolated RLM worker the query is transparently delegated to the
+        trusted parent process, so Fabric credentials never enter generated
+        code. Direct callers execute in the current process.
+        """
+
+        resolved = self.resolve()
+        if _HOST_QUERY_TRANSPORT is not None:
+            return _HOST_QUERY_TRANSPORT(
+                root=resolved.root,
+                catalog=list(resolved.catalog or ()),
+                sql=sql,
+                sources=dict(sources),
+                max_rows=max_rows,
+            )
+        return execute_lakehouse_query(
+            resolved,
+            sql=sql,
+            sources=sources,
+            max_rows=max_rows,
+        )
+
     def __rlm_describe__(self) -> str:
         state = (
             f"resolved metadata catalog with {len(self.catalog or ())} "
@@ -188,9 +242,10 @@ class LakehouseSource:
         return (
             f"LakehouseSource: {state}. Catalog entries are dictionaries with "
             "kind, name, path, and columns. Use .list_sources(kind=...) or "
-            ".find_sources(query, kind=...) to choose relevant sources, then query "
-            "their direct paths. Do not call notebookutils from the worker; the "
-            "catalog is already resolved."
+            ".find_sources(query, kind=...) to choose relevant sources. Use "
+            ".query(sql, sources={alias: catalog_name}) to analyze them through "
+            "the parent process. Do not call notebookutils from the worker; the "
+            "catalog is already resolved and credentials remain in the parent."
         )
 
     def __repr__(self) -> str:
@@ -226,6 +281,142 @@ def _storage_token() -> str:
                 "Delta schema discovery requires Fabric storage credentials."
             ) from exc
         return mssparkutils.credentials.getToken("storage")
+
+
+def _quote_identifier(value: str) -> str:
+    if not _SAFE_ALIAS.fullmatch(value):
+        raise ValueError(
+            f"Invalid source alias {value!r}; use letters, numbers, and underscores."
+        )
+    return f'"{value}"'
+
+
+def _quote_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _validate_catalog_query(sql: str) -> str:
+    normalized = str(sql).strip()
+    if not normalized or not re.match(r"^(?:SELECT|WITH)\b", normalized, re.IGNORECASE):
+        raise ValueError("LakehouseSource.query requires a read-only catalog query.")
+    if _UNSAFE_QUERY.search(normalized):
+        raise ValueError("LakehouseSource.query requires a read-only catalog query.")
+    return normalized
+
+
+def _json_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, decimal.Decimal):
+        return float(value)
+    if isinstance(value, (dt.date, dt.datetime, dt.time)):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.hex()
+    return str(value)
+
+
+def execute_lakehouse_query(
+    source: LakehouseSource,
+    *,
+    sql: str,
+    sources: Mapping[str, str],
+    max_rows: int = 1_000,
+) -> dict[str, Any]:
+    """Execute a catalog-bounded query in the trusted calling process."""
+
+    if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows <= 0:
+        raise ValueError("LakehouseSource.query max_rows must be a positive integer.")
+    if not isinstance(sources, Mapping) or not sources:
+        raise ValueError("LakehouseSource.query requires at least one named source.")
+
+    normalized_sql = _validate_catalog_query(sql)
+    resolved = source.resolve()
+    catalog = {str(entry["name"]): entry for entry in resolved.catalog or ()}
+    selected: list[tuple[str, dict[str, Any]]] = []
+    for alias, catalog_name in sources.items():
+        alias_text = str(alias)
+        _quote_identifier(alias_text)
+        name_text = str(catalog_name)
+        if name_text not in catalog:
+            raise ValueError(
+                f"Source {name_text!r} is not in this LakehouseSource catalog."
+            )
+        selected.append((alias_text, catalog[name_text]))
+
+    try:
+        import duckdb
+    except ImportError as exc:
+        raise RuntimeError(
+            "LakehouseSource.query requires the analytics extra: "
+            "pip install 'fabric-rlm[analytics]'."
+        ) from exc
+
+    con = duckdb.connect()
+    token: str | None = None
+    try:
+        statements = con.extract_statements(normalized_sql)
+        if (
+            len(statements) != 1
+            or str(statements[0].type).rsplit(".", 1)[-1] != "SELECT"
+        ):
+            raise ValueError("LakehouseSource.query requires a read-only catalog query.")
+
+        kinds = {str(entry.get("kind", "")).lower() for _, entry in selected}
+        remote = any("://" in str(entry["path"]) for _, entry in selected)
+        if "delta" in kinds:
+            con.sql("INSTALL delta; LOAD delta;")
+        if remote:
+            con.sql("INSTALL azure; LOAD azure;")
+            token = _storage_token()
+            escaped_token = token.replace("'", "''")
+            con.execute(
+                "CREATE SECRET onelake_tok "
+                "(TYPE azure, PROVIDER access_token, "
+                f"ACCESS_TOKEN '{escaped_token}', ACCOUNT_NAME 'onelake')"
+            )
+
+        for alias, entry in selected:
+            kind = str(entry.get("kind", "")).lower()
+            path = _quote_literal(str(entry["path"]))
+            if kind == "delta":
+                relation = f"delta_scan({path})"
+            elif kind == "csv":
+                relation = f"read_csv_auto({path}, header=true)"
+            elif kind == "parquet":
+                relation = f"read_parquet({path})"
+            else:
+                raise ValueError(
+                    f"LakehouseSource.query does not support source kind {kind!r}."
+                )
+            con.execute(
+                f"CREATE TEMP VIEW {_quote_identifier(alias)} AS "
+                f"SELECT * FROM {relation}"
+            )
+
+        cursor = con.execute(
+            f"SELECT * FROM ({normalized_sql}) AS __fabric_rlm_query "
+            f"LIMIT {max_rows + 1}"
+        )
+        columns = [description[0] for description in cursor.description or ()]
+        fetched = cursor.fetchall()
+        return {
+            "columns": columns,
+            "rows": [
+                [_json_value(value) for value in row]
+                for row in fetched[:max_rows]
+            ],
+            "truncated": len(fetched) > max_rows,
+        }
+    except Exception as exc:
+        message = str(exc)
+        if token:
+            message = message.replace(token, "[REDACTED]")
+        if message != str(exc):
+            raise type(exc)(message) from None
+        raise
+    finally:
+        con.close()
 
 
 def _read_delta_columns(path: str) -> list[list[str]]:
