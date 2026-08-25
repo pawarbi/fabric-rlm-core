@@ -7,6 +7,7 @@ import datetime as dt
 import decimal
 import json
 import re
+import threading
 from collections import deque
 from collections.abc import Iterator
 from copy import deepcopy
@@ -22,6 +23,9 @@ _HOST_QUERY_TRANSPORT: Callable[..., dict[str, Any]] | None = None
 _MAX_QUERY_ROWS = 10_000
 _MAX_QUERY_CHARS = 100_000
 _MAX_QUERY_RESULT_BYTES = 5 * 1024 * 1024
+_QUERY_FETCH_BATCH_ROWS = 1
+_QUERY_MEMORY_LIMIT = "256MB"
+_QUERY_TIMEOUT_SECONDS = 30.0
 _SAFE_ALIAS = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _UNSAFE_SCALAR_FUNCTION = re.compile(
     r"^(?:"
@@ -495,6 +499,62 @@ def _json_value(value: Any) -> Any:
     return str(value)
 
 
+def _fetch_query_result(
+    cursor: Any,
+    *,
+    max_rows: int,
+) -> dict[str, Any]:
+    columns = [description[0] for description in cursor.description or ()]
+    columns_json = json.dumps(columns, ensure_ascii=False)
+    encoded_size = len(
+        (
+            '{"columns": '
+            + columns_json
+            + ', "rows": [], "truncated": false}'
+        ).encode("utf-8")
+    )
+    if encoded_size > _MAX_QUERY_RESULT_BYTES:
+        raise ValueError(
+            "LakehouseSource.query result exceeds the 5 MiB transfer limit. "
+            "Aggregate further or select fewer columns."
+        )
+
+    rows: list[list[Any]] = []
+    truncated = False
+    while True:
+        remaining = max_rows + 1 - len(rows)
+        if remaining <= 0:
+            truncated = True
+            break
+        batch = cursor.fetchmany(min(_QUERY_FETCH_BATCH_ROWS, remaining))
+        if not batch:
+            break
+        for row in batch:
+            if len(rows) == max_rows:
+                truncated = True
+                break
+            converted = [_json_value(value) for value in row]
+            row_size = len(
+                json.dumps(converted, ensure_ascii=False).encode("utf-8")
+            )
+            separator_size = 2 if rows else 0
+            if encoded_size + separator_size + row_size > _MAX_QUERY_RESULT_BYTES:
+                raise ValueError(
+                    "LakehouseSource.query result exceeds the 5 MiB transfer limit. "
+                    "Aggregate further or select fewer columns."
+                )
+            rows.append(converted)
+            encoded_size += separator_size + row_size
+        if truncated:
+            break
+
+    return {
+        "columns": columns,
+        "rows": rows,
+        "truncated": truncated,
+    }
+
+
 def execute_lakehouse_query(
     source: LakehouseSource,
     *,
@@ -536,7 +596,11 @@ def execute_lakehouse_query(
 
     con = duckdb.connect()
     token: str | None = None
+    deadline_reached = threading.Event()
+    timer: threading.Timer | None = None
     try:
+        con.execute("SET memory_limit = ?", [_QUERY_MEMORY_LIMIT])
+        con.execute("SET temp_directory = ''")
         normalized_sql = _validate_catalog_query(
             con,
             sql,
@@ -581,27 +645,23 @@ def execute_lakehouse_query(
                 f"SELECT * FROM {relation}"
             )
 
+        def interrupt_query() -> None:
+            deadline_reached.set()
+            con.interrupt()
+
+        timer = threading.Timer(_QUERY_TIMEOUT_SECONDS, interrupt_query)
+        timer.daemon = True
+        timer.start()
         cursor = con.execute(
             f"SELECT * FROM ({normalized_sql}) AS __fabric_rlm_query "
             f"LIMIT {max_rows + 1}"
         )
-        columns = [description[0] for description in cursor.description or ()]
-        fetched = cursor.fetchall()
-        result = {
-            "columns": columns,
-            "rows": [
-                [_json_value(value) for value in row]
-                for row in fetched[:max_rows]
-            ],
-            "truncated": len(fetched) > max_rows,
-        }
-        if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > _MAX_QUERY_RESULT_BYTES:
-            raise ValueError(
-                "LakehouseSource.query result exceeds the 5 MiB transfer limit. "
-                "Aggregate further or select fewer columns."
-            )
-        return result
+        return _fetch_query_result(cursor, max_rows=max_rows)
     except Exception as exc:
+        if deadline_reached.is_set():
+            raise TimeoutError(
+                "LakehouseSource.query exceeded its execution deadline."
+            ) from None
         message = str(exc)
         if token:
             message = message.replace(token, "[REDACTED]")
@@ -609,6 +669,9 @@ def execute_lakehouse_query(
             raise RuntimeError(message) from None
         raise
     finally:
+        if timer is not None:
+            timer.cancel()
+            timer.join()
         con.close()
 
 
