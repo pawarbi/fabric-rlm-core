@@ -16,9 +16,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Callable
-from urllib.parse import urlsplit
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlsplit
+from urllib.request import Request, urlopen
 
-from .lakehouse import LakehouseSource
+from .lakehouse import LakehouseSource, _storage_token
 from .semantic_model import SemanticModel
 
 
@@ -32,6 +34,9 @@ _F_SEAL_SEAL = 0x0001
 _F_SEAL_SHRINK = 0x0002
 _F_SEAL_GROW = 0x0004
 _F_SEAL_WRITE = 0x0008
+_ONELAKE_API_VERSION = "2023-08-03"
+_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
+_UPLOAD_TIMEOUT_SECONDS = 60
 
 
 def _configure_host_file_transport(
@@ -294,7 +299,8 @@ def _normalize_destination_root(root: str | Path) -> str:
         raise ValueError(
             "FileDestination root must be a canonical OneLake abfss:// Files scope."
         )
-    return value
+    workspace, _, host = parts.netloc.rpartition("@")
+    return f"abfss://{workspace}@{host.lower()}{parts.path}"
 
 
 def _safe_relative_path(relative_path: str) -> PurePosixPath:
@@ -382,7 +388,10 @@ def publish_file(
 
     source = _validated_staged_source(destination, local_path)
     relative = _safe_relative_path(relative_path)
-    with _sealed_staged_snapshot(destination, source) as (snapshot_uri, size):
+    with _sealed_staged_snapshot(destination, source) as (
+        snapshot_descriptor,
+        size,
+    ):
         target = f"{destination.root}/{relative.as_posix()}"
         fs = _notebook_fs()
         parent = target.rsplit("/", 1)[0]
@@ -390,8 +399,11 @@ def publish_file(
         if not fs.mkdirs(parent):
             raise RuntimeError(f"Could not create destination directory: {parent}")
         try:
-            if not fs.cp(snapshot_uri, temporary, recurse=False):
-                raise RuntimeError(f"Could not upload staged file to: {temporary}")
+            _upload_snapshot_to_onelake(
+                snapshot_descriptor,
+                temporary,
+                size,
+            )
             if not fs.exists(temporary):
                 raise RuntimeError(f"Uploaded file is not visible at: {temporary}")
             uploaded_size = _remote_file_size(fs, temporary)
@@ -526,7 +538,7 @@ def _sealed_staged_snapshot(
         snapshot_stat = os.fstat(snapshot_descriptor)
         if snapshot_stat.st_size != size:
             raise RuntimeError("Immutable artifact snapshot size is inconsistent.")
-        yield f"file:/proc/{os.getpid()}/fd/{snapshot_descriptor}", size
+        yield snapshot_descriptor, size
     finally:
         for descriptor in (
             snapshot_descriptor,
@@ -569,6 +581,109 @@ def _seal_memfd(descriptor: int, fcntl_module: Any) -> None:
     applied = fcntl_module.fcntl(descriptor, _F_GET_SEALS)
     if applied & seals != seals:
         raise RuntimeError("Immutable artifact snapshot could not be sealed.")
+
+
+def _upload_snapshot_to_onelake(
+    descriptor: int,
+    target: str,
+    size: int,
+) -> None:
+    """Stream a sealed snapshot to a new OneLake file with the parent token."""
+
+    url = _onelake_dfs_url(target)
+    headers = {
+        "Authorization": f"Bearer {_storage_token()}",
+        "x-ms-version": _ONELAKE_API_VERSION,
+    }
+    _send_onelake_request(
+        Request(
+            f"{url}?resource=file",
+            data=b"",
+            headers={
+                **headers,
+                "Content-Length": "0",
+                "If-None-Match": "*",
+            },
+            method="PUT",
+        ),
+        operation="create",
+    )
+
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    position = 0
+    while position < size:
+        chunk = os.read(descriptor, min(_UPLOAD_CHUNK_BYTES, size - position))
+        if not chunk:
+            raise RuntimeError("Immutable artifact snapshot ended unexpectedly.")
+        _send_onelake_request(
+            Request(
+                f"{url}?action=append&position={position}",
+                data=chunk,
+                headers={
+                    **headers,
+                    "Content-Length": str(len(chunk)),
+                    "Content-Type": "application/octet-stream",
+                },
+                method="PATCH",
+            ),
+            operation="append",
+        )
+        position += len(chunk)
+
+    _send_onelake_request(
+        Request(
+            f"{url}?action=flush&position={size}",
+            data=b"",
+            headers={**headers, "Content-Length": "0"},
+            method="PATCH",
+        ),
+        operation="flush",
+    )
+
+
+def _onelake_dfs_url(path: str) -> str:
+    """Convert one canonical OneLake ABFSS path to its DFS API URL."""
+
+    prefix = "abfss://"
+    authority_suffix = "@onelake.dfs.fabric.microsoft.com/"
+    workspace_and_path = path[len(prefix) :] if path.startswith(prefix) else ""
+    workspace, separator, object_path = workspace_and_path.partition(
+        authority_suffix
+    )
+    if (
+        not separator
+        or not workspace
+        or not object_path
+        or "\\" in path
+        or any(ord(char) < 32 for char in path)
+        or any(part in {"", ".", ".."} for part in object_path.split("/"))
+    ):
+        raise ValueError("OneLake upload target must be a canonical ABFSS path.")
+    return (
+        "https://onelake.dfs.fabric.microsoft.com/"
+        f"{quote(workspace, safe='')}/{quote(object_path, safe='/')}"
+    )
+
+
+def _send_onelake_request(request: Request, *, operation: str) -> None:
+    """Send one bounded OneLake upload request without exposing its token."""
+
+    try:
+        with urlopen(request, timeout=_UPLOAD_TIMEOUT_SECONDS) as response:
+            status = response.status
+    except HTTPError as exc:
+        raise RuntimeError(
+            f"OneLake upload failed during {operation}: HTTP {exc.code}."
+        ) from None
+    except (OSError, URLError) as exc:
+        raise RuntimeError(
+            f"OneLake upload failed during {operation}: "
+            f"{type(exc).__name__}."
+        ) from None
+    if status < 200 or status >= 300:
+        raise RuntimeError(
+            f"OneLake upload failed during {operation}: HTTP {status}."
+        )
 
 
 def _remote_file_size(fs: Any, path: str) -> int:

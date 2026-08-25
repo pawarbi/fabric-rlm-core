@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from urllib.parse import unquote, urlsplit
 from urllib.request import url2pathname
 
@@ -72,6 +73,219 @@ class FakeFabricFs:
                 isDir=False,
             )
         ]
+
+
+def install_fake_fabric_runtime(monkeypatch, fs: FakeFabricFs) -> None:
+    monkeypatch.setattr("fabric_rlm.artifacts._notebook_fs", lambda: fs)
+
+    def upload(descriptor: int, target: str, size: int) -> None:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        content = os.read(descriptor, size + 1)
+        assert len(content) == size
+        fs.files[target] = content
+
+    monkeypatch.setattr(
+        "fabric_rlm.artifacts._upload_snapshot_to_onelake",
+        upload,
+    )
+
+
+def test_onelake_upload_streams_sealed_descriptor_with_parent_token(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "report.xlsx"
+    source.write_bytes(b"workbook")
+    descriptor = os.open(source, os.O_RDONLY)
+    requests = []
+
+    class Response:
+        status = 201
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def open_request(request, timeout):
+        requests.append((request, timeout))
+        return Response()
+
+    monkeypatch.setattr(artifacts, "_storage_token", lambda: "secret-token")
+    monkeypatch.setattr(artifacts, "urlopen", open_request)
+    target = f"{ROOT}/nested/report.xlsx"
+
+    try:
+        artifacts._upload_snapshot_to_onelake(descriptor, target, 8)
+    finally:
+        os.close(descriptor)
+
+    assert [request.get_method() for request, _ in requests] == [
+        "PUT",
+        "PATCH",
+        "PATCH",
+    ]
+    assert requests[0][0].full_url.endswith(
+        "/workspace/lakehouse/Files/published/nested/report.xlsx?resource=file"
+    )
+    assert requests[1][0].full_url.endswith(
+        "/workspace/lakehouse/Files/published/nested/report.xlsx"
+        "?action=append&position=0"
+    )
+    assert requests[1][0].data == b"workbook"
+    assert requests[2][0].full_url.endswith(
+        "/workspace/lakehouse/Files/published/nested/report.xlsx"
+        "?action=flush&position=8"
+    )
+    assert all(
+        request.get_header("Authorization") == "Bearer secret-token"
+        for request, _ in requests
+    )
+    assert [request.get_header("Content-length") for request, _ in requests] == [
+        "0",
+        "8",
+        "0",
+    ]
+    assert all(timeout == artifacts._UPLOAD_TIMEOUT_SECONDS for _, timeout in requests)
+
+
+def test_onelake_upload_redacts_parent_token_from_http_errors(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "report.xlsx"
+    source.write_bytes(b"workbook")
+    descriptor = os.open(source, os.O_RDONLY)
+    monkeypatch.setattr(artifacts, "_storage_token", lambda: "secret-token")
+
+    def fail_request(request, timeout):
+        raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(artifacts, "urlopen", fail_request)
+
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            artifacts._upload_snapshot_to_onelake(
+                descriptor,
+                f"{ROOT}/report.xlsx",
+                8,
+            )
+    finally:
+        os.close(descriptor)
+
+    assert "HTTP 403" in str(exc_info.value)
+    assert "secret-token" not in str(exc_info.value)
+
+
+def test_onelake_upload_encodes_reserved_spaces_and_unicode() -> None:
+    url = artifacts._onelake_dfs_url(
+        f"{ROOT}/Q#1/revenue ? \N{EURO SIGN}.xlsx"
+    )
+
+    assert url.endswith(
+        "/workspace/lakehouse/Files/published/"
+        "Q%231/revenue%20%3F%20%E2%82%AC.xlsx"
+    )
+
+
+def test_onelake_upload_preserves_authority_text_inside_path() -> None:
+    url = artifacts._onelake_dfs_url(
+        f"{ROOT}/a@onelake.dfs.fabric.microsoft.com/b.xlsx"
+    )
+
+    assert url.endswith(
+        "/workspace/lakehouse/Files/published/"
+        "a%40onelake.dfs.fabric.microsoft.com/b.xlsx"
+    )
+
+
+def test_onelake_upload_chunks_content_at_exact_positions(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "report.xlsx"
+    source.write_bytes(b"12345678")
+    descriptor = os.open(source, os.O_RDONLY)
+    requests = []
+
+    class Response:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(artifacts, "_storage_token", lambda: "token")
+    monkeypatch.setattr(artifacts, "_UPLOAD_CHUNK_BYTES", 3)
+    monkeypatch.setattr(
+        artifacts,
+        "urlopen",
+        lambda request, timeout: requests.append(request) or Response(),
+    )
+
+    try:
+        artifacts._upload_snapshot_to_onelake(
+            descriptor,
+            f"{ROOT}/report.xlsx",
+            8,
+        )
+    finally:
+        os.close(descriptor)
+
+    append_requests = [
+        request for request in requests if "action=append" in request.full_url
+    ]
+    assert [request.full_url.rsplit("=", 1)[-1] for request in append_requests] == [
+        "0",
+        "3",
+        "6",
+    ]
+    assert [request.data for request in append_requests] == [
+        b"123",
+        b"456",
+        b"78",
+    ]
+
+
+def test_onelake_upload_flushes_empty_file_without_append(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "empty.xlsx"
+    source.write_bytes(b"")
+    descriptor = os.open(source, os.O_RDONLY)
+    requests = []
+
+    class Response:
+        status = 201
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(artifacts, "_storage_token", lambda: "token")
+    monkeypatch.setattr(
+        artifacts,
+        "urlopen",
+        lambda request, timeout: requests.append(request) or Response(),
+    )
+
+    try:
+        artifacts._upload_snapshot_to_onelake(
+            descriptor,
+            f"{ROOT}/empty.xlsx",
+            0,
+        )
+    finally:
+        os.close(descriptor)
+
+    assert [request.get_method() for request in requests] == ["PUT", "PATCH"]
+    assert requests[-1].full_url.endswith("?action=flush&position=0")
 
 
 def test_sealable_memfd_uses_libc_when_python_does_not_expose_it(
@@ -174,7 +388,7 @@ def test_file_destination_stages_and_publishes_to_onelake(
     monkeypatch,
 ) -> None:
     fs = FakeFabricFs()
-    monkeypatch.setattr("fabric_rlm.artifacts._notebook_fs", lambda: fs)
+    install_fake_fabric_runtime(monkeypatch, fs)
     destination = FileDestination(ROOT)
     staged = destination.stage("reports/revenue.xlsx")
     staged.write_bytes(b"workbook")
@@ -240,7 +454,7 @@ def test_file_destination_rejects_oversized_artifact() -> None:
 @fabric_runtime_only
 def test_file_destination_does_not_overwrite_by_default(monkeypatch) -> None:
     fs = FakeFabricFs()
-    monkeypatch.setattr("fabric_rlm.artifacts._notebook_fs", lambda: fs)
+    install_fake_fabric_runtime(monkeypatch, fs)
     destination = FileDestination(ROOT)
     staged = destination.stage("report.xlsx")
     staged.write_bytes(b"new")
@@ -256,7 +470,7 @@ def test_file_destination_does_not_overwrite_by_default(monkeypatch) -> None:
 @fabric_runtime_only
 def test_file_destination_overwrites_only_when_explicit(monkeypatch) -> None:
     fs = FakeFabricFs()
-    monkeypatch.setattr("fabric_rlm.artifacts._notebook_fs", lambda: fs)
+    install_fake_fabric_runtime(monkeypatch, fs)
     destination = FileDestination(ROOT)
     staged = destination.stage("report.xlsx")
     staged.write_bytes(b"new")
@@ -289,10 +503,22 @@ def test_file_destination_requires_canonical_onelake_files_scope(root: str) -> N
         FileDestination(root)
 
 
+def test_file_destination_canonicalizes_scheme_and_host_case() -> None:
+    destination = FileDestination(
+        "ABFSS://workspace@ONELAKE.DFS.FABRIC.MICROSOFT.COM/"
+        "lakehouse/Files"
+    )
+
+    assert destination.root == (
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/"
+        "lakehouse/Files"
+    )
+
+
 @fabric_runtime_only
 def test_file_destination_publishes_via_temporary_onelake_path(monkeypatch) -> None:
     fs = FakeFabricFs()
-    monkeypatch.setattr("fabric_rlm.artifacts._notebook_fs", lambda: fs)
+    install_fake_fabric_runtime(monkeypatch, fs)
     destination = FileDestination(ROOT)
     staged = destination.stage("revenue.xlsx")
     staged.write_bytes(b"workbook")
@@ -302,6 +528,29 @@ def test_file_destination_publishes_via_temporary_onelake_path(monkeypatch) -> N
     target = f"{ROOT}/revenue.xlsx"
     assert result == {"path": target, "name": "revenue.xlsx", "size": 8}
     assert fs.files == {target: b"workbook"}
+
+
+@fabric_runtime_only
+def test_file_destination_removes_partial_temporary_upload(monkeypatch) -> None:
+    fs = FakeFabricFs()
+    monkeypatch.setattr("fabric_rlm.artifacts._notebook_fs", lambda: fs)
+
+    def fail_after_create(_descriptor: int, target: str, _size: int) -> None:
+        fs.files[target] = b"partial"
+        raise RuntimeError("append failed")
+
+    monkeypatch.setattr(
+        "fabric_rlm.artifacts._upload_snapshot_to_onelake",
+        fail_after_create,
+    )
+    destination = FileDestination(ROOT)
+    staged = destination.stage("report.xlsx")
+    staged.write_bytes(b"workbook")
+
+    with pytest.raises(RuntimeError, match="append failed"):
+        destination.publish(staged)
+
+    assert fs.files == {}
 
 
 def test_file_destination_rejects_symlinked_staged_source(tmp_path: Path) -> None:
@@ -348,7 +597,7 @@ def test_file_destination_rejects_file_changed_during_snapshot(
     monkeypatch,
 ) -> None:
     fs = FakeFabricFs()
-    monkeypatch.setattr("fabric_rlm.artifacts._notebook_fs", lambda: fs)
+    install_fake_fabric_runtime(monkeypatch, fs)
     destination = FileDestination(ROOT)
     staged = destination.stage("report.xlsx")
     staged.write_bytes(b"workbook")
