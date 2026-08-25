@@ -592,7 +592,7 @@ def _validate_catalog_query(
             for row in con.execute(
                 "SELECT DISTINCT function_name "
                 "FROM duckdb_functions() "
-                "WHERE function_type IN ('scalar', 'aggregate') "
+                "WHERE function_type IN ('scalar', 'aggregate', 'window') "
                 "AND internal "
                 "AND NOT coalesce(has_side_effects, false)"
             ).fetchall()

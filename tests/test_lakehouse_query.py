@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from fabric_rlm import LakehouseSource
+from fabric_rlm import lakehouse as lakehouse_module
 
 
 def _serialized_select(table_name: str) -> str:
@@ -278,6 +279,64 @@ def test_lakehouse_query_allows_bounded_recursive_ctes_from_authorized_sources(
     )
 
     assert result["rows"] == [[1], [2], [3]]
+
+
+def test_lakehouse_query_allows_internal_side_effect_free_window_functions(
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "values.csv"
+    csv_path.write_text("value\n3\n1\n2\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.values", "path": str(csv_path)}],
+    )
+
+    result = source.query(
+        """
+        SELECT value, row_number() OVER (ORDER BY value) AS row_number
+        FROM values
+        ORDER BY value
+        """,
+        sources={"values": "files.values"},
+    )
+
+    assert result["rows"] == [[1, 1], [2, 2], [3, 3]]
+
+
+def test_catalog_validation_allows_functions_classified_as_window() -> None:
+    document = json.loads(_serialized_select("values"))
+    document["statements"][0]["node"]["select_list"] = [
+        {"class": "WINDOW", "function_name": "row_number", "schema": "", "catalog": ""}
+    ]
+
+    class _Cursor:
+        def __init__(self, *, serialized=None, rows=None) -> None:
+            self._serialized = serialized
+            self._rows = rows or []
+
+        def fetchone(self):
+            return (self._serialized,)
+
+        def fetchall(self):
+            return self._rows
+
+    class _Connection:
+        def execute(self, sql, _parameters=None):
+            if sql == "SELECT json_serialize_sql(?)":
+                return _Cursor(serialized=json.dumps(document))
+            if sql.startswith("SELECT DISTINCT function_name "):
+                rows = [("row_number",)] if "'window'" in sql else []
+                return _Cursor(rows=rows)
+            raise AssertionError(f"Unexpected SQL: {sql}")
+
+    assert (
+        lakehouse_module._validate_catalog_query(
+            _Connection(),
+            "SELECT row_number() OVER () FROM values",
+            aliases=["values"],
+        )
+        == "SELECT row_number() OVER () FROM values"
+    )
 
 
 @pytest.mark.parametrize(
