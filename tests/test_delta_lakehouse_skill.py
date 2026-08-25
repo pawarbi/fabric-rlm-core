@@ -160,6 +160,10 @@ def test_skill_prioritizes_resolved_lakehouse_catalogs_and_portable_queries() ->
     assert "LakehouseSource" in content
     assert "list_sources" in content
     assert "find_sources" in content
+    assert "lakehouse.query(" in content
+    assert "Do not call `open_delta`" in normalized
+    assert "Do not call `_storage_token`" in normalized
+    assert "DefaultAzureCredential" in normalized
     assert "Do not call `notebookutils`" in normalized
     assert "catalog's `columns` metadata" in normalized
     assert "date - INTERVAL 11 MONTH" in content

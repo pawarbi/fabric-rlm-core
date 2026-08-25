@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from fabric_rlm import LakehouseSource
@@ -62,6 +65,7 @@ def test_lakehouse_query_rejects_sources_outside_the_catalog() -> None:
     [
         "COPY (SELECT * FROM companies) TO 'out.csv'",
         "SELECT * FROM read_csv_auto('C:/secrets.txt')",
+        "SELECT * FROM read_csv_auto/**/('C:/secrets.txt')",
         "SELECT * FROM delta_scan('abfss://other/Tables/private')",
         "SELECT * FROM duckdb_secrets()",
         "PRAGMA version",
@@ -77,6 +81,22 @@ def test_lakehouse_query_rejects_external_or_non_query_sql(sql: str) -> None:
 
     with pytest.raises(ValueError, match="read-only catalog query"):
         source.query(sql, sources={"companies": "files.companies"})
+
+
+def test_lakehouse_query_rejects_unbounded_result_limits() -> None:
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.companies", "path": "companies.csv"}
+        ],
+    )
+
+    with pytest.raises(ValueError, match="at most 10000"):
+        source.query(
+            "SELECT * FROM companies",
+            sources={"companies": "files.companies"},
+            max_rows=10_001,
+        )
 
 
 def test_lakehouse_query_bounds_returned_rows(tmp_path) -> None:
@@ -104,3 +124,72 @@ def test_lakehouse_query_bounds_returned_rows(tmp_path) -> None:
         "rows": [[1], [2]],
         "truncated": True,
     }
+
+
+def test_lakehouse_query_rejects_results_above_transfer_limit(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "values.csv"
+    csv_path.write_text(f"value\n{'x' * 100}\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.values", "path": str(csv_path)}
+        ],
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._MAX_QUERY_RESULT_BYTES", 50)
+
+    with pytest.raises(ValueError, match="transfer limit"):
+        source.query(
+            "SELECT value FROM values",
+            sources={"values": "files.values"},
+        )
+
+
+def test_lakehouse_query_redacts_storage_token_from_errors(monkeypatch) -> None:
+    token = "sensitive-storage-token"
+
+    class _Statement:
+        type = "StatementType.SELECT"
+
+    class _Connection:
+        def extract_statements(self, _sql):
+            return [_Statement()]
+
+        def sql(self, _sql):
+            return None
+
+        def execute(self, sql):
+            if sql.startswith("CREATE TEMP VIEW"):
+                raise RuntimeError(f"storage failure for {token}")
+            return self
+
+        def close(self):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "duckdb",
+        SimpleNamespace(connect=lambda: _Connection()),
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._storage_token", lambda: token)
+    source = LakehouseSource(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+        catalog=[
+            {
+                "kind": "csv",
+                "name": "files.values",
+                "path": "abfss://workspace/lakehouse/Files/values.csv",
+            }
+        ],
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        source.query(
+            "SELECT value FROM values",
+            sources={"values": "files.values"},
+        )
+
+    assert token not in str(exc_info.value)
+    assert "[REDACTED]" in str(exc_info.value)

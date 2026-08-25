@@ -317,7 +317,10 @@ class Interpreter:
             )
             response = {
                 "jsonrpc": "2.0",
-                "result": {"value": json.dumps(result), "type": "json"},
+                "result": {
+                    "value": json.dumps(result, ensure_ascii=False),
+                    "type": "json",
+                },
                 "id": request_id,
             }
         except Exception as exc:
@@ -830,7 +833,7 @@ class SubprocessPythonInterpreter:
                 result = self.tools[name](**kwargs)
             is_json = isinstance(result, (list, dict))
             value = (
-                json.dumps(result)
+                json.dumps(result, ensure_ascii=False)
                 if is_json
                 else (str(result) if result is not None else "")
             )
@@ -865,6 +868,9 @@ class SubprocessPythonInterpreter:
             try:
                 msg = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if msg.get("method") == "tool_call":
+                self._handle_tool_call(msg)
                 continue
             if msg.get("id") != request_id:
                 continue

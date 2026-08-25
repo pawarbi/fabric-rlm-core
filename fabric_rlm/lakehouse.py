@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import decimal
+import json
 import re
 from collections import deque
 from collections.abc import Iterator
@@ -18,11 +19,15 @@ class LakehouseDiscoveryError(RuntimeError):
 
 
 _HOST_QUERY_TRANSPORT: Callable[..., dict[str, Any]] | None = None
+_MAX_QUERY_ROWS = 10_000
+_MAX_QUERY_CHARS = 100_000
+_MAX_QUERY_RESULT_BYTES = 5 * 1024 * 1024
 _SAFE_ALIAS = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _UNSAFE_QUERY = re.compile(
     r"\b(?:"
     r"pragma|attach|detach|copy|install|load|export|import|call|"
-    r"duckdb_[A-Za-z0-9_]*|glob|query_table|"
+    r"duckdb_[A-Za-z0-9_]*|glob|query_table|sniff_csv|"
+    r"getenv|current_setting|[A-Za-z0-9_]*(?:secret|credential|token)[A-Za-z0-9_]*|"
     r"read_[A-Za-z0-9_]*|[A-Za-z0-9_]+_scan"
     r")\s*(?:\(|\b)",
     re.IGNORECASE,
@@ -297,7 +302,12 @@ def _quote_literal(value: str) -> str:
 
 def _validate_catalog_query(sql: str) -> str:
     normalized = str(sql).strip()
-    if not normalized or not re.match(r"^(?:SELECT|WITH)\b", normalized, re.IGNORECASE):
+    if (
+        not normalized
+        or len(normalized) > _MAX_QUERY_CHARS
+        or any(marker in normalized for marker in ("--", "/*", "*/"))
+        or not re.match(r"^(?:SELECT|WITH)\b", normalized, re.IGNORECASE)
+    ):
         raise ValueError("LakehouseSource.query requires a read-only catalog query.")
     if _UNSAFE_QUERY.search(normalized):
         raise ValueError("LakehouseSource.query requires a read-only catalog query.")
@@ -327,6 +337,10 @@ def execute_lakehouse_query(
 
     if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows <= 0:
         raise ValueError("LakehouseSource.query max_rows must be a positive integer.")
+    if max_rows > _MAX_QUERY_ROWS:
+        raise ValueError(
+            f"LakehouseSource.query max_rows must be at most {_MAX_QUERY_ROWS}."
+        )
     if not isinstance(sources, Mapping) or not sources:
         raise ValueError("LakehouseSource.query requires at least one named source.")
 
@@ -400,7 +414,7 @@ def execute_lakehouse_query(
         )
         columns = [description[0] for description in cursor.description or ()]
         fetched = cursor.fetchall()
-        return {
+        result = {
             "columns": columns,
             "rows": [
                 [_json_value(value) for value in row]
@@ -408,12 +422,18 @@ def execute_lakehouse_query(
             ],
             "truncated": len(fetched) > max_rows,
         }
+        if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > _MAX_QUERY_RESULT_BYTES:
+            raise ValueError(
+                "LakehouseSource.query result exceeds the 5 MiB transfer limit. "
+                "Aggregate further or select fewer columns."
+            )
+        return result
     except Exception as exc:
         message = str(exc)
         if token:
             message = message.replace(token, "[REDACTED]")
         if message != str(exc):
-            raise type(exc)(message) from None
+            raise RuntimeError(message) from None
         raise
     finally:
         con.close()

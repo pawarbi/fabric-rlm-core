@@ -260,6 +260,8 @@ def test_lakehouse_source_description_explains_resolved_worker_contract() -> Non
     assert "1 source" in description
     assert "list_sources" in description
     assert "find_sources" in description
+    assert ".query(" in description
+    assert "credentials remain in the parent" in description
     assert "Do not call notebookutils" in description
 
 

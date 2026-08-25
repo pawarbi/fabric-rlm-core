@@ -286,6 +286,29 @@ def test_lakehouse_query_callback_is_available_with_bound_variables(
     assert result.strip() == "North America"
 
 
+def test_send_jsonrpc_services_worker_callback_before_its_response(monkeypatch) -> None:
+    interp = SubprocessPythonInterpreter()
+    frames = iter(
+        [
+            '{"jsonrpc":"2.0","method":"tool_call","params":{},"id":90}',
+            '{"jsonrpc":"2.0","result":{"ok":true},"id":1}',
+        ]
+    )
+    handled = []
+    monkeypatch.setattr(interp, "_write_jsonrpc", lambda _payload: None)
+    monkeypatch.setattr(
+        interp,
+        "_read_response_line",
+        lambda _timeout, _context: next(frames),
+    )
+    monkeypatch.setattr(interp, "_handle_tool_call", handled.append)
+
+    result = interp._send_jsonrpc("set_inputs", {}, timeout=1, context="test")
+
+    assert handled[0]["method"] == "tool_call"
+    assert result == {"ok": True}
+
+
 # ----- Lifecycle ---------------------------------------------------------------
 
 

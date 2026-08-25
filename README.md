@@ -415,10 +415,28 @@ Fabric discovery APIs again:
 lakehouse.list_sources(kind="delta")
 lakehouse.find_sources("usage")
 lakehouse.find_sources("customer_id", kind="delta")
+
+summary = lakehouse.query(
+    """
+    SELECT c.region, SUM(s.mrr) AS active_mrr
+    FROM companies AS c
+    JOIN subscriptions AS s USING (company_id)
+    WHERE s.status = 'active'
+    GROUP BY c.region
+    ORDER BY active_mrr DESC
+    """,
+    sources={
+        "companies": "dbo.companies",
+        "subscriptions": "dbo.subscriptions",
+    },
+)
 ```
 
 Catalog searches match source names, paths, columns, and data types. They do
-not widen the Tables or Files scopes supplied by the caller.
+not widen the Tables or Files scopes supplied by the caller. `query()` runs in
+the trusted parent process against only the named catalog entries and returns
+bounded JSON-safe rows, so Fabric storage credentials are never exposed to the
+isolated model-generated worker.
 
 ### Semantic models
 

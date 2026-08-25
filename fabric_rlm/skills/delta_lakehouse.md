@@ -36,14 +36,41 @@ contains source names, direct paths, kinds, and columns.
 all_sources = lakehouse.list_sources()
 delta_sources = lakehouse.list_sources(kind="delta")
 usage_candidates = lakehouse.find_sources("usage", kind="delta")
+
+result = lakehouse.query(
+    """
+    SELECT c.region,
+           SUM(s.mrr) AS active_mrr,
+           COUNT(DISTINCT c.company_id) AS company_count
+    FROM companies AS c
+    JOIN subscriptions AS s USING (company_id)
+    WHERE s.status = 'active'
+    GROUP BY c.region
+    ORDER BY active_mrr DESC
+    LIMIT 1
+    """,
+    sources={
+        "companies": "dbo.companies",
+        "subscriptions": "dbo.subscriptions",
+    },
+)
+print(result)
 ```
 
 Use `list_sources()` or `find_sources()` first, select only the entries relevant
-to the question, and query each selected entry's `path`. Use the catalog's
-`columns` metadata to plan joins before opening tables. Do not call `notebookutils`
-from the worker to rediscover a resolved `LakehouseSource`;
-Fabric workload credentials may be unavailable there, and rediscovery wastes
-turns even when it succeeds. Never widen beyond the supplied catalog.
+to the question, and pass their catalog names to `lakehouse.query(...)`. Use the
+catalog's `columns` metadata to plan joins before querying. The trusted parent
+opens those sources and returns bounded rows; storage credentials never enter
+worker code.
+
+Do not call `open_delta` for a bound `LakehouseSource`. Do not call
+`_storage_token`. Do not call `notebookutils` or `DefaultAzureCredential`
+either. Those direct-path helpers are for raw path inputs, not resolved
+Lakehouse inputs.
+Fabric workload credentials are commonly unavailable in the isolated worker,
+so retrying them wastes turns and cannot repair the boundary. Never widen
+beyond the supplied catalog, and never submit placeholder or hypothetical
+metrics after a query failure.
 
 ## READ THIS FIRST - the failure that returns a wrong answer silently
 
