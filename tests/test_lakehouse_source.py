@@ -1,10 +1,73 @@
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from fabric_rlm import LakehouseSource, RLM
+from fabric_rlm import lakehouse as lakehouse_module
 from fabric_rlm.artifacts import decode_from_worker_wire, encode_for_worker
 from fabric_rlm.lakehouse import LakehouseDiscoveryError, resolve_lakehouse_inputs
+
+
+def test_delta_schema_discovery_uses_current_pyarrow_conversion(
+    monkeypatch,
+) -> None:
+    fields = [
+        SimpleNamespace(name="company_id", type="Int64"),
+        SimpleNamespace(name="region", type="Utf8"),
+    ]
+
+    class Schema:
+        def to_pyarrow(self):
+            return fields
+
+    class DeltaTable:
+        def __init__(self, path, storage_options=None):
+            assert path == "local-delta-table"
+            assert storage_options is None
+
+        def schema(self):
+            return Schema()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "deltalake",
+        SimpleNamespace(DeltaTable=DeltaTable),
+    )
+
+    assert lakehouse_module._read_delta_columns("local-delta-table") == [
+        ["company_id", "Int64"],
+        ["region", "Utf8"],
+    ]
+
+
+def test_delta_schema_discovery_supports_arrow_conversion(
+    monkeypatch,
+) -> None:
+    fields = [SimpleNamespace(name="invoice_id", type="Int64")]
+
+    class Schema:
+        def to_arrow(self):
+            return fields
+
+    class DeltaTable:
+        def __init__(self, _path, storage_options=None):
+            assert storage_options is None
+
+        def schema(self):
+            return Schema()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "deltalake",
+        SimpleNamespace(DeltaTable=DeltaTable),
+    )
+
+    assert lakehouse_module._read_delta_columns("local-delta-table") == [
+        ["invoice_id", "Int64"],
+    ]
 
 
 def test_lakehouse_source_is_public_and_normalizes_scopes() -> None:

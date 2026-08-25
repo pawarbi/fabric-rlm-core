@@ -455,7 +455,11 @@ def _read_delta_columns(path: str) -> list[list[str]]:
             "use_fabric_endpoint": "true",
         }
     try:
-        schema = DeltaTable(path, storage_options=options).schema().to_arrow()
+        delta_schema = DeltaTable(path, storage_options=options).schema()
+        convert = getattr(delta_schema, "to_pyarrow", None)
+        if convert is None:
+            convert = delta_schema.to_arrow
+        schema = convert()
     except Exception as exc:
         raise LakehouseDiscoveryError(
             f"Delta metadata at {path!r} could not be read: "
