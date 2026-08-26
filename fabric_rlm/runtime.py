@@ -105,6 +105,10 @@ _REPAIR_DIVERSITY_LINE = (
 )
 _REPAIR_NUDGE_MODES = {"off", "static", "escalating"}
 _REPAIR_NUDGE_DEFAULT = "escalating"
+_PYTHON_LITERAL_RECOVERY_HINT = (
+    "This REPL executes Python: use `None`, `True`, and `False`, "
+    "not JSON `null`, `true`, or `false`."
+)
 
 
 def _repair_nudge_mode() -> str:
@@ -2295,6 +2299,11 @@ class RLM:
                 tail_ratio=_tail_ratio("FABRIC_RLM_ERROR_TAIL_RATIO", _ERROR_TAIL_RATIO_DEFAULT),
             )
             parts.append(f"\nERROR:\n```\n{error_text}\n```\nWrite a recovery turn.")
+            if re.search(
+                r"NameError: name ['\"](?:null|true|false)['\"] is not defined",
+                error_text,
+            ):
+                parts.append(f"\n{_PYTHON_LITERAL_RECOVERY_HINT}")
         elif result.stderr:
             stderr_text = _truncate_for_feedback(
                 result.stderr,
