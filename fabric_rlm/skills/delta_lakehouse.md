@@ -2,6 +2,7 @@
 applies_when:
   keywords:
     - delta
+    - delta lakehouse
     - delta table
     - delta_scan
     - deltatable
