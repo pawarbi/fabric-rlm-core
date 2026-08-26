@@ -171,6 +171,10 @@ def test_skill_prioritizes_resolved_lakehouse_catalogs_and_portable_queries() ->
     assert "Do not call `_storage_token`" in normalized
     assert "DefaultAzureCredential" in normalized
     assert "Do not call `notebookutils`" in normalized
+    assert "OutOfMemoryException" in content
+    assert "Never follow DuckDB's suggestion to configure a spill path" in normalized
+    assert "Aggregate each large fact table" in normalized
+    assert "report that limitation" in normalized
     assert "catalog's `columns` metadata" in normalized
     assert "date - INTERVAL 11 MONTH" in content
     assert "date_add('month', -11, date)" in content

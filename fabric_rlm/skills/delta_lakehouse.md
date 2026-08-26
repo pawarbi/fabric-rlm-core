@@ -72,6 +72,26 @@ so retrying them wastes turns and cannot repair the boundary. Never widen
 beyond the supplied catalog, and never submit placeholder or hypothetical
 metrics after a query failure.
 
+### Query within the broker budget
+
+`lakehouse.query(...)` runs with a fixed memory ceiling and disk spill disabled.
+An `OutOfMemoryException` is a containment signal, not permission to enable
+`temp_directory`. Never follow DuckDB's suggestion to configure a spill path,
+and never bypass the broker with direct DuckDB, filesystem, or storage access.
+
+Repair the query and retry:
+
+- Select only the columns required for the metric.
+- Apply date, status, and partition filters before joins.
+- Aggregate each large fact table to the needed grain before joining it.
+- Calculate one analytical question at a time instead of building one wide
+  all-purpose intermediate result.
+- Avoid large sorts, cross joins, raw-row exports, and unbounded window frames.
+
+The RLM loop can use the next turn to submit a smaller query. If a correct
+bounded query cannot answer the question, report that limitation rather than
+weakening the resource boundary or inventing a result.
+
 ## READ THIS FIRST - the failure that returns a wrong answer silently
 
 A Delta table directory contains parquet files that are no longer part of the
