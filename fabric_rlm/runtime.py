@@ -338,8 +338,8 @@ def _route_with_task_fallback(
     inputs={"pdf_path": ...})``), inputs-only routing scores nothing and every
     run gets the same always-on bundle. The fallback is gated on *zero* input
     scores so the original menu-inflation protection is preserved: whenever
-    bound inputs match any skill keyword (the longcot/benchmark shape, where
-    the task text enumerates every template), the task text is never consulted.
+    bound inputs match any skill keyword (the benchmark-menu shape, where the
+    task text enumerates every template), the task text is never consulted.
 
     Returns ``(decision, used_task_text_fallback)``.
     """
@@ -2203,7 +2203,7 @@ class RLM:
     ) -> tuple[str, dict[str, Any] | None] | None:
         """Run the configured global output validator on a SUBMIT payload.
 
-        The validator is a callable (typically ``verify_longcot_output``)
+        The validator is a callable (typically a host contract verifier)
         that raises :class:`AssertionError` on contract violation. Returns
         ``None`` when no validator is configured, the validator passes, or
         the validator itself misbehaves (graceful degrade — never block a

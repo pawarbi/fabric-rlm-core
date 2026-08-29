@@ -37,12 +37,12 @@ def _skill(
 def test_route_keyword_match_activates_skill() -> None:
     skills = [
         _skill("core", specificity="core"),
-        _skill("mcm", keywords=["matrix chain", "MCM"], output_fields=["Q1"], verifier_present=True),
+        _skill("mcm", keywords=["matrix chain", "MCM"], output_fields=["A1"], verifier_present=True),
         _skill("mfmc", keywords=["max-flow"], verifier_present=True),
     ]
     router = SkillRouter(skills, max_active_skills=2)
 
-    decision = router.route("Solve this matrix chain problem with output Q1..Q5.")
+    decision = router.route("Solve this matrix chain problem with output A1..A5.")
 
     assert "core" in decision.active
     assert "mcm" in decision.active
@@ -101,12 +101,12 @@ def test_decoy_stress_no_false_activation() -> None:
     decoys = [_skill(f"decoy_{i}", keywords=[f"decoyword{i}"]) for i in range(20)]
     skills = [
         _skill("core", specificity="core"),
-        _skill("mcm", keywords=["matrix chain"], output_fields=["Q1"], verifier_present=True),
+        _skill("mcm", keywords=["matrix chain"], output_fields=["A1"], verifier_present=True),
         *decoys,
     ]
     router = SkillRouter(skills, max_active_skills=2)
 
-    decision = router.route("Solve a matrix chain with outputs Q1..Q5.")
+    decision = router.route("Solve a matrix chain with outputs A1..A5.")
 
     activated = set(decision.active)
     decoy_names = {d.name for d in decoys}
@@ -136,7 +136,7 @@ def test_baseline_skill_names_overrides_core_specificity() -> None:
 
     skills = [
         _skill("core", specificity="core"),
-        _skill("longcot_core", specificity="core"),
+        _skill("secondary_core", specificity="core"),
         _skill("mcm", keywords=["matrix chain"], verifier_present=True),
     ]
     router = SkillRouter(
@@ -148,7 +148,7 @@ def test_baseline_skill_names_overrides_core_specificity() -> None:
     decision = router.route("Solve a matrix chain problem.")
 
     assert "core" not in decision.active
-    assert "longcot_core" not in decision.active
+    assert "secondary_core" not in decision.active
     assert "mcm" in decision.active
 
 
@@ -225,11 +225,11 @@ def test_default_behavior_unchanged_when_kwargs_omitted() -> None:
 
     skills = [
         _skill("core", specificity="core"),
-        _skill("longcot_core", specificity="core"),
+        _skill("secondary_core", specificity="core"),
         _skill(
             "dom",
             keywords=["foo"],
-            depends_on=["longcot_core"],
+            depends_on=["secondary_core"],
             verifier_present=True,
         ),
     ]
@@ -237,7 +237,7 @@ def test_default_behavior_unchanged_when_kwargs_omitted() -> None:
 
     decision = router.route("foo")
 
-    # Both core skills always-on + dom + dep closure (longcot_core already in)
+    # Both core skills always-on + dom + dependency closure.
     assert "core" in decision.active
-    assert "longcot_core" in decision.active
+    assert "secondary_core" in decision.active
     assert "dom" in decision.active

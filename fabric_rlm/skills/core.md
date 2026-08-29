@@ -16,10 +16,10 @@ to verify, and what never to echo back. This skill is always active.
 
 ## Contract: output fields
 
-When the prompt declares output fields (e.g. `Q1..Q5`, or a `solution =
-{...}` literal), the SUBMIT payload MUST be a JSON object whose top-level
-keys exactly match the declared schema names — no extras, no missing
-keys, no renames, no nesting tricks.
+When the prompt declares output fields or provides a `solution = {...}`
+literal, the SUBMIT payload MUST be a JSON object whose top-level keys
+exactly match the declared schema names — no extras, no missing keys,
+no renames, no nesting tricks.
 
 ## Required behavior
 
@@ -102,4 +102,3 @@ keys, no renames, no nesting tricks.
    field is genuinely missing (e.g. an empty matrix literal, an
    unreplaced `<PLACEHOLDER>`, or text that ends mid-sentence with no
    closing punctuation). When in doubt, attempt and verify.
-

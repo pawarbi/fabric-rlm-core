@@ -142,8 +142,8 @@ def assert_keys(*required: str) -> Validator:
 def _resolve(payload: Mapping[str, Any], key: str) -> Any:
     """Pull `key` from payload OR from a nested dict at `payload['solution']`.
 
-    LongCoT-style outputs typically come as ``payload = {'solution': '<json str>'}``
-    where the actual fields are inside the JSON. We try both forms.
+    Some outputs use ``payload = {'solution': '<json str>'}`` with the actual
+    fields inside the JSON. We accept both forms.
     """
     if key in payload:
         return payload[key]
@@ -167,8 +167,8 @@ _MISSING = object()
 def assert_list_len(key: str, n: int, *, exact: bool = True) -> Validator:
     """Assert that ``payload[key]`` is a list of length ``n`` (exact by default).
 
-    Resolves ``key`` from the top-level payload OR from a JSON string in
-    ``payload['solution']`` (longcot pattern).
+    Resolves ``key`` from the top-level payload or from a JSON string in
+    ``payload['solution']``.
     """
     def v(payload: Mapping[str, Any]) -> None:
         val = _resolve(payload, key)
@@ -283,8 +283,8 @@ def infer_subquestion_count(question_text: str) -> int:
     is detected (caller should treat 0 as "unknown shape, no guard").
 
     Picks the *largest* contiguous run starting at 1 across all detected
-    schemes — so "Q1..Q50" wins over a stray "Step 3" elsewhere in the
-    prompt.
+    schemes, so a complete enumerated field sequence wins over a stray step
+    reference elsewhere in the prompt.
     """
     if not question_text:
         return 0

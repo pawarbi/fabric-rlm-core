@@ -1,7 +1,7 @@
 """Bandit-augmented escalation policy.
 
 Per-trajectory analysis of the 0.1.10 validation run showed a clear pattern:
-on hard LongCoT templates (MFMC, Backprop, DistMem, VLIW) the cheap LM
+on hard algorithmic benchmark templates the cheap LM
 produces nonsense at rung 0 every time, and budget spent on rungs 0/1/2/3
 is pure waste. The only rung that ever produces a win on those problems
 is rung 4 (strong LM) — and even then often only because the cheap rungs
