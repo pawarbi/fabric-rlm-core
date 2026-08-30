@@ -982,3 +982,110 @@ def score_clustering_case(
         sample_size=sample_size,
         runtime_seconds=runtime_seconds,
     )
+
+
+def _optional_nonnegative_int(value: object, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    return value
+
+
+def score_count_rate_case(
+    *,
+    dataset_id: str,
+    case_id: str,
+    task: str,
+    expected_count: int | None = None,
+    actual_count: int | None = None,
+    expected_denominator: int | None = None,
+    actual_denominator: int | None = None,
+    censored: bool = False,
+    rate_tolerance: float = 1e-12,
+    slice_id: str = "all",
+    runtime_seconds: float = 0.0,
+) -> BenchmarkCaseScore:
+    """Score exact counts/rates or enforce an unreported censored outcome."""
+
+    if type(censored) is not bool:
+        raise ValueError("censored must be a boolean")
+    expected = _optional_nonnegative_int(expected_count, "expected_count")
+    actual = _optional_nonnegative_int(actual_count, "actual_count")
+    expected_den = _optional_nonnegative_int(
+        expected_denominator,
+        "expected_denominator",
+    )
+    actual_den = _optional_nonnegative_int(
+        actual_denominator,
+        "actual_denominator",
+    )
+    tolerance = _finite_number(rate_tolerance, "rate_tolerance")
+    if tolerance < 0:
+        raise ValueError("rate_tolerance must be non-negative")
+
+    if censored:
+        if expected is not None or expected_den is not None:
+            raise ValueError(
+                "censored cases must not contain visible expected outcomes"
+            )
+        return BenchmarkCaseScore(
+            dataset_id=dataset_id,
+            case_id=case_id,
+            task=task,
+            slice_id=slice_id,
+            invariants={
+                "censoring_respected": actual is None and actual_den is None
+            },
+            sample_size=0,
+            runtime_seconds=runtime_seconds,
+        )
+
+    if expected is None:
+        raise ValueError("expected_count is required for uncensored cases")
+    if actual is None:
+        raise ValueError("actual_count is required for uncensored cases")
+    if (expected_den is None) != (actual_den is None):
+        raise ValueError(
+            "expected_denominator and actual_denominator must be provided together"
+        )
+    metrics = {
+        "count_absolute_error": float(abs(actual - expected)),
+    }
+    invariants = {
+        "count_exact": actual == expected,
+    }
+    sample_size = expected
+    if expected_den is not None and actual_den is not None:
+        if expected_den <= 0 or actual_den <= 0:
+            raise ValueError("denominators must be positive")
+        if expected > expected_den:
+            raise ValueError(
+                "expected_count must not exceed expected_denominator"
+            )
+        if actual > actual_den:
+            raise ValueError(
+                "actual_count must not exceed actual_denominator"
+            )
+        expected_rate = expected / expected_den
+        actual_rate = actual / actual_den
+        metrics["denominator_absolute_error"] = float(
+            abs(actual_den - expected_den)
+        )
+        metrics["rate_absolute_error"] = abs(actual_rate - expected_rate)
+        invariants["denominator_exact"] = actual_den == expected_den
+        invariants["rate_within_tolerance"] = (
+            metrics["rate_absolute_error"] <= tolerance
+        )
+        sample_size = expected_den
+
+    return BenchmarkCaseScore(
+        dataset_id=dataset_id,
+        case_id=case_id,
+        task=task,
+        slice_id=slice_id,
+        metrics=metrics,
+        invariants=invariants,
+        sample_size=sample_size,
+        runtime_seconds=runtime_seconds,
+    )

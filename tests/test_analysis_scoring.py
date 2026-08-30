@@ -10,6 +10,7 @@ from fabric_rlm.experimental import (
     BenchmarkReport,
     score_binary_classification_case,
     score_clustering_case,
+    score_count_rate_case,
     score_detection_case,
     score_decomposition_case,
     score_regression_case,
@@ -709,5 +710,143 @@ def test_clustering_score_rejects_invalid_inputs(
             dataset_id="dataset",
             case_id="case",
             task="clustering",
+            **kwargs,
+        )
+
+
+def test_count_rate_score_reports_exact_cohort_result() -> None:
+    score = score_count_rate_case(
+        dataset_id="panel-ground-truth-v1",
+        case_id="2026-01",
+        task="day_90_retention",
+        expected_count=24,
+        actual_count=24,
+        expected_denominator=30,
+        actual_denominator=30,
+        rate_tolerance=1e-12,
+    )
+
+    assert score.metrics == {
+        "count_absolute_error": 0.0,
+        "denominator_absolute_error": 0.0,
+        "rate_absolute_error": 0.0,
+    }
+    assert score.invariants == {
+        "count_exact": True,
+        "denominator_exact": True,
+        "rate_within_tolerance": True,
+    }
+    assert score.sample_size == 30
+    assert score.passed is True
+
+
+def test_count_rate_score_catches_wrong_retention_denominator() -> None:
+    score = score_count_rate_case(
+        dataset_id="panel-ground-truth-v1",
+        case_id="2026-01",
+        task="day_90_retention",
+        expected_count=24,
+        actual_count=24,
+        expected_denominator=30,
+        actual_denominator=60,
+        rate_tolerance=1e-12,
+    )
+
+    assert score.metrics["count_absolute_error"] == 0.0
+    assert score.metrics["denominator_absolute_error"] == 30.0
+    assert score.metrics["rate_absolute_error"] == pytest.approx(0.4)
+    assert score.invariants["denominator_exact"] is False
+    assert score.invariants["rate_within_tolerance"] is False
+    assert score.passed is False
+
+
+def test_count_rate_score_supports_count_only_funnel_steps() -> None:
+    score = score_count_rate_case(
+        dataset_id="panel-ground-truth-v1",
+        case_id="converted",
+        task="funnel_count",
+        expected_count=98,
+        actual_count=96,
+    )
+
+    assert score.metrics == {"count_absolute_error": 2.0}
+    assert score.invariants == {"count_exact": False}
+    assert score.sample_size == 98
+    assert score.passed is False
+
+
+def test_count_rate_score_requires_censored_outcome_to_remain_unreported() -> None:
+    respected = score_count_rate_case(
+        dataset_id="panel-ground-truth-v1",
+        case_id="2026-04",
+        task="day_90_retention",
+        censored=True,
+    )
+    leaked = score_count_rate_case(
+        dataset_id="panel-ground-truth-v1",
+        case_id="2026-04",
+        task="day_90_retention",
+        censored=True,
+        actual_count=12,
+        actual_denominator=20,
+    )
+
+    assert respected.metrics == {}
+    assert respected.invariants == {"censoring_respected": True}
+    assert respected.passed is True
+    assert leaked.invariants["censoring_respected"] is False
+    assert leaked.passed is False
+
+
+def test_count_rate_score_rejects_visible_truth_for_censored_case() -> None:
+    with pytest.raises(ValueError, match="visible expected outcomes"):
+        score_count_rate_case(
+            dataset_id="panel-ground-truth-v1",
+            case_id="2026-04",
+            task="day_90_retention",
+            censored=True,
+            expected_count=12,
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {
+                "expected_count": 1,
+                "actual_count": 1,
+                "expected_denominator": 0,
+                "actual_denominator": 0,
+            },
+            "positive",
+        ),
+        (
+            {
+                "expected_count": 2,
+                "actual_count": 2,
+                "expected_denominator": 1,
+                "actual_denominator": 1,
+            },
+            "must not exceed",
+        ),
+        (
+            {
+                "expected_count": 1,
+                "actual_count": None,
+            },
+            "actual_count",
+        ),
+    ],
+)
+def test_count_rate_score_rejects_invalid_inputs(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        score_count_rate_case(
+            dataset_id="dataset",
+            case_id="case",
+            task="rate",
             **kwargs,
         )
