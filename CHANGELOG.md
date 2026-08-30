@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.2 — 2026-08-29 — secure Lakehouse analysis and verified insights
 
 ### Added
 
@@ -28,6 +28,15 @@
 - **`RLMResult.inspect()` and `RunInspector`** — render a collapsed interactive
   turn timeline in Fabric/Jupyter or save a standalone escaped HTML report with
   code, output, errors, repairs, timing, token usage, and submission payloads.
+- **`deep_insight_discovery` and `deep_insight_critic` skills** — produce
+  source-agnostic analytical contracts with independently executable numeric
+  evidence, typed diagnostic alternatives, conservative action-readiness
+  gates, and adversarial decision-quality review.
+- **Verified insight audit utilities** — strict source manifests, constrained
+  aggregate DuckDB execution, precision-aware host auditing, fingerprinted
+  checkpoints, critic-driven evidence closure, and bounded action synthesis.
+  CRM Arena Pro and Olist transfer benchmarks exercise zero-turn replay and
+  deterministic artifact hashes.
 
 ### Fixed
 
@@ -44,6 +53,17 @@
   `/proc/<pid>/fd` paths.
 - Delta schema discovery supports both delta-rs `Schema.to_pyarrow()` and
   `Schema.to_arrow()`.
+
+### Fabric verification
+
+- Merged release code resolved and queried real Delta tables and Files through
+  OneLake without a SQL endpoint.
+- Contract-v3 discovery executed 13 host-audited numeric checks across 10
+  CloudMetrics sources and persisted payload, audit, critic, and run artifacts
+  to an `abfss://` Files path.
+- `FileDestination` published Markdown and Excel files to OneLake; both were
+  read back successfully, and the Excel workbook reopened with `openpyxl`.
+
 ## 0.4.1 — 2026-08-22 — safer workers and typed outputs
 
 ### Added
