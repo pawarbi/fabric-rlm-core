@@ -33,6 +33,11 @@ from fabric_rlm.experimental.analysis_operators import (
     rate_decomposition,
     volume_rate_mix_decomposition,
 )
+from fabric_rlm.experimental.analysis_benchmarks import (
+    SyntheticBenchmark,
+    load_synthetic_benchmark,
+    write_decomposition_benchmark,
+)
 from fabric_rlm.experimental.analysis_reproducibility import (
     canonical_json,
     derive_seed,
@@ -66,13 +71,16 @@ __all__ = [
     "EvidenceRegistry",
     "fingerprint",
     "LadderPolicy",
+    "load_synthetic_benchmark",
     "OperatorNode",
     "OperatorResult",
     "OperatorSpec",
     "rate_decomposition",
     "RunBudget",
+    "SyntheticBenchmark",
     "ValidatedDAG",
     "ValidationVerdict",
     "validate_analysis_dag",
     "volume_rate_mix_decomposition",
+    "write_decomposition_benchmark",
 ]
