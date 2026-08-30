@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fabric_rlm import File, LocalArtifactStore
+from fabric_rlm import File, FileDestination, LocalArtifactStore
 from fabric_rlm.artifacts import decode_from_worker_wire, encode_for_worker
 
 
@@ -32,3 +32,20 @@ def test_worker_wire_file_roundtrip(tmp_path: Path) -> None:
     assert isinstance(decoded["file"], File)
     assert decoded["file"].path == file.path
 
+
+def test_worker_wire_file_destination_roundtrip(tmp_path: Path) -> None:
+    destination = FileDestination(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse/Files",
+        max_bytes=1024,
+    )
+
+    decoded = decode_from_worker_wire(encode_for_worker({"destination": destination}))
+
+    worker_destination = decoded["destination"]
+    assert isinstance(worker_destination, FileDestination)
+    assert worker_destination.root == destination.root
+    assert worker_destination.staging_root == destination.staging_root
+    assert worker_destination.max_bytes == 1024
+    worker_destination.close()
+    assert Path(destination.staging_root).exists()
+    destination.close()

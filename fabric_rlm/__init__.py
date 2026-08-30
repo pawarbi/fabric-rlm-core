@@ -1,6 +1,7 @@
 """Public API for fabric-rlm."""
 
-from .artifacts import File, LocalArtifactStore
+from .artifacts import File, FileDestination, LocalArtifactStore
+from .lakehouse import LakehouseSource
 from .semantic_model import SemanticModel, sempy_available
 from .excel_artifacts import (
     ExcelCellValue,
@@ -24,6 +25,7 @@ from .interpreter import (
     WorkerProtocolError,
     WorkerTimeout,
 )
+from .inspector import RunInspector
 from .lm import AnthropicLM, FabricLM, OpenAILM, register_backend, resolve_lm
 from .metrics import ValidationCheck, ValidationReport
 from .replay_lm import (
@@ -55,14 +57,17 @@ __all__ = [
     "ExcelTargetRange",
     "FabricLM",
     "File",
+    "FileDestination",
     "Interpreter",
     "LocalArtifactStore",
+    "LakehouseSource",
     "OpenAILM",
     "Issue",
     "ReplayInterpreter",
     "ReplayLM",
     "RLM",
     "RLMResult",
+    "RunInspector",
     "SemanticModel",
     "replay_trajectory",
     "Skill",
@@ -100,4 +105,4 @@ __all__ = [
 
 # Single source of truth for the package version. pyproject.toml reads this
 # statically via [tool.setuptools.dynamic] — bump it here and nowhere else.
-__version__ = "0.4.1"
+__version__ = "0.4.2"

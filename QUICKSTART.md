@@ -317,6 +317,35 @@ print(fr.french)
 `predict(...)` is the async form of `predict_sync(...)`. The runtime also injects
 `load_skill`, `activate_skill`, and `list_skills` for on-demand skill loading.
 
+To publish a new workbook or other generated file to an unattached OneLake
+Lakehouse, bind a `FileDestination` whose root is a full `abfss://.../Files`
+path. Use it as a context manager so local staging files are always removed:
+
+```python
+from fabric_rlm import FileDestination
+
+with FileDestination(
+    "abfss://<workspace-id>@onelake.dfs.fabric.microsoft.com/"
+    "<lakehouse-id>/Files/reports"
+) as destination:
+    result = RLM.task(
+        task=(
+            "Create report.xlsx. Use destination.stage('report.xlsx') as the "
+            "local openpyxl path, reopen and verify it, then call "
+            "destination.publish(staged) and submit the returned path."
+        ),
+        inputs={"destination": destination},
+        outputs={"workbook_path": str},
+        skills=["excel_modify"],
+        lm=FabricLM("gpt-5.1"),
+    ).run()
+```
+
+`publish()` defaults to `overwrite=False`; pass `overwrite=True` only for an
+intentional replacement. It returns `{"path", "name", "size"}` after the
+trusted parent has copied the staged file and verified the OneLake destination.
+The isolated worker never receives storage credentials.
+
 You can also pass `sub_lm=` separately if you want a cheaper model for nested calls:
 
 ```python

@@ -92,6 +92,10 @@ pdf = [
 analytics = [
   "duckdb>=1.1",
   "polars>=1.0",
+  # delta_lakehouse skill: the reader used when DuckDB's `delta` extension
+  # cannot be downloaded (no-egress runtimes). Pure-Python wheel, no build step.
+  # 1.0 is the floor for `DeltaTable.file_uris()`, which replaced `.files()`.
+  "deltalake>=1.0",
 ]
 
 [project.scripts]

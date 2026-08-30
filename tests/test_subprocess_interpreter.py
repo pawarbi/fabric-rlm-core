@@ -21,6 +21,7 @@ from dspy.primitives.code_interpreter import (
     FinalOutput,
 )
 
+from fabric_rlm import FileDestination, LakehouseSource
 from fabric_rlm.interpreter import SubprocessPythonInterpreter
 
 
@@ -249,6 +250,91 @@ def test_tool_error_propagates_to_user_code() -> None:
         with pytest.raises(CodeInterpreterError) as exc_info:
             interp.execute("failing_tool()")
     assert "boom" in str(exc_info.value).lower()
+
+
+def test_lakehouse_query_callback_is_available_with_bound_variables(
+    monkeypatch,
+) -> None:
+    source = LakehouseSource(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+        catalog=[
+            {
+                "kind": "delta",
+                "name": "dbo.companies",
+                "path": "abfss://workspace/lakehouse/Tables/dbo/companies",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "fabric_rlm.interpreter.execute_lakehouse_query",
+        lambda *_args, **_kwargs: {
+            "columns": ["region"],
+            "rows": [["North America"]],
+            "truncated": False,
+        },
+    )
+
+    with SubprocessPythonInterpreter() as interp:
+        result = interp.execute(
+            "data = lakehouse.query("
+            "\"SELECT region FROM companies\", "
+            "sources={\"companies\": \"dbo.companies\"})\n"
+            "print(data['rows'][0][0])",
+            variables={"lakehouse": source},
+        )
+
+    assert result.strip() == "North America"
+
+
+def test_file_publish_callback_is_available_with_bound_variables(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    destination = FileDestination(
+        "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse/Files"
+    )
+    monkeypatch.setattr(
+        "fabric_rlm.interpreter.publish_file",
+        lambda *_args, **_kwargs: {
+            "path": "abfss://lakehouse/Files/report.xlsx",
+            "name": "report.xlsx",
+            "size": 8,
+        },
+    )
+
+    with SubprocessPythonInterpreter() as interp:
+        result = interp.execute(
+            "staged = destination.stage('report.xlsx')\n"
+            "staged.write_bytes(b'workbook')\n"
+            "published = destination.publish(staged)\n"
+            "print(published['path'])",
+            variables={"destination": destination},
+        )
+
+    assert result.strip() == "abfss://lakehouse/Files/report.xlsx"
+
+
+def test_send_jsonrpc_services_worker_callback_before_its_response(monkeypatch) -> None:
+    interp = SubprocessPythonInterpreter()
+    frames = iter(
+        [
+            '{"jsonrpc":"2.0","method":"tool_call","params":{},"id":90}',
+            '{"jsonrpc":"2.0","result":{"ok":true},"id":1}',
+        ]
+    )
+    handled = []
+    monkeypatch.setattr(interp, "_write_jsonrpc", lambda _payload: None)
+    monkeypatch.setattr(
+        interp,
+        "_read_response_line",
+        lambda _timeout, _context: next(frames),
+    )
+    monkeypatch.setattr(interp, "_handle_tool_call", handled.append)
+
+    result = interp._send_jsonrpc("set_inputs", {}, timeout=1, context="test")
+
+    assert handled[0]["method"] == "tool_call"
+    assert result == {"ok": True}
 
 
 # ----- Lifecycle ---------------------------------------------------------------
