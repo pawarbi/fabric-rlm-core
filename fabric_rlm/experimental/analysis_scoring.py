@@ -337,3 +337,183 @@ def score_decomposition_case(
         sample_size=sample_size,
         runtime_seconds=runtime_seconds,
     )
+
+
+def _binary_labels(values: object) -> tuple[int, ...]:
+    if not isinstance(values, (list, tuple)) or not values:
+        raise ValueError("labels must be a non-empty sequence")
+    normalized = []
+    for index, value in enumerate(values):
+        if type(value) is not int or value not in {0, 1}:
+            raise ValueError(f"labels[{index}] must be 0 or 1")
+        normalized.append(value)
+    if set(normalized) != {0, 1}:
+        raise ValueError("labels must contain both classes")
+    return tuple(normalized)
+
+
+def _probabilities(values: object) -> tuple[float, ...]:
+    if not isinstance(values, (list, tuple)) or not values:
+        raise ValueError("probabilities must be a non-empty sequence")
+    normalized = tuple(
+        _finite_number(value, f"probabilities[{index}]")
+        for index, value in enumerate(values)
+    )
+    if any(value < 0 or value > 1 for value in normalized):
+        raise ValueError("probabilities must be between 0 and 1")
+    return normalized
+
+
+def _roc_auc(
+    labels: tuple[int, ...],
+    probabilities: tuple[float, ...],
+) -> float:
+    ordered = sorted(
+        zip(probabilities, labels),
+        key=lambda item: item[0],
+    )
+    positive_rank_sum = 0.0
+    index = 0
+    while index < len(ordered):
+        end = index + 1
+        while end < len(ordered) and ordered[end][0] == ordered[index][0]:
+            end += 1
+        average_rank = 0.5 * ((index + 1) + end)
+        positive_rank_sum += average_rank * sum(
+            label for _, label in ordered[index:end]
+        )
+        index = end
+    positives = sum(labels)
+    negatives = len(labels) - positives
+    return (
+        positive_rank_sum - positives * (positives + 1) / 2
+    ) / (positives * negatives)
+
+
+def _average_precision(
+    labels: tuple[int, ...],
+    probabilities: tuple[float, ...],
+) -> float:
+    """Return grouped-threshold step-function average precision."""
+
+    ordered = sorted(
+        zip(probabilities, labels),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    positives = sum(labels)
+    true_positives = 0
+    seen = 0
+    previous_recall = 0.0
+    area = 0.0
+    index = 0
+    while index < len(ordered):
+        end = index + 1
+        while end < len(ordered) and ordered[end][0] == ordered[index][0]:
+            end += 1
+        true_positives += sum(label for _, label in ordered[index:end])
+        seen += end - index
+        recall = true_positives / positives
+        precision = true_positives / seen
+        area += (recall - previous_recall) * precision
+        previous_recall = recall
+        index = end
+    return area
+
+
+def _expected_calibration_error(
+    labels: tuple[int, ...],
+    probabilities: tuple[float, ...],
+    calibration_bins: int,
+) -> float:
+    bins: list[list[tuple[int, float]]] = [
+        [] for _ in range(calibration_bins)
+    ]
+    for label, probability in zip(labels, probabilities):
+        bin_index = min(int(probability * calibration_bins), calibration_bins - 1)
+        bins[bin_index].append((label, probability))
+    return math.fsum(
+        len(items)
+        / len(labels)
+        * abs(
+            math.fsum(probability for _, probability in items) / len(items)
+            - math.fsum(label for label, _ in items) / len(items)
+        )
+        for items in bins
+        if items
+    )
+
+
+def score_binary_classification_case(
+    *,
+    dataset_id: str,
+    case_id: str,
+    task: str,
+    labels: tuple[object, ...] | list[object],
+    probabilities: tuple[object, ...] | list[object],
+    sample_size: int,
+    slice_id: str = "all",
+    minimum_sample_size: int = 1,
+    calibration_bins: int = 10,
+    runtime_seconds: float = 0.0,
+) -> BenchmarkCaseScore:
+    """Score classification, grouped-threshold PR AUC, and calibration."""
+
+    normalized_labels = _binary_labels(labels)
+    normalized_probabilities = _probabilities(probabilities)
+    if len(normalized_labels) != len(normalized_probabilities):
+        raise ValueError("labels and probabilities must have the same length")
+    if type(sample_size) is not int or sample_size != len(normalized_labels):
+        raise ValueError("sample_size must match labels length")
+    if type(minimum_sample_size) is not int or minimum_sample_size <= 0:
+        raise ValueError("minimum_sample_size must be a positive integer")
+    if type(calibration_bins) is not int or calibration_bins < 2:
+        raise ValueError("calibration_bins must be an integer of at least 2")
+
+    epsilon = 1e-15
+    clipped = tuple(
+        min(max(probability, epsilon), 1.0 - epsilon)
+        for probability in normalized_probabilities
+    )
+    log_loss = -math.fsum(
+        label * math.log(probability)
+        + (1 - label) * math.log(1.0 - probability)
+        for label, probability in zip(normalized_labels, clipped)
+    ) / sample_size
+    brier_score = math.fsum(
+        (probability - label) ** 2
+        for label, probability in zip(
+            normalized_labels,
+            normalized_probabilities,
+        )
+    ) / sample_size
+    return BenchmarkCaseScore(
+        dataset_id=dataset_id,
+        case_id=case_id,
+        task=task,
+        slice_id=slice_id,
+        metrics={
+            "brier_score": brier_score,
+            "expected_calibration_error": _expected_calibration_error(
+                normalized_labels,
+                normalized_probabilities,
+                calibration_bins,
+            ),
+            "log_loss": log_loss,
+            "pr_auc": _average_precision(
+                normalized_labels,
+                normalized_probabilities,
+            ),
+            "roc_auc": _roc_auc(
+                normalized_labels,
+                normalized_probabilities,
+            ),
+        },
+        invariants={
+            "both_classes_present": True,
+            "minimum_sample_size_met": sample_size >= minimum_sample_size,
+            "probabilities_in_range": True,
+        },
+        sample_size=sample_size,
+        runtime_seconds=runtime_seconds,
+    )

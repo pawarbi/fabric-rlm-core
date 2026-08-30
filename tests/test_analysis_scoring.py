@@ -8,6 +8,7 @@ import pytest
 from fabric_rlm.experimental import (
     BenchmarkCaseScore,
     BenchmarkReport,
+    score_binary_classification_case,
     score_decomposition_case,
 )
 
@@ -210,4 +211,100 @@ def test_benchmark_scores_reject_non_finite_metrics() -> None:
             case_id="case",
             task="task",
             metrics={"error": math.nan},
+        )
+
+
+def test_perfect_binary_classification_score_has_ideal_metrics() -> None:
+    score = score_binary_classification_case(
+        dataset_id="distribution-shift-ground-truth-v1",
+        case_id="final-holdout",
+        task="classification",
+        labels=(0, 0, 1, 1),
+        probabilities=(0.0, 0.1, 0.9, 1.0),
+        sample_size=4,
+        minimum_sample_size=4,
+        calibration_bins=2,
+    )
+
+    assert score.passed is True
+    assert score.metrics["roc_auc"] == 1.0
+    assert score.metrics["pr_auc"] == 1.0
+    assert score.metrics["brier_score"] == pytest.approx(0.005)
+    assert score.metrics["log_loss"] < 0.053
+    assert score.metrics["expected_calibration_error"] == pytest.approx(0.05)
+    assert score.invariants == {
+        "both_classes_present": True,
+        "minimum_sample_size_met": True,
+        "probabilities_in_range": True,
+    }
+
+
+def test_binary_classification_auc_handles_tied_probabilities() -> None:
+    score = score_binary_classification_case(
+        dataset_id="dataset",
+        case_id="ties",
+        task="classification",
+        labels=(0, 1, 0, 1),
+        probabilities=(0.5, 0.5, 0.5, 0.5),
+        sample_size=4,
+        calibration_bins=2,
+    )
+
+    assert score.metrics["roc_auc"] == pytest.approx(0.5)
+    assert score.metrics["pr_auc"] == pytest.approx(0.5)
+    assert score.metrics["brier_score"] == pytest.approx(0.25)
+
+
+def test_binary_classification_score_flags_small_subgroup() -> None:
+    score = score_binary_classification_case(
+        dataset_id="dataset",
+        case_id="holdout",
+        task="classification",
+        slice_id="rare",
+        labels=(0, 1, 0, 1),
+        probabilities=(0.2, 0.8, 0.3, 0.7),
+        sample_size=4,
+        minimum_sample_size=30,
+    )
+
+    assert score.invariants["minimum_sample_size_met"] is False
+    assert score.passed is False
+    report = BenchmarkReport(cases=(score,))
+    assert report.summary["failed_invariants"][0]["slice_id"] == "rare"
+
+
+@pytest.mark.parametrize(
+    ("labels", "probabilities", "match"),
+    [
+        ((0, 1), (0.2,), "same length"),
+        ((0, 2), (0.2, 0.8), "labels"),
+        ((0, 1), (-0.1, 0.8), "probabilities"),
+        ((0, 0), (0.2, 0.3), "both classes"),
+    ],
+)
+def test_binary_classification_score_rejects_invalid_inputs(
+    labels: tuple[object, ...],
+    probabilities: tuple[object, ...],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        score_binary_classification_case(
+            dataset_id="dataset",
+            case_id="case",
+            task="classification",
+            labels=labels,
+            probabilities=probabilities,
+            sample_size=len(labels),
+        )
+
+
+def test_binary_classification_score_requires_matching_sample_size() -> None:
+    with pytest.raises(ValueError, match="sample_size"):
+        score_binary_classification_case(
+            dataset_id="dataset",
+            case_id="case",
+            task="classification",
+            labels=(0, 1),
+            probabilities=(0.2, 0.8),
+            sample_size=3,
         )

@@ -51,6 +51,7 @@ from fabric_rlm.experimental.analysis_reproducibility import (
 from fabric_rlm.experimental.analysis_scoring import (
     BenchmarkCaseScore,
     BenchmarkReport,
+    score_binary_classification_case,
     score_decomposition_case,
 )
 from fabric_rlm.experimental.analysis_validation import (
@@ -105,6 +106,7 @@ __all__ = [
     "OperatorSpec",
     "rate_decomposition",
     "RunBudget",
+    "score_binary_classification_case",
     "score_decomposition_case",
     "SplitFold",
     "SplitPlan",
