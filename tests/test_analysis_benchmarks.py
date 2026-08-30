@@ -13,6 +13,7 @@ import pytest
 
 from fabric_rlm.experimental import (
     load_synthetic_benchmark,
+    write_clustered_benchmark,
     write_correlated_benchmark,
     write_decomposition_benchmark,
     write_panel_benchmark,
@@ -119,6 +120,7 @@ def test_load_synthetic_benchmark_rejects_tampered_truth(tmp_path: Path) -> None
     "writer",
     [
         write_decomposition_benchmark,
+        write_clustered_benchmark,
         write_correlated_benchmark,
         write_panel_benchmark,
         write_time_series_benchmark,
@@ -602,3 +604,156 @@ def test_correlated_benchmark_seed_changes_rows_but_not_ground_truth(
         first_truth["data_generating_process"]
         == second_truth["data_generating_process"]
     )
+
+
+def test_clustered_benchmark_is_byte_reproducible_across_hash_seeds(
+    tmp_path: Path,
+) -> None:
+    script = textwrap.dedent(
+        """
+        import sys
+        from pathlib import Path
+        from fabric_rlm.experimental import write_clustered_benchmark
+
+        write_clustered_benchmark(Path(sys.argv[1]), root_seed=104)
+        """
+    )
+    for directory, hash_seed in (("first", "1"), ("second", "2")):
+        environment = os.environ.copy()
+        environment["PYTHONHASHSEED"] = hash_seed
+        subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path / directory)],
+            check=True,
+            env=environment,
+        )
+
+    assert _bundle_bytes(tmp_path / "first") == _bundle_bytes(tmp_path / "second")
+
+
+def test_clustered_benchmark_records_cluster_and_contamination_truth(
+    tmp_path: Path,
+) -> None:
+    bundle = write_clustered_benchmark(tmp_path, root_seed=104)
+    manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
+    truth = json.loads(bundle.truth_path.read_text(encoding="utf-8"))
+
+    assert manifest["dataset_id"] == "clustered-contaminated-ground-truth-v1"
+    assert manifest["sources"][0]["identity"] == "observations"
+    assert manifest["sources"][0]["row_count"] == 360
+    assert truth["structure"]["row_count"] == 360
+    assert truth["structure"]["batch_count"] == 12
+    assert truth["structure"]["rows_per_batch"] == 30
+    assert truth["clusters"]["expected_counts"] == {
+        "cluster_a": 180,
+        "cluster_b": 120,
+        "cluster_c": 60,
+    }
+    assert truth["clusters"]["scoring_scope"] == "non_point_anomalies"
+    assert truth["contamination"]["point_anomaly_count"] == 18
+    assert truth["contamination"]["displacement_per_axis"] == 8.0
+    assert truth["batch_anomalies"]["anomalous_batches"] == [
+        "batch-003",
+        "batch-009",
+    ]
+    assert truth["validation"]["scaling_required"] is True
+    assert truth["validation"]["identifier_columns"] == ["row_id", "batch_id"]
+
+
+def test_clustered_benchmark_exercises_scale_and_batch_anomalies(
+    tmp_path: Path,
+) -> None:
+    bundle = write_clustered_benchmark(tmp_path, root_seed=104)
+    truth = json.loads(bundle.truth_path.read_text(encoding="utf-8"))
+    with bundle.worker_source_paths["observations"].open(
+        "r",
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+        assert reader.fieldnames is not None
+        assert {"cluster_label", "is_point_anomaly"}.isdisjoint(reader.fieldnames)
+
+    batch_rows: dict[str, list[dict[str, str]]] = {}
+    for row in rows:
+        batch_rows.setdefault(row["batch_id"], []).append(row)
+    assert set(len(entries) for entries in batch_rows.values()) == {30}
+
+    cluster_x = [float(row["cluster_x"]) for row in rows]
+    large_scale = [float(row["large_scale_nuisance"]) for row in rows]
+    cluster_x_mean = math.fsum(cluster_x) / len(cluster_x)
+    large_scale_mean = math.fsum(large_scale) / len(large_scale)
+    cluster_x_sd = math.sqrt(
+        math.fsum((value - cluster_x_mean) ** 2 for value in cluster_x)
+        / len(cluster_x)
+    )
+    large_scale_sd = math.sqrt(
+        math.fsum((value - large_scale_mean) ** 2 for value in large_scale)
+        / len(large_scale)
+    )
+    assert large_scale_sd > 100 * cluster_x_sd
+
+    batch_means = {
+        batch_id: math.fsum(float(row["batch_signal"]) for row in entries)
+        / len(entries)
+        for batch_id, entries in batch_rows.items()
+    }
+    assert batch_means["batch-003"] > 4.0
+    assert batch_means["batch-009"] < -4.0
+    assert all(
+        abs(mean) < 1e-12
+        for batch_id, mean in batch_means.items()
+        if batch_id not in truth["batch_anomalies"]["anomalous_batches"]
+    )
+
+
+def test_clustered_benchmark_point_anomalies_are_far_from_hidden_centers(
+    tmp_path: Path,
+) -> None:
+    bundle = write_clustered_benchmark(tmp_path, root_seed=104)
+    truth = json.loads(bundle.truth_path.read_text(encoding="utf-8"))
+    with bundle.worker_source_paths["observations"].open(
+        "r",
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        rows = {
+            row["row_id"]: row
+            for row in csv.DictReader(handle)
+        }
+
+    anomaly_distances: list[float] = []
+    clean_distances: list[float] = []
+    for row_id, labels in truth["row_truth"].items():
+        row = rows[row_id]
+        center = truth["clusters"]["centers"][labels["cluster_label"]]
+        distance = math.hypot(
+            float(row["cluster_x"]) - center[0],
+            float(row["cluster_y"]) - center[1],
+        )
+        if labels["is_point_anomaly"]:
+            anomaly_distances.append(distance)
+        else:
+            clean_distances.append(distance)
+
+    assert len(anomaly_distances) == 18
+    assert min(anomaly_distances) > 6.0
+    assert max(clean_distances) < 2.5
+
+
+def test_clustered_benchmark_seed_changes_assignments_not_design(
+    tmp_path: Path,
+) -> None:
+    first = write_clustered_benchmark(tmp_path / "first", root_seed=1)
+    second = write_clustered_benchmark(tmp_path / "second", root_seed=2)
+    first_truth = json.loads(first.truth_path.read_text(encoding="utf-8"))
+    second_truth = json.loads(second.truth_path.read_text(encoding="utf-8"))
+
+    assert first.dataset_fingerprint != second.dataset_fingerprint
+    assert first.worker_source_paths["observations"].read_bytes() != second.worker_source_paths[
+        "observations"
+    ].read_bytes()
+    assert first_truth["structure"] == second_truth["structure"]
+    assert first_truth["clusters"] == second_truth["clusters"]
+    assert first_truth["contamination"] == second_truth["contamination"]
+    assert first_truth["batch_anomalies"] == second_truth["batch_anomalies"]

@@ -19,6 +19,9 @@ from fabric_rlm.experimental.analysis_reproducibility import (
 
 
 _DECOMPOSITION_DATASET_ID = "decomposition-ground-truth-v1"
+_CLUSTERED_DATASET_ID = "clustered-contaminated-ground-truth-v1"
+_CLUSTERED_ROW_COUNT = 360
+_CLUSTERED_BATCH_COUNT = 12
 _CORRELATED_DATASET_ID = "correlated-tabular-ground-truth-v1"
 _CORRELATED_GROUP_COUNT = 120
 _CORRELATED_OBSERVATIONS_PER_GROUP = 4
@@ -28,6 +31,9 @@ _TIME_SERIES_DATASET_ID = "time-series-ground-truth-v1"
 _GENERATOR_VERSION = "2"
 _RANDOM_ENGINE = "python.random.Random"
 _DATASET_SOURCE_FILES = {
+    _CLUSTERED_DATASET_ID: {
+        "observations": "observations.csv",
+    },
     _CORRELATED_DATASET_ID: {
         "observations": "observations.csv",
     },
@@ -45,6 +51,13 @@ _DATASET_SOURCE_FILES = {
     },
 }
 _DATASET_SEED_NAMES = {
+    _CLUSTERED_DATASET_ID: {
+        "assignment",
+        "batch_noise",
+        "cluster_noise",
+        "contamination",
+        "nuisance",
+    },
     _CORRELATED_DATASET_ID: {
         "measurement_noise",
         "missingness",
@@ -501,6 +514,217 @@ def write_time_series_benchmark(
         manifest_path=manifest_path,
         truth_path=truth_path,
         worker_source_paths=MappingProxyType({"time_series": source_path}),
+        dataset_fingerprint=dataset_fingerprint,
+    )
+
+
+def write_clustered_benchmark(
+    output_dir: str | Path,
+    *,
+    root_seed: int,
+) -> SyntheticBenchmark:
+    """Write scale-sensitive clusters with point and batch contamination."""
+
+    if type(root_seed) is not int or root_seed < 0:
+        raise ValueError("root_seed must be a non-negative integer")
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    if any(root.iterdir()):
+        raise ValueError(f"output_dir must be empty: {root}")
+
+    derived_seeds = {
+        name: derive_seed(
+            root_seed,
+            dataset_id=_CLUSTERED_DATASET_ID,
+            operator_id=f"generate.clustered.{name}.v1",
+        )
+        for name in (
+            "assignment",
+            "batch_noise",
+            "cluster_noise",
+            "contamination",
+            "nuisance",
+        )
+    }
+    assignment_rng = random.Random(derived_seeds["assignment"])
+    batch_rng = random.Random(derived_seeds["batch_noise"])
+    cluster_rng = random.Random(derived_seeds["cluster_noise"])
+    contamination_rng = random.Random(derived_seeds["contamination"])
+    nuisance_rng = random.Random(derived_seeds["nuisance"])
+
+    centers = {
+        "cluster_a": (-4.0, -3.0),
+        "cluster_b": (0.0, 4.0),
+        "cluster_c": (5.0, -1.0),
+    }
+    expected_counts = {
+        "cluster_a": 180,
+        "cluster_b": 120,
+        "cluster_c": 60,
+    }
+    labels = [
+        label
+        for label, count in expected_counts.items()
+        for _ in range(count)
+    ]
+    assignment_rng.shuffle(labels)
+    point_anomaly_indices = set(
+        contamination_rng.sample(range(_CLUSTERED_ROW_COUNT), 18)
+    )
+    anomaly_directions = (
+        (-8.0, -8.0),
+        (-8.0, 8.0),
+        (8.0, -8.0),
+        (8.0, 8.0),
+    )
+    anomalous_batch_shifts = {
+        "batch-003": 5.0,
+        "batch-009": -5.0,
+    }
+    rows_per_batch = _CLUSTERED_ROW_COUNT // _CLUSTERED_BATCH_COUNT
+    batch_noise = {}
+    for batch_index in range(1, _CLUSTERED_BATCH_COUNT + 1):
+        batch_id = f"batch-{batch_index:03d}"
+        raw_noise = [batch_rng.gauss(0.0, 0.35) for _ in range(rows_per_batch)]
+        noise_mean = math.fsum(raw_noise) / rows_per_batch
+        batch_noise[batch_id] = [value - noise_mean for value in raw_noise]
+
+    rows: list[tuple[object, ...]] = []
+    row_truth: dict[str, dict[str, object]] = {}
+    for row_index, cluster_label in enumerate(labels):
+        row_id = f"row-{row_index + 1:03d}"
+        batch_index = row_index // rows_per_batch + 1
+        within_batch_index = row_index % rows_per_batch
+        batch_id = f"batch-{batch_index:03d}"
+        center_x, center_y = centers[cluster_label]
+        cluster_x = center_x + max(
+            -1.0,
+            min(1.0, cluster_rng.gauss(0.0, 0.4)),
+        )
+        cluster_y = center_y + max(
+            -1.0,
+            min(1.0, cluster_rng.gauss(0.0, 0.4)),
+        )
+        is_point_anomaly = row_index in point_anomaly_indices
+        if is_point_anomaly:
+            offset_x, offset_y = anomaly_directions[
+                contamination_rng.randrange(len(anomaly_directions))
+            ]
+            cluster_x += offset_x
+            cluster_y += offset_y
+        is_batch_anomaly = batch_id in anomalous_batch_shifts
+        batch_signal = (
+            batch_noise[batch_id][within_batch_index]
+            + anomalous_batch_shifts.get(batch_id, 0.0)
+        )
+        rows.append(
+            (
+                row_id,
+                batch_id,
+                cluster_x,
+                cluster_y,
+                nuisance_rng.gauss(0.0, 1000.0),
+                batch_signal,
+            )
+        )
+        row_truth[row_id] = {
+            "cluster_label": cluster_label,
+            "is_batch_anomaly": is_batch_anomaly,
+            "is_point_anomaly": is_point_anomaly,
+        }
+
+    source_path = root / _DATASET_SOURCE_FILES[_CLUSTERED_DATASET_ID][
+        "observations"
+    ]
+    _write_csv(
+        source_path,
+        (
+            "row_id",
+            "batch_id",
+            "cluster_x",
+            "cluster_y",
+            "large_scale_nuisance",
+            "batch_signal",
+        ),
+        rows,
+    )
+    sources = [
+        _file_record(root, "observations", source_path, len(rows)),
+    ]
+    dataset_fingerprint = _dataset_fingerprint(
+        dataset_id=_CLUSTERED_DATASET_ID,
+        root_seed=root_seed,
+        derived_seeds=derived_seeds,
+        sources=sources,
+    )
+    truth_path = root / "truth.json"
+    _write_json(
+        truth_path,
+        {
+            "dataset_id": _CLUSTERED_DATASET_ID,
+            "dataset_fingerprint": dataset_fingerprint,
+            "generator_version": _GENERATOR_VERSION,
+            "root_seed": root_seed,
+            "structure": {
+                "batch_count": _CLUSTERED_BATCH_COUNT,
+                "row_count": _CLUSTERED_ROW_COUNT,
+                "rows_per_batch": rows_per_batch,
+            },
+            "clusters": {
+                "centers": {
+                    label: list(center) for label, center in centers.items()
+                },
+                "expected_counts": expected_counts,
+                "scoring_scope": "non_point_anomalies",
+            },
+            "contamination": {
+                "point_anomaly_count": len(point_anomaly_indices),
+                "point_anomaly_rate": (
+                    len(point_anomaly_indices) / _CLUSTERED_ROW_COUNT
+                ),
+                "displacement_per_axis": 8.0,
+            },
+            "batch_anomalies": {
+                "anomalous_batches": sorted(anomalous_batch_shifts),
+                "batch_feature": "batch_signal",
+                "expected_shifts": anomalous_batch_shifts,
+            },
+            "validation": {
+                "cluster_features": [
+                    "cluster_x",
+                    "cluster_y",
+                    "large_scale_nuisance",
+                ],
+                "identifier_columns": ["row_id", "batch_id"],
+                "scaling_required": True,
+            },
+            "row_truth": row_truth,
+        },
+    )
+    truth_bytes = truth_path.read_bytes()
+    manifest_path = root / "manifest.json"
+    _write_json(
+        manifest_path,
+        {
+            "dataset_id": _CLUSTERED_DATASET_ID,
+            "dataset_fingerprint": dataset_fingerprint,
+            "generator_version": _GENERATOR_VERSION,
+            "random_engine": _RANDOM_ENGINE,
+            "root_seed": root_seed,
+            "derived_seeds": derived_seeds,
+            "sources": sources,
+            "truth_integrity": {
+                "sha256": hashlib.sha256(truth_bytes).hexdigest(),
+                "size_bytes": len(truth_bytes),
+            },
+        },
+    )
+    return SyntheticBenchmark(
+        dataset_id=_CLUSTERED_DATASET_ID,
+        root_seed=root_seed,
+        manifest_path=manifest_path,
+        truth_path=truth_path,
+        worker_source_paths=MappingProxyType({"observations": source_path}),
         dataset_fingerprint=dataset_fingerprint,
     )
 
