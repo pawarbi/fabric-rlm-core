@@ -26,10 +26,10 @@ be matched alphabetically as a fallback.
 ```yaml
 ---
 applies_when:
-  keywords: ["FLOW GAUNTLET", "max-flow", "min-cut"]
-  output_fields: ["final_capacities", "saturated_edges"]
+  keywords: ["invoice reconciliation", "variance analysis"]
+  output_fields: ["reconciled_total", "unmatched_items"]
 excludes: []
-depends_on: ["longcot_core"]
+depends_on: ["core"]
 specificity: domain        # one of: core | domain | utility
 ---
 ```

@@ -126,7 +126,7 @@ def test_assert_list_len_min_mode() -> None:
 
 
 def test_assert_list_len_resolves_from_solution_json() -> None:
-    """Longcot pattern: payload['solution'] is a JSON string with the field inside."""
+    """A JSON solution string may contain the requested field."""
     payload = {"solution": '{"final_capacities": [1, 2, 3, 4, 5]}'}
     assert_list_len("final_capacities", 5)(payload)
     with pytest.raises(AssertionError):

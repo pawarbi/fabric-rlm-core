@@ -8,7 +8,42 @@
   Lakehouse Delta tables through mounted paths or OneLake `abfss://` paths.
   The `analytics` extra includes delta-rs as a fallback when DuckDB cannot
   download its Delta extension.
+- **`LakehouseSource`** — discover whole Lakehouses, Tables, schemas, individual
+  Delta tables, and Files in the trusted parent, then expose a compact catalog
+  to isolated workers. `list_sources()`, `find_sources()`, and `query()` support
+  multiple nested Lakehouse inputs without placing Fabric credentials in
+  generated code.
+- **Parent-side Lakehouse query broker** — workers select catalog aliases and
+  submit SQL while the parent validates and executes bounded reads. Parsed
+  relation authorization permits only bound aliases and CTEs derived from them;
+  dynamic SQL, external paths, table functions, side-effecting functions, and
+  unknown functions fail closed. Execution has a 30-second deadline, 256 MiB
+  memory limit, disabled temporary spill, 10,000-row ceiling, incremental
+  serialization, and a 5 MiB transfer ceiling.
+- **`FileDestination`** — stage artifacts locally in generated code and publish
+  them to canonical OneLake `Files` paths through the trusted parent. The
+  broker supports legacy and DSPy workers, sealed snapshots, bounded DFS
+  uploads, explicit overwrite semantics, remote-size verification, and cleanup
+  without exposing storage tokens to the worker.
+- **`RLMResult.inspect()` and `RunInspector`** — render a collapsed interactive
+  turn timeline in Fabric/Jupyter or save a standalone escaped HTML report with
+  code, output, errors, repairs, timing, token usage, and submission payloads.
 
+### Fixed
+
+- Lakehouse roots and inferred scopes now reject traversal, encoded paths,
+  mixed `Tables`/`Files` segments, duplicate separators, query strings,
+  fragments, and malformed OneLake authorities.
+- Explicit, discovered, and query-time Lakehouse catalogs reject
+  case-insensitive duplicate names instead of silently selecting one source.
+- An output named `inspect` remains available as `result.inspect`; call
+  `RLMResult.inspect(result)` to inspect that run.
+- Secure artifact publication supports Fabric Linux runtimes that omit
+  `os.memfd_create` or Python `fcntl` seal constants, and streams sealed
+  descriptors directly through the OneLake DFS API when AzCopy rejects
+  `/proc/<pid>/fd` paths.
+- Delta schema discovery supports both delta-rs `Schema.to_pyarrow()` and
+  `Schema.to_arrow()`.
 ## 0.4.1 — 2026-08-22 — safer workers and typed outputs
 
 ### Added

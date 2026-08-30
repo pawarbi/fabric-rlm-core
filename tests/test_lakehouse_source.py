@@ -176,13 +176,77 @@ def test_lakehouse_source_validates_catalog_entries() -> None:
         )
 
 
-@pytest.mark.parametrize("scope", ["../Tables", "Files/../secrets", r"Files\data"])
+def test_lakehouse_source_rejects_duplicate_explicit_catalog_names() -> None:
+    with pytest.raises(ValueError, match="unique names"):
+        LakehouseSource(
+            "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse",
+            catalog=[
+                {
+                    "kind": "csv",
+                    "name": "files.orders",
+                    "path": "abfss://root/Files/orders.csv",
+                },
+                {
+                    "kind": "parquet",
+                    "name": "Files.Orders",
+                    "path": "abfss://root/Files/orders.parquet",
+                },
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "../Tables",
+        "Files/../secrets",
+        r"Files\data",
+        "Tables/%2e%2e/private",
+        "Tables//private",
+        "Tables/private?version=1",
+        "Tables/private#fragment",
+        "Tables/dbo/Files/private",
+        "Files/data/Tables/private",
+    ],
+)
 def test_lakehouse_source_rejects_unsafe_relative_scopes(scope: str) -> None:
     with pytest.raises(ValueError, match="relative paths"):
         LakehouseSource(
             "abfss://ws@onelake.dfs.fabric.microsoft.com/lh",
             tables=scope,
         )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables/../Files/private",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables/%2e%2e/Files/private",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables/dbo/Files/private",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh//Tables",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables?version=1",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/lh/Tables#fragment",
+    ],
+)
+def test_lakehouse_source_rejects_unsafe_inferred_scopes(path: str) -> None:
+    with pytest.raises(ValueError, match="canonical|relative paths"):
+        LakehouseSource(path, catalog=[])
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        "abfss://onelake.dfs.fabric.microsoft.com/lh",
+        "abfss://@onelake.dfs.fabric.microsoft.com/lh",
+        "abfss://ws@other.example/lh",
+        "abfss://user:password@onelake.dfs.fabric.microsoft.com/lh",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com:443/lh",
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/",
+    ],
+)
+def test_lakehouse_source_rejects_malformed_abfss_roots(root: str) -> None:
+    with pytest.raises(ValueError, match="canonical"):
+        LakehouseSource(root, catalog=[])
 
 
 def test_explicit_catalog_round_trips_through_worker_wire() -> None:
@@ -357,6 +421,26 @@ class _FakeFS:
 
     def head(self, path: str, _max_bytes: int):
         return self.heads[path]
+
+
+def test_auto_discovery_rejects_duplicate_normalized_names(monkeypatch) -> None:
+    root = "abfss://ws@onelake.dfs.fabric.microsoft.com/lh"
+    files = f"{root}/Files"
+    csv_path = f"{files}/orders.csv"
+    parquet_path = f"{files}/orders.parquet"
+    fs = _FakeFS(
+        {
+            files: [
+                _Item(csv_path, is_dir=False),
+                _Item(parquet_path, is_dir=False),
+            ]
+        },
+        {csv_path: "order_id\n1\n"},
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
+
+    with pytest.raises(LakehouseDiscoveryError, match="duplicate catalog name"):
+        LakehouseSource(root, tables=[], files="Files").resolve()
 
 
 def test_explicit_catalog_bypasses_auto_discovery(monkeypatch) -> None:

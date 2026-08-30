@@ -166,8 +166,8 @@ def test_validator_parses_json_string_answer():
 
 def test_validator_silent_on_scalar_answers():
     """Some prompts enumerate sub-questions but want a single integer answer
-    (e.g. "considering Q1..Q5, what is the final value?"). Don't reject scalars."""
-    v = assert_answers_all_subquestions("answer", "Q1: a  Q2: b  Q3: c")
+    (e.g. "considering Parts 1-5, what is the final value?"). Don't reject scalars."""
+    v = assert_answers_all_subquestions("answer", "Part 1: a  Part 2: b  Part 3: c")
     v({"answer": 42})
     v({"answer": "the answer is 42"})  # not JSON, leave alone
 

@@ -105,6 +105,10 @@ _REPAIR_DIVERSITY_LINE = (
 )
 _REPAIR_NUDGE_MODES = {"off", "static", "escalating"}
 _REPAIR_NUDGE_DEFAULT = "escalating"
+_PYTHON_LITERAL_RECOVERY_HINT = (
+    "This REPL executes Python: use `None`, `True`, and `False`, "
+    "not JSON `null`, `true`, or `false`."
+)
 
 
 def _repair_nudge_mode() -> str:
@@ -334,8 +338,8 @@ def _route_with_task_fallback(
     inputs={"pdf_path": ...})``), inputs-only routing scores nothing and every
     run gets the same always-on bundle. The fallback is gated on *zero* input
     scores so the original menu-inflation protection is preserved: whenever
-    bound inputs match any skill keyword (the longcot/benchmark shape, where
-    the task text enumerates every template), the task text is never consulted.
+    bound inputs match any skill keyword (the benchmark-menu shape, where the
+    task text enumerates every template), the task text is never consulted.
 
     Returns ``(decision, used_task_text_fallback)``.
     """
@@ -625,6 +629,13 @@ class RLMResult:
             slow_turn_seconds=slow_turn_seconds,
             expanded=expanded,
         )
+
+    def __getattribute__(self, name: str) -> Any:
+        if name == "inspect":
+            payload = object.__getattribute__(self, "__dict__").get("payload")
+            if isinstance(payload, dict) and name in payload:
+                return payload[name]
+        return object.__getattribute__(self, name)
 
     def __getattr__(self, name: str) -> Any:
         # Only reached when normal attribute lookup fails. Never satisfy dunder
@@ -2192,7 +2203,7 @@ class RLM:
     ) -> tuple[str, dict[str, Any] | None] | None:
         """Run the configured global output validator on a SUBMIT payload.
 
-        The validator is a callable (typically ``verify_longcot_output``)
+        The validator is a callable (typically a host contract verifier)
         that raises :class:`AssertionError` on contract violation. Returns
         ``None`` when no validator is configured, the validator passes, or
         the validator itself misbehaves (graceful degrade — never block a
@@ -2288,6 +2299,11 @@ class RLM:
                 tail_ratio=_tail_ratio("FABRIC_RLM_ERROR_TAIL_RATIO", _ERROR_TAIL_RATIO_DEFAULT),
             )
             parts.append(f"\nERROR:\n```\n{error_text}\n```\nWrite a recovery turn.")
+            if re.search(
+                r"NameError: name ['\"](?:null|true|false)['\"] is not defined",
+                error_text,
+            ):
+                parts.append(f"\n{_PYTHON_LITERAL_RECOVERY_HINT}")
         elif result.stderr:
             stderr_text = _truncate_for_feedback(
                 result.stderr,

@@ -88,6 +88,24 @@ def test_inspector_is_collapsed_by_default_and_can_start_expanded() -> None:
     assert '<details class="frlm-inspector" open>' in expanded
 
 
+def test_inspect_output_field_remains_available_as_an_attribute() -> None:
+    result = RLMResult(
+        submitted=True,
+        payload={"inspect": "submitted value"},
+        trajectory=Trajectory(),
+        final_state={},
+    )
+
+    assert result.inspect == "submitted value"
+    assert isinstance(RLMResult.inspect(result), RunInspector)
+
+
+def test_inspect_method_remains_an_alias_without_an_output_collision() -> None:
+    result = _result(_turn(1, submitted=True))
+
+    assert isinstance(result.inspect(), RunInspector)
+
+
 def test_inspector_marks_a_successful_turn_after_an_error_as_recovered() -> None:
     result = _result(
         _turn(1, error="ValueError: bad query"),

@@ -2,6 +2,7 @@
 applies_when:
   keywords:
     - delta
+    - delta lakehouse
     - delta table
     - delta_scan
     - deltatable
@@ -72,6 +73,26 @@ so retrying them wastes turns and cannot repair the boundary. Never widen
 beyond the supplied catalog, and never submit placeholder or hypothetical
 metrics after a query failure.
 
+### Query within the broker budget
+
+`lakehouse.query(...)` runs with a fixed memory ceiling and disk spill disabled.
+An `OutOfMemoryException` is a containment signal, not permission to enable
+`temp_directory`. Never follow DuckDB's suggestion to configure a spill path,
+and never bypass the broker with direct DuckDB, filesystem, or storage access.
+
+Repair the query and retry:
+
+- Select only the columns required for the metric.
+- Apply date, status, and partition filters before joins.
+- Aggregate each large fact table to the needed grain before joining it.
+- Calculate one analytical question at a time instead of building one wide
+  all-purpose intermediate result.
+- Avoid large sorts, cross joins, raw-row exports, and unbounded window frames.
+
+The RLM loop can use the next turn to submit a smaller query. If a correct
+bounded query cannot answer the question, report that limitation rather than
+weakening the resource boundary or inventing a result.
+
 ## READ THIS FIRST - the failure that returns a wrong answer silently
 
 A Delta table directory contains parquet files that are no longer part of the
@@ -120,7 +141,7 @@ say so, not to approximate it with parquet.
 | `count(DISTINCT col)` when it matters | Trust `approx_unique` as exact | It is a HyperLogLog estimate and can exceed the row count |
 | Print `fetchall()` rows yourself | `relation.show()` | Box-drawing characters crash on cp1252 stdout |
 | `con.register("name", dataset)` | Put a bare Python variable name in the SQL | Replacement scan reads the *calling* frame, so it breaks inside a helper |
-| Bind the token as a parameter: `ACCESS_TOKEN ?` | Format the token into the SQL string | Tokens end up in logs, tracebacks, and the trajectory |
+| Escape single quotes before interpolating the token into `CREATE SECRET`, keep that statement in trusted parent code, and redact errors | Use a placeholder in `CREATE SECRET` or expose the token to worker code | DuckDB secret DDL does not accept parameter placeholders; the parent broker prevents tokens from entering the trajectory |
 | Omit `ENDPOINT`, or give it an `https://` scheme | `ENDPOINT 'onelake.dfs.fabric.microsoft.com'` | A bare host fails with `relative URL without a base` |
 | `storage_options=None` for a mounted path | Hand a mount a token | A mount is plain POSIX IO and needs no credential |
 | Put partition columns in `WHERE` | Filter in pandas after loading everything | Pruning skips whole files at the scan |
@@ -197,6 +218,8 @@ def _prepare(con, path):
             "WHERE name = 'onelake_tok'"
         ).fetchone()[0]
         if not has_secret:
+            # DuckDB secret DDL does not accept a parameter placeholder here.
+            # Keep this trusted-parent-only and redact failures before surfacing them.
             token = _storage_token().replace("'", "''")
             con.execute(
                 "CREATE SECRET onelake_tok "

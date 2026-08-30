@@ -2,12 +2,53 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
 
 from fabric_rlm import LakehouseSource
+from fabric_rlm import lakehouse as lakehouse_module
+
+
+def _serialized_select(table_name: str) -> str:
+    return json.dumps(
+        {
+            "error": False,
+            "statements": [
+                {
+                    "node": {
+                        "type": "SELECT_NODE",
+                        "cte_map": {"map": []},
+                        "from_table": {
+                            "type": "BASE_TABLE",
+                            "table_name": table_name,
+                            "catalog_name": "",
+                            "schema_name": "",
+                            "at_clause": None,
+                        },
+                    }
+                }
+            ],
+        }
+    )
+
+
+class _SelectStatement:
+    type = "StatementType.SELECT"
+
+
+class _MetadataCursor:
+    def __init__(self, table_name: str) -> None:
+        self._table_name = table_name
+
+    def fetchone(self):
+        return (_serialized_select(self._table_name),)
+
+    def fetchall(self):
+        return []
 
 
 def test_lakehouse_query_reads_only_named_catalog_sources(tmp_path) -> None:
@@ -60,6 +101,24 @@ def test_lakehouse_query_rejects_sources_outside_the_catalog() -> None:
         )
 
 
+def test_lakehouse_query_rejects_catalog_name_collisions_after_construction() -> None:
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.orders", "path": "orders.csv"},
+            {"kind": "parquet", "name": "files.customers", "path": "customers.parquet"},
+        ],
+    )
+    assert source.catalog is not None
+    source.catalog[1]["name"] = "Files.Orders"
+
+    with pytest.raises(ValueError, match="unique names"):
+        source.query(
+            "SELECT * FROM orders",
+            sources={"orders": "files.orders"},
+        )
+
+
 @pytest.mark.parametrize(
     "sql",
     [
@@ -76,6 +135,252 @@ def test_lakehouse_query_rejects_external_or_non_query_sql(sql: str) -> None:
         "file:///lakehouse",
         catalog=[
             {"kind": "csv", "name": "files.companies", "path": "companies.csv"}
+        ],
+    )
+
+    with pytest.raises(ValueError, match="read-only catalog query"):
+        source.query(sql, sources={"companies": "files.companies"})
+
+
+def test_lakehouse_query_rejects_dynamic_sql_that_reads_local_files(
+    tmp_path,
+) -> None:
+    payload_path = tmp_path / "payload.txt"
+    payload_path.write_text("must-not-be-readable", encoding="utf-8")
+    csv_path = tmp_path / "companies.csv"
+    csv_path.write_text("id\n1\n", encoding="utf-8")
+    escaped_path = str(payload_path).replace("\\", "/").replace("'", "''")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.companies", "path": str(csv_path)}
+        ],
+    )
+
+    with pytest.raises(ValueError, match="read-only catalog query"):
+        source.query(
+            "SELECT * FROM query("
+            "'SELECT content FROM rea' || "
+            f"'d_text(''{escaped_path}'')'"
+            ")",
+            sources={"companies": "files.companies"},
+        )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM parquet_metadata('private.parquet')",
+        "SELECT (SELECT count(*) FROM query('SELECT * FROM companies'))",
+        "SELECT * FROM (SELECT * FROM query('SELECT * FROM companies')) nested",
+        "SELECT * FROM unnest([1, 2, 3])",
+        "SELECT * FROM generate_series(1, 10)",
+    ],
+)
+def test_lakehouse_query_rejects_all_user_table_functions(sql: str, tmp_path) -> None:
+    csv_path = tmp_path / "companies.csv"
+    csv_path.write_text("id\n1\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.companies", "path": str(csv_path)}
+        ],
+    )
+
+    with pytest.raises(ValueError, match="read-only catalog query"):
+        source.query(sql, sources={"companies": "files.companies"})
+
+
+def test_lakehouse_query_allows_ctes_derived_from_authorized_sources(
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "companies.csv"
+    csv_path.write_text("region,mrr\nNorth America,10\nEurope,7\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.companies", "path": str(csv_path)}
+        ],
+    )
+
+    result = source.query(
+        """
+        WITH regional AS (
+            SELECT region, SUM(mrr) AS total_mrr
+            FROM companies
+            GROUP BY region
+        )
+        SELECT region, total_mrr
+        FROM regional
+        WHERE total_mrr >= (SELECT MIN(mrr) FROM companies)
+        ORDER BY total_mrr DESC
+        """,
+        sources={"companies": "files.companies"},
+    )
+
+    assert result["rows"] == [["North America", 10], ["Europe", 7]]
+
+
+@pytest.mark.parametrize(
+    ("operator", "expected"),
+    [
+        ("UNION", [[1], [2], [3]]),
+        ("EXCEPT", [[1]]),
+        ("INTERSECT", [[2]]),
+    ],
+)
+def test_lakehouse_query_allows_set_operations_over_authorized_sources(
+    operator: str,
+    expected: list[list[int]],
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "values.csv"
+    csv_path.write_text("value\n1\n2\n3\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.values", "path": str(csv_path)}],
+    )
+
+    result = source.query(
+        f"""
+        SELECT value FROM values WHERE value <= 2
+        {operator}
+        SELECT value FROM values WHERE value >= 2
+        ORDER BY value
+        """,
+        sources={"values": "files.values"},
+    )
+
+    assert result["rows"] == expected
+
+
+def test_lakehouse_query_allows_bounded_recursive_ctes_from_authorized_sources(
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "values.csv"
+    csv_path.write_text("value\n1\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.values", "path": str(csv_path)}],
+    )
+
+    result = source.query(
+        """
+        WITH RECURSIVE running(value, depth) AS (
+            SELECT value, 1 FROM values
+            UNION ALL
+            SELECT value + 1, depth + 1
+            FROM running
+            WHERE depth < 3
+        )
+        SELECT value FROM running ORDER BY value
+        """,
+        sources={"values": "files.values"},
+    )
+
+    assert result["rows"] == [[1], [2], [3]]
+
+
+def test_lakehouse_query_allows_internal_side_effect_free_window_functions(
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "values.csv"
+    csv_path.write_text("value\n3\n1\n2\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.values", "path": str(csv_path)}],
+    )
+
+    result = source.query(
+        """
+        SELECT value, row_number() OVER (ORDER BY value) AS row_number
+        FROM values
+        ORDER BY value
+        """,
+        sources={"values": "files.values"},
+    )
+
+    assert result["rows"] == [[1, 1], [2, 2], [3, 3]]
+
+
+@pytest.mark.parametrize(
+    ("window_type", "function_name"),
+    [
+        ("WINDOW_CUME_DIST", "cume_dist"),
+        ("WINDOW_FIRST_VALUE", "first_value"),
+        ("WINDOW_LAG", "lag"),
+        ("WINDOW_LAST_VALUE", "last_value"),
+        ("WINDOW_LEAD", "lead"),
+        ("WINDOW_NTH_VALUE", "nth_value"),
+        ("WINDOW_NTILE", "ntile"),
+        ("WINDOW_PERCENT_RANK", "percent_rank"),
+        ("WINDOW_RANK", "rank"),
+        ("WINDOW_RANK_DENSE", "dense_rank"),
+        ("WINDOW_ROW_NUMBER", "row_number"),
+    ],
+)
+def test_catalog_validation_allows_builtin_window_missing_from_function_catalog(
+    window_type: str,
+    function_name: str,
+) -> None:
+    document = json.loads(_serialized_select("values"))
+    document["statements"][0]["node"]["select_list"] = [
+        {
+            "class": "WINDOW",
+            "type": window_type,
+            "function_name": function_name,
+            "schema": "",
+            "catalog": "",
+        }
+    ]
+
+    class _Cursor:
+        def __init__(self, *, serialized=None, rows=None) -> None:
+            self._serialized = serialized
+            self._rows = rows or []
+
+        def fetchone(self):
+            return (self._serialized,)
+
+        def fetchall(self):
+            return self._rows
+
+    class _Connection:
+        def execute(self, sql, _parameters=None):
+            if sql == "SELECT json_serialize_sql(?)":
+                return _Cursor(serialized=json.dumps(document))
+            if sql.startswith("SELECT DISTINCT function_name "):
+                return _Cursor()
+            raise AssertionError(f"Unexpected SQL: {sql}")
+
+    assert (
+        lakehouse_module._validate_catalog_query(
+            _Connection(),
+            f"SELECT {function_name}() OVER () FROM values",
+            aliases=["values"],
+        )
+        == f"SELECT {function_name}() OVER () FROM values"
+    )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT unregistered_transform(id) FROM companies",
+        "SELECT current_query() FROM companies",
+        "SELECT unregistered_transform(id) OVER () FROM companies",
+    ],
+)
+def test_lakehouse_query_rejects_unrecognized_or_side_effecting_functions(
+    sql: str,
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "companies.csv"
+    csv_path.write_text("id\n1\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[
+            {"kind": "csv", "name": "files.companies", "path": str(csv_path)}
         ],
     )
 
@@ -147,11 +452,236 @@ def test_lakehouse_query_rejects_results_above_transfer_limit(
         )
 
 
+def test_lakehouse_query_fetches_and_sizes_results_incrementally(
+    monkeypatch,
+) -> None:
+    class _ResultCursor:
+        description = [("value",)]
+
+        def __init__(self) -> None:
+            self._rows = iter([(1,), (2,), (3,)])
+
+        def fetchmany(self, size):
+            rows = []
+            for _ in range(size):
+                try:
+                    rows.append(next(self._rows))
+                except StopIteration:
+                    break
+            return rows
+
+        def fetchall(self):
+            raise AssertionError("Lakehouse queries must not materialize all rows.")
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.settings = []
+
+        def extract_statements(self, _sql):
+            return [_SelectStatement()]
+
+        def sql(self, _sql):
+            return None
+
+        def execute(self, sql, parameters=None):
+            if sql == "SELECT json_serialize_sql(?)":
+                return _MetadataCursor("values")
+            if sql.startswith("SELECT DISTINCT function_name "):
+                return _MetadataCursor("values")
+            if sql.startswith("SET "):
+                self.settings.append((sql, parameters))
+                return self
+            if sql.startswith("CREATE TEMP VIEW"):
+                return self
+            if sql.startswith("SELECT * FROM ("):
+                return _ResultCursor()
+            return self
+
+        def close(self):
+            return None
+
+    connection = _Connection()
+    monkeypatch.setitem(
+        sys.modules,
+        "duckdb",
+        SimpleNamespace(connect=lambda: connection),
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._QUERY_MEMORY_LIMIT", "64MB")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.values", "path": "values.csv"}],
+    )
+
+    result = source.query(
+        "SELECT value FROM values",
+        sources={"values": "files.values"},
+        max_rows=2,
+    )
+
+    assert result == {
+        "columns": ["value"],
+        "rows": [[1], [2]],
+        "truncated": True,
+    }
+    assert ("SET memory_limit = ?", ["64MB"]) in connection.settings
+    assert ("SET temp_directory = ''", None) in connection.settings
+
+
+def test_lakehouse_query_stops_after_first_oversized_row(monkeypatch) -> None:
+    class _ResultCursor:
+        description = [("value",)]
+
+        def __init__(self) -> None:
+            self._calls = 0
+
+        def fetchmany(self, _size):
+            self._calls += 1
+            if self._calls == 1:
+                return [("x" * 100,)]
+            raise AssertionError("Fetching must stop once the transfer limit is exceeded.")
+
+    class _Connection:
+        def extract_statements(self, _sql):
+            return [_SelectStatement()]
+
+        def sql(self, _sql):
+            return None
+
+        def execute(self, sql, _parameters=None):
+            if sql == "SELECT json_serialize_sql(?)":
+                return _MetadataCursor("values")
+            if sql.startswith("SELECT DISTINCT function_name "):
+                return _MetadataCursor("values")
+            if sql.startswith("SELECT * FROM ("):
+                return _ResultCursor()
+            return self
+
+        def close(self):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "duckdb",
+        SimpleNamespace(connect=lambda: _Connection()),
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._MAX_QUERY_RESULT_BYTES", 50)
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.values", "path": "values.csv"}],
+    )
+
+    with pytest.raises(ValueError, match="transfer limit"):
+        source.query(
+            "SELECT value FROM values",
+            sources={"values": "files.values"},
+        )
+
+
+def test_lakehouse_query_interrupts_execution_after_deadline(monkeypatch) -> None:
+    class _Connection:
+        def __init__(self) -> None:
+            self.interrupted = threading.Event()
+
+        def extract_statements(self, _sql):
+            return [_SelectStatement()]
+
+        def sql(self, _sql):
+            return None
+
+        def execute(self, sql, _parameters=None):
+            if sql == "SELECT json_serialize_sql(?)":
+                return _MetadataCursor("values")
+            if sql.startswith("SELECT DISTINCT function_name "):
+                return _MetadataCursor("values")
+            if sql.startswith("SELECT * FROM ("):
+                if not self.interrupted.wait(0.2):
+                    raise RuntimeError("query completed without interruption")
+                raise RuntimeError("INTERRUPT Error: interrupted")
+            return self
+
+        def interrupt(self):
+            self.interrupted.set()
+
+        def close(self):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "duckdb",
+        SimpleNamespace(connect=lambda: _Connection()),
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._QUERY_TIMEOUT_SECONDS", 0.01)
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.values", "path": "values.csv"}],
+    )
+
+    with pytest.raises(TimeoutError, match="deadline"):
+        source.query(
+            "SELECT value FROM values",
+            sources={"values": "files.values"},
+        )
+
+
+def test_lakehouse_query_interrupts_real_duckdb_work(monkeypatch, tmp_path) -> None:
+    pytest.importorskip("duckdb")
+    csv_path = tmp_path / "values.csv"
+    csv_path.write_text(
+        "value\n" + "\n".join(str(value) for value in range(500)) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._QUERY_TIMEOUT_SECONDS", 0.01)
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.values", "path": str(csv_path)}],
+    )
+
+    with pytest.raises(TimeoutError, match="deadline"):
+        source.query(
+            """
+            SELECT SUM(a.value * b.value + c.value * d.value)
+            FROM values a
+            CROSS JOIN values b
+            CROSS JOIN values c
+            CROSS JOIN values d
+            """,
+            sources={"values": "files.values"},
+        )
+
+
 def test_lakehouse_query_redacts_storage_token_from_errors(monkeypatch) -> None:
     token = "sensitive-storage-token"
 
     class _Statement:
         type = "StatementType.SELECT"
+
+    class _Cursor:
+        def fetchone(self):
+            return (
+                json.dumps(
+                    {
+                        "error": False,
+                        "statements": [
+                            {
+                                "node": {
+                                    "type": "SELECT_NODE",
+                                    "cte_map": {"map": []},
+                                    "from_table": {
+                                        "type": "BASE_TABLE",
+                                        "table_name": "values",
+                                        "catalog_name": "",
+                                        "schema_name": "",
+                                        "at_clause": None,
+                                    },
+                                }
+                            }
+                        ],
+                    }
+                ),
+            )
+
+        def fetchall(self):
+            return []
 
     class _Connection:
         def extract_statements(self, _sql):
@@ -160,7 +690,11 @@ def test_lakehouse_query_redacts_storage_token_from_errors(monkeypatch) -> None:
         def sql(self, _sql):
             return None
 
-        def execute(self, sql):
+        def execute(self, sql, _parameters=None):
+            if sql == "SELECT json_serialize_sql(?)" or sql.startswith(
+                "SELECT DISTINCT function_name "
+            ):
+                return _Cursor()
             if sql.startswith("CREATE TEMP VIEW"):
                 raise RuntimeError(f"storage failure for {token}")
             return self

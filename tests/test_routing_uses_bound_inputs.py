@@ -1,8 +1,7 @@
 """Routing must score skills against bound inputs, not just task description.
 
-Pre-fix bug: when the task description was generic (e.g. "solve the question
-provided as `longcot_question`"), the router never saw the actual question
-and so domain skills (mfmc, backprop, mcm, distmem, vliw) never activated
+Pre-fix bug: when the task description was generic, the router never saw the
+actual question supplied as a bound input, so domain skills never activated
 correctly. This test pins the universal fix so routing stays sensitive to
 input content for any signature.
 """
@@ -28,31 +27,31 @@ from test_runtime_verifier import (
 
 GENERIC_TASK = (
     "Solve the algorithm question provided as the bound input "
-    "`longcot_question` and SUBMIT(output=...)."
+    "`question` and SUBMIT(output=...)."
 )
 
 
-def _five_longcot_skills():
+def _five_domain_skills():
     return {
         "core": _router_skill("core", specificity="core"),
-        "longcot_mfmc": _router_skill(
-            "longcot_mfmc",
+        "domain_mfmc": _router_skill(
+            "domain_mfmc",
             keywords=["max-flow", "min-cut", "FLOW GAUNTLET"],
         ),
-        "longcot_backprop": _router_skill(
-            "longcot_backprop",
+        "domain_backprop": _router_skill(
+            "domain_backprop",
             keywords=["backprop", "backpropagation", "gradient"],
         ),
-        "longcot_mcm": _router_skill(
-            "longcot_mcm",
+        "domain_mcm": _router_skill(
+            "domain_mcm",
             keywords=["matrix chain", "MCM", "parenthesization"],
         ),
-        "longcot_distmem": _router_skill(
-            "longcot_distmem",
+        "domain_distmem": _router_skill(
+            "domain_distmem",
             keywords=["distributed memory", "DistMem", "barrier"],
         ),
-        "longcot_vliw": _router_skill(
-            "longcot_vliw",
+        "domain_vliw": _router_skill(
+            "domain_vliw",
             keywords=["VLIW", "issue width"],
         ),
     }
@@ -61,11 +60,11 @@ def _five_longcot_skills():
 @pytest.mark.parametrize(
     "question_text, expected_skill",
     [
-        ("FLOW GAUNTLET: compute the max-flow from s to t.", "longcot_mfmc"),
-        ("Compute the gradient of the loss via backpropagation.", "longcot_backprop"),
-        ("Find the optimal parenthesization for this matrix chain (MCM).", "longcot_mcm"),
-        ("With distributed memory and a barrier between phases, ...", "longcot_distmem"),
-        ("VLIW scheduling with issue width 4: pack the bundles.", "longcot_vliw"),
+        ("FLOW GAUNTLET: compute the max-flow from s to t.", "domain_mfmc"),
+        ("Compute the gradient of the loss via backpropagation.", "domain_backprop"),
+        ("Find the optimal parenthesization for this matrix chain (MCM).", "domain_mcm"),
+        ("With distributed memory and a barrier between phases, ...", "domain_distmem"),
+        ("VLIW scheduling with issue width 4: pack the bundles.", "domain_vliw"),
     ],
     ids=["mfmc", "backprop", "mcm", "distmem", "vliw"],
 )
@@ -75,7 +74,7 @@ def test_router_activates_correct_template_skill_from_bound_input(
     """Routing must pick the template-specific skill based on the question text
     bound as an input, even when the task description is generic."""
 
-    skills = _five_longcot_skills()
+    skills = _five_domain_skills()
     loader = _routing_loader(skills)
 
     fake = _install_fake_interpreter(
@@ -102,7 +101,7 @@ def test_router_activates_correct_template_skill_from_bound_input(
         enable_router=True,
         max_active_skills=2,
     )
-    result = rlm.run(inputs={"longcot_question": question_text})
+    result = rlm.run(inputs={"question": question_text})
 
     active = result.trajectory.metadata.get("router_active", [])
     assert (

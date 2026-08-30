@@ -149,7 +149,13 @@ def test_do_dont_table_covers_the_load_bearing_rules() -> None:
     for row in rows[2:]:
         assert row.count("|") >= 4, f"row missing the why column: {row}"
 
-    for rule in ("read_parquet", "con.register", "ACCESS_TOKEN ?", "ENDPOINT", "num_records"):
+    for rule in (
+        "read_parquet",
+        "con.register",
+        "does not accept parameter placeholders",
+        "ENDPOINT",
+        "num_records",
+    ):
         assert rule in table, f"Do/Don't table lost the {rule} rule"
 
 
@@ -165,6 +171,10 @@ def test_skill_prioritizes_resolved_lakehouse_catalogs_and_portable_queries() ->
     assert "Do not call `_storage_token`" in normalized
     assert "DefaultAzureCredential" in normalized
     assert "Do not call `notebookutils`" in normalized
+    assert "OutOfMemoryException" in content
+    assert "Never follow DuckDB's suggestion to configure a spill path" in normalized
+    assert "Aggregate each large fact table" in normalized
+    assert "report that limitation" in normalized
     assert "catalog's `columns` metadata" in normalized
     assert "date - INTERVAL 11 MONTH" in content
     assert "date_add('month', -11, date)" in content
@@ -1029,10 +1039,11 @@ def test_azure_secret_form_in_the_skill_is_accepted_by_duckdb(duck) -> None:
     except Exception as exc:  # pragma: no cover - offline machine
         pytest.skip(f"azure extension unavailable: {exc}")
 
+    token = "dummy-token".replace("'", "''")
     con.execute(
         "CREATE OR REPLACE SECRET onelake_tok "
-        "(TYPE azure, PROVIDER access_token, ACCESS_TOKEN ?, ACCOUNT_NAME 'onelake')",
-        ["dummy-token"],
+        "(TYPE azure, PROVIDER access_token, "
+        f"ACCESS_TOKEN '{token}', ACCOUNT_NAME 'onelake')"
     )
     assert con.sql("SELECT count(*) FROM duckdb_secrets()").fetchone()[0] >= 1
 

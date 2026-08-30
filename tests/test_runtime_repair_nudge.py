@@ -107,3 +107,36 @@ def test_validation_feedback_respects_mode(monkeypatch):
     rlm._repair_counts = {}
     assert _REPAIR_DIVERSITY_LINE not in rlm._format_validation_feedback(result, 1, validation)
     assert _REPAIR_DIVERSITY_LINE in rlm._format_validation_feedback(result, 2, validation)
+
+
+def test_name_error_for_json_null_explains_python_literals():
+    rlm = _make_rlm()
+    result = ExecResult(
+        ok=False,
+        submitted=False,
+        stdout="",
+        stderr="",
+        state={"analysis": []},
+        error="NameError: name 'null' is not defined",
+        submit_payload=None,
+    )
+
+    feedback = rlm._format_feedback(result, 3)
+
+    assert "use `None`, `True`, and `False`" in feedback
+    assert "not JSON `null`, `true`, or `false`" in feedback
+
+
+def test_unrelated_name_error_omits_json_literal_hint():
+    rlm = _make_rlm()
+    result = ExecResult(
+        ok=False,
+        submitted=False,
+        stdout="",
+        stderr="",
+        state={},
+        error="NameError: name 'revenue' is not defined",
+        submit_payload=None,
+    )
+
+    assert "not JSON `null`, `true`, or `false`" not in rlm._format_feedback(result, 3)
