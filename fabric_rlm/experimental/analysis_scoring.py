@@ -628,3 +628,206 @@ def score_regression_case(
         sample_size=sample_size,
         runtime_seconds=runtime_seconds,
     )
+
+
+def _index_sequence(values: object, field_name: str) -> tuple[int, ...]:
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(f"{field_name} must be a sequence")
+    normalized = []
+    for index, value in enumerate(values):
+        if type(value) is not int or value < 0:
+            raise ValueError(
+                f"{field_name}[{index}] must be a non-negative integer"
+            )
+        normalized.append(value)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(f"{field_name} must not contain duplicates")
+    return tuple(sorted(normalized))
+
+
+def _unit_interval_threshold(value: object, field_name: str) -> float:
+    number = _finite_number(value, field_name)
+    if number < 0 or number > 1:
+        raise ValueError(f"{field_name} must be between 0 and 1")
+    return number
+
+
+def _optimal_event_delays(
+    expected: tuple[int, ...],
+    detected: tuple[int, ...],
+    tolerance: int,
+) -> tuple[int, ...]:
+    """Maximize one-to-one matches, then minimize total absolute delay."""
+
+    expected_count = len(expected)
+    detected_count = len(detected)
+    matches = [
+        [0] * (detected_count + 1) for _ in range(expected_count + 1)
+    ]
+    costs = [
+        [0] * (detected_count + 1) for _ in range(expected_count + 1)
+    ]
+    choices = [
+        [""] * (detected_count + 1) for _ in range(expected_count + 1)
+    ]
+    for expected_index in range(1, expected_count + 1):
+        choices[expected_index][0] = "skip_expected"
+    for detected_index in range(1, detected_count + 1):
+        choices[0][detected_index] = "skip_detected"
+
+    for expected_index in range(1, expected_count + 1):
+        for detected_index in range(1, detected_count + 1):
+            best_matches = matches[expected_index - 1][detected_index]
+            best_cost = costs[expected_index - 1][detected_index]
+            best_choice = "skip_expected"
+
+            candidate_matches = matches[expected_index][detected_index - 1]
+            candidate_cost = costs[expected_index][detected_index - 1]
+            if (
+                candidate_matches > best_matches
+                or (
+                    candidate_matches == best_matches
+                    and candidate_cost < best_cost
+                )
+            ):
+                best_matches = candidate_matches
+                best_cost = candidate_cost
+                best_choice = "skip_detected"
+
+            delay = detected[detected_index - 1] - expected[expected_index - 1]
+            if abs(delay) <= tolerance:
+                candidate_matches = (
+                    matches[expected_index - 1][detected_index - 1] + 1
+                )
+                candidate_cost = (
+                    costs[expected_index - 1][detected_index - 1] + abs(delay)
+                )
+                if (
+                    candidate_matches > best_matches
+                    or (
+                        candidate_matches == best_matches
+                        and candidate_cost <= best_cost
+                    )
+                ):
+                    best_matches = candidate_matches
+                    best_cost = candidate_cost
+                    best_choice = "match"
+
+            matches[expected_index][detected_index] = best_matches
+            costs[expected_index][detected_index] = best_cost
+            choices[expected_index][detected_index] = best_choice
+
+    delays = []
+    expected_index = expected_count
+    detected_index = detected_count
+    while expected_index > 0 or detected_index > 0:
+        choice = choices[expected_index][detected_index]
+        if choice == "match":
+            delays.append(
+                detected[detected_index - 1] - expected[expected_index - 1]
+            )
+            expected_index -= 1
+            detected_index -= 1
+        elif choice == "skip_detected":
+            detected_index -= 1
+        else:
+            expected_index -= 1
+    return tuple(reversed(delays))
+
+
+def score_detection_case(
+    *,
+    dataset_id: str,
+    case_id: str,
+    task: str,
+    expected_indices: tuple[int, ...] | list[int],
+    detected_indices: tuple[int, ...] | list[int],
+    total_opportunities: int,
+    tolerance: int = 0,
+    slice_id: str = "all",
+    minimum_precision: float | None = None,
+    minimum_recall: float | None = None,
+    maximum_false_alarm_rate: float | None = None,
+    maximum_mean_absolute_delay: float | None = None,
+    runtime_seconds: float = 0.0,
+) -> BenchmarkCaseScore:
+    """Score one-to-one event detection within an index tolerance."""
+
+    expected = _index_sequence(expected_indices, "expected_indices")
+    detected = _index_sequence(detected_indices, "detected_indices")
+    if type(total_opportunities) is not int or total_opportunities <= 0:
+        raise ValueError("total_opportunities must be a positive integer")
+    if any(index >= total_opportunities for index in expected + detected):
+        raise ValueError("event indices must be less than total_opportunities")
+    if type(tolerance) is not int or tolerance < 0:
+        raise ValueError("tolerance must be a non-negative integer")
+
+    delays = _optimal_event_delays(expected, detected, tolerance)
+
+    true_positives = len(delays)
+    false_positives = len(detected) - true_positives
+    precision = (
+        true_positives / len(detected)
+        if detected
+        else (1.0 if not expected else 0.0)
+    )
+    recall = true_positives / len(expected) if expected else 1.0
+    f1 = (
+        2.0 * precision * recall / (precision + recall)
+        if precision + recall
+        else 0.0
+    )
+    metrics = {
+        "f1": f1,
+        "false_alarm_rate": false_positives / total_opportunities,
+        "precision": precision,
+        "recall": recall,
+    }
+    if delays:
+        metrics["mean_absolute_detection_delay"] = (
+            math.fsum(abs(delay) for delay in delays) / len(delays)
+        )
+        metrics["mean_detection_delay"] = math.fsum(delays) / len(delays)
+
+    invariants: dict[str, bool] = {}
+    if minimum_precision is not None:
+        threshold = _unit_interval_threshold(
+            minimum_precision,
+            "minimum_precision",
+        )
+        invariants["minimum_precision_met"] = precision >= threshold
+    if minimum_recall is not None:
+        threshold = _unit_interval_threshold(minimum_recall, "minimum_recall")
+        invariants["minimum_recall_met"] = recall >= threshold
+    if maximum_false_alarm_rate is not None:
+        threshold = _unit_interval_threshold(
+            maximum_false_alarm_rate,
+            "maximum_false_alarm_rate",
+        )
+        invariants["maximum_false_alarm_rate_met"] = (
+            metrics["false_alarm_rate"] <= threshold
+        )
+    if maximum_mean_absolute_delay is not None:
+        threshold = _finite_number(
+            maximum_mean_absolute_delay,
+            "maximum_mean_absolute_delay",
+        )
+        if threshold < 0:
+            raise ValueError(
+                "maximum_mean_absolute_delay must be non-negative"
+            )
+        invariants["maximum_mean_absolute_delay_met"] = (
+            bool(delays)
+            and metrics["mean_absolute_detection_delay"] <= threshold
+        ) or not expected
+
+    return BenchmarkCaseScore(
+        dataset_id=dataset_id,
+        case_id=case_id,
+        task=task,
+        slice_id=slice_id,
+        metrics=metrics,
+        invariants=invariants,
+        sample_size=total_opportunities,
+        runtime_seconds=runtime_seconds,
+    )

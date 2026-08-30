@@ -9,6 +9,7 @@ from fabric_rlm.experimental import (
     BenchmarkCaseScore,
     BenchmarkReport,
     score_binary_classification_case,
+    score_detection_case,
     score_decomposition_case,
     score_regression_case,
 )
@@ -432,4 +433,151 @@ def test_regression_score_rejects_non_finite_derived_errors() -> None:
             actual=(1e308,),
             predicted=(-1e308,),
             sample_size=1,
+        )
+
+
+def test_exact_detection_score_has_no_false_alarms_or_delay() -> None:
+    score = score_detection_case(
+        dataset_id="time-series-ground-truth-v1",
+        case_id="anomaly-missing",
+        task="anomaly_detection",
+        expected_indices=(10, 20, 30),
+        detected_indices=(10, 20, 30),
+        total_opportunities=100,
+        tolerance=0,
+        minimum_precision=1.0,
+        minimum_recall=1.0,
+        maximum_false_alarm_rate=0.0,
+        maximum_mean_absolute_delay=0.0,
+    )
+
+    assert score.metrics == {
+        "f1": 1.0,
+        "false_alarm_rate": 0.0,
+        "mean_absolute_detection_delay": 0.0,
+        "mean_detection_delay": 0.0,
+        "precision": 1.0,
+        "recall": 1.0,
+    }
+    assert score.passed is True
+
+
+def test_detection_score_matches_events_once_within_tolerance() -> None:
+    score = score_detection_case(
+        dataset_id="dataset",
+        case_id="events",
+        task="change_detection",
+        expected_indices=(10, 20),
+        detected_indices=(11, 18, 50),
+        total_opportunities=60,
+        tolerance=2,
+    )
+
+    assert score.metrics["precision"] == pytest.approx(2 / 3)
+    assert score.metrics["recall"] == 1.0
+    assert score.metrics["f1"] == pytest.approx(0.8)
+    assert score.metrics["false_alarm_rate"] == pytest.approx(1 / 60)
+    assert score.metrics["mean_detection_delay"] == pytest.approx(-0.5)
+    assert score.metrics["mean_absolute_detection_delay"] == pytest.approx(1.5)
+
+
+def test_detection_score_maximizes_matches_before_minimizing_delay() -> None:
+    score = score_detection_case(
+        dataset_id="dataset",
+        case_id="overlapping-windows",
+        task="change_detection",
+        expected_indices=(15, 20, 24, 31, 36),
+        detected_indices=(7, 17, 23, 25),
+        total_opportunities=50,
+        tolerance=10,
+    )
+
+    assert score.metrics["precision"] == 1.0
+    assert score.metrics["recall"] == pytest.approx(4 / 5)
+    assert score.metrics["mean_absolute_detection_delay"] == pytest.approx(4.5)
+
+
+def test_detection_score_supports_anomaly_free_ranges() -> None:
+    clean = score_detection_case(
+        dataset_id="dataset",
+        case_id="clean",
+        task="anomaly_detection",
+        expected_indices=(),
+        detected_indices=(),
+        total_opportunities=24,
+    )
+    noisy = score_detection_case(
+        dataset_id="dataset",
+        case_id="clean",
+        task="anomaly_detection",
+        expected_indices=(),
+        detected_indices=(5, 12),
+        total_opportunities=24,
+        maximum_false_alarm_rate=0.05,
+    )
+
+    assert clean.metrics["precision"] == 1.0
+    assert clean.metrics["recall"] == 1.0
+    assert clean.passed is True
+    assert noisy.metrics["precision"] == 0.0
+    assert noisy.metrics["recall"] == 1.0
+    assert noisy.metrics["false_alarm_rate"] == pytest.approx(2 / 24)
+    assert noisy.invariants["maximum_false_alarm_rate_met"] is False
+
+
+def test_detection_score_preserves_failed_thresholds() -> None:
+    score = score_detection_case(
+        dataset_id="dataset",
+        case_id="weak",
+        task="anomaly_detection",
+        expected_indices=(10, 20, 30),
+        detected_indices=(10, 70),
+        total_opportunities=100,
+        minimum_precision=0.75,
+        minimum_recall=0.75,
+    )
+
+    assert score.invariants["minimum_precision_met"] is False
+    assert score.invariants["minimum_recall_met"] is False
+    assert score.passed is False
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {"expected_indices": (1, 1), "detected_indices": ()},
+            "duplicates",
+        ),
+        (
+            {"expected_indices": (1,), "detected_indices": (-1,)},
+            "non-negative",
+        ),
+        (
+            {
+                "expected_indices": (0,),
+                "detected_indices": (0,),
+                "total_opportunities": 1,
+                "tolerance": -1,
+            },
+            "tolerance",
+        ),
+    ],
+)
+def test_detection_score_rejects_invalid_inputs(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    defaults = {
+        "expected_indices": (),
+        "detected_indices": (),
+        "total_opportunities": 10,
+    }
+    defaults.update(kwargs)
+    with pytest.raises(ValueError, match=match):
+        score_detection_case(
+            dataset_id="dataset",
+            case_id="case",
+            task="detection",
+            **defaults,
         )
