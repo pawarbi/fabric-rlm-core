@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import random
 from typing import Literal
 
 from fabric_rlm.experimental.analysis_reproducibility import fingerprint
@@ -216,6 +217,191 @@ def _require_complete_mapping(
         raise ValueError(f"{field_name} is missing row: {missing[0]}")
 
 
+def _builder_inputs(
+    *,
+    row_ids: tuple[str, ...] | list[str],
+    final_holdout_ids: tuple[str, ...] | list[str],
+    fold_count: int,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    normalized_rows = tuple(
+        sorted(_unique_text_tuple(row_ids, "row_ids", allow_empty=False))
+    )
+    normalized_holdout = tuple(
+        sorted(_unique_text_tuple(final_holdout_ids, "final_holdout_ids"))
+    )
+    unknown_holdout = sorted(set(normalized_holdout) - set(normalized_rows))
+    if unknown_holdout:
+        raise ValueError(
+            f"final_holdout_ids contains unknown row: {unknown_holdout[0]}"
+        )
+    if type(fold_count) is not int or fold_count < 2:
+        raise ValueError("fold_count must be an integer of at least 2")
+    holdout = set(normalized_holdout)
+    eligible_rows = tuple(
+        row_id for row_id in normalized_rows if row_id not in holdout
+    )
+    if fold_count > len(eligible_rows):
+        raise ValueError("fold_count must not exceed eligible row count")
+    return normalized_rows, normalized_holdout, eligible_rows
+
+
+def _folds_from_validation_buckets(
+    eligible_rows: tuple[str, ...],
+    validation_buckets: list[list[str]],
+) -> tuple[SplitFold, ...]:
+    eligible = set(eligible_rows)
+    return tuple(
+        SplitFold(
+            fold_id=f"fold-{index + 1}",
+            train_ids=tuple(sorted(eligible - set(validation_ids))),
+            validation_ids=tuple(sorted(validation_ids)),
+        )
+        for index, validation_ids in enumerate(validation_buckets)
+    )
+
+
+def build_random_split_plan(
+    row_ids: tuple[str, ...] | list[str],
+    *,
+    plan_id: str,
+    seed: int,
+    fold_count: int = 5,
+    final_holdout_ids: tuple[str, ...] | list[str] = (),
+    feature_columns: tuple[str, ...] | list[str] = (),
+    prohibited_feature_columns: tuple[str, ...] | list[str] = (),
+    row_fingerprints: Mapping[str, str] | None = None,
+) -> ValidatedSplitPlan:
+    """Build deterministic random K-fold assignments."""
+
+    normalized_rows, normalized_holdout, eligible_rows = _builder_inputs(
+        row_ids=row_ids,
+        final_holdout_ids=final_holdout_ids,
+        fold_count=fold_count,
+    )
+    shuffled = list(eligible_rows)
+    random.Random(seed).shuffle(shuffled)
+    buckets = [[] for _ in range(fold_count)]
+    for index, row_id in enumerate(shuffled):
+        buckets[index % fold_count].append(row_id)
+    plan = SplitPlan(
+        plan_id=plan_id,
+        strategy="random",
+        seed=seed,
+        row_ids=normalized_rows,
+        folds=_folds_from_validation_buckets(eligible_rows, buckets),
+        final_holdout_ids=normalized_holdout,
+        feature_columns=tuple(feature_columns),
+        prohibited_feature_columns=tuple(prohibited_feature_columns),
+    )
+    return validate_split_plan(plan, row_fingerprints=row_fingerprints)
+
+
+def build_stratified_split_plan(
+    row_ids: tuple[str, ...] | list[str],
+    *,
+    strata_by_row: Mapping[str, object],
+    plan_id: str,
+    seed: int,
+    fold_count: int = 5,
+    final_holdout_ids: tuple[str, ...] | list[str] = (),
+    feature_columns: tuple[str, ...] | list[str] = (),
+    prohibited_feature_columns: tuple[str, ...] | list[str] = (),
+    row_fingerprints: Mapping[str, str] | None = None,
+) -> ValidatedSplitPlan:
+    """Build deterministic K-fold assignments balanced within each stratum."""
+
+    normalized_rows, normalized_holdout, eligible_rows = _builder_inputs(
+        row_ids=row_ids,
+        final_holdout_ids=final_holdout_ids,
+        fold_count=fold_count,
+    )
+    _require_complete_mapping(strata_by_row, normalized_rows, "strata_by_row")
+    strata: dict[object, list[str]] = {}
+    for row_id in eligible_rows:
+        value = strata_by_row[row_id]
+        try:
+            hash(value)
+        except TypeError as exc:
+            raise ValueError("strata_by_row values must be hashable") from exc
+        strata.setdefault(value, []).append(row_id)
+    undersized = [
+        value for value, members in strata.items() if len(members) < fold_count
+    ]
+    if undersized:
+        raise ValueError(
+            f"stratum {undersized[0]!r} has fewer rows than fold_count"
+        )
+    rng = random.Random(seed)
+    buckets = [[] for _ in range(fold_count)]
+    for members in strata.values():
+        rng.shuffle(members)
+        for index, row_id in enumerate(members):
+            buckets[index % fold_count].append(row_id)
+    plan = SplitPlan(
+        plan_id=plan_id,
+        strategy="stratified",
+        seed=seed,
+        row_ids=normalized_rows,
+        folds=_folds_from_validation_buckets(eligible_rows, buckets),
+        final_holdout_ids=normalized_holdout,
+        feature_columns=tuple(feature_columns),
+        prohibited_feature_columns=tuple(prohibited_feature_columns),
+    )
+    return validate_split_plan(plan, row_fingerprints=row_fingerprints)
+
+
+def build_grouped_split_plan(
+    row_ids: tuple[str, ...] | list[str],
+    *,
+    group_by_row: Mapping[str, object],
+    plan_id: str,
+    seed: int,
+    fold_count: int = 5,
+    final_holdout_ids: tuple[str, ...] | list[str] = (),
+    feature_columns: tuple[str, ...] | list[str] = (),
+    prohibited_feature_columns: tuple[str, ...] | list[str] = (),
+    row_fingerprints: Mapping[str, str] | None = None,
+) -> ValidatedSplitPlan:
+    """Build deterministic K-fold assignments without splitting entities."""
+
+    normalized_rows, normalized_holdout, eligible_rows = _builder_inputs(
+        row_ids=row_ids,
+        final_holdout_ids=final_holdout_ids,
+        fold_count=fold_count,
+    )
+    _require_complete_mapping(group_by_row, normalized_rows, "group_by_row")
+    groups: dict[object, list[str]] = {}
+    for row_id in eligible_rows:
+        value = group_by_row[row_id]
+        try:
+            hash(value)
+        except TypeError as exc:
+            raise ValueError("group_by_row values must be hashable") from exc
+        groups.setdefault(value, []).append(row_id)
+    if len(groups) < fold_count:
+        raise ValueError("fold_count must not exceed eligible group count")
+    group_values = list(groups)
+    random.Random(seed).shuffle(group_values)
+    buckets = [[] for _ in range(fold_count)]
+    for index, group in enumerate(group_values):
+        buckets[index % fold_count].extend(groups[group])
+    plan = SplitPlan(
+        plan_id=plan_id,
+        strategy="grouped",
+        seed=seed,
+        row_ids=normalized_rows,
+        folds=_folds_from_validation_buckets(eligible_rows, buckets),
+        final_holdout_ids=normalized_holdout,
+        feature_columns=tuple(feature_columns),
+        prohibited_feature_columns=tuple(prohibited_feature_columns),
+    )
+    return validate_split_plan(
+        plan,
+        group_by_row=group_by_row,
+        row_fingerprints=row_fingerprints,
+    )
+
+
 def validate_split_plan(
     plan: SplitPlan,
     *,
@@ -249,6 +435,16 @@ def validate_split_plan(
             "row_fingerprints",
         )
 
+    holdout_groups = (
+        {group_by_row[row_id] for row_id in plan.final_holdout_ids}
+        if group_by_row is not None
+        else set()
+    )
+    holdout_fingerprints = (
+        {row_fingerprints[row_id] for row_id in plan.final_holdout_ids}
+        if row_fingerprints is not None
+        else set()
+    )
     for fold in plan.folds:
         if group_by_row is not None:
             training_groups = {group_by_row[row_id] for row_id in fold.train_ids}
@@ -260,6 +456,12 @@ def validate_split_plan(
                 raise ValueError(
                     f"entity leakage in fold {fold.fold_id}: "
                     f"{next(iter(overlap))!r}"
+                )
+            fold_groups = training_groups | validation_groups
+            if fold_groups & holdout_groups:
+                raise ValueError(
+                    f"entity leakage between fold {fold.fold_id} "
+                    "and final holdout"
                 )
         if time_by_row is not None:
             latest_training = max(time_by_row[row_id] for row_id in fold.train_ids)
@@ -282,6 +484,14 @@ def validate_split_plan(
             if overlap:
                 raise ValueError(
                     f"duplicate-row leakage in fold {fold.fold_id}"
+                )
+            fold_fingerprints = (
+                training_fingerprints | validation_fingerprints
+            )
+            if fold_fingerprints & holdout_fingerprints:
+                raise ValueError(
+                    f"duplicate-row leakage between fold {fold.fold_id} "
+                    "and final holdout"
                 )
 
     return ValidatedSplitPlan(plan=plan, fingerprint=plan.fingerprint)

@@ -52,6 +52,9 @@ from fabric_rlm.experimental.analysis_validation import (
     SplitFold,
     SplitPlan,
     ValidatedSplitPlan,
+    build_grouped_split_plan,
+    build_random_split_plan,
+    build_stratified_split_plan,
     validate_split_plan,
 )
 from fabric_rlm.experimental.bandit_policy import BanditPolicy, BanditState
@@ -71,6 +74,9 @@ __all__ = [
     "AttemptRecord",
     "BanditPolicy",
     "BanditState",
+    "build_grouped_split_plan",
+    "build_random_split_plan",
+    "build_stratified_split_plan",
     "Budget",
     "canonical_json",
     "derive_seed",

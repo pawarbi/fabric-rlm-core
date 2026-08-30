@@ -7,6 +7,9 @@ import pytest
 from fabric_rlm.experimental import (
     SplitFold,
     SplitPlan,
+    build_grouped_split_plan,
+    build_random_split_plan,
+    build_stratified_split_plan,
     validate_split_plan,
 )
 
@@ -217,6 +220,43 @@ def test_validation_rejects_duplicate_content_across_partitions() -> None:
         )
 
 
+def test_validation_rejects_duplicate_content_in_final_holdout() -> None:
+    with pytest.raises(ValueError, match="duplicate-row leakage"):
+        build_random_split_plan(
+            ("r1", "r2", "r3", "r4", "r5"),
+            plan_id="holdout-duplicates",
+            seed=5,
+            fold_count=2,
+            final_holdout_ids=("r5",),
+            row_fingerprints={
+                "r1": "duplicate",
+                "r2": "b",
+                "r3": "c",
+                "r4": "d",
+                "r5": "duplicate",
+            },
+        )
+
+
+def test_grouped_builder_rejects_entity_split_into_final_holdout() -> None:
+    with pytest.raises(ValueError, match="entity leakage"):
+        build_grouped_split_plan(
+            ("r1", "r2", "r3", "r4", "r5", "r6"),
+            group_by_row={
+                "r1": "g1",
+                "r2": "g1",
+                "r3": "g2",
+                "r4": "g2",
+                "r5": "g3",
+                "r6": "g3",
+            },
+            plan_id="holdout-group-leakage",
+            seed=5,
+            fold_count=2,
+            final_holdout_ids=("r6",),
+        )
+
+
 def test_validation_rejects_target_derived_features() -> None:
     plan = SplitPlan(
         plan_id="features",
@@ -262,3 +302,128 @@ def test_validated_split_plan_preserves_training_only_preprocessing_boundary() -
     assert validated.plan is plan
     assert validated.fingerprint == plan.fingerprint
     assert validated.preprocessing_fit_ids("fold-1") == ("r1", "r2")
+
+
+def test_random_split_plan_is_deterministic_and_preserves_final_holdout() -> None:
+    row_ids = tuple(f"r{index:02d}" for index in range(1, 26))
+    first = build_random_split_plan(
+        row_ids,
+        plan_id="random-cv",
+        seed=42,
+        fold_count=5,
+        final_holdout_ids=("r24", "r25"),
+    )
+    second = build_random_split_plan(
+        tuple(reversed(row_ids)),
+        plan_id="random-cv",
+        seed=42,
+        fold_count=5,
+        final_holdout_ids=("r25", "r24"),
+    )
+
+    assert first.fingerprint == second.fingerprint
+    assert first.plan.final_holdout_ids == ("r24", "r25")
+    validation_ids = [
+        row_id
+        for fold in first.plan.folds
+        for row_id in fold.validation_ids
+    ]
+    assert sorted(validation_ids) == list(row_ids[:-2])
+    assert len(validation_ids) == len(set(validation_ids))
+    assert all(
+        {"r24", "r25"}.isdisjoint(fold.train_ids + fold.validation_ids)
+        for fold in first.plan.folds
+    )
+    different = build_random_split_plan(
+        row_ids,
+        plan_id="random-cv",
+        seed=43,
+        fold_count=5,
+        final_holdout_ids=("r24", "r25"),
+    )
+    assert first.fingerprint != different.fingerprint
+
+
+def test_stratified_split_plan_preserves_each_class_in_every_fold() -> None:
+    row_ids = tuple(f"r{index:02d}" for index in range(1, 21))
+    strata = {
+        row_id: ("positive" if index <= 8 else "negative")
+        for index, row_id in enumerate(row_ids, start=1)
+    }
+
+    validated = build_stratified_split_plan(
+        row_ids,
+        strata_by_row=strata,
+        plan_id="stratified-cv",
+        seed=11,
+        fold_count=4,
+    )
+
+    for fold in validated.plan.folds:
+        validation_strata = [strata[row_id] for row_id in fold.validation_ids]
+        assert validation_strata.count("positive") == 2
+        assert validation_strata.count("negative") == 3
+
+
+def test_grouped_split_plan_keeps_entities_in_one_validation_fold() -> None:
+    row_ids = tuple(f"r{index:02d}" for index in range(1, 25))
+    groups = {
+        row_id: f"group-{(index - 1) // 3 + 1}"
+        for index, row_id in enumerate(row_ids, start=1)
+    }
+
+    validated = build_grouped_split_plan(
+        row_ids,
+        group_by_row=groups,
+        plan_id="grouped-cv",
+        seed=19,
+        fold_count=4,
+    )
+
+    validation_fold_by_group: dict[str, str] = {}
+    for fold in validated.plan.folds:
+        for row_id in fold.validation_ids:
+            group = groups[row_id]
+            prior_fold = validation_fold_by_group.setdefault(group, fold.fold_id)
+            assert prior_fold == fold.fold_id
+        assert {groups[row_id] for row_id in fold.train_ids}.isdisjoint(
+            groups[row_id] for row_id in fold.validation_ids
+        )
+    assert set(validation_fold_by_group) == set(groups.values())
+
+
+@pytest.mark.parametrize(
+    ("builder", "kwargs", "match"),
+    [
+        (
+            build_random_split_plan,
+            {"row_ids": ("r1", "r2"), "fold_count": 3},
+            "fold_count",
+        ),
+        (
+            build_stratified_split_plan,
+            {
+                "row_ids": ("r1", "r2", "r3"),
+                "strata_by_row": {"r1": "a", "r2": "a", "r3": "b"},
+                "fold_count": 2,
+            },
+            "stratum",
+        ),
+        (
+            build_grouped_split_plan,
+            {
+                "row_ids": ("r1", "r2"),
+                "group_by_row": {"r1": "g1"},
+                "fold_count": 2,
+            },
+            "group_by_row",
+        ),
+    ],
+)
+def test_split_plan_builders_reject_unsafe_inputs(
+    builder: object,
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        builder(plan_id="invalid", seed=1, **kwargs)
