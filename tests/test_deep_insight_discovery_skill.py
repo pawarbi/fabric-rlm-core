@@ -10,7 +10,7 @@ from fabric_rlm.skill_router import SkillRouter
 SKILL = "deep_insight_discovery"
 
 
-def _verify(payload: dict) -> None:
+def _verify_raw(payload: dict) -> None:
     source = SkillLoader().load(SKILL).verifier_source
     assert source is not None
     namespace: dict = {}
@@ -18,13 +18,110 @@ def _verify(payload: dict) -> None:
     namespace["verify"](payload)
 
 
+def _strong_plan() -> dict:
+    return {
+        "business_context": "Organizations progress through an observed lifecycle.",
+        "kpi_map": [
+            {
+                "kpi": "90-day retention",
+                "computability": "computable",
+                "reason": "Observed cohort and retained-state fields are available.",
+            },
+            {
+                "kpi": "Customer advocacy",
+                "computability": "not_computable",
+                "reason": "No survey or advocacy measure is available.",
+            },
+        ],
+        "search_space": {
+            "dimensions_available": ["segment", "cohort_quarter"],
+            "dimensions_deferred": [],
+            "time_grains_available": ["quarter"],
+            "populations": ["Customers activated since 2024-Q1"],
+        },
+    }
+
+
+def _strong_candidates(insights: list[dict]) -> list[dict]:
+    return [
+        {
+            "candidate": insight["title"],
+            "dimensions_tested": list(
+                insight.get("discovery", {}).get("dimensions_tested", [])
+            ),
+            "disposition": "promoted",
+            "reason": "Material, persistent, and decision-relevant.",
+            "promoted_as": insight["title"],
+        }
+        for insight in insights
+    ]
+
+
+def _quantitative_rejection_evidence() -> dict:
+    return {
+        "effect_value": 0.01,
+        "baseline_value": 0.50,
+        "sample_size": 412,
+        "verification": {
+            "method": "sql",
+            "expression": (
+                "SELECT AVG(retained_90d) AS metric_value "
+                "FROM customer_cohorts"
+            ),
+            "sources": {"customer_cohorts": "analytics.customer_cohorts"},
+            "components": [
+                {
+                    "name": "effect_value",
+                    "expected_value": 0.01,
+                    "expression": (
+                        "SELECT AVG(retained_90d) AS metric_value "
+                        "FROM customer_cohorts WHERE segment = 'Enterprise'"
+                    ),
+                    "sources": {
+                        "customer_cohorts": "analytics.customer_cohorts"
+                    },
+                },
+                {
+                    "name": "baseline_value",
+                    "expected_value": 0.50,
+                    "expression": (
+                        "SELECT AVG(retained_90d) AS metric_value "
+                        "FROM customer_cohorts"
+                    ),
+                    "sources": {
+                        "customer_cohorts": "analytics.customer_cohorts"
+                    },
+                },
+                {
+                    "name": "sample_size",
+                    "expected_value": 412,
+                    "expression": (
+                        "SELECT COUNT(customer_id) AS metric_value "
+                        "FROM customer_cohorts"
+                    ),
+                    "sources": {
+                        "customer_cohorts": "analytics.customer_cohorts"
+                    },
+                },
+            ],
+        },
+    }
+
+
+def _verify(payload: dict) -> None:
+    expanded = dict(payload)
+    expanded.setdefault("analysis_plan", _strong_plan())
+    expanded.setdefault(
+        "candidates",
+        _strong_candidates(expanded.get("insights", [])),
+    )
+    _verify_raw(expanded)
+
+
 def _strong_insight() -> dict:
     return {
         "title": "Enterprise retention diverged from the aggregate",
-        "statement": (
-            "Enterprise 90-day retention fell from 91% to 78%, while overall "
-            "retention remained near 86%."
-        ),
+        "statement": "Enterprise 90-day retention fell from 91% to 78%.",
         "interpretation": (
             "The aggregate masks deterioration in a high-value subgroup. "
             "Implementation quality is a hypothesis, not an established cause."
@@ -42,7 +139,20 @@ def _strong_insight() -> dict:
         },
         "priority": {"impact": "high", "urgency": "high", "rank": 1},
         "confidence": {"level": "high", "reason": "Four cohorts and 412 accounts"},
+        "evidence_tier": "associational",
         "limitations": ["Observational data does not establish causality."],
+        "supporting_claims": [],
+        "discovery": {
+            "pattern_type": "subgroup",
+            "dimensions_tested": ["segment", "cohort_quarter"],
+            "population": "Customers activated since 2024-Q1",
+            "sample_size": 412,
+            "robustness_checks": [
+                "Compared four activation cohorts.",
+                "Checked cohort denominator and composition stability.",
+                "Recomputed with and without incomplete cohorts.",
+            ],
+        },
         "verification": {
             "method": "sql",
             "expression": (
@@ -53,6 +163,382 @@ def _strong_insight() -> dict:
             "sources": {"customer_cohorts": "analytics.customer_cohorts"},
         },
     }
+
+
+def _metric_component(
+    name: str,
+    role: str,
+    expected_value: float,
+    *,
+    method: str = "sql",
+) -> dict:
+    if method == "python":
+        expression = f"metric_value = {name}.sum()"
+        sources = {name: name}
+    else:
+        expression = (
+            f"SELECT SUM({name}) AS metric_value FROM customer_cohorts"
+        )
+        sources = {"customer_cohorts": "analytics.customer_cohorts"}
+    return {
+        "name": name,
+        "role": role,
+        "expected_value": expected_value,
+        "verification": {
+            "method": method,
+            "expression": expression,
+            "sources": sources,
+        },
+    }
+
+
+def _derived_metric_spec(
+    metric_type: str,
+    expected_value: float,
+    components: list[dict],
+) -> dict:
+    return {
+        "type": metric_type,
+        "expected_value": expected_value,
+        "components": components,
+    }
+
+
+def _diagnostic_assessment(
+    *,
+    measurable: bool,
+    disposition: str,
+    decision_readiness: str,
+    method: str = "sql",
+) -> dict:
+    explanation = "Enterprise cohort mix changed."
+    item = {
+        "explanation": explanation,
+        "measurable": measurable,
+        "disposition": disposition,
+    }
+    if measurable and disposition in {"ruled_out", "weakened"}:
+        item["expected_value"] = 0.01
+        item["verification"] = _metric_component(
+            "mix_shift", "value", 0.01, method=method
+        )["verification"]
+    if not measurable:
+        item["limitation"] = (
+            "The source has no account-level implementation-quality measure."
+        )
+    return {
+        "decision_readiness": decision_readiness,
+        "explanations": [
+            item,
+            {
+                "explanation": "Instrumentation coverage declined.",
+                "measurable": False,
+                "disposition": "not_measurable",
+                "limitation": (
+                    "Historical instrumentation coverage metadata is unavailable."
+                ),
+            },
+        ],
+    }
+
+
+def test_verifier_accepts_source_agnostic_analysis_plan() -> None:
+    insights = [_strong_insight()]
+    _verify_raw(
+        {
+            "analysis_plan": {
+                "business_context": "Devices emit operational events.",
+                "kpi_map": [
+                    {
+                        "kpi": "Peak processing latency",
+                        "computability": "partially_computable",
+                        "reason": "Latency exists but maintenance windows are unavailable.",
+                    }
+                ],
+                "search_space": {
+                    "dimensions_available": [],
+                    "dimensions_deferred": [],
+                    "time_grains_available": [],
+                    "populations": ["All observed devices"],
+                },
+            },
+            "candidates": _strong_candidates(insights),
+            "insights": insights,
+        }
+    )
+
+
+def test_verifier_requires_analysis_plan() -> None:
+    with pytest.raises(AssertionError, match="analysis_plan is required"):
+        _verify_raw({"insights": [_strong_insight()]})
+
+
+@pytest.mark.parametrize(
+    "plan",
+    [
+        {},
+        {
+            "business_context": "Observed process",
+            "kpi_map": [],
+            "search_space": {
+                "dimensions_available": [],
+                "time_grains_available": [],
+                "populations": ["All records"],
+            },
+        },
+        {
+            "business_context": "Observed process",
+            "kpi_map": [
+                {
+                    "kpi": "Cycle time",
+                    "computability": "estimated",
+                    "reason": "Timestamps are available.",
+                }
+            ],
+            "search_space": {
+                "dimensions_available": [],
+                "time_grains_available": [],
+                "populations": ["All records"],
+            },
+        },
+    ],
+)
+def test_verifier_rejects_invalid_analysis_plan(plan: dict) -> None:
+    with pytest.raises(AssertionError, match="analysis_plan|kpi computability"):
+        _verify_raw({"analysis_plan": plan, "insights": [_strong_insight()]})
+
+
+def test_verifier_requires_candidate_ledger() -> None:
+    with pytest.raises(AssertionError, match="candidates ledger is required"):
+        _verify_raw(
+            {
+                "analysis_plan": _strong_plan(),
+                "insights": [_strong_insight()],
+            }
+        )
+
+
+def test_verifier_requires_every_insight_to_be_promoted() -> None:
+    with pytest.raises(AssertionError, match="not promoted"):
+        _verify_raw(
+            {
+                "analysis_plan": _strong_plan(),
+                "candidates": [
+                    {
+                        "candidate": "Another finding",
+                        "dimensions_tested": ["segment"],
+                        "disposition": "rejected",
+                        "reason": "The effect was not persistent.",
+                        "rejection_type": "not_computable",
+                        "missing_fields": ["retention_observation_window"],
+                        "promoted_as": None,
+                    }
+                ],
+                "insights": [_strong_insight()],
+            }
+        )
+
+
+def test_verifier_rejects_candidate_with_invalid_disposition() -> None:
+    insights = [_strong_insight()]
+    candidates = _strong_candidates(insights)
+    candidates[0]["disposition"] = "interesting"
+
+    with pytest.raises(AssertionError, match="disposition is invalid"):
+        _verify_raw(
+            {
+                "analysis_plan": _strong_plan(),
+                "candidates": candidates,
+                "insights": insights,
+            }
+        )
+
+
+def test_verifier_requires_evidence_for_quantitative_candidate_rejection() -> None:
+    insight = _strong_insight()
+    candidates = _strong_candidates([insight])
+    candidates.append(
+        {
+            "candidate": "Retention does not differ by region",
+            "dimensions_tested": ["segment"],
+            "disposition": "rejected",
+            "reason": "The observed difference was negligible.",
+            "rejection_type": "quantitative",
+            "promoted_as": None,
+        }
+    )
+
+    with pytest.raises(AssertionError, match="quantitative rejection evidence"):
+        _verify(
+            {
+                "candidates": candidates,
+                "insights": [insight],
+            }
+        )
+
+
+def test_verifier_accepts_evidence_backed_quantitative_rejection() -> None:
+    insight = _strong_insight()
+    candidates = _strong_candidates([insight])
+    candidates.append(
+        {
+            "candidate": "Retention does not differ by region",
+            "dimensions_tested": ["segment"],
+            "disposition": "rejected",
+            "reason": "The measured effect was negligible relative to baseline.",
+            "rejection_type": "quantitative",
+            "rejection_evidence": _quantitative_rejection_evidence(),
+            "promoted_as": None,
+        }
+    )
+
+    _verify({"candidates": candidates, "insights": [insight]})
+
+
+def test_verifier_accepts_nested_quantitative_rejection_component_verification() -> None:
+    insight = _strong_insight()
+    evidence = _quantitative_rejection_evidence()
+    for component in evidence["verification"]["components"]:
+        component["verification"] = {
+            "method": evidence["verification"]["method"],
+            "expression": component.pop("expression"),
+            "sources": component.pop("sources"),
+        }
+    candidates = _strong_candidates([insight])
+    candidates.append(
+        {
+            "candidate": "Retention does not differ by region",
+            "dimensions_tested": ["segment"],
+            "disposition": "rejected",
+            "reason": "The measured effect was negligible relative to baseline.",
+            "rejection_type": "quantitative",
+            "rejection_evidence": evidence,
+            "promoted_as": None,
+        }
+    )
+
+    _verify({"candidates": candidates, "insights": [insight]})
+
+
+def test_verifier_accepts_not_computable_rejection_with_missing_field() -> None:
+    insight = _strong_insight()
+    candidates = _strong_candidates([insight])
+    candidates.append(
+        {
+            "candidate": "Advocacy predicts retention",
+            "dimensions_tested": [],
+            "disposition": "rejected",
+            "reason": "The source has no advocacy outcome.",
+            "rejection_type": "not_computable",
+            "missing_fields": ["advocacy_score"],
+            "promoted_as": None,
+        }
+    )
+
+    _verify({"candidates": candidates, "insights": [insight]})
+
+
+def test_verifier_rejects_not_computable_claim_for_available_dimension() -> None:
+    insight = _strong_insight()
+    candidates = _strong_candidates([insight])
+    candidates.append(
+        {
+            "candidate": "Retention does not differ by segment",
+            "dimensions_tested": [],
+            "disposition": "rejected",
+            "reason": "The source has no segment field.",
+            "rejection_type": "not_computable",
+            "missing_fields": ["segment"],
+            "promoted_as": None,
+        }
+    )
+
+    with pytest.raises(AssertionError, match="available field"):
+        _verify({"candidates": candidates, "insights": [insight]})
+
+
+def test_verifier_rejects_inflated_insight_dimension_provenance() -> None:
+    insight = _strong_insight()
+    insight["discovery"]["dimensions_tested"].append("region")
+    candidates = _strong_candidates([insight])
+    candidates[0]["dimensions_tested"] = ["segment", "cohort_quarter"]
+
+    with pytest.raises(AssertionError, match="dimensions do not match promoted candidate"):
+        _verify_raw(
+            {
+                "analysis_plan": _strong_plan(),
+                "candidates": candidates,
+                "insights": [insight],
+            }
+        )
+
+
+def test_verifier_accepts_no_rejected_candidates_for_small_search_space() -> None:
+    insight = _strong_insight()
+    insight["discovery"]["dimensions_tested"] = []
+    plan = _strong_plan()
+    plan["search_space"]["dimensions_available"] = []
+
+    _verify_raw(
+        {
+            "analysis_plan": plan,
+            "candidates": _strong_candidates([insight]),
+            "insights": [insight],
+        }
+    )
+
+
+def test_verifier_requires_available_dimensions_to_be_tested_or_deferred() -> None:
+    insight = _strong_insight()
+    plan = _strong_plan()
+    plan["search_space"]["dimensions_available"].append("region")
+
+    with pytest.raises(AssertionError, match="unsearched dimension"):
+        _verify_raw(
+            {
+                "analysis_plan": plan,
+                "candidates": _strong_candidates([insight]),
+                "insights": [insight],
+            }
+        )
+
+
+def test_verifier_accepts_dimension_deferred_with_reason() -> None:
+    insight = _strong_insight()
+    plan = _strong_plan()
+    plan["search_space"]["dimensions_available"].append("region")
+    plan["search_space"]["dimensions_deferred"] = [
+        {
+            "dimension": "region",
+            "reason": "Region is redacted in this extract.",
+        }
+    ]
+
+    _verify_raw(
+        {
+            "analysis_plan": plan,
+            "candidates": _strong_candidates([insight]),
+            "insights": [insight],
+        }
+    )
+
+
+def test_verifier_rejects_dimension_deferred_without_reason() -> None:
+    insight = _strong_insight()
+    plan = _strong_plan()
+    plan["search_space"]["dimensions_available"].append("region")
+    plan["search_space"]["dimensions_deferred"] = [
+        {"dimension": "region", "reason": ""}
+    ]
+
+    with pytest.raises(AssertionError, match="deferred dimension.*reason"):
+        _verify_raw(
+            {
+                "analysis_plan": plan,
+                "candidates": _strong_candidates([insight]),
+                "insights": [insight],
+            }
+        )
 
 
 def test_skill_is_packaged_and_has_tiered_verifier() -> None:
@@ -139,6 +625,628 @@ def test_skill_follows_playbook_contract_heading_order() -> None:
 
 def test_verifier_accepts_source_derived_insight() -> None:
     _verify({"insights": [_strong_insight()]})
+
+
+def test_current_contract_requires_typed_diagnostics_for_high_confidence_insight() -> None:
+    with pytest.raises(AssertionError, match="current contract.*diagnostic"):
+        _verify(
+            {
+                "contract_version": 2,
+                "insights": [_strong_insight()],
+            }
+        )
+
+
+def test_legacy_contract_omission_remains_compatible() -> None:
+    _verify({"insights": [_strong_insight()]})
+
+
+def test_verifier_rejects_unsupported_contract_version() -> None:
+    with pytest.raises(AssertionError, match="contract_version is unsupported"):
+        _verify(
+            {
+                "contract_version": 99,
+                "insights": [_strong_insight()],
+            }
+        )
+
+
+def test_current_contract_accepts_complete_typed_diagnostics() -> None:
+    insight = _strong_insight()
+    insight["diagnostic_measurability"] = "mixed"
+    insight["diagnostic_assessment"] = _diagnostic_assessment(
+        measurable=True,
+        disposition="ruled_out",
+        decision_readiness="act_ready",
+    )
+    insight["action"]["kind"] = "program"
+
+    _verify({"contract_version": 2, "insights": [insight]})
+
+
+def _add_v3_closure_fields(assessment: dict, status: str = "ruled_out") -> None:
+    measurable = assessment["explanations"][0]
+    measurable.update(
+        {
+            "explanation_id": "cohort-mix",
+            "closure_status": status,
+            "required_check": "Compare cohort composition across periods.",
+        }
+    )
+    non_measurable = assessment["explanations"][1]
+    non_measurable.update(
+        {
+            "explanation_id": "instrumentation-coverage",
+            "closure_status": "unresolvable",
+        }
+    )
+
+
+def test_evidence_closure_contract_accepts_resolved_explanations() -> None:
+    insight = _strong_insight()
+    insight["diagnostic_measurability"] = "mixed"
+    assessment = _diagnostic_assessment(
+        measurable=True,
+        disposition="ruled_out",
+        decision_readiness="act_ready",
+    )
+    _add_v3_closure_fields(assessment)
+    insight["diagnostic_assessment"] = assessment
+    insight["action"]["kind"] = "program"
+
+    _verify({"contract_version": 3, "insights": [insight]})
+
+
+def test_evidence_closure_contract_requires_stable_explanation_ids() -> None:
+    insight = _strong_insight()
+    insight["confidence"]["level"] = "medium"
+    insight["diagnostic_measurability"] = "mixed"
+    assessment = _diagnostic_assessment(
+        measurable=True,
+        disposition="unresolved",
+        decision_readiness="investigate_first",
+    )
+    _add_v3_closure_fields(assessment, status="pending")
+    del assessment["explanations"][0]["explanation_id"]
+    insight["diagnostic_assessment"] = assessment
+    insight["action"]["kind"] = "diagnostic"
+
+    with pytest.raises(AssertionError, match="explanation_id"):
+        _verify({"contract_version": 3, "insights": [insight]})
+
+
+def test_evidence_closure_pending_or_supported_explanations_gate_action() -> None:
+    for status in ("pending", "supported"):
+        insight = _strong_insight()
+        insight["confidence"]["level"] = "medium"
+        insight["diagnostic_measurability"] = "mixed"
+        assessment = _diagnostic_assessment(
+            measurable=True,
+            disposition="unresolved" if status == "pending" else "supported",
+            decision_readiness="act_ready",
+        )
+        _add_v3_closure_fields(assessment, status=status)
+        if status == "supported":
+            assessment["explanations"][0]["expected_value"] = 0.25
+            assessment["explanations"][0]["verification"] = _metric_component(
+                "mix_shift",
+                "value",
+                0.25,
+            )["verification"]
+        insight["diagnostic_assessment"] = assessment
+        insight["action"]["kind"] = "program"
+
+        with pytest.raises(AssertionError, match="requires investigate_first"):
+            _verify({"contract_version": 3, "insights": [insight]})
+
+
+def test_verifier_accepts_one_aggregate_over_row_derived_source_values() -> None:
+    insight = _strong_insight()
+    insight["diagnostic_measurability"] = "mixed"
+    assessment = _diagnostic_assessment(
+        measurable=True,
+        disposition="weakened",
+        decision_readiness="act_ready",
+    )
+    assessment["explanations"][0]["verification"] = {
+        "method": "sql",
+        "expression": (
+            "SELECT ROUND(AVG(DATE_DIFF('day', o.promised_at, "
+            "o.delivered_at)), 2) AS metric_value "
+            "FROM orders o JOIN reviews r ON r.order_id = o.order_id"
+        ),
+        "sources": {"orders": "orders", "reviews": "reviews"},
+    }
+    insight["diagnostic_assessment"] = assessment
+    insight["action"]["kind"] = "program"
+
+    _verify({"contract_version": 2, "insights": [insight]})
+
+
+def test_verifier_rejects_metric_arithmetic_across_multiple_aggregates() -> None:
+    insight = _strong_insight()
+    insight["verification"]["expression"] = (
+        "SELECT SUM(retained_90d) / COUNT(customer_id) AS metric_value "
+        "FROM customer_cohorts"
+    )
+
+    with pytest.raises(AssertionError, match="derived metrics as components"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_ruled_out_diagnostic_with_python_verification() -> None:
+    insight = _strong_insight()
+    insight["diagnostic_measurability"] = "mixed"
+    insight["diagnostic_assessment"] = _diagnostic_assessment(
+        measurable=True,
+        disposition="ruled_out",
+        decision_readiness="act_ready",
+        method="python",
+    )
+    insight["action"]["kind"] = "program"
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_unresolved_measurable_investigation_gate() -> None:
+    insight = _strong_insight()
+    insight["confidence"]["level"] = "medium"
+    insight["diagnostic_measurability"] = "mixed"
+    insight["diagnostic_assessment"] = _diagnostic_assessment(
+        measurable=True,
+        disposition="unresolved",
+        decision_readiness="investigate_first",
+    )
+    insight["action"]["kind"] = "diagnostic"
+    insight["action"]["decision"] = "Test cohort mix and instrumentation coverage"
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_not_measurable_diagnostic_with_limitation() -> None:
+    insight = _strong_insight()
+    insight["diagnostic_measurability"] = "not_measurable"
+    assessment = _diagnostic_assessment(
+        measurable=False,
+        disposition="not_measurable",
+        decision_readiness="act_ready",
+    )
+    assessment["explanations"][0]["limitation"] = (
+        "Historical cohort-composition fields are unavailable."
+    )
+    insight["diagnostic_assessment"] = assessment
+    insight["action"]["kind"] = "program"
+
+    _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize("field", ["confidence", "urgency"])
+def test_verifier_rejects_high_or_critical_with_unresolved_measurable_alternative(
+    field: str,
+) -> None:
+    insight = _strong_insight()
+    insight["confidence"]["level"] = "medium"
+    insight["diagnostic_measurability"] = "mixed"
+    insight["diagnostic_assessment"] = _diagnostic_assessment(
+        measurable=True,
+        disposition="unresolved",
+        decision_readiness="investigate_first",
+    )
+    insight["action"]["kind"] = "diagnostic"
+    if field == "confidence":
+        insight["confidence"]["level"] = "high"
+    else:
+        insight["priority"]["urgency"] = "critical"
+
+    with pytest.raises(AssertionError, match="unresolved measurable"):
+        _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize("disposition", ["ruled_out", "weakened"])
+def test_verifier_requires_verification_for_tested_diagnostic(
+    disposition: str,
+) -> None:
+    insight = _strong_insight()
+    insight["diagnostic_measurability"] = "mixed"
+    assessment = _diagnostic_assessment(
+        measurable=True,
+        disposition=disposition,
+        decision_readiness="act_ready",
+    )
+    del assessment["explanations"][0]["verification"]
+    insight["diagnostic_assessment"] = assessment
+    insight["action"]["kind"] = "program"
+
+    with pytest.raises(AssertionError, match="verification"):
+        _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize(
+    ("measurable", "disposition"),
+    [(False, "unresolved"), (True, "not_measurable")],
+)
+def test_verifier_rejects_not_measurable_disposition_inconsistency(
+    measurable: bool,
+    disposition: str,
+) -> None:
+    insight = _strong_insight()
+    insight["diagnostic_measurability"] = "mixed"
+    assessment = _diagnostic_assessment(
+        measurable=measurable,
+        disposition=disposition,
+        decision_readiness="act_ready",
+    )
+    insight["diagnostic_assessment"] = assessment
+    insight["action"]["kind"] = "program"
+
+    with pytest.raises(AssertionError, match="measurable|not_measurable"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_investigate_first_with_program_action() -> None:
+    insight = _strong_insight()
+    insight["confidence"]["level"] = "medium"
+    insight["diagnostic_measurability"] = "mixed"
+    insight["diagnostic_assessment"] = _diagnostic_assessment(
+        measurable=True,
+        disposition="unresolved",
+        decision_readiness="investigate_first",
+    )
+    insight["action"]["kind"] = "program"
+
+    with pytest.raises(AssertionError, match="diagnostic action"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_typed_diagnostics_when_measurability_is_declared() -> None:
+    insight = _strong_insight()
+    insight["diagnostic_measurability"] = "measurable"
+
+    with pytest.raises(AssertionError, match="diagnostic_assessment"):
+        _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize("metric_type", ["value", "count", "amount", "average"])
+def test_verifier_accepts_first_class_simple_metric_spec(metric_type: str) -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        metric_type,
+        78,
+        [_metric_component("observed_value", "value", 78)],
+    )
+    if metric_type == "count":
+        insight["metric_spec"]["comparison"] = {"kind": "none"}
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_requires_structured_comparison_metadata_for_count_spec() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "count",
+        78,
+        [_metric_component("observed_value", "value", 78)],
+    )
+
+    with pytest.raises(AssertionError, match="count comparison metadata"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_source_agnostic_python_rate_components() -> None:
+    insight = _strong_insight()
+    del insight["verification"]
+    insight["metric_spec"] = _derived_metric_spec(
+        "rate",
+        837 / 2491,
+        [
+            _metric_component("low_csat_tickets", "numerator", 837, method="python"),
+            _metric_component("all_tickets", "denominator", 2491, method="python"),
+        ],
+    )
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_recomputes_supporting_claim_metric_spec() -> None:
+    insight = _strong_insight()
+    insight["supporting_claims"] = [
+        {
+            "claim": "Low-CSAT tickets were 33.6% of all tickets.",
+            "expected_value": 837 / 2491,
+            "metric_spec": _derived_metric_spec(
+                "rate",
+                837 / 2491,
+                [
+                    _metric_component("low_csat_tickets", "numerator", 837),
+                    _metric_component("all_tickets", "denominator", 2491),
+                ],
+            ),
+        }
+    ]
+
+    _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize("invalid_value", [True, float("inf")])
+def test_verifier_rejects_invalid_component_expected_value(
+    invalid_value: float,
+) -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "rate",
+        0.25,
+        [
+            _metric_component("part", "numerator", invalid_value),
+            _metric_component("whole", "denominator", 100),
+        ],
+    )
+
+    with pytest.raises(AssertionError, match="finite numeric"):
+        _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize(
+    ("metric_type", "expected_value", "components"),
+    [
+        (
+            "share",
+            25 / 100,
+            [
+                _metric_component("part", "numerator", 25),
+                _metric_component("whole", "denominator", 100),
+            ],
+        ),
+        (
+            "delta",
+            13,
+            [
+                _metric_component("current", "current", 78),
+                _metric_component("comparison", "comparison", 65),
+            ],
+        ),
+        (
+            "rate_of_change",
+            0.20,
+            [
+                _metric_component("current", "current", 120),
+                _metric_component("comparison", "comparison", 100),
+            ],
+        ),
+    ],
+)
+def test_verifier_recomputes_supported_derived_metric_types(
+    metric_type: str,
+    expected_value: float,
+    components: list[dict],
+) -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        metric_type, expected_value, components
+    )
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_zero_denominator_for_derived_metric() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "rate",
+        0,
+        [
+            _metric_component("part", "numerator", 25),
+            _metric_component("whole", "denominator", 0),
+        ],
+    )
+
+    with pytest.raises(AssertionError, match="zero denominator"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_mismatched_derived_arithmetic() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "delta",
+        14,
+        [
+            _metric_component("current", "current", 78),
+            _metric_component("comparison", "comparison", 65),
+        ],
+    )
+
+    with pytest.raises(AssertionError, match="does not reconcile"):
+        _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize("invalid_value", [True, float("inf"), float("-inf"), float("nan")])
+def test_verifier_rejects_bool_and_nonfinite_metric_values(
+    invalid_value: float,
+) -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "rate",
+        invalid_value,
+        [
+            _metric_component("part", "numerator", 25),
+            _metric_component("whole", "denominator", 100),
+        ],
+    )
+
+    with pytest.raises(AssertionError, match="finite numeric"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_cross_period_count_without_denominator_integrity() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "count",
+        837,
+        [
+            _metric_component("current_count", "current", 837),
+            _metric_component("comparison_count", "comparison", 424),
+        ],
+    )
+    insight["metric_spec"]["comparison"] = {"kind": "cross_period"}
+
+    with pytest.raises(AssertionError, match="denominator integrity"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_cross_period_count_with_denominators_and_rates() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "count",
+        837,
+        [
+            _metric_component("current_count", "current", 837),
+            _metric_component("comparison_count", "comparison", 424),
+            _metric_component("current_total", "current_denominator", 2491),
+            _metric_component("comparison_total", "comparison_denominator", 1256),
+        ],
+    )
+    insight["metric_spec"]["comparison"] = {
+        "kind": "cross_period",
+        "population": "variable",
+        "current_rate": 837 / 2491,
+        "comparison_rate": 424 / 1256,
+    }
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_cross_period_count_with_wrong_rate() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "count",
+        837,
+        [
+            _metric_component("current_count", "current", 837),
+            _metric_component("comparison_count", "comparison", 424),
+            _metric_component("current_total", "current_denominator", 2491),
+            _metric_component("comparison_total", "comparison_denominator", 1256),
+        ],
+    )
+    insight["metric_spec"]["comparison"] = {
+        "kind": "cross_period",
+        "population": "variable",
+        "current_rate": 837 / 2491,
+        "comparison_rate": 0.50,
+    }
+
+    with pytest.raises(AssertionError, match="comparison rate"):
+        _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize("population", ["stable", "exhaustive"])
+def test_verifier_accepts_equal_verified_stable_denominators(
+    population: str,
+) -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "count",
+        837,
+        [
+            _metric_component("current_count", "current", 837),
+            _metric_component("comparison_count", "comparison", 424),
+            _metric_component("current_total", "current_denominator", 2491),
+            _metric_component("comparison_total", "comparison_denominator", 2491),
+        ],
+    )
+    insight["metric_spec"]["comparison"] = {
+        "kind": "cross_period",
+        "population": population,
+    }
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_model_supplied_stable_flag() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "count",
+        837,
+        [
+            _metric_component("current_count", "current", 837),
+            _metric_component("comparison_count", "comparison", 424),
+            _metric_component("stable_check", "denominator_stable", 1),
+        ],
+    )
+    insight["metric_spec"]["comparison"] = {
+        "kind": "cross_period",
+        "population": "stable",
+    }
+
+    with pytest.raises(AssertionError, match="current_denominator"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_unequal_stable_denominators() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "count",
+        837,
+        [
+            _metric_component("current_count", "current", 837),
+            _metric_component("comparison_count", "comparison", 424),
+            _metric_component("current_total", "current_denominator", 2491),
+            _metric_component("comparison_total", "comparison_denominator", 1256),
+        ],
+    )
+    insight["metric_spec"]["comparison"] = {
+        "kind": "cross_period",
+        "population": "stable",
+    }
+
+    with pytest.raises(AssertionError, match="denominators must be equal"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_reconciles_decomposition_and_explicit_residual() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "decomposition",
+        13,
+        [
+            _metric_component("total_delta", "total_delta", 13),
+            _metric_component("volume_effect", "contribution", 8),
+            _metric_component("mix_effect", "contribution", 4),
+            _metric_component("residual", "residual", 1),
+        ],
+    )
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_decomposition_without_explicit_residual() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "decomposition",
+        13,
+        [
+            _metric_component("total_delta", "total_delta", 13),
+            _metric_component("volume_effect", "contribution", 8),
+            _metric_component("mix_effect", "contribution", 4),
+        ],
+    )
+
+    with pytest.raises(AssertionError, match="residual"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_unreconciled_decomposition() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _derived_metric_spec(
+        "decomposition",
+        13,
+        [
+            _metric_component("total_delta", "total_delta", 13),
+            _metric_component("volume_effect", "contribution", 8),
+            _metric_component("mix_effect", "contribution", 4),
+            _metric_component("residual", "residual", 0),
+        ],
+    )
+
+    with pytest.raises(AssertionError, match="decomposition"):
+        _verify({"insights": [insight]})
 
 
 def test_verifier_requires_insights_payload() -> None:
@@ -246,6 +1354,52 @@ def test_verifier_accepts_valid_metric_projection_forms(expression: str) -> None
     insight = _strong_insight()
     insight["verification"]["expression"] = expression
     _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_cte_aggregate_over_declared_source() -> None:
+    insight = _strong_insight()
+    insight["verification"]["expression"] = (
+        "WITH segment_totals AS ("
+        "SELECT segment, SUM(retained_90d) AS retained_total "
+        "FROM customer_cohorts GROUP BY segment"
+        ") "
+        "SELECT COUNT(*) AS metric_value FROM segment_totals "
+        "WHERE retained_total > 10"
+    )
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_cast_count_over_source_derived_subquery() -> None:
+    insight = _strong_insight()
+    insight["verification"]["expression"] = (
+        "SELECT COUNT(*)::DOUBLE AS metric_value FROM ("
+        "SELECT customer_id FROM customer_cohorts "
+        "GROUP BY customer_id HAVING SUM(retained_90d) > 10"
+        ")"
+    )
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_quantile_over_source_derived_expression() -> None:
+    insight = _strong_insight()
+    insight["verification"]["expression"] = (
+        "SELECT quantile_cont(retained_90d - activated_30d, 0.5) "
+        "AS metric_value FROM customer_cohorts"
+    )
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_quantile_over_constants() -> None:
+    insight = _strong_insight()
+    insight["verification"]["expression"] = (
+        "SELECT quantile_cont(10, 0.5) AS metric_value FROM customer_cohorts"
+    )
+
+    with pytest.raises(AssertionError, match="recompute metric_value"):
+        _verify({"insights": [insight]})
 
 
 def test_verifier_rejects_cte_shadowing_declared_source() -> None:
@@ -440,6 +1594,183 @@ def test_verifier_rejects_unsupported_causal_language() -> None:
         _verify({"insights": [insight]})
 
 
+@pytest.mark.parametrize(
+    "interpretation",
+    [
+        "The decline is a leading indicator of revenue softness.",
+        "The decline signals churn risk.",
+        "The decline implies customers are failing before renewal.",
+        "The usage contraction confirms weakening demand.",
+        "Usage is flowing into lower invoiced revenue.",
+        "Product friction is behind the usage decline.",
+    ],
+)
+def test_verifier_rejects_implied_causal_or_predictive_language(
+    interpretation: str,
+) -> None:
+    insight = _strong_insight()
+    insight["interpretation"] = interpretation
+
+    with pytest.raises(AssertionError, match="causal"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_multiple_claims_packed_into_primary_statement() -> None:
+    insight = _strong_insight()
+    insight["statement"] = (
+        "Enterprise retention fell from 91% to 78%; "
+        "quarterly active users fell from 4,105 to 2,156."
+    )
+
+    with pytest.raises(AssertionError, match="one primary"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_comma_while_packed_primary_claim() -> None:
+    insight = _strong_insight()
+    insight["statement"] = (
+        "Enterprise retention fell from 91% to 78%, while overall retention "
+        "remained near 86%."
+    )
+
+    with pytest.raises(AssertionError, match="one primary"):
+        _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize("connector", ["as", "with", "alongside"])
+def test_verifier_rejects_other_packed_claim_connectors(
+    connector: str,
+) -> None:
+    insight = _strong_insight()
+    insight["statement"] = (
+        f"Enterprise retention fell to 78% {connector} active users dropped "
+        "to 2,156."
+    )
+
+    with pytest.raises(AssertionError, match="one primary"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_quantitative_fact_hidden_in_interpretation() -> None:
+    insight = _strong_insight()
+    insight["interpretation"] = (
+        "Quarterly active users fell from 4,105 to 2,156, increasing renewal risk."
+    )
+
+    with pytest.raises(AssertionError, match="supporting_claims"):
+        _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize(
+    "interpretation",
+    [
+        "Half the recurring-revenue base sits in roughly two dozen accounts.",
+        "One in three customers reported a poor experience.",
+        "A quarter of orders account for most delayed deliveries.",
+    ],
+)
+def test_verifier_rejects_word_number_fact_hidden_in_interpretation(
+    interpretation: str,
+) -> None:
+    insight = _strong_insight()
+    insight["interpretation"] = interpretation
+
+    with pytest.raises(AssertionError, match="supporting_claims"):
+        _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize(
+    "interpretation",
+    [
+        "The 2024 enterprise cohort is the most exposed segment.",
+        "The Q4 enterprise cohort is the most exposed segment.",
+    ],
+)
+def test_verifier_allows_period_labels_in_interpretation(
+    interpretation: str,
+) -> None:
+    insight = _strong_insight()
+    insight["interpretation"] = interpretation
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_does_not_mistake_four_digit_count_for_year() -> None:
+    insight = _strong_insight()
+    insight["interpretation"] = (
+        "The affected population includes 2024 enterprise accounts."
+    )
+
+    with pytest.raises(AssertionError, match="supporting_claims"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_independently_verified_supporting_claim() -> None:
+    insight = _strong_insight()
+    insight["supporting_claims"] = [
+        {
+            "claim": "Quarterly active users fell from 4,105 to 2,156.",
+            "expected_value": 2156,
+            "verification": {
+                "method": "sql",
+                "expression": (
+                    "SELECT COUNT(DISTINCT user_id) AS metric_value "
+                    "FROM customer_cohorts WHERE cohort_quarter = '2024-Q4'"
+                ),
+                "sources": {
+                    "customer_cohorts": "analytics.customer_cohorts"
+                },
+            },
+        }
+    ]
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_unverified_supporting_claim() -> None:
+    insight = _strong_insight()
+    insight["supporting_claims"] = [
+        {
+            "claim": "Quarterly active users fell from 4,105 to 2,156.",
+            "expected_value": 2156,
+            "verification": {
+                "method": "sql",
+                "expression": (
+                    "SELECT 2156 AS metric_value FROM customer_cohorts"
+                ),
+                "sources": {
+                    "customer_cohorts": "analytics.customer_cohorts"
+                },
+            },
+        }
+    ]
+
+    with pytest.raises(AssertionError, match="recompute"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_supporting_claim_expected_value() -> None:
+    insight = _strong_insight()
+    insight["supporting_claims"] = [
+        {
+            "claim": "Quarterly active users fell to 2,156.",
+            "verification": {
+                "method": "sql",
+                "expression": (
+                    "SELECT COUNT(DISTINCT user_id) AS metric_value "
+                    "FROM customer_cohorts WHERE cohort_quarter = '2024-Q4'"
+                ),
+                "sources": {
+                    "customer_cohorts": "analytics.customer_cohorts"
+                },
+            },
+        }
+    ]
+
+    with pytest.raises(AssertionError, match="expected_value"):
+        _verify({"insights": [insight]})
+
+
 def test_verifier_allows_explicit_causal_disclaimer() -> None:
     insight = _strong_insight()
     insight["interpretation"] = (
@@ -502,6 +1833,8 @@ def test_verifier_allows_explicitly_negated_causal_claim() -> None:
     [
         "interpretation",
         "competing_explanations",
+        "supporting_claims",
+        "discovery",
         "action",
         "priority",
         "confidence",
@@ -515,6 +1848,210 @@ def test_verifier_requires_decision_quality_fields(field: str) -> None:
 
     with pytest.raises(AssertionError, match=field):
         _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize(
+    "discovery",
+    [
+        {
+            "pattern_type": "unknown",
+            "dimensions_tested": ["segment"],
+            "population": "Customers",
+            "sample_size": 10,
+            "robustness_checks": ["Compared groups."],
+        },
+        {
+            "pattern_type": "subgroup",
+            "dimensions_tested": [],
+            "population": "Customers",
+            "sample_size": 10,
+            "robustness_checks": ["Compared groups."],
+        },
+        {
+            "pattern_type": "subgroup",
+            "dimensions_tested": ["segment"],
+            "population": "Customers",
+            "sample_size": 0,
+            "robustness_checks": ["Compared groups."],
+        },
+        {
+            "pattern_type": "subgroup",
+            "dimensions_tested": ["segment"],
+            "population": "Customers",
+            "sample_size": 10,
+            "robustness_checks": [],
+        },
+    ],
+)
+def test_verifier_requires_discovery_provenance(discovery: dict) -> None:
+    insight = _strong_insight()
+    insight["discovery"] = discovery
+
+    with pytest.raises(AssertionError, match="discovery"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_pattern_diversity_for_deep_analysis() -> None:
+    insights = []
+    for index in range(8):
+        insight = _strong_insight()
+        insight["title"] = f"Portfolio trend {index}"
+        insight["statement"] = f"Metric {index} fell by {index + 1}%."
+        insight["priority"]["rank"] = index + 1
+        insight["discovery"]["pattern_type"] = "portfolio_trend"
+        insights.append(insight)
+
+    with pytest.raises(AssertionError, match="pattern diversity"):
+        _verify({"insights": insights})
+
+
+def test_verifier_rejects_vacuous_confidence_reason() -> None:
+    insight = _strong_insight()
+    insight["confidence"]["reason"] = "Based on the available data."
+
+    with pytest.raises(AssertionError, match="evidence"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_specific_observational_confidence_reason() -> None:
+    insight = _strong_insight()
+    insight["confidence"]["reason"] = (
+        "Twelve months of daily observations across all accounts."
+    )
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_allows_negated_implied_causal_language() -> None:
+    insight = _strong_insight()
+    insight["interpretation"] = (
+        "The subgroup gap does not signal churn risk."
+    )
+
+    _verify({"insights": [insight]})
+
+
+@pytest.mark.parametrize(
+    "interpretation",
+    [
+        "Implementation delays drove the decline.",
+        "Implementation delays triggered the decline.",
+        "Retention fell because onboarding weakened.",
+        "Implementation delays led to the decline.",
+    ],
+)
+def test_verifier_rejects_common_causal_verbs(
+    interpretation: str,
+) -> None:
+    insight = _strong_insight()
+    insight["interpretation"] = interpretation
+
+    with pytest.raises(AssertionError, match="causal"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_denominator_check_for_cohort_transition() -> None:
+    insight = _strong_insight()
+    insight["discovery"]["pattern_type"] = "cohort_transition"
+    insight["discovery"]["robustness_checks"] = [
+        "Compared four activation cohorts.",
+        "Excluded incomplete periods.",
+    ]
+
+    with pytest.raises(AssertionError, match="denominator"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_two_dimensions_for_interaction() -> None:
+    insight = _strong_insight()
+    insight["discovery"]["pattern_type"] = "interaction"
+    insight["discovery"]["dimensions_tested"] = ["plan_tier"]
+    insight["discovery"]["interaction_evidence"] = {
+        "cells": [
+            {"cell": "basic|north", "effect": -0.02, "sample_size": 80},
+            {"cell": "basic|south", "effect": 0.08, "sample_size": 75},
+        ],
+        "heterogeneity": "The effect changes sign across regions.",
+        "baseline_effect": -0.01,
+    }
+
+    with pytest.raises(AssertionError, match="two dimensions"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_effect_heterogeneity_for_interaction() -> None:
+    insight = _strong_insight()
+    insight["discovery"]["pattern_type"] = "interaction"
+
+    with pytest.raises(AssertionError, match="effect heterogeneity"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_uniform_interaction_cell_effects() -> None:
+    insight = _strong_insight()
+    insight["discovery"]["pattern_type"] = "interaction"
+    insight["discovery"]["interaction_evidence"] = {
+        "cells": [
+            {"cell": "enterprise|north", "effect": 0.05, "sample_size": 80},
+            {"cell": "enterprise|south", "effect": 0.05, "sample_size": 75},
+        ],
+        "heterogeneity": "Effects were compared across cells.",
+        "baseline_effect": 0.05,
+    }
+
+    with pytest.raises(AssertionError, match="effects must differ"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_genuine_interaction_effect_evidence() -> None:
+    insight = _strong_insight()
+    insight["discovery"]["pattern_type"] = "interaction"
+    insight["discovery"]["interaction_evidence"] = {
+        "cells": [
+            {"cell": "enterprise|north", "effect": -0.02, "sample_size": 80},
+            {"cell": "enterprise|south", "effect": 0.08, "sample_size": 75},
+        ],
+        "heterogeneity": "The effect changes sign across regions.",
+        "baseline_effect": 0.01,
+    }
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_requires_recognized_evidence_tier() -> None:
+    insight = _strong_insight()
+    insight["evidence_tier"] = "predictive-ish"
+
+    with pytest.raises(AssertionError, match="evidence tier is invalid"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_causal_tier_without_causal_evidence() -> None:
+    insight = _strong_insight()
+    insight["evidence_tier"] = "causal"
+
+    with pytest.raises(AssertionError, match="causal evidence"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_overclaiming_language_below_causal_tier() -> None:
+    insight = _strong_insight()
+    insight["interpretation"] = (
+        "This conclusively proves that implementation quality is responsible."
+    )
+
+    with pytest.raises(AssertionError, match="evidence tier"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_descriptive_evidence_tier() -> None:
+    insight = _strong_insight()
+    insight["evidence_tier"] = "descriptive"
+    insight["interpretation"] = (
+        "The measured subgroup differs from the aggregate during the period."
+    )
+
+    _verify({"insights": [insight]})
 
 
 @pytest.mark.parametrize("value", [[], ["valid", 1], "not-a-list"])
