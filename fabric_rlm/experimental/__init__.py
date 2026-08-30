@@ -48,6 +48,11 @@ from fabric_rlm.experimental.analysis_reproducibility import (
     derive_seed,
     fingerprint,
 )
+from fabric_rlm.experimental.analysis_scoring import (
+    BenchmarkCaseScore,
+    BenchmarkReport,
+    score_decomposition_case,
+)
 from fabric_rlm.experimental.analysis_validation import (
     SplitFold,
     SplitPlan,
@@ -76,6 +81,8 @@ __all__ = [
     "AttemptRecord",
     "BanditPolicy",
     "BanditState",
+    "BenchmarkCaseScore",
+    "BenchmarkReport",
     "build_grouped_split_plan",
     "build_nested_grouped_split_plan",
     "build_random_split_plan",
@@ -98,6 +105,7 @@ __all__ = [
     "OperatorSpec",
     "rate_decomposition",
     "RunBudget",
+    "score_decomposition_case",
     "SplitFold",
     "SplitPlan",
     "SyntheticBenchmark",
