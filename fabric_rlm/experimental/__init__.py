@@ -27,6 +27,7 @@ from fabric_rlm.experimental.analysis_dag import (
     ValidatedDAG,
     validate_analysis_dag,
 )
+from fabric_rlm.experimental.analysis_evidence import EvidenceRegistry
 from fabric_rlm.experimental.analysis_reproducibility import (
     canonical_json,
     derive_seed,
@@ -56,6 +57,7 @@ __all__ = [
     "EffortBanditPolicy",
     "EffortLadderPolicy",
     "EvidenceEntry",
+    "EvidenceRegistry",
     "fingerprint",
     "LadderPolicy",
     "OperatorNode",
