@@ -123,7 +123,11 @@ Python, and generated artifacts can be written back to `Files/` without giving
 the isolated worker OneLake credentials.
 
 ```python
-from fabric_rlm import FileDestination
+from fabric_rlm import FabricLM, FileDestination, LakehouseSource, RLM
+
+lakehouse = LakehouseSource(
+    "abfss://<workspace-id>@onelake.dfs.fabric.microsoft.com/<lakehouse-id>"
+)
 
 with FileDestination(
     "abfss://<workspace-id>@onelake.dfs.fabric.microsoft.com/"

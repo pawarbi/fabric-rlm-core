@@ -23,7 +23,7 @@ specificity: domain
 ---
 # delta_lakehouse
 
-Summary: READ-ONLY analysis of Delta tables in a Fabric Lakehouse using DuckDB with a delta-rs fallback. A Delta table is a transaction log plus data files, NOT a folder of parquet. Resolve the path, discover schema and partitions from metadata, then query through a Delta-aware reader. Works against an attached lakehouse mount and an `abfss://` OneLake path.
+Summary: READ-ONLY analysis of Delta tables in a Fabric Lakehouse using DuckDB with a delta-rs fallback. A Delta table is a transaction log plus data files, NOT a folder of parquet. Prefer a bound `LakehouseSource`, which keeps OneLake credentials in the trusted parent. Direct readers work against an attached lakehouse mount; direct `abfss://` access is reserved for trusted notebook/manual analysis outside the isolated RLM worker.
 
 You never read raw table bytes back into the LM. You print small summaries only.
 
@@ -66,8 +66,11 @@ worker code.
 
 Do not call `open_delta` for a bound `LakehouseSource`. Do not call
 `_storage_token`. Do not call `notebookutils` or `DefaultAzureCredential`
-either. Those direct-path helpers are for raw path inputs, not resolved
-Lakehouse inputs.
+either. A raw mounted filesystem path can use the local-mount `open_delta` call
+below, but a raw `abfss://` path must be bound as a `LakehouseSource` by the
+trusted parent.
+The credential-bearing remote-path reference is for trusted notebook/manual
+analysis only, not model-generated worker code.
 Fabric workload credentials are commonly unavailable in the isolated worker,
 so retrying them wastes turns and cannot repair the boundary. Never widen
 beyond the supplied catalog, and never submit placeholder or hypothetical
@@ -151,7 +154,17 @@ say so, not to approximate it with parquet.
 | Use `file_uris()` to inspect layout only | `read_parquet(dt.file_uris())` | With deletion vectors those files still hold deleted rows |
 | Report that a table is unreadable in this runtime | Approximate it with a parquet read | A wrong number is worse than no number |
 
-## Step 1 - resolve the path (attached lakehouse OR abfss)
+## Step 1 - resolve the path
+
+### Trusted notebook/manual analysis only: direct ABFSS access
+
+The isolated RLM worker must not execute, reproduce, or adapt this section's
+`abfss://` token-acquisition code. To analyze a remote OneLake path, bind a
+`LakehouseSource` in the trusted parent and use `lakehouse.query(...)`. The
+direct ABFSS branch below is retained only for a human-authored trusted
+notebook or manual verification environment where credentials are intentionally
+available. Worker-generated code may use the mounted filesystem branch because
+it requires no credential.
 
 Two path shapes reach the same table. Handle both.
 
@@ -481,10 +494,11 @@ is written. Run `SELECT table_schema, table_name FROM information_schema.tables`
 to see what you have, then `DESCRIBE <table>` per table before querying, exactly
 as in Step 2.
 
-Note on tokens outside Fabric: the default `SecurityPolicy` strips `AZURE_CLIENT_*`
-and `AZURE_TENANT_*` from the worker environment, so `DefaultAzureCredential`
-cannot pick up a service principal from env vars there. Inside a Fabric notebook
-`notebookutils` is used and this does not apply.
+Trusted-host note: the default `SecurityPolicy` strips `AZURE_CLIENT_*` and
+`AZURE_TENANT_*` from the worker environment, so `DefaultAzureCredential`
+cannot pick up a service principal there. A human-authored Fabric notebook can
+use `notebookutils`, but worker code must use a bound `LakehouseSource` instead
+of attempting either credential path.
 
 Then every query below uses the returned relation:
 

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,7 +9,7 @@ description = "A portable Python subprocess runtime for Recursive Language Model
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Sandeep Pawar" }]
-license = { text = "MIT" }
+license = "MIT"
 keywords = [
   "rlm",
   "recursive-language-model",
@@ -23,7 +23,6 @@ keywords = [
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",

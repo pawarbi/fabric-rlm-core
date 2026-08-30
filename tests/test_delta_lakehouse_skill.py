@@ -180,6 +180,18 @@ def test_skill_prioritizes_resolved_lakehouse_catalogs_and_portable_queries() ->
     assert "date_add('month', -11, date)" in content
 
 
+def test_direct_abfss_recipe_is_trusted_host_only() -> None:
+    content = SkillLoader().load(SKILL).content
+    normalized = " ".join(content.split())
+
+    assert "Trusted notebook/manual analysis only" in normalized
+    assert (
+        "The isolated RLM worker must not execute, reproduce, or adapt this section"
+        in normalized
+    )
+    assert "bind a `LakehouseSource`" in normalized
+
+
 def test_provenance_section_states_what_was_and_was_not_verified() -> None:
     """The skill claims measured numbers and must name its live-test boundary."""
     content = SkillLoader().load(SKILL).content
