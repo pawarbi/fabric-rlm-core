@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import random
 from typing import Literal
 
-from fabric_rlm.experimental.analysis_reproducibility import fingerprint
+from fabric_rlm.experimental.analysis_reproducibility import derive_seed, fingerprint
 
 
 SplitStrategy = Literal["random", "stratified", "grouped", "temporal", "nested"]
@@ -391,6 +391,191 @@ def build_grouped_split_plan(
         seed=seed,
         row_ids=normalized_rows,
         folds=_folds_from_validation_buckets(eligible_rows, buckets),
+        final_holdout_ids=normalized_holdout,
+        feature_columns=tuple(feature_columns),
+        prohibited_feature_columns=tuple(prohibited_feature_columns),
+    )
+    return validate_split_plan(
+        plan,
+        group_by_row=group_by_row,
+        row_fingerprints=row_fingerprints,
+    )
+
+
+def build_temporal_split_plan(
+    row_ids: tuple[str, ...] | list[str],
+    *,
+    time_by_row: Mapping[str, object],
+    plan_id: str,
+    seed: int,
+    fold_count: int,
+    initial_training_count: int,
+    final_holdout_ids: tuple[str, ...] | list[str] = (),
+    feature_columns: tuple[str, ...] | list[str] = (),
+    prohibited_feature_columns: tuple[str, ...] | list[str] = (),
+    row_fingerprints: Mapping[str, str] | None = None,
+) -> ValidatedSplitPlan:
+    """Build deterministic expanding-window validation assignments."""
+
+    normalized_rows, normalized_holdout, eligible_rows = _builder_inputs(
+        row_ids=row_ids,
+        final_holdout_ids=final_holdout_ids,
+        fold_count=fold_count,
+    )
+    _require_complete_mapping(time_by_row, normalized_rows, "time_by_row")
+    if type(initial_training_count) is not int or initial_training_count <= 0:
+        raise ValueError("initial_training_count must be a positive integer")
+    if initial_training_count >= len(eligible_rows):
+        raise ValueError(
+            "initial_training_count must leave rows for validation folds"
+        )
+    remaining_count = len(eligible_rows) - initial_training_count
+    if remaining_count < fold_count or remaining_count % fold_count != 0:
+        raise ValueError(
+            "rows after initial training must divide evenly into non-empty folds"
+        )
+    try:
+        ordered_rows = tuple(
+            sorted(eligible_rows, key=lambda row_id: (time_by_row[row_id], row_id))
+        )
+    except TypeError as exc:
+        raise ValueError("time_by_row values must be mutually comparable") from exc
+    if normalized_holdout:
+        latest_eligible = max(time_by_row[row_id] for row_id in eligible_rows)
+        earliest_holdout = min(
+            time_by_row[row_id] for row_id in normalized_holdout
+        )
+        if latest_eligible >= earliest_holdout:
+            raise ValueError(
+                "final holdout must occur strictly after all validation rows"
+            )
+
+    validation_size = remaining_count // fold_count
+    folds = []
+    for index in range(fold_count):
+        validation_start = initial_training_count + index * validation_size
+        validation_end = validation_start + validation_size
+        training_ids = ordered_rows[:validation_start]
+        validation_ids = ordered_rows[validation_start:validation_end]
+        if time_by_row[training_ids[-1]] >= time_by_row[validation_ids[0]]:
+            raise ValueError(
+                f"time boundary is not strict for fold-{index + 1}"
+            )
+        folds.append(
+            SplitFold(
+                fold_id=f"fold-{index + 1}",
+                train_ids=training_ids,
+                validation_ids=validation_ids,
+            )
+        )
+    plan = SplitPlan(
+        plan_id=plan_id,
+        strategy="temporal",
+        seed=seed,
+        row_ids=normalized_rows,
+        folds=tuple(folds),
+        final_holdout_ids=normalized_holdout,
+        feature_columns=tuple(feature_columns),
+        prohibited_feature_columns=tuple(prohibited_feature_columns),
+    )
+    return validate_split_plan(
+        plan,
+        time_by_row=time_by_row,
+        row_fingerprints=row_fingerprints,
+    )
+
+
+def build_nested_grouped_split_plan(
+    row_ids: tuple[str, ...] | list[str],
+    *,
+    group_by_row: Mapping[str, object],
+    plan_id: str,
+    seed: int,
+    outer_fold_count: int,
+    inner_fold_count: int,
+    final_holdout_ids: tuple[str, ...] | list[str] = (),
+    feature_columns: tuple[str, ...] | list[str] = (),
+    prohibited_feature_columns: tuple[str, ...] | list[str] = (),
+    row_fingerprints: Mapping[str, str] | None = None,
+) -> ValidatedSplitPlan:
+    """Build nested grouped folds for selection inside outer evaluation."""
+
+    normalized_rows, normalized_holdout, eligible_rows = _builder_inputs(
+        row_ids=row_ids,
+        final_holdout_ids=final_holdout_ids,
+        fold_count=outer_fold_count,
+    )
+    if type(inner_fold_count) is not int or inner_fold_count < 2:
+        raise ValueError("inner_fold_count must be an integer of at least 2")
+    _require_complete_mapping(group_by_row, normalized_rows, "group_by_row")
+    groups: dict[object, list[str]] = {}
+    for row_id in eligible_rows:
+        value = group_by_row[row_id]
+        try:
+            hash(value)
+        except TypeError as exc:
+            raise ValueError("group_by_row values must be hashable") from exc
+        groups.setdefault(value, []).append(row_id)
+    if len(groups) < outer_fold_count:
+        raise ValueError("outer_fold_count exceeds eligible group count")
+
+    group_values = list(groups)
+    random.Random(seed).shuffle(group_values)
+    outer_buckets = [[] for _ in range(outer_fold_count)]
+    for index, group in enumerate(group_values):
+        outer_buckets[index % outer_fold_count].extend(groups[group])
+    outer_folds = [
+        SplitFold(
+            fold_id=f"outer-{index + 1}",
+            train_ids=tuple(
+                sorted(set(eligible_rows) - set(validation_ids))
+            ),
+            validation_ids=tuple(sorted(validation_ids)),
+        )
+        for index, validation_ids in enumerate(outer_buckets)
+    ]
+
+    inner_folds = []
+    for outer_index, outer_fold in enumerate(outer_folds):
+        inner_groups: dict[object, list[str]] = {}
+        for row_id in outer_fold.train_ids:
+            inner_groups.setdefault(group_by_row[row_id], []).append(row_id)
+        if len(inner_groups) < inner_fold_count:
+            raise ValueError(
+                f"inner_fold_count exceeds groups in {outer_fold.fold_id}"
+            )
+        inner_group_values = list(inner_groups)
+        inner_seed = derive_seed(
+            seed,
+            dataset_id=plan_id,
+            operator_id=f"split.nested.{outer_fold.fold_id}",
+        )
+        random.Random(inner_seed).shuffle(inner_group_values)
+        inner_buckets = [[] for _ in range(inner_fold_count)]
+        for index, group in enumerate(inner_group_values):
+            inner_buckets[index % inner_fold_count].extend(inner_groups[group])
+        for inner_index, validation_ids in enumerate(inner_buckets):
+            inner_folds.append(
+                SplitFold(
+                    fold_id=(
+                        f"{outer_fold.fold_id}-inner-{inner_index + 1}"
+                    ),
+                    parent_fold_id=outer_fold.fold_id,
+                    train_ids=tuple(
+                        sorted(
+                            set(outer_fold.train_ids) - set(validation_ids)
+                        )
+                    ),
+                    validation_ids=tuple(sorted(validation_ids)),
+                )
+            )
+
+    plan = SplitPlan(
+        plan_id=plan_id,
+        strategy="nested",
+        seed=seed,
+        row_ids=normalized_rows,
+        folds=tuple(outer_folds + inner_folds),
         final_holdout_ids=normalized_holdout,
         feature_columns=tuple(feature_columns),
         prohibited_feature_columns=tuple(prohibited_feature_columns),
