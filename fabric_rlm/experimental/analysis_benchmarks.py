@@ -19,12 +19,18 @@ from fabric_rlm.experimental.analysis_reproducibility import (
 
 
 _DECOMPOSITION_DATASET_ID = "decomposition-ground-truth-v1"
+_CORRELATED_DATASET_ID = "correlated-tabular-ground-truth-v1"
+_CORRELATED_GROUP_COUNT = 120
+_CORRELATED_OBSERVATIONS_PER_GROUP = 4
 _PANEL_DATASET_ID = "panel-ground-truth-v1"
 _PANEL_COHORT_SIZE = 60
 _TIME_SERIES_DATASET_ID = "time-series-ground-truth-v1"
 _GENERATOR_VERSION = "2"
 _RANDOM_ENGINE = "python.random.Random"
 _DATASET_SOURCE_FILES = {
+    _CORRELATED_DATASET_ID: {
+        "observations": "observations.csv",
+    },
     _DECOMPOSITION_DATASET_ID: {
         "additive": "additive.csv",
         "rate": "rate.csv",
@@ -39,6 +45,12 @@ _DATASET_SOURCE_FILES = {
     },
 }
 _DATASET_SEED_NAMES = {
+    _CORRELATED_DATASET_ID: {
+        "measurement_noise",
+        "missingness",
+        "outcome_noise",
+        "structure",
+    },
     _DECOMPOSITION_DATASET_ID: {
         "additive",
         "rate",
@@ -489,6 +501,239 @@ def write_time_series_benchmark(
         manifest_path=manifest_path,
         truth_path=truth_path,
         worker_source_paths=MappingProxyType({"time_series": source_path}),
+        dataset_fingerprint=dataset_fingerprint,
+    )
+
+
+def write_correlated_benchmark(
+    output_dir: str | Path,
+    *,
+    root_seed: int,
+) -> SyntheticBenchmark:
+    """Write grouped tabular data with known drivers and correlated proxies."""
+
+    if type(root_seed) is not int or root_seed < 0:
+        raise ValueError("root_seed must be a non-negative integer")
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    if any(root.iterdir()):
+        raise ValueError(f"output_dir must be empty: {root}")
+
+    derived_seeds = {
+        name: derive_seed(
+            root_seed,
+            dataset_id=_CORRELATED_DATASET_ID,
+            operator_id=f"generate.correlated.{name}.v1",
+        )
+        for name in (
+            "measurement_noise",
+            "missingness",
+            "outcome_noise",
+            "structure",
+        )
+    }
+    structure_rng = random.Random(derived_seeds["structure"])
+    measurement_rng = random.Random(derived_seeds["measurement_noise"])
+    outcome_rng = random.Random(derived_seeds["outcome_noise"])
+    missingness_rng = random.Random(derived_seeds["missingness"])
+
+    generated_rows: list[dict[str, object]] = []
+    row_truth: dict[str, dict[str, float]] = {}
+    for group_index in range(1, _CORRELATED_GROUP_COUNT + 1):
+        group_id = f"group-{group_index:03d}"
+        group_effect = structure_rng.gauss(0.0, 1.5)
+        for observation_index in range(1, _CORRELATED_OBSERVATIONS_PER_GROUP + 1):
+            row_id = f"{group_id}-row-{observation_index}"
+            linear_signal = structure_rng.gauss(0.0, 1.0)
+            nonlinear_signal = structure_rng.gauss(0.0, 1.0)
+            interaction_left = structure_rng.gauss(0.0, 1.0)
+            interaction_right = structure_rng.gauss(0.0, 1.0)
+            confounder = structure_rng.gauss(0.0, 1.0)
+            missing_signal = structure_rng.gauss(0.0, 1.0)
+            components = {
+                "confounder": 2.0 * confounder,
+                "group_effect": group_effect,
+                "interaction_left_x_right": (
+                    4.0 * interaction_left * interaction_right
+                ),
+                "linear_signal": 3.0 * linear_signal,
+                "missing_signal": 1.5 * missing_signal,
+                "nonlinear_signal_squared": -2.0 * nonlinear_signal**2,
+                "outcome_noise": outcome_rng.gauss(0.0, 1.0),
+            }
+            target = 10.0 + math.fsum(components.values())
+            generated_rows.append(
+                {
+                    "row_id": row_id,
+                    "group_id": group_id,
+                    "observation_index": observation_index,
+                    "linear_signal": linear_signal,
+                    "correlated_linear_proxy": (
+                        linear_signal + measurement_rng.gauss(0.0, 0.05)
+                    ),
+                    "nonlinear_signal": nonlinear_signal,
+                    "interaction_left": interaction_left,
+                    "interaction_right": interaction_right,
+                    "confounder": confounder,
+                    "confounder_proxy": (
+                        confounder + measurement_rng.gauss(0.0, 0.1)
+                    ),
+                    "nuisance": structure_rng.gauss(0.0, 1.0),
+                    "missing_signal": missing_signal,
+                    "missingness_score": (
+                        confounder + missingness_rng.gauss(0.0, 0.5)
+                    ),
+                    "target": target,
+                }
+            )
+            row_truth[row_id] = components
+
+    missing_count = int(len(generated_rows) * 0.15)
+    missing_row_ids = {
+        str(row["row_id"])
+        for row in sorted(
+            generated_rows,
+            key=lambda row: (-float(row["missingness_score"]), str(row["row_id"])),
+        )[:missing_count]
+    }
+    rows = [
+        (
+            row["row_id"],
+            row["group_id"],
+            row["observation_index"],
+            row["linear_signal"],
+            row["correlated_linear_proxy"],
+            row["nonlinear_signal"],
+            row["interaction_left"],
+            row["interaction_right"],
+            row["confounder"],
+            row["confounder_proxy"],
+            row["nuisance"],
+            None if row["row_id"] in missing_row_ids else row["missing_signal"],
+            row["target"],
+        )
+        for row in generated_rows
+    ]
+
+    source_path = root / _DATASET_SOURCE_FILES[_CORRELATED_DATASET_ID][
+        "observations"
+    ]
+    _write_csv(
+        source_path,
+        (
+            "row_id",
+            "group_id",
+            "observation_index",
+            "linear_signal",
+            "correlated_linear_proxy",
+            "nonlinear_signal",
+            "interaction_left",
+            "interaction_right",
+            "confounder",
+            "confounder_proxy",
+            "nuisance",
+            "missing_signal",
+            "target",
+        ),
+        rows,
+    )
+    sources = [
+        _file_record(root, "observations", source_path, len(rows)),
+    ]
+    dataset_fingerprint = _dataset_fingerprint(
+        dataset_id=_CORRELATED_DATASET_ID,
+        root_seed=root_seed,
+        derived_seeds=derived_seeds,
+        sources=sources,
+    )
+    truth_path = root / "truth.json"
+    _write_json(
+        truth_path,
+        {
+            "dataset_id": _CORRELATED_DATASET_ID,
+            "dataset_fingerprint": dataset_fingerprint,
+            "generator_version": _GENERATOR_VERSION,
+            "root_seed": root_seed,
+            "structure": {
+                "group_count": _CORRELATED_GROUP_COUNT,
+                "observations_per_group": _CORRELATED_OBSERVATIONS_PER_GROUP,
+                "row_count": len(rows),
+            },
+            "validation": {
+                "group_key": "group_id",
+                "identifier_columns": ["row_id", "group_id"],
+                "model_selection_strategy": "nested_grouped_cross_validation",
+                "preprocessing_scope": "training_fold_only",
+                "required_strategy": "grouped",
+                "untouched_final_holdout_required": True,
+            },
+            "data_generating_process": {
+                "intercept": 10.0,
+                "direct_terms": {
+                    "confounder": 2.0,
+                    "interaction_left_x_right": 4.0,
+                    "linear_signal": 3.0,
+                    "missing_signal": 1.5,
+                    "nonlinear_signal_squared": -2.0,
+                },
+                "group_effect_standard_deviation": 1.5,
+                "outcome_noise_standard_deviation": 1.0,
+                "non_driver_features": [
+                    "correlated_linear_proxy",
+                    "confounder_proxy",
+                    "nuisance",
+                ],
+            },
+            "multicollinearity": {
+                "pairs": [
+                    {
+                        "feature": "linear_signal",
+                        "proxy": "correlated_linear_proxy",
+                        "proxy_noise_standard_deviation": 0.05,
+                    },
+                    {
+                        "feature": "confounder",
+                        "proxy": "confounder_proxy",
+                        "proxy_noise_standard_deviation": 0.1,
+                    },
+                ],
+                "interpretation": "proxies are associated but have no direct term",
+            },
+            "missingness": {
+                "mechanism": "MAR",
+                "missing_count": missing_count,
+                "missing_rate": missing_count / len(rows),
+                "missing_row_ids": sorted(missing_row_ids),
+                "selection_feature": "confounder",
+                "selection_rule": "highest confounder plus independent noise scores",
+            },
+            "row_truth": row_truth,
+        },
+    )
+    truth_bytes = truth_path.read_bytes()
+    manifest_path = root / "manifest.json"
+    _write_json(
+        manifest_path,
+        {
+            "dataset_id": _CORRELATED_DATASET_ID,
+            "dataset_fingerprint": dataset_fingerprint,
+            "generator_version": _GENERATOR_VERSION,
+            "random_engine": _RANDOM_ENGINE,
+            "root_seed": root_seed,
+            "derived_seeds": derived_seeds,
+            "sources": sources,
+            "truth_integrity": {
+                "sha256": hashlib.sha256(truth_bytes).hexdigest(),
+                "size_bytes": len(truth_bytes),
+            },
+        },
+    )
+    return SyntheticBenchmark(
+        dataset_id=_CORRELATED_DATASET_ID,
+        root_seed=root_seed,
+        manifest_path=manifest_path,
+        truth_path=truth_path,
+        worker_source_paths=MappingProxyType({"observations": source_path}),
         dataset_fingerprint=dataset_fingerprint,
     )
 

@@ -36,6 +36,7 @@ from fabric_rlm.experimental.analysis_operators import (
 from fabric_rlm.experimental.analysis_benchmarks import (
     SyntheticBenchmark,
     load_synthetic_benchmark,
+    write_correlated_benchmark,
     write_decomposition_benchmark,
     write_panel_benchmark,
     write_time_series_benchmark,
@@ -84,6 +85,7 @@ __all__ = [
     "ValidationVerdict",
     "validate_analysis_dag",
     "volume_rate_mix_decomposition",
+    "write_correlated_benchmark",
     "write_decomposition_benchmark",
     "write_panel_benchmark",
     "write_time_series_benchmark",

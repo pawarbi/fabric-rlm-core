@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -12,6 +13,7 @@ import pytest
 
 from fabric_rlm.experimental import (
     load_synthetic_benchmark,
+    write_correlated_benchmark,
     write_decomposition_benchmark,
     write_panel_benchmark,
     write_time_series_benchmark,
@@ -117,6 +119,7 @@ def test_load_synthetic_benchmark_rejects_tampered_truth(tmp_path: Path) -> None
     "writer",
     [
         write_decomposition_benchmark,
+        write_correlated_benchmark,
         write_panel_benchmark,
         write_time_series_benchmark,
     ],
@@ -445,3 +448,157 @@ def test_panel_benchmark_loader_verifies_sources_and_truth(tmp_path: Path) -> No
     assert loaded.dataset_id == "panel-ground-truth-v1"
     assert loaded.worker_source_paths == written.worker_source_paths
     assert loaded.dataset_fingerprint == written.dataset_fingerprint
+
+
+def _pearson_correlation(left: list[float], right: list[float]) -> float:
+    left_mean = math.fsum(left) / len(left)
+    right_mean = math.fsum(right) / len(right)
+    covariance = math.fsum(
+        (left_value - left_mean) * (right_value - right_mean)
+        for left_value, right_value in zip(left, right)
+    )
+    left_variance = math.fsum((value - left_mean) ** 2 for value in left)
+    right_variance = math.fsum((value - right_mean) ** 2 for value in right)
+    return covariance / math.sqrt(left_variance * right_variance)
+
+
+def test_correlated_benchmark_is_byte_reproducible_across_hash_seeds(
+    tmp_path: Path,
+) -> None:
+    script = textwrap.dedent(
+        """
+        import sys
+        from pathlib import Path
+        from fabric_rlm.experimental import write_correlated_benchmark
+
+        write_correlated_benchmark(Path(sys.argv[1]), root_seed=91)
+        """
+    )
+    for directory, hash_seed in (("first", "1"), ("second", "2")):
+        environment = os.environ.copy()
+        environment["PYTHONHASHSEED"] = hash_seed
+        subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path / directory)],
+            check=True,
+            env=environment,
+        )
+
+    assert _bundle_bytes(tmp_path / "first") == _bundle_bytes(tmp_path / "second")
+
+
+def test_correlated_benchmark_records_structure_and_validation_truth(
+    tmp_path: Path,
+) -> None:
+    bundle = write_correlated_benchmark(tmp_path, root_seed=91)
+    manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
+    truth = json.loads(bundle.truth_path.read_text(encoding="utf-8"))
+
+    assert manifest["dataset_id"] == "correlated-tabular-ground-truth-v1"
+    assert manifest["sources"][0]["identity"] == "observations"
+    assert manifest["sources"][0]["row_count"] == 480
+    assert truth["structure"] == {
+        "group_count": 120,
+        "observations_per_group": 4,
+        "row_count": 480,
+    }
+    assert truth["validation"]["group_key"] == "group_id"
+    assert truth["validation"]["identifier_columns"] == ["row_id", "group_id"]
+    assert truth["validation"]["required_strategy"] == "grouped"
+    assert (
+        truth["validation"]["model_selection_strategy"]
+        == "nested_grouped_cross_validation"
+    )
+    assert truth["validation"]["preprocessing_scope"] == "training_fold_only"
+    assert truth["validation"]["untouched_final_holdout_required"] is True
+    assert truth["data_generating_process"]["direct_terms"] == {
+        "confounder": 2.0,
+        "interaction_left_x_right": 4.0,
+        "linear_signal": 3.0,
+        "missing_signal": 1.5,
+        "nonlinear_signal_squared": -2.0,
+    }
+    assert truth["data_generating_process"]["non_driver_features"] == [
+        "correlated_linear_proxy",
+        "confounder_proxy",
+        "nuisance",
+    ]
+
+
+def test_correlated_benchmark_contains_known_collinearity_and_missingness(
+    tmp_path: Path,
+) -> None:
+    bundle = write_correlated_benchmark(tmp_path, root_seed=91)
+    truth = json.loads(bundle.truth_path.read_text(encoding="utf-8"))
+    with bundle.worker_source_paths["observations"].open(
+        "r",
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+        assert reader.fieldnames is not None
+        assert {
+            "group_effect",
+            "missingness_score",
+            "outcome_noise",
+        }.isdisjoint(reader.fieldnames)
+
+    group_counts: dict[str, int] = {}
+    for row in rows:
+        group_counts[row["group_id"]] = group_counts.get(row["group_id"], 0) + 1
+    assert set(group_counts.values()) == {4}
+
+    linear = [float(row["linear_signal"]) for row in rows]
+    linear_proxy = [float(row["correlated_linear_proxy"]) for row in rows]
+    confounder = [float(row["confounder"]) for row in rows]
+    confounder_proxy = [float(row["confounder_proxy"]) for row in rows]
+    assert _pearson_correlation(linear, linear_proxy) > 0.99
+    assert _pearson_correlation(confounder, confounder_proxy) > 0.98
+
+    missing_row_ids = {
+        row["row_id"] for row in rows if row["missing_signal"] == ""
+    }
+    assert len(missing_row_ids) == 72
+    assert missing_row_ids == set(truth["missingness"]["missing_row_ids"])
+    assert truth["missingness"]["mechanism"] == "MAR"
+    assert truth["missingness"]["selection_feature"] == "confounder"
+
+
+def test_correlated_benchmark_target_reconciles_to_hidden_components(
+    tmp_path: Path,
+) -> None:
+    bundle = write_correlated_benchmark(tmp_path, root_seed=91)
+    truth = json.loads(bundle.truth_path.read_text(encoding="utf-8"))
+    row_truth = truth["row_truth"]
+    with bundle.worker_source_paths["observations"].open(
+        "r",
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+
+    for row in rows:
+        components = row_truth[row["row_id"]]
+        reconstructed = truth["data_generating_process"]["intercept"] + math.fsum(
+            components.values()
+        )
+        assert float(row["target"]) == pytest.approx(reconstructed, abs=1e-12)
+
+
+def test_correlated_benchmark_seed_changes_rows_but_not_ground_truth(
+    tmp_path: Path,
+) -> None:
+    first = write_correlated_benchmark(tmp_path / "first", root_seed=1)
+    second = write_correlated_benchmark(tmp_path / "second", root_seed=2)
+    first_truth = json.loads(first.truth_path.read_text(encoding="utf-8"))
+    second_truth = json.loads(second.truth_path.read_text(encoding="utf-8"))
+
+    assert first.dataset_fingerprint != second.dataset_fingerprint
+    assert first.worker_source_paths["observations"].read_bytes() != second.worker_source_paths[
+        "observations"
+    ].read_bytes()
+    assert first_truth["structure"] == second_truth["structure"]
+    assert (
+        first_truth["data_generating_process"]
+        == second_truth["data_generating_process"]
+    )
