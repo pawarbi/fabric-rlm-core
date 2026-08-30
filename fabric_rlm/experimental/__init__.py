@@ -22,6 +22,11 @@ from fabric_rlm.experimental.analysis_contracts import (
     OperatorResult,
     RunBudget,
 )
+from fabric_rlm.experimental.analysis_dag import (
+    OperatorSpec,
+    ValidatedDAG,
+    validate_analysis_dag,
+)
 from fabric_rlm.experimental.analysis_reproducibility import (
     canonical_json,
     derive_seed,
@@ -55,6 +60,9 @@ __all__ = [
     "LadderPolicy",
     "OperatorNode",
     "OperatorResult",
+    "OperatorSpec",
     "RunBudget",
+    "ValidatedDAG",
     "ValidationVerdict",
+    "validate_analysis_dag",
 ]

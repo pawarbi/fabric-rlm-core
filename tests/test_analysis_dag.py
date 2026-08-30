@@ -22,6 +22,10 @@ from fabric_rlm.experimental.analysis_reproducibility import (
     derive_seed,
     fingerprint,
 )
+from fabric_rlm.experimental.analysis_dag import (
+    OperatorSpec,
+    validate_analysis_dag,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -403,3 +407,345 @@ def test_seed_and_fingerprint_are_stable_in_a_fresh_process() -> None:
     ).stdout
 
     assert first == second
+
+
+def test_validate_analysis_dag_returns_stable_parallel_waves() -> None:
+    dag = AnalysisDAG(
+        dag_id="revenue-drivers",
+        root_seed=17,
+        budget=RunBudget(max_nodes=4, max_parallel_nodes=2),
+        nodes=(
+            OperatorNode(
+                node_id="baseline",
+                operator="kpi.baseline.v1",
+                source_ids=("orders",),
+                seed=1,
+                parameters={"metric": "revenue"},
+            ),
+            OperatorNode(
+                node_id="regions",
+                operator="kpi.additive.v1",
+                source_ids=("orders",),
+                seed=2,
+                depends_on=("baseline",),
+                execution_mode="parallel",
+                parameters={"metric": "revenue", "segment": "region"},
+            ),
+            OperatorNode(
+                node_id="channels",
+                operator="kpi.additive.v1",
+                source_ids=("orders",),
+                seed=3,
+                depends_on=("baseline",),
+                execution_mode="parallel",
+                parameters={"metric": "revenue", "segment": "channel"},
+            ),
+            OperatorNode(
+                node_id="summary",
+                operator="evidence.summarize.v1",
+                source_ids=("orders",),
+                seed=4,
+                depends_on=("regions", "channels"),
+            ),
+        ),
+    )
+    registry = {
+        "kpi.baseline.v1": OperatorSpec(
+            operator="kpi.baseline.v1",
+            allowed_parameters=("metric",),
+            required_parameters=("metric",),
+        ),
+        "kpi.additive.v1": OperatorSpec(
+            operator="kpi.additive.v1",
+            allowed_parameters=("metric", "segment"),
+            required_parameters=("metric", "segment"),
+        ),
+        "evidence.summarize.v1": OperatorSpec(
+            operator="evidence.summarize.v1",
+        ),
+    }
+
+    validated = validate_analysis_dag(
+        dag,
+        operator_registry=registry,
+        authorized_sources={"orders"},
+    )
+
+    assert validated.waves == (
+        ("baseline",),
+        ("channels", "regions"),
+        ("summary",),
+    )
+    assert validated.node_ids == (
+        "baseline",
+        "channels",
+        "regions",
+        "summary",
+    )
+
+
+@pytest.mark.parametrize(
+    ("dag", "registry", "authorized_sources", "match"),
+    [
+        (
+            AnalysisDAG(
+                dag_id="unknown-operator",
+                root_seed=1,
+                budget=RunBudget(max_nodes=1),
+                nodes=(
+                    OperatorNode(
+                        node_id="node",
+                        operator="unknown.v1",
+                        source_ids=("orders",),
+                        seed=1,
+                    ),
+                ),
+            ),
+            {},
+            {"orders"},
+            "node.*operator",
+        ),
+        (
+            AnalysisDAG(
+                dag_id="unauthorized-source",
+                root_seed=1,
+                budget=RunBudget(max_nodes=1),
+                nodes=(
+                    OperatorNode(
+                        node_id="node",
+                        operator="known.v1",
+                        source_ids=("private_orders",),
+                        seed=1,
+                    ),
+                ),
+            ),
+            {"known.v1": OperatorSpec(operator="known.v1")},
+            {"orders"},
+            "node.*source_ids",
+        ),
+        (
+            AnalysisDAG(
+                dag_id="missing-dependency",
+                root_seed=1,
+                budget=RunBudget(max_nodes=1),
+                nodes=(
+                    OperatorNode(
+                        node_id="node",
+                        operator="known.v1",
+                        source_ids=("orders",),
+                        seed=1,
+                        depends_on=("absent",),
+                    ),
+                ),
+            ),
+            {"known.v1": OperatorSpec(operator="known.v1")},
+            {"orders"},
+            "node.*depends_on",
+        ),
+        (
+            AnalysisDAG(
+                dag_id="cycle",
+                root_seed=1,
+                budget=RunBudget(max_nodes=2),
+                nodes=(
+                    OperatorNode(
+                        node_id="first",
+                        operator="known.v1",
+                        source_ids=("orders",),
+                        seed=1,
+                        depends_on=("second",),
+                    ),
+                    OperatorNode(
+                        node_id="second",
+                        operator="known.v1",
+                        source_ids=("orders",),
+                        seed=2,
+                        depends_on=("first",),
+                    ),
+                ),
+            ),
+            {"known.v1": OperatorSpec(operator="known.v1")},
+            {"orders"},
+            "cycle",
+        ),
+    ],
+)
+def test_validate_analysis_dag_rejects_unsafe_graphs(
+    dag: AnalysisDAG,
+    registry: dict[str, OperatorSpec],
+    authorized_sources: set[str],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        validate_analysis_dag(
+            dag,
+            operator_registry=registry,
+            authorized_sources=authorized_sources,
+        )
+
+
+def test_validate_analysis_dag_rejects_node_budget_overflow() -> None:
+    nodes = tuple(
+        OperatorNode(
+            node_id=f"node-{index}",
+            operator="known.v1",
+            source_ids=("orders",),
+            seed=index,
+            parameters={"metric": "revenue"},
+        )
+        for index in range(2)
+    )
+    dag = AnalysisDAG(
+        dag_id="over-budget",
+        root_seed=1,
+        budget=RunBudget(max_nodes=1),
+        nodes=nodes,
+    )
+    with pytest.raises(ValueError, match="max_nodes"):
+        validate_analysis_dag(
+            dag,
+            operator_registry={
+                "known.v1": OperatorSpec(
+                    operator="known.v1",
+                    allowed_parameters=("metric",),
+                )
+            },
+            authorized_sources={"orders"},
+        )
+
+
+def test_validate_analysis_dag_rejects_unsupported_and_missing_parameters() -> None:
+    node = OperatorNode(
+        node_id="node",
+        operator="known.v1",
+        source_ids=("orders",),
+        seed=1,
+        parameters={"metric": "revenue"},
+    )
+    unsupported = AnalysisDAG(
+        dag_id="bad-parameters",
+        root_seed=1,
+        budget=RunBudget(max_nodes=1),
+        nodes=(node,),
+    )
+    with pytest.raises(ValueError, match="node.*parameters.metric"):
+        validate_analysis_dag(
+            unsupported,
+            operator_registry={
+                "known.v1": OperatorSpec(
+                    operator="known.v1",
+                    allowed_parameters=("segment",),
+                )
+            },
+            authorized_sources={"orders"},
+        )
+
+    missing = AnalysisDAG(
+        dag_id="missing-parameter",
+        root_seed=1,
+        budget=RunBudget(max_nodes=1),
+        nodes=(
+            OperatorNode(
+                node_id="node",
+                operator="known.v1",
+                source_ids=("orders",),
+                seed=1,
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="node.*parameters.metric.*required"):
+        validate_analysis_dag(
+            missing,
+            operator_registry={
+                "known.v1": OperatorSpec(
+                    operator="known.v1",
+                    allowed_parameters=("metric",),
+                    required_parameters=("metric",),
+                )
+            },
+            authorized_sources={"orders"},
+        )
+
+
+def test_validate_analysis_dag_identifies_mismatched_registry_spec() -> None:
+    dag = AnalysisDAG(
+        dag_id="mismatched-registry",
+        root_seed=1,
+        budget=RunBudget(max_nodes=1),
+        nodes=(
+            OperatorNode(
+                node_id="node",
+                operator="known.v1",
+                source_ids=("orders",),
+                seed=1,
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="node.*registry key 'known.v1'.*spec operator 'other.v1'",
+    ):
+        validate_analysis_dag(
+            dag,
+            operator_registry={
+                "known.v1": OperatorSpec(operator="other.v1"),
+            },
+            authorized_sources={"orders"},
+        )
+
+
+def test_validate_analysis_dag_bounds_parallel_wave_size() -> None:
+    dag = AnalysisDAG(
+        dag_id="bounded-parallelism",
+        root_seed=1,
+        budget=RunBudget(max_nodes=3, max_parallel_nodes=2),
+        nodes=tuple(
+            OperatorNode(
+                node_id=node_id,
+                operator="known.v1",
+                source_ids=("orders",),
+                seed=index,
+                execution_mode="parallel",
+            )
+            for index, node_id in enumerate(("a", "b", "c"))
+        ),
+    )
+
+    validated = validate_analysis_dag(
+        dag,
+        operator_registry={"known.v1": OperatorSpec(operator="known.v1")},
+        authorized_sources={"orders"},
+    )
+
+    assert validated.waves == (("a", "b"), ("c",))
+
+
+def test_validate_analysis_dag_keeps_independent_sequential_nodes_apart() -> None:
+    dag = AnalysisDAG(
+        dag_id="sequential-roots",
+        root_seed=1,
+        budget=RunBudget(max_nodes=2, max_parallel_nodes=2),
+        nodes=(
+            OperatorNode(
+                node_id="first",
+                operator="known.v1",
+                source_ids=("orders",),
+                seed=1,
+            ),
+            OperatorNode(
+                node_id="second",
+                operator="known.v1",
+                source_ids=("orders",),
+                seed=2,
+            ),
+        ),
+    )
+
+    validated = validate_analysis_dag(
+        dag,
+        operator_registry={"known.v1": OperatorSpec(operator="known.v1")},
+        authorized_sources={"orders"},
+    )
+
+    assert validated.waves == (("first",), ("second",))
