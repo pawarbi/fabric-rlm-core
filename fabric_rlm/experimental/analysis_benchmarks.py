@@ -27,6 +27,7 @@ _CORRELATED_GROUP_COUNT = 120
 _CORRELATED_OBSERVATIONS_PER_GROUP = 4
 _PANEL_DATASET_ID = "panel-ground-truth-v1"
 _PANEL_COHORT_SIZE = 60
+_SHIFT_DATASET_ID = "distribution-shift-ground-truth-v1"
 _TIME_SERIES_DATASET_ID = "time-series-ground-truth-v1"
 _GENERATOR_VERSION = "2"
 _RANDOM_ENGINE = "python.random.Random"
@@ -45,6 +46,9 @@ _DATASET_SOURCE_FILES = {
     _PANEL_DATASET_ID: {
         "customers": "customers.csv",
         "events": "events.csv",
+    },
+    _SHIFT_DATASET_ID: {
+        "observations": "observations.csv",
     },
     _TIME_SERIES_DATASET_ID: {
         "time_series": "time_series.csv",
@@ -70,6 +74,12 @@ _DATASET_SEED_NAMES = {
         "volume_rate_mix",
     },
     _PANEL_DATASET_ID: {"attributes", "structure"},
+    _SHIFT_DATASET_ID: {
+        "covariates",
+        "labels",
+        "missingness",
+        "structure",
+    },
     _TIME_SERIES_DATASET_ID: {"noise", "structure"},
 }
 
@@ -721,6 +731,244 @@ def write_clustered_benchmark(
     )
     return SyntheticBenchmark(
         dataset_id=_CLUSTERED_DATASET_ID,
+        root_seed=root_seed,
+        manifest_path=manifest_path,
+        truth_path=truth_path,
+        worker_source_paths=MappingProxyType({"observations": source_path}),
+        dataset_fingerprint=dataset_fingerprint,
+    )
+
+
+def write_shift_benchmark(
+    output_dir: str | Path,
+    *,
+    root_seed: int,
+) -> SyntheticBenchmark:
+    """Write classification data with holdout shift and MNAR missingness."""
+
+    if type(root_seed) is not int or root_seed < 0:
+        raise ValueError("root_seed must be a non-negative integer")
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    if any(root.iterdir()):
+        raise ValueError(f"output_dir must be empty: {root}")
+
+    derived_seeds = {
+        name: derive_seed(
+            root_seed,
+            dataset_id=_SHIFT_DATASET_ID,
+            operator_id=f"generate.shift.{name}.v1",
+        )
+        for name in ("covariates", "labels", "missingness", "structure")
+    }
+    covariate_rng = random.Random(derived_seeds["covariates"])
+    label_rng = random.Random(derived_seeds["labels"])
+    missingness_rng = random.Random(derived_seeds["missingness"])
+    structure_rng = random.Random(derived_seeds["structure"])
+
+    partition_specs = {
+        "development": {
+            "subgroup_counts": {"majority": 560, "minority": 112, "rare": 28},
+            "shift_mean": 0.0,
+            "missing_count": 70,
+        },
+        "final_holdout": {
+            "subgroup_counts": {"majority": 240, "minority": 48, "rare": 12},
+            "shift_mean": 1.5,
+            "missing_count": 90,
+        },
+    }
+    subgroup_offsets = {
+        "majority": 0.0,
+        "minority": 0.4,
+        "rare": -0.8,
+    }
+    generated_rows: list[dict[str, object]] = []
+    missing_row_ids: set[str] = set()
+    for partition, spec in partition_specs.items():
+        subgroup_counts = spec["subgroup_counts"]
+        assert isinstance(subgroup_counts, dict)
+        subgroup_labels = [
+            subgroup
+            for subgroup, count in subgroup_counts.items()
+            for _ in range(int(count))
+        ]
+        structure_rng.shuffle(subgroup_labels)
+        partition_rows: list[dict[str, object]] = []
+        for row_index, subgroup in enumerate(subgroup_labels, start=1):
+            row_id = f"{partition}-{row_index:04d}"
+            shift_feature = covariate_rng.gauss(float(spec["shift_mean"]), 1.0)
+            stable_feature = covariate_rng.gauss(0.0, 1.0)
+            complete_risk_marker = covariate_rng.gauss(0.0, 1.0)
+            logit = (
+                -0.5
+                + 1.2 * shift_feature
+                - 0.8 * stable_feature
+                + complete_risk_marker
+                + subgroup_offsets[subgroup]
+            )
+            probability = 1.0 / (1.0 + math.exp(-logit))
+            partition_rows.append(
+                {
+                    "row_id": row_id,
+                    "partition": partition,
+                    "subgroup": subgroup,
+                    "shift_feature": shift_feature,
+                    "stable_feature": stable_feature,
+                    "complete_risk_marker": complete_risk_marker,
+                    "missingness_score": (
+                        complete_risk_marker
+                        + missingness_rng.gauss(0.0, 0.25)
+                    ),
+                    "logit": logit,
+                    "label_probability": probability,
+                    "target": int(label_rng.random() < probability),
+                }
+            )
+        missing_count = int(spec["missing_count"])
+        missing_row_ids.update(
+            str(row["row_id"])
+            for row in sorted(
+                partition_rows,
+                key=lambda row: (
+                    -float(row["missingness_score"]),
+                    str(row["row_id"]),
+                ),
+            )[:missing_count]
+        )
+        generated_rows.extend(partition_rows)
+
+    rows = [
+        (
+            row["row_id"],
+            row["partition"],
+            row["subgroup"],
+            row["shift_feature"],
+            row["stable_feature"],
+            (
+                None
+                if row["row_id"] in missing_row_ids
+                else row["complete_risk_marker"]
+            ),
+            row["target"],
+        )
+        for row in generated_rows
+    ]
+    row_truth = {
+        str(row["row_id"]): {
+            "complete_risk_marker": row["complete_risk_marker"],
+            "is_mnar_missing": row["row_id"] in missing_row_ids,
+            "label_probability": row["label_probability"],
+            "logit": row["logit"],
+        }
+        for row in generated_rows
+    }
+
+    source_path = root / _DATASET_SOURCE_FILES[_SHIFT_DATASET_ID]["observations"]
+    _write_csv(
+        source_path,
+        (
+            "row_id",
+            "partition",
+            "subgroup",
+            "shift_feature",
+            "stable_feature",
+            "risk_marker",
+            "target",
+        ),
+        rows,
+    )
+    sources = [
+        _file_record(root, "observations", source_path, len(rows)),
+    ]
+    dataset_fingerprint = _dataset_fingerprint(
+        dataset_id=_SHIFT_DATASET_ID,
+        root_seed=root_seed,
+        derived_seeds=derived_seeds,
+        sources=sources,
+    )
+    truth_path = root / "truth.json"
+    _write_json(
+        truth_path,
+        {
+            "dataset_id": _SHIFT_DATASET_ID,
+            "dataset_fingerprint": dataset_fingerprint,
+            "generator_version": _GENERATOR_VERSION,
+            "root_seed": root_seed,
+            "partitions": {
+                partition: {
+                    "row_count": sum(
+                        int(count)
+                        for count in spec["subgroup_counts"].values()
+                    ),
+                    "subgroup_counts": spec["subgroup_counts"],
+                }
+                for partition, spec in partition_specs.items()
+            },
+            "data_generating_process": {
+                "intercept": -0.5,
+                "coefficients": {
+                    "risk_marker": 1.0,
+                    "shift_feature": 1.2,
+                    "stable_feature": -0.8,
+                },
+                "link": "logit",
+                "subgroup_intercepts": subgroup_offsets,
+            },
+            "covariate_shift": {
+                "feature": "shift_feature",
+                "development_mean": 0.0,
+                "final_holdout_mean": 1.5,
+                "standard_deviation": 1.0,
+            },
+            "missingness": {
+                "development_rate": 0.1,
+                "final_holdout_rate": 0.3,
+                "mechanism": "MNAR",
+                "missing_row_ids": sorted(missing_row_ids),
+                "selection_rule": (
+                    "highest complete risk marker plus independent noise scores "
+                    "within each partition"
+                ),
+            },
+            "validation": {
+                "final_holdout_value": "final_holdout",
+                "identifier_columns": ["row_id"],
+                "minimum_subgroup_support": 30,
+                "partition_column": "partition",
+                "preprocessing_scope": "training_fold_only",
+                "required_metrics": [
+                    "roc_auc",
+                    "pr_auc",
+                    "log_loss",
+                    "brier_score",
+                    "calibration",
+                ],
+                "subgroup_column": "subgroup",
+            },
+            "row_truth": row_truth,
+        },
+    )
+    truth_bytes = truth_path.read_bytes()
+    manifest_path = root / "manifest.json"
+    _write_json(
+        manifest_path,
+        {
+            "dataset_id": _SHIFT_DATASET_ID,
+            "dataset_fingerprint": dataset_fingerprint,
+            "generator_version": _GENERATOR_VERSION,
+            "random_engine": _RANDOM_ENGINE,
+            "root_seed": root_seed,
+            "derived_seeds": derived_seeds,
+            "sources": sources,
+            "truth_integrity": {
+                "sha256": hashlib.sha256(truth_bytes).hexdigest(),
+                "size_bytes": len(truth_bytes),
+            },
+        },
+    )
+    return SyntheticBenchmark(
+        dataset_id=_SHIFT_DATASET_ID,
         root_seed=root_seed,
         manifest_path=manifest_path,
         truth_path=truth_path,

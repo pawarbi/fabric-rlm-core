@@ -17,6 +17,7 @@ from fabric_rlm.experimental import (
     write_correlated_benchmark,
     write_decomposition_benchmark,
     write_panel_benchmark,
+    write_shift_benchmark,
     write_time_series_benchmark,
 )
 from fabric_rlm.experimental.analysis_reproducibility import derive_seed
@@ -123,6 +124,7 @@ def test_load_synthetic_benchmark_rejects_tampered_truth(tmp_path: Path) -> None
         write_clustered_benchmark,
         write_correlated_benchmark,
         write_panel_benchmark,
+        write_shift_benchmark,
         write_time_series_benchmark,
     ],
 )
@@ -757,3 +759,147 @@ def test_clustered_benchmark_seed_changes_assignments_not_design(
     assert first_truth["clusters"] == second_truth["clusters"]
     assert first_truth["contamination"] == second_truth["contamination"]
     assert first_truth["batch_anomalies"] == second_truth["batch_anomalies"]
+
+
+def test_shift_benchmark_is_byte_reproducible_across_hash_seeds(
+    tmp_path: Path,
+) -> None:
+    script = textwrap.dedent(
+        """
+        import sys
+        from pathlib import Path
+        from fabric_rlm.experimental import write_shift_benchmark
+
+        write_shift_benchmark(Path(sys.argv[1]), root_seed=205)
+        """
+    )
+    for directory, hash_seed in (("first", "1"), ("second", "2")):
+        environment = os.environ.copy()
+        environment["PYTHONHASHSEED"] = hash_seed
+        subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path / directory)],
+            check=True,
+            env=environment,
+        )
+
+    assert _bundle_bytes(tmp_path / "first") == _bundle_bytes(tmp_path / "second")
+
+
+def test_shift_benchmark_records_holdout_and_subgroup_truth(
+    tmp_path: Path,
+) -> None:
+    bundle = write_shift_benchmark(tmp_path, root_seed=205)
+    manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
+    truth = json.loads(bundle.truth_path.read_text(encoding="utf-8"))
+
+    assert manifest["dataset_id"] == "distribution-shift-ground-truth-v1"
+    assert manifest["sources"][0]["row_count"] == 1000
+    assert truth["partitions"] == {
+        "development": {
+            "row_count": 700,
+            "subgroup_counts": {"majority": 560, "minority": 112, "rare": 28},
+        },
+        "final_holdout": {
+            "row_count": 300,
+            "subgroup_counts": {"majority": 240, "minority": 48, "rare": 12},
+        },
+    }
+    assert truth["validation"]["partition_column"] == "partition"
+    assert truth["validation"]["final_holdout_value"] == "final_holdout"
+    assert truth["validation"]["subgroup_column"] == "subgroup"
+    assert truth["validation"]["minimum_subgroup_support"] == 30
+    assert truth["validation"]["preprocessing_scope"] == "training_fold_only"
+    assert truth["validation"]["required_metrics"] == [
+        "roc_auc",
+        "pr_auc",
+        "log_loss",
+        "brier_score",
+        "calibration",
+    ]
+
+
+def test_shift_benchmark_contains_covariate_shift_and_mnar_missingness(
+    tmp_path: Path,
+) -> None:
+    bundle = write_shift_benchmark(tmp_path, root_seed=205)
+    truth = json.loads(bundle.truth_path.read_text(encoding="utf-8"))
+    with bundle.worker_source_paths["observations"].open(
+        "r",
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+        assert reader.fieldnames is not None
+        assert {
+            "complete_risk_marker",
+            "label_probability",
+            "missingness_score",
+        }.isdisjoint(reader.fieldnames)
+
+    by_partition = {
+        partition: [row for row in rows if row["partition"] == partition]
+        for partition in ("development", "final_holdout")
+    }
+    shift_means = {
+        partition: math.fsum(float(row["shift_feature"]) for row in entries)
+        / len(entries)
+        for partition, entries in by_partition.items()
+    }
+    assert shift_means["final_holdout"] - shift_means["development"] > 1.2
+
+    missing_counts = {
+        partition: sum(row["risk_marker"] == "" for row in entries)
+        for partition, entries in by_partition.items()
+    }
+    assert missing_counts == {"development": 70, "final_holdout": 90}
+    assert truth["missingness"]["mechanism"] == "MNAR"
+    assert truth["missingness"]["development_rate"] == pytest.approx(0.1)
+    assert truth["missingness"]["final_holdout_rate"] == pytest.approx(0.3)
+    assert set(truth["missingness"]["missing_row_ids"]) == {
+        row["row_id"] for row in rows if row["risk_marker"] == ""
+    }
+
+
+def test_shift_benchmark_hidden_probabilities_match_declared_logit(
+    tmp_path: Path,
+) -> None:
+    bundle = write_shift_benchmark(tmp_path, root_seed=205)
+    truth = json.loads(bundle.truth_path.read_text(encoding="utf-8"))
+    with bundle.worker_source_paths["observations"].open(
+        "r",
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        rows = {
+            row["row_id"]: row
+            for row in csv.DictReader(handle)
+        }
+
+    for row_id, hidden in truth["row_truth"].items():
+        expected_probability = 1.0 / (1.0 + math.exp(-hidden["logit"]))
+        assert hidden["label_probability"] == pytest.approx(
+            expected_probability,
+            abs=1e-15,
+        )
+        assert rows[row_id]["target"] in {"0", "1"}
+        assert hidden["is_mnar_missing"] == (rows[row_id]["risk_marker"] == "")
+
+
+def test_shift_benchmark_seed_changes_rows_not_design(
+    tmp_path: Path,
+) -> None:
+    first = write_shift_benchmark(tmp_path / "first", root_seed=1)
+    second = write_shift_benchmark(tmp_path / "second", root_seed=2)
+    first_truth = json.loads(first.truth_path.read_text(encoding="utf-8"))
+    second_truth = json.loads(second.truth_path.read_text(encoding="utf-8"))
+
+    assert first.dataset_fingerprint != second.dataset_fingerprint
+    assert first.worker_source_paths["observations"].read_bytes() != second.worker_source_paths[
+        "observations"
+    ].read_bytes()
+    assert first_truth["partitions"] == second_truth["partitions"]
+    assert first_truth["data_generating_process"] == second_truth[
+        "data_generating_process"
+    ]
+    assert first_truth["covariate_shift"] == second_truth["covariate_shift"]

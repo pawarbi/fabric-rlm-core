@@ -40,6 +40,7 @@ from fabric_rlm.experimental.analysis_benchmarks import (
     write_correlated_benchmark,
     write_decomposition_benchmark,
     write_panel_benchmark,
+    write_shift_benchmark,
     write_time_series_benchmark,
 )
 from fabric_rlm.experimental.analysis_reproducibility import (
@@ -90,5 +91,6 @@ __all__ = [
     "write_correlated_benchmark",
     "write_decomposition_benchmark",
     "write_panel_benchmark",
+    "write_shift_benchmark",
     "write_time_series_benchmark",
 ]
