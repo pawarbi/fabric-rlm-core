@@ -37,6 +37,7 @@ from fabric_rlm.experimental.analysis_benchmarks import (
     SyntheticBenchmark,
     load_synthetic_benchmark,
     write_decomposition_benchmark,
+    write_time_series_benchmark,
 )
 from fabric_rlm.experimental.analysis_reproducibility import (
     canonical_json,
@@ -83,4 +84,5 @@ __all__ = [
     "validate_analysis_dag",
     "volume_rate_mix_decomposition",
     "write_decomposition_benchmark",
+    "write_time_series_benchmark",
 ]

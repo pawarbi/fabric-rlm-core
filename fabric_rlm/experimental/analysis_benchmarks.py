@@ -18,13 +18,27 @@ from fabric_rlm.experimental.analysis_reproducibility import (
 )
 
 
-_DATASET_ID = "decomposition-ground-truth-v1"
-_GENERATOR_VERSION = "1"
+_DECOMPOSITION_DATASET_ID = "decomposition-ground-truth-v1"
+_TIME_SERIES_DATASET_ID = "time-series-ground-truth-v1"
+_GENERATOR_VERSION = "2"
 _RANDOM_ENGINE = "python.random.Random"
-_SOURCE_FILES = {
-    "additive": "additive.csv",
-    "rate": "rate.csv",
-    "volume_rate_mix": "volume_rate_mix.csv",
+_DATASET_SOURCE_FILES = {
+    _DECOMPOSITION_DATASET_ID: {
+        "additive": "additive.csv",
+        "rate": "rate.csv",
+        "volume_rate_mix": "volume_rate_mix.csv",
+    },
+    _TIME_SERIES_DATASET_ID: {
+        "time_series": "time_series.csv",
+    },
+}
+_DATASET_SEED_NAMES = {
+    _DECOMPOSITION_DATASET_ID: {
+        "additive",
+        "rate",
+        "volume_rate_mix",
+    },
+    _TIME_SERIES_DATASET_ID: {"noise", "structure"},
 }
 
 
@@ -75,15 +89,18 @@ def _file_record(root: Path, identity: str, path: Path, row_count: int) -> dict[
 
 def _dataset_fingerprint(
     *,
+    dataset_id: str,
     root_seed: int,
+    derived_seeds: Mapping[str, int],
     sources: list[dict[str, object]],
 ) -> str:
     return fingerprint(
         {
-            "dataset_id": _DATASET_ID,
+            "dataset_id": dataset_id,
             "generator_version": _GENERATOR_VERSION,
             "random_engine": _RANDOM_ENGINE,
             "root_seed": root_seed,
+            "derived_seeds": derived_seeds,
             "sources": sources,
         }
     )
@@ -229,37 +246,26 @@ def write_decomposition_benchmark(
     if any(root.iterdir()):
         raise ValueError(f"output_dir must be empty: {root}")
 
+    derived_seeds = {
+        name: derive_seed(
+            root_seed,
+            dataset_id=_DECOMPOSITION_DATASET_ID,
+            operator_id=f"generate.{name}.v1",
+        )
+        for name in ("additive", "rate", "volume_rate_mix")
+    }
     additive_rows, additive_truth = _additive_case(
-        random.Random(
-            derive_seed(
-                root_seed,
-                dataset_id=_DATASET_ID,
-                operator_id="generate.additive.v1",
-            )
-        )
+        random.Random(derived_seeds["additive"])
     )
-    rate_rows, rate_truth = _rate_case(
-        random.Random(
-            derive_seed(
-                root_seed,
-                dataset_id=_DATASET_ID,
-                operator_id="generate.rate.v1",
-            )
-        )
-    )
+    rate_rows, rate_truth = _rate_case(random.Random(derived_seeds["rate"]))
     vrm_rows, vrm_truth = _volume_rate_mix_case(
-        random.Random(
-            derive_seed(
-                root_seed,
-                dataset_id=_DATASET_ID,
-                operator_id="generate.volume_rate_mix.v1",
-            )
-        )
+        random.Random(derived_seeds["volume_rate_mix"])
     )
 
-    additive_path = root / _SOURCE_FILES["additive"]
-    rate_path = root / _SOURCE_FILES["rate"]
-    vrm_path = root / _SOURCE_FILES["volume_rate_mix"]
+    source_files = _DATASET_SOURCE_FILES[_DECOMPOSITION_DATASET_ID]
+    additive_path = root / source_files["additive"]
+    rate_path = root / source_files["rate"]
+    vrm_path = root / source_files["volume_rate_mix"]
     _write_csv(
         additive_path,
         ("case_id", "period", "segment", "value"),
@@ -282,7 +288,9 @@ def write_decomposition_benchmark(
         _file_record(root, "volume_rate_mix", vrm_path, len(vrm_rows)),
     ]
     dataset_fingerprint = _dataset_fingerprint(
+        dataset_id=_DECOMPOSITION_DATASET_ID,
         root_seed=root_seed,
+        derived_seeds=derived_seeds,
         sources=sources,
     )
     manifest_path = root / "manifest.json"
@@ -290,7 +298,7 @@ def write_decomposition_benchmark(
     _write_json(
         truth_path,
         {
-            "dataset_id": _DATASET_ID,
+            "dataset_id": _DECOMPOSITION_DATASET_ID,
             "dataset_fingerprint": dataset_fingerprint,
             "generator_version": _GENERATOR_VERSION,
             "root_seed": root_seed,
@@ -301,11 +309,12 @@ def write_decomposition_benchmark(
     _write_json(
         manifest_path,
         {
-            "dataset_id": _DATASET_ID,
+            "dataset_id": _DECOMPOSITION_DATASET_ID,
             "dataset_fingerprint": dataset_fingerprint,
             "generator_version": _GENERATOR_VERSION,
             "random_engine": _RANDOM_ENGINE,
             "root_seed": root_seed,
+            "derived_seeds": derived_seeds,
             "sources": sources,
             "truth_integrity": {
                 "sha256": hashlib.sha256(truth_bytes).hexdigest(),
@@ -314,7 +323,7 @@ def write_decomposition_benchmark(
         },
     )
     return SyntheticBenchmark(
-        dataset_id=_DATASET_ID,
+        dataset_id=_DECOMPOSITION_DATASET_ID,
         root_seed=root_seed,
         manifest_path=manifest_path,
         truth_path=truth_path,
@@ -325,6 +334,154 @@ def write_decomposition_benchmark(
                 "volume_rate_mix": vrm_path,
             }
         ),
+        dataset_fingerprint=dataset_fingerprint,
+    )
+
+
+def write_time_series_benchmark(
+    output_dir: str | Path,
+    *,
+    root_seed: int,
+) -> SyntheticBenchmark:
+    """Write deterministic seasonal, shift, anomaly, and missingness series."""
+
+    if type(root_seed) is not int or root_seed < 0:
+        raise ValueError("root_seed must be a non-negative integer")
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    if any(root.iterdir()):
+        raise ValueError(f"output_dir must be empty: {root}")
+
+    derived_seeds = {
+        name: derive_seed(
+            root_seed,
+            dataset_id=_TIME_SERIES_DATASET_ID,
+            operator_id=f"generate.time_series.{name}.v1",
+        )
+        for name in ("noise", "structure")
+    }
+    structure_rng = random.Random(derived_seeds["structure"])
+    noise_rng = random.Random(derived_seeds["noise"])
+    seasonal_pattern = (0, 5, 9, 12, 15, 10, 4, -2, -8, -12, -9, -4)
+    periods = 120
+    shift_index = 72
+    missing_indices = tuple(sorted(structure_rng.sample(range(12, 108), 4)))
+    anomaly_candidates = [
+        index for index in range(12, 108) if index not in missing_indices
+    ]
+    anomaly_indices = tuple(sorted(structure_rng.sample(anomaly_candidates, 5)))
+    anomaly_values = [60, -55, 70, -65, 80]
+    structure_rng.shuffle(anomaly_values)
+    anomaly_magnitudes = {
+        index: magnitude
+        for index, magnitude in zip(
+            anomaly_indices,
+            anomaly_values,
+        )
+    }
+
+    rows: list[tuple[object, ...]] = []
+    for index in range(periods):
+        seasonal_value = (
+            100
+            + 2 * index
+            + seasonal_pattern[index % len(seasonal_pattern)]
+            + (40 if index >= shift_index else 0)
+            + noise_rng.randint(-2, 2)
+        )
+        rows.append(("seasonal_shift", index, seasonal_value))
+
+        if index not in missing_indices:
+            anomaly_value = (
+                200
+                + seasonal_pattern[index % len(seasonal_pattern)]
+                + noise_rng.randint(-3, 3)
+                + anomaly_magnitudes.get(index, 0)
+            )
+            rows.append(("anomaly_missing", index, anomaly_value))
+
+    source_path = root / _DATASET_SOURCE_FILES[_TIME_SERIES_DATASET_ID][
+        "time_series"
+    ]
+    _write_csv(
+        source_path,
+        ("series_id", "time_index", "value"),
+        rows,
+    )
+    sources = [
+        _file_record(root, "time_series", source_path, len(rows)),
+    ]
+    dataset_fingerprint = _dataset_fingerprint(
+        dataset_id=_TIME_SERIES_DATASET_ID,
+        root_seed=root_seed,
+        derived_seeds=derived_seeds,
+        sources=sources,
+    )
+    truth_path = root / "truth.json"
+    _write_json(
+        truth_path,
+        {
+            "dataset_id": _TIME_SERIES_DATASET_ID,
+            "dataset_fingerprint": dataset_fingerprint,
+            "generator_version": _GENERATOR_VERSION,
+            "root_seed": root_seed,
+            "series": [
+                {
+                    "series_id": "seasonal_shift",
+                    "base_level": 100,
+                    "total_period_count": periods,
+                    "observed_period_count": periods,
+                    "seasonal_pattern": list(seasonal_pattern),
+                    "seasonal_period": len(seasonal_pattern),
+                    "trend_per_period": 2,
+                    "level_shift_index": shift_index,
+                    "level_shift_magnitude": 40,
+                    "noise_bounds": [-2, 2],
+                },
+                {
+                    "series_id": "anomaly_missing",
+                    "anomaly_free_ranges": [[0, 11], [108, 119]],
+                    "base_level": 200,
+                    "total_period_count": periods,
+                    "observed_period_count": periods - len(missing_indices),
+                    "seasonal_pattern": list(seasonal_pattern),
+                    "seasonal_period": len(seasonal_pattern),
+                    "trend_per_period": 0,
+                    "anomaly_indices": list(anomaly_indices),
+                    "anomaly_magnitudes": {
+                        str(index): anomaly_magnitudes[index]
+                        for index in anomaly_indices
+                    },
+                    "missing_indices": list(missing_indices),
+                    "noise_bounds": [-3, 3],
+                },
+            ],
+        },
+    )
+    truth_bytes = truth_path.read_bytes()
+    manifest_path = root / "manifest.json"
+    _write_json(
+        manifest_path,
+        {
+            "dataset_id": _TIME_SERIES_DATASET_ID,
+            "dataset_fingerprint": dataset_fingerprint,
+            "generator_version": _GENERATOR_VERSION,
+            "random_engine": _RANDOM_ENGINE,
+            "root_seed": root_seed,
+            "derived_seeds": derived_seeds,
+            "sources": sources,
+            "truth_integrity": {
+                "sha256": hashlib.sha256(truth_bytes).hexdigest(),
+                "size_bytes": len(truth_bytes),
+            },
+        },
+    )
+    return SyntheticBenchmark(
+        dataset_id=_TIME_SERIES_DATASET_ID,
+        root_seed=root_seed,
+        manifest_path=manifest_path,
+        truth_path=truth_path,
+        worker_source_paths=MappingProxyType({"time_series": source_path}),
         dataset_fingerprint=dataset_fingerprint,
     )
 
@@ -348,11 +505,29 @@ def load_synthetic_benchmark(manifest_path: str | Path) -> SyntheticBenchmark:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("manifest must contain an object")
-    if payload.get("dataset_id") != _DATASET_ID:
-        raise ValueError(f"unsupported dataset_id: {payload.get('dataset_id')}")
+    dataset_id = payload.get("dataset_id")
+    source_files = _DATASET_SOURCE_FILES.get(dataset_id)
+    if source_files is None:
+        raise ValueError(f"unsupported dataset_id: {dataset_id}")
+    if payload.get("generator_version") != _GENERATOR_VERSION:
+        raise ValueError(
+            "unsupported generator_version: "
+            f"{payload.get('generator_version')!r}"
+        )
+    if payload.get("random_engine") != _RANDOM_ENGINE:
+        raise ValueError(
+            f"unsupported random_engine: {payload.get('random_engine')!r}"
+        )
     root_seed = payload.get("root_seed")
     if type(root_seed) is not int or root_seed < 0:
         raise ValueError("root_seed must be a non-negative integer")
+    derived_seeds = payload.get("derived_seeds")
+    if not isinstance(derived_seeds, dict):
+        raise ValueError("derived_seeds must be an object")
+    if set(derived_seeds) != _DATASET_SEED_NAMES[dataset_id]:
+        raise ValueError("derived_seeds do not match the dataset generator")
+    if any(type(seed) is not int or seed < 0 for seed in derived_seeds.values()):
+        raise ValueError("derived_seeds must contain non-negative integers")
     sources = payload.get("sources")
     if not isinstance(sources, list) or not sources:
         raise ValueError("sources must be a non-empty list")
@@ -365,7 +540,7 @@ def load_synthetic_benchmark(manifest_path: str | Path) -> SyntheticBenchmark:
             raise ValueError(f"sources[{index}] must be an object")
         identity = source.get("identity")
         relative = source.get("path")
-        if identity not in _SOURCE_FILES or relative != _SOURCE_FILES[identity]:
+        if identity not in source_files or relative != source_files[identity]:
             raise ValueError(f"sources[{index}] has an invalid identity or path")
         if identity in verified:
             raise ValueError(f"duplicate source identity: {identity}")
@@ -387,11 +562,13 @@ def load_synthetic_benchmark(manifest_path: str | Path) -> SyntheticBenchmark:
         verified[identity] = source_path
         normalized_sources.append(source)
 
-    missing_sources = sorted(set(_SOURCE_FILES) - set(verified))
+    missing_sources = sorted(set(source_files) - set(verified))
     if missing_sources:
         raise ValueError(f"missing required source: {missing_sources[0]}")
     expected_fingerprint = _dataset_fingerprint(
+        dataset_id=dataset_id,
         root_seed=root_seed,
+        derived_seeds=derived_seeds,
         sources=normalized_sources,
     )
     if payload.get("dataset_fingerprint") != expected_fingerprint:
@@ -417,7 +594,7 @@ def load_synthetic_benchmark(manifest_path: str | Path) -> SyntheticBenchmark:
     if truth_payload.get("generator_version") != _GENERATOR_VERSION:
         raise ValueError("truth generator_version does not match manifest")
     return SyntheticBenchmark(
-        dataset_id=_DATASET_ID,
+        dataset_id=dataset_id,
         root_seed=root_seed,
         manifest_path=path,
         truth_path=truth_path,
