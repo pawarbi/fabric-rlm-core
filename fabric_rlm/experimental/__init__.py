@@ -31,6 +31,7 @@ from fabric_rlm.experimental.analysis_evidence import EvidenceRegistry
 from fabric_rlm.experimental.analysis_operators import (
     additive_decomposition,
     rate_decomposition,
+    volume_rate_mix_decomposition,
 )
 from fabric_rlm.experimental.analysis_reproducibility import (
     canonical_json,
@@ -73,4 +74,5 @@ __all__ = [
     "ValidatedDAG",
     "ValidationVerdict",
     "validate_analysis_dag",
+    "volume_rate_mix_decomposition",
 ]

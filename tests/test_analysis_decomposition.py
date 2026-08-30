@@ -7,6 +7,7 @@ import pytest
 from fabric_rlm.experimental import (
     additive_decomposition,
     rate_decomposition,
+    volume_rate_mix_decomposition,
 )
 
 
@@ -226,3 +227,244 @@ def test_rate_decomposition_rejects_invalid_denominators(
 
     with pytest.raises(ValueError, match=field):
         rate_decomposition(node_id="invalid", seed=1, **kwargs)
+
+
+def test_volume_rate_mix_recovers_pure_volume_effect() -> None:
+    result = volume_rate_mix_decomposition(
+        node_id="pure-volume",
+        before={
+            "enterprise": {"volume": 40, "rate": 100},
+            "smb": {"volume": 60, "rate": 50},
+        },
+        after={
+            "enterprise": {"volume": 60, "rate": 100},
+            "smb": {"volume": 90, "rate": 50},
+        },
+        seed=1,
+    )
+
+    assert result.values["observed_change"] == pytest.approx(3500)
+    assert result.values["volume_effect"] == pytest.approx(3500)
+    assert result.values["rate_effect"] == pytest.approx(0)
+    assert result.values["mix_effect"] == pytest.approx(0)
+    assert result.diagnostics["reconciliation"]["passed"] is True
+
+
+def test_volume_rate_mix_recovers_pure_rate_effect() -> None:
+    result = volume_rate_mix_decomposition(
+        node_id="pure-rate",
+        before={
+            "enterprise": {"volume": 40, "rate": 100},
+            "smb": {"volume": 60, "rate": 50},
+        },
+        after={
+            "enterprise": {"volume": 40, "rate": 110},
+            "smb": {"volume": 60, "rate": 55},
+        },
+        seed=1,
+    )
+
+    assert result.values["observed_change"] == pytest.approx(700)
+    assert result.values["volume_effect"] == pytest.approx(0)
+    assert result.values["rate_effect"] == pytest.approx(700)
+    assert result.values["mix_effect"] == pytest.approx(0)
+    assert result.diagnostics["reconciliation"]["passed"] is True
+
+
+def test_volume_rate_mix_recovers_pure_mix_effect() -> None:
+    result = volume_rate_mix_decomposition(
+        node_id="pure-mix",
+        before={
+            "enterprise": {"volume": 40, "rate": 100},
+            "smb": {"volume": 60, "rate": 50},
+        },
+        after={
+            "enterprise": {"volume": 60, "rate": 100},
+            "smb": {"volume": 40, "rate": 50},
+        },
+        seed=1,
+    )
+
+    assert result.values["observed_change"] == pytest.approx(1000)
+    assert result.values["volume_effect"] == pytest.approx(0)
+    assert result.values["rate_effect"] == pytest.approx(0)
+    assert result.values["mix_effect"] == pytest.approx(1000)
+    assert result.diagnostics["reconciliation"]["passed"] is True
+
+
+def test_volume_rate_mix_mixed_case_reconciles_and_reverses() -> None:
+    before = {
+        "enterprise": {"volume": 40, "rate": 100},
+        "smb": {"volume": 60, "rate": 50},
+    }
+    after = {
+        "enterprise": {"volume": 70, "rate": 120},
+        "smb": {"volume": 50, "rate": 45},
+    }
+
+    forward = volume_rate_mix_decomposition(
+        node_id="forward",
+        before=before,
+        after=after,
+        seed=7,
+    )
+    reverse = volume_rate_mix_decomposition(
+        node_id="reverse",
+        before=after,
+        after=before,
+        seed=7,
+    )
+
+    assert math.fsum(
+        (
+            forward.values["volume_effect"],
+            forward.values["rate_effect"],
+            forward.values["mix_effect"],
+        )
+    ) == pytest.approx(forward.values["observed_change"])
+    for metric in (
+        "observed_change",
+        "volume_effect",
+        "rate_effect",
+        "mix_effect",
+    ):
+        assert reverse.values[metric] == pytest.approx(-forward.values[metric])
+
+
+def test_volume_rate_mix_handles_appearing_and_disappearing_segments() -> None:
+    result = volume_rate_mix_decomposition(
+        node_id="boundary-segments",
+        before={
+            "legacy": {"volume": 20, "rate": 30},
+            "stable": {"volume": 80, "rate": 50},
+        },
+        after={
+            "new": {"volume": 25, "rate": 70},
+            "stable": {"volume": 75, "rate": 50},
+        },
+        seed=9,
+    )
+
+    assert result.diagnostics["boundary_segments"] == (
+        {
+            "segment": "legacy",
+            "missing_period": "after",
+            "rate_convention": "carry_observed_rate",
+        },
+        {
+            "segment": "new",
+            "missing_period": "before",
+            "rate_convention": "carry_observed_rate",
+        },
+    )
+    assert result.diagnostics["reconciliation"]["passed"] is True
+    assert result.values["observed_change"] == pytest.approx(900)
+
+
+def test_volume_rate_mix_handles_complete_segment_churn() -> None:
+    result = volume_rate_mix_decomposition(
+        node_id="complete-churn",
+        before={"old": {"volume": 50, "rate": 10}},
+        after={"new": {"volume": 50, "rate": 20}},
+        seed=1,
+    )
+
+    assert result.values["observed_change"] == pytest.approx(500)
+    assert result.values["volume_effect"] == pytest.approx(0)
+    assert result.values["rate_effect"] == pytest.approx(0)
+    assert result.values["mix_effect"] == pytest.approx(500)
+    assert result.diagnostics["reconciliation"]["passed"] is True
+
+
+def test_volume_rate_mix_fingerprint_is_stable_and_input_sensitive() -> None:
+    first = volume_rate_mix_decomposition(
+        node_id="first",
+        before={
+            "a": {"volume": 0.0, "rate": 5},
+            "stable": {"volume": 10, "rate": 2},
+        },
+        after={
+            "a": {"volume": 10, "rate": 5},
+            "stable": {"volume": 10, "rate": 2},
+        },
+        seed=1,
+    )
+    equivalent = volume_rate_mix_decomposition(
+        node_id="equivalent",
+        before={
+            "stable": {"rate": 2, "volume": 10},
+            "a": {"volume": -0.0, "rate": 5},
+        },
+        after={
+            "stable": {"volume": 10, "rate": 2},
+            "a": {"rate": 5, "volume": 10},
+        },
+        seed=1,
+    )
+    changed = volume_rate_mix_decomposition(
+        node_id="changed",
+        before={
+            "a": {"volume": 1, "rate": 5},
+            "stable": {"volume": 10, "rate": 2},
+        },
+        after={
+            "a": {"volume": 10, "rate": 5},
+            "stable": {"volume": 10, "rate": 2},
+        },
+        seed=1,
+    )
+
+    assert (
+        first.diagnostics["input_fingerprint"]
+        == equivalent.diagnostics["input_fingerprint"]
+    )
+    assert (
+        first.diagnostics["input_fingerprint"]
+        != changed.diagnostics["input_fingerprint"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "match"),
+    [
+        ({}, {"a": {"volume": 1, "rate": 1}}, "before.*segment"),
+        (
+            {"a": {"volume": 0, "rate": 1}},
+            {"a": {"volume": 1, "rate": 1}},
+            "before.*total volume",
+        ),
+        (
+            {"a": {"volume": -1, "rate": 1}},
+            {"a": {"volume": 1, "rate": 1}},
+            "before.a.volume",
+        ),
+        (
+            {"a": {"volume": 1}},
+            {"a": {"volume": 1, "rate": 1}},
+            "before.a.*rate",
+        ),
+        (
+            {"a": {"volume": 1, "rate": math.nan}},
+            {"a": {"volume": 1, "rate": 1}},
+            "before.a.rate",
+        ),
+        ({"a": {"volume": 1, "rate": 1}}, {}, "after.*segment"),
+        (
+            {"a": {"volume": 1, "rate": 1}},
+            {"a": {"volume": -1, "rate": 1}},
+            "after.a.volume",
+        ),
+    ],
+)
+def test_volume_rate_mix_rejects_invalid_inputs(
+    before: dict[str, dict[str, float]],
+    after: dict[str, dict[str, float]],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        volume_rate_mix_decomposition(
+            node_id="invalid",
+            before=before,
+            after=after,
+            seed=1,
+        )
