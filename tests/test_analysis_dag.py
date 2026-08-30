@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -13,6 +17,14 @@ from fabric_rlm.experimental.analysis_contracts import (
     OperatorResult,
     RunBudget,
 )
+from fabric_rlm.experimental.analysis_reproducibility import (
+    canonical_json,
+    derive_seed,
+    fingerprint,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_analysis_brief_records_explicit_focus_and_safe_defaults() -> None:
@@ -264,3 +276,130 @@ def test_completed_operator_result_requires_values_and_diagnostics() -> None:
             seed=11,
             sample_size=0,
         )
+
+
+def test_seed_derivation_is_domain_separated_and_bounded() -> None:
+    first = derive_seed(
+        20260829,
+        dataset_id="seasonal-v1",
+        operator_id="trend.stl.v1",
+        repetition=2,
+        fold=4,
+    )
+
+    assert 0 <= first <= 2**32 - 1
+    assert first == derive_seed(
+        20260829,
+        dataset_id="seasonal-v1",
+        operator_id="trend.stl.v1",
+        repetition=2,
+        fold=4,
+    )
+    alternatives = (
+        derive_seed(
+            20260830,
+            dataset_id="seasonal-v1",
+            operator_id="trend.stl.v1",
+            repetition=2,
+            fold=4,
+        ),
+        derive_seed(
+            20260829,
+            dataset_id="seasonal-v2",
+            operator_id="trend.stl.v1",
+            repetition=2,
+            fold=4,
+        ),
+        derive_seed(
+            20260829,
+            dataset_id="seasonal-v1",
+            operator_id="trend.robust-slope.v1",
+            repetition=2,
+            fold=4,
+        ),
+        derive_seed(
+            20260829,
+            dataset_id="seasonal-v1",
+            operator_id="trend.stl.v1",
+            repetition=3,
+            fold=4,
+        ),
+        derive_seed(
+            20260829,
+            dataset_id="seasonal-v1",
+            operator_id="trend.stl.v1",
+            repetition=2,
+            fold=5,
+        ),
+    )
+    assert first not in alternatives
+
+
+def test_seed_derivation_rejects_ambient_or_invalid_inputs() -> None:
+    with pytest.raises(ValueError, match="root_seed"):
+        derive_seed(-1, dataset_id="data", operator_id="operator")
+
+    with pytest.raises(ValueError, match="dataset_id"):
+        derive_seed(1, dataset_id="", operator_id="operator")
+
+    with pytest.raises(ValueError, match="operator_id"):
+        derive_seed(1, dataset_id="data", operator_id="")
+
+    with pytest.raises(ValueError, match="repetition"):
+        derive_seed(
+            1,
+            dataset_id="data",
+            operator_id="operator",
+            repetition=-1,
+        )
+
+    with pytest.raises(ValueError, match="fold"):
+        derive_seed(1, dataset_id="data", operator_id="operator", fold=-1)
+
+
+def test_fingerprint_uses_canonical_json_for_equivalent_values() -> None:
+    first = {"metric": "revenue", "segments": ["region", "channel"]}
+    second = {"segments": ("region", "channel"), "metric": "revenue"}
+
+    assert canonical_json(first) == canonical_json(second)
+    assert fingerprint(first) == fingerprint(second)
+    assert fingerprint(first) != fingerprint({"metric": "profit"})
+
+
+def test_seed_and_fingerprint_are_stable_in_a_fresh_process() -> None:
+    code = (
+        "from fabric_rlm.experimental.analysis_reproducibility import "
+        "derive_seed, fingerprint; "
+        "print(derive_seed(17, dataset_id='panel-v1', "
+        "operator_id='cohort.retention.v1', repetition=3, fold=2)); "
+        "print(fingerprint({'b': [2, 3], 'a': 1}))"
+    )
+    first_env = {
+        **os.environ,
+        "PYTHONPATH": str(ROOT),
+        "PYTHONHASHSEED": "1",
+    }
+    second_env = {
+        **os.environ,
+        "PYTHONPATH": str(ROOT),
+        "PYTHONHASHSEED": "99999",
+    }
+
+    first = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=first_env,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    second = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=second_env,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    assert first == second

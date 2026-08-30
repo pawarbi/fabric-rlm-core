@@ -22,6 +22,11 @@ from fabric_rlm.experimental.analysis_contracts import (
     OperatorResult,
     RunBudget,
 )
+from fabric_rlm.experimental.analysis_reproducibility import (
+    canonical_json,
+    derive_seed,
+    fingerprint,
+)
 from fabric_rlm.experimental.bandit_policy import BanditPolicy, BanditState
 from fabric_rlm.experimental.effort_ladder_policy import (
     EFFORT_RUNG_COST,
@@ -39,11 +44,14 @@ __all__ = [
     "BanditPolicy",
     "BanditState",
     "Budget",
+    "canonical_json",
+    "derive_seed",
     "DifficultyVerdict",
-    "EvidenceEntry",
     "EFFORT_RUNG_COST",
     "EffortBanditPolicy",
     "EffortLadderPolicy",
+    "EvidenceEntry",
+    "fingerprint",
     "LadderPolicy",
     "OperatorNode",
     "OperatorResult",
