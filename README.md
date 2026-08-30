@@ -572,7 +572,7 @@ token-sensitive batch runs on trivial tasks.
 
 Skills are Markdown playbooks that tell the model how to do a kind of work
 properly: which library to reach for, the traps to avoid, and what to check
-before submitting. Eight ship with the package. Name the ones a task needs and
+before submitting. Eleven ship with the package. Name the ones a task needs and
 they are prepended to the prompt. The keyword router can also select them from
 the task and input names.
 
@@ -595,13 +595,15 @@ print(rlm.run().answer)
 | `excel_extract` | Reading workbooks: locating real header rows, multi-table sheets, formula versus cached value, pulling structured records out of messy layouts |
 | `data_exploration` | Files too large for context: DuckDB and Polars over CSV, Parquet and JSONL, aggregating in code so raw rows never reach the prompt |
 | `delta_lakehouse` | Read-only Delta table discovery and analysis through mounted Lakehouse paths or OneLake `abfss://` paths |
+| `deep_insight_discovery` | Source-agnostic search for trends, cohorts, interactions, anomalies, and decision-grade findings with executable numeric evidence |
+| `deep_insight_critic` | Adversarial review of audited findings, alternative explanations, action readiness, and required follow-up evidence |
 | `pdf_document_analysis` | Long documents with PyMuPDF: page enumeration, chunking, and per-chunk extraction |
 | `semantic_model` | Power BI semantic model discovery, measure selection, DAX queries, and result validation |
 | `core` | The PLAN / VERIFY / REFLECT contract applied to every run |
 | `validation` | Checking an answer against the task's constraints before submitting |
 | `error_handling` | What to do when a turn raises, so the next turn fixes rather than repeats |
 
-The six domain skills are keyword-routed. For example, `data_exploration`
+The eight domain skills are keyword-routed. For example, `data_exploration`
 activates when a task or input name mentions logs or CSV files. The core and
 utility skills provide planning, validation, and error recovery.
 
