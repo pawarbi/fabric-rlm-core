@@ -831,3 +831,154 @@ def score_detection_case(
         sample_size=total_opportunities,
         runtime_seconds=runtime_seconds,
     )
+
+
+def _cluster_labels(values: object, field_name: str) -> tuple[object, ...]:
+    if not isinstance(values, (list, tuple)) or not values:
+        raise ValueError(f"{field_name} must be a non-empty sequence")
+    normalized = []
+    for index, value in enumerate(values):
+        try:
+            hash(value)
+        except TypeError as exc:
+            raise ValueError(
+                f"{field_name}[{index}] must be hashable"
+            ) from exc
+        normalized.append(value)
+    return tuple(normalized)
+
+
+def _combination_two(value: int) -> int:
+    return value * (value - 1) // 2
+
+
+def _adjusted_rand_index(
+    expected: tuple[object, ...],
+    predicted: tuple[object, ...],
+) -> float:
+    expected_counts: dict[object, int] = {}
+    predicted_counts: dict[object, int] = {}
+    contingency: dict[tuple[object, object], int] = {}
+    for expected_label, predicted_label in zip(expected, predicted):
+        expected_counts[expected_label] = (
+            expected_counts.get(expected_label, 0) + 1
+        )
+        predicted_counts[predicted_label] = (
+            predicted_counts.get(predicted_label, 0) + 1
+        )
+        pair = (expected_label, predicted_label)
+        contingency[pair] = contingency.get(pair, 0) + 1
+    total_pairs = _combination_two(len(expected))
+    if total_pairs == 0:
+        return 1.0
+    contingency_index = math.fsum(
+        _combination_two(count) for count in contingency.values()
+    )
+    expected_index_sum = math.fsum(
+        _combination_two(count) for count in expected_counts.values()
+    )
+    predicted_index_sum = math.fsum(
+        _combination_two(count) for count in predicted_counts.values()
+    )
+    expected_index = (
+        expected_index_sum * predicted_index_sum / total_pairs
+    )
+    maximum_index = 0.5 * (expected_index_sum + predicted_index_sum)
+    denominator = maximum_index - expected_index
+    if denominator == 0:
+        return 1.0
+    return (contingency_index - expected_index) / denominator
+
+
+def _minus_one_to_one(value: object, field_name: str) -> float:
+    number = _finite_number(value, field_name)
+    if number < -1 or number > 1:
+        raise ValueError(f"{field_name} must be between -1 and 1")
+    return number
+
+
+def score_clustering_case(
+    *,
+    dataset_id: str,
+    case_id: str,
+    task: str,
+    expected_labels: tuple[object, ...] | list[object],
+    predicted_labels: tuple[object, ...] | list[object],
+    sample_size: int,
+    slice_id: str = "all",
+    silhouette: float | None = None,
+    stability_ari: float | None = None,
+    minimum_ari: float | None = None,
+    minimum_silhouette: float | None = None,
+    minimum_stability_ari: float | None = None,
+    require_expected_cluster_count: bool = False,
+    runtime_seconds: float = 0.0,
+) -> BenchmarkCaseScore:
+    """Score cluster recovery, shape quality, and resampling stability."""
+
+    expected = _cluster_labels(expected_labels, "expected_labels")
+    predicted = _cluster_labels(predicted_labels, "predicted_labels")
+    if len(expected) != len(predicted):
+        raise ValueError(
+            "expected_labels and predicted_labels must have the same length"
+        )
+    if type(sample_size) is not int or sample_size != len(expected):
+        raise ValueError("sample_size must match labels length")
+    if type(require_expected_cluster_count) is not bool:
+        raise ValueError("require_expected_cluster_count must be a boolean")
+
+    ari = _adjusted_rand_index(expected, predicted)
+    expected_cluster_count = len(set(expected))
+    predicted_cluster_count = len(set(predicted))
+    metrics = {
+        "adjusted_rand_index": ari,
+        "cluster_count_absolute_error": float(
+            abs(predicted_cluster_count - expected_cluster_count)
+        ),
+    }
+    invariants: dict[str, bool] = {}
+    if silhouette is not None:
+        metrics["silhouette"] = _minus_one_to_one(
+            silhouette,
+            "silhouette",
+        )
+    if stability_ari is not None:
+        metrics["stability_adjusted_rand_index"] = _minus_one_to_one(
+            stability_ari,
+            "stability_ari",
+        )
+    if minimum_ari is not None:
+        threshold = _minus_one_to_one(minimum_ari, "minimum_ari")
+        invariants["minimum_ari_met"] = ari >= threshold
+    if minimum_silhouette is not None:
+        threshold = _minus_one_to_one(
+            minimum_silhouette,
+            "minimum_silhouette",
+        )
+        invariants["minimum_silhouette_met"] = (
+            silhouette is not None and metrics["silhouette"] >= threshold
+        )
+    if minimum_stability_ari is not None:
+        threshold = _minus_one_to_one(
+            minimum_stability_ari,
+            "minimum_stability_ari",
+        )
+        invariants["minimum_stability_ari_met"] = (
+            stability_ari is not None
+            and metrics["stability_adjusted_rand_index"] >= threshold
+        )
+    if require_expected_cluster_count:
+        invariants["expected_cluster_count_met"] = (
+            expected_cluster_count == predicted_cluster_count
+        )
+
+    return BenchmarkCaseScore(
+        dataset_id=dataset_id,
+        case_id=case_id,
+        task=task,
+        slice_id=slice_id,
+        metrics=metrics,
+        invariants=invariants,
+        sample_size=sample_size,
+        runtime_seconds=runtime_seconds,
+    )

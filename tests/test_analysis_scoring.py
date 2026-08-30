@@ -9,6 +9,7 @@ from fabric_rlm.experimental import (
     BenchmarkCaseScore,
     BenchmarkReport,
     score_binary_classification_case,
+    score_clustering_case,
     score_detection_case,
     score_decomposition_case,
     score_regression_case,
@@ -580,4 +581,133 @@ def test_detection_score_rejects_invalid_inputs(
             case_id="case",
             task="detection",
             **defaults,
+        )
+
+
+def test_clustering_score_is_invariant_to_cluster_label_permutation() -> None:
+    score = score_clustering_case(
+        dataset_id="clustered-contaminated-ground-truth-v1",
+        case_id="clean-clusters",
+        task="clustering",
+        expected_labels=("a", "a", "b", "b", "c", "c"),
+        predicted_labels=("z", "z", "x", "x", "y", "y"),
+        sample_size=6,
+        silhouette=0.82,
+        stability_ari=0.91,
+        minimum_ari=0.9,
+        minimum_silhouette=0.5,
+        minimum_stability_ari=0.8,
+    )
+
+    assert score.metrics == {
+        "adjusted_rand_index": 1.0,
+        "cluster_count_absolute_error": 0.0,
+        "silhouette": 0.82,
+        "stability_adjusted_rand_index": 0.91,
+    }
+    assert score.invariants == {
+        "minimum_ari_met": True,
+        "minimum_silhouette_met": True,
+        "minimum_stability_ari_met": True,
+    }
+    assert score.passed is True
+
+
+def test_clustering_score_detects_collapsed_clusters() -> None:
+    score = score_clustering_case(
+        dataset_id="dataset",
+        case_id="collapsed",
+        task="clustering",
+        expected_labels=("a", "a", "b", "b"),
+        predicted_labels=("one", "one", "one", "one"),
+        sample_size=4,
+        minimum_ari=0.5,
+        require_expected_cluster_count=True,
+    )
+
+    assert score.metrics["adjusted_rand_index"] == 0.0
+    assert score.metrics["cluster_count_absolute_error"] == 1.0
+    assert score.invariants["minimum_ari_met"] is False
+    assert score.invariants["expected_cluster_count_met"] is False
+    assert score.passed is False
+
+
+def test_clustering_score_handles_independent_pairings() -> None:
+    score = score_clustering_case(
+        dataset_id="dataset",
+        case_id="independent",
+        task="clustering",
+        expected_labels=("a", "a", "b", "b"),
+        predicted_labels=("x", "y", "x", "y"),
+        sample_size=4,
+    )
+
+    assert score.metrics["adjusted_rand_index"] == pytest.approx(-0.5)
+
+
+@pytest.mark.parametrize(
+    ("expected", "predicted"),
+    [
+        (("a",), ("x",)),
+        (("a", "b", "c"), ("x", "y", "z")),
+        (("a", "a", "a"), ("x", "x", "x")),
+    ],
+)
+def test_clustering_score_matches_standard_degenerate_ari_convention(
+    expected: tuple[str, ...],
+    predicted: tuple[str, ...],
+) -> None:
+    score = score_clustering_case(
+        dataset_id="dataset",
+        case_id="degenerate",
+        task="clustering",
+        expected_labels=expected,
+        predicted_labels=predicted,
+        sample_size=len(expected),
+    )
+
+    assert score.metrics["adjusted_rand_index"] == 1.0
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {
+                "expected_labels": ("a", "b"),
+                "predicted_labels": ("x",),
+                "sample_size": 2,
+            },
+            "same length",
+        ),
+        (
+            {
+                "expected_labels": ("a", "b"),
+                "predicted_labels": ("x", "y"),
+                "sample_size": 2,
+                "silhouette": 1.5,
+            },
+            "silhouette",
+        ),
+        (
+            {
+                "expected_labels": ("a", "b"),
+                "predicted_labels": ("x", "y"),
+                "sample_size": 2,
+                "stability_ari": -1.5,
+            },
+            "stability_ari",
+        ),
+    ],
+)
+def test_clustering_score_rejects_invalid_inputs(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        score_clustering_case(
+            dataset_id="dataset",
+            case_id="case",
+            task="clustering",
+            **kwargs,
         )
