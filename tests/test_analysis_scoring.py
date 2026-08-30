@@ -10,6 +10,7 @@ from fabric_rlm.experimental import (
     BenchmarkReport,
     score_binary_classification_case,
     score_decomposition_case,
+    score_regression_case,
 )
 
 
@@ -307,4 +308,128 @@ def test_binary_classification_score_requires_matching_sample_size() -> None:
             labels=(0, 1),
             probabilities=(0.2, 0.8),
             sample_size=3,
+        )
+
+
+def test_regression_score_reports_error_bias_and_interval_quality() -> None:
+    score = score_regression_case(
+        dataset_id="correlated-tabular-ground-truth-v1",
+        case_id="final-holdout",
+        task="regression",
+        actual=(10.0, 20.0, 30.0, 40.0),
+        predicted=(11.0, 19.0, 28.0, 42.0),
+        interval_lower=(8.0, 18.0, 25.0, 39.0),
+        interval_upper=(12.0, 22.0, 31.0, 41.0),
+        sample_size=4,
+        minimum_sample_size=4,
+        minimum_interval_coverage=0.75,
+    )
+
+    assert score.metrics["bias"] == 0.0
+    assert score.metrics["mae"] == 1.5
+    assert score.metrics["rmse"] == pytest.approx(math.sqrt(2.5))
+    assert score.metrics["interval_coverage"] == 1.0
+    assert score.metrics["mean_interval_width"] == 4.0
+    assert score.passed is True
+
+
+def test_regression_score_flags_undercoverage_and_small_slice() -> None:
+    score = score_regression_case(
+        dataset_id="dataset",
+        case_id="holdout",
+        task="regression",
+        slice_id="rare",
+        actual=(0.0, 1.0, 2.0),
+        predicted=(0.0, 1.0, 2.0),
+        interval_lower=(0.1, 0.9, 2.1),
+        interval_upper=(0.2, 1.1, 2.2),
+        sample_size=3,
+        minimum_sample_size=30,
+        minimum_interval_coverage=0.8,
+    )
+
+    assert score.metrics["interval_coverage"] == pytest.approx(1 / 3)
+    assert score.invariants["minimum_sample_size_met"] is False
+    assert score.invariants["minimum_interval_coverage_met"] is False
+    assert score.passed is False
+
+
+def test_regression_score_can_require_uncertainty_intervals() -> None:
+    score = score_regression_case(
+        dataset_id="dataset",
+        case_id="case",
+        task="regression",
+        actual=(1.0, 2.0),
+        predicted=(1.0, 2.0),
+        sample_size=2,
+        require_intervals=True,
+    )
+
+    assert score.invariants["required_intervals_present"] is False
+    assert score.passed is False
+    assert "interval_coverage" not in score.metrics
+
+    coverage_required = score_regression_case(
+        dataset_id="dataset",
+        case_id="case",
+        task="regression",
+        actual=(1.0, 2.0),
+        predicted=(1.0, 2.0),
+        sample_size=2,
+        minimum_interval_coverage=0.8,
+    )
+    assert (
+        coverage_required.invariants["minimum_interval_coverage_met"] is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {"actual": (1.0, 2.0), "predicted": (1.0,)},
+            "same length",
+        ),
+        (
+            {
+                "actual": (1.0, 2.0),
+                "predicted": (1.0, 2.0),
+                "interval_lower": (0.0, 1.0),
+            },
+            "provided together",
+        ),
+        (
+            {
+                "actual": (1.0, 2.0),
+                "predicted": (1.0, 2.0),
+                "interval_lower": (0.0, 3.0),
+                "interval_upper": (2.0, 2.5),
+            },
+            "lower",
+        ),
+    ],
+)
+def test_regression_score_rejects_invalid_inputs(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        score_regression_case(
+            dataset_id="dataset",
+            case_id="case",
+            task="regression",
+            sample_size=2,
+            **kwargs,
+        )
+
+
+def test_regression_score_rejects_non_finite_derived_errors() -> None:
+    with pytest.raises(ValueError, match="errors"):
+        score_regression_case(
+            dataset_id="dataset",
+            case_id="overflow",
+            task="regression",
+            actual=(1e308,),
+            predicted=(-1e308,),
+            sample_size=1,
         )

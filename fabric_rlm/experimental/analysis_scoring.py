@@ -364,6 +364,15 @@ def _probabilities(values: object) -> tuple[float, ...]:
     return normalized
 
 
+def _numeric_sequence(values: object, field_name: str) -> tuple[float, ...]:
+    if not isinstance(values, (list, tuple)) or not values:
+        raise ValueError(f"{field_name} must be a non-empty sequence")
+    return tuple(
+        _finite_number(value, f"{field_name}[{index}]")
+        for index, value in enumerate(values)
+    )
+
+
 def _roc_auc(
     labels: tuple[int, ...],
     probabilities: tuple[float, ...],
@@ -514,6 +523,108 @@ def score_binary_classification_case(
             "minimum_sample_size_met": sample_size >= minimum_sample_size,
             "probabilities_in_range": True,
         },
+        sample_size=sample_size,
+        runtime_seconds=runtime_seconds,
+    )
+
+
+def score_regression_case(
+    *,
+    dataset_id: str,
+    case_id: str,
+    task: str,
+    actual: tuple[object, ...] | list[object],
+    predicted: tuple[object, ...] | list[object],
+    sample_size: int,
+    slice_id: str = "all",
+    interval_lower: tuple[object, ...] | list[object] | None = None,
+    interval_upper: tuple[object, ...] | list[object] | None = None,
+    minimum_sample_size: int = 1,
+    minimum_interval_coverage: float | None = None,
+    require_intervals: bool = False,
+    runtime_seconds: float = 0.0,
+) -> BenchmarkCaseScore:
+    """Score regression error, bias, and optional uncertainty intervals."""
+
+    actual_values = _numeric_sequence(actual, "actual")
+    predicted_values = _numeric_sequence(predicted, "predicted")
+    if len(actual_values) != len(predicted_values):
+        raise ValueError("actual and predicted must have the same length")
+    if type(sample_size) is not int or sample_size != len(actual_values):
+        raise ValueError("sample_size must match actual length")
+    if type(minimum_sample_size) is not int or minimum_sample_size <= 0:
+        raise ValueError("minimum_sample_size must be a positive integer")
+    if type(require_intervals) is not bool:
+        raise ValueError("require_intervals must be a boolean")
+    if (interval_lower is None) != (interval_upper is None):
+        raise ValueError("interval_lower and interval_upper must be provided together")
+    if minimum_interval_coverage is not None:
+        numeric_minimum_coverage = _finite_number(
+            minimum_interval_coverage,
+            "minimum_interval_coverage",
+        )
+        if numeric_minimum_coverage < 0 or numeric_minimum_coverage > 1:
+            raise ValueError(
+                "minimum_interval_coverage must be between 0 and 1"
+            )
+    else:
+        numeric_minimum_coverage = None
+
+    errors = tuple(
+        _finite_number(
+            predicted_value - actual_value,
+            f"errors[{index}]",
+        )
+        for index, (actual_value, predicted_value) in enumerate(
+            zip(actual_values, predicted_values)
+        )
+    )
+    metrics = {
+        "bias": math.fsum(errors) / sample_size,
+        "mae": math.fsum(abs(error) for error in errors) / sample_size,
+        "rmse": math.sqrt(
+            math.fsum(error**2 for error in errors) / sample_size
+        ),
+    }
+    intervals_present = interval_lower is not None
+    invariants = {
+        "minimum_sample_size_met": sample_size >= minimum_sample_size,
+        "required_intervals_present": not require_intervals or intervals_present,
+    }
+    if intervals_present:
+        lower_values = _numeric_sequence(interval_lower, "interval_lower")
+        upper_values = _numeric_sequence(interval_upper, "interval_upper")
+        if len(lower_values) != sample_size or len(upper_values) != sample_size:
+            raise ValueError("interval bounds must match actual length")
+        if any(lower > upper for lower, upper in zip(lower_values, upper_values)):
+            raise ValueError("interval lower bounds must not exceed upper bounds")
+        coverage = sum(
+            lower <= value <= upper
+            for value, lower, upper in zip(
+                actual_values,
+                lower_values,
+                upper_values,
+            )
+        ) / sample_size
+        metrics["interval_coverage"] = coverage
+        metrics["mean_interval_width"] = math.fsum(
+            upper - lower for lower, upper in zip(lower_values, upper_values)
+        ) / sample_size
+        invariants["interval_bounds_valid"] = True
+        if numeric_minimum_coverage is not None:
+            invariants["minimum_interval_coverage_met"] = (
+                coverage >= numeric_minimum_coverage
+            )
+    elif numeric_minimum_coverage is not None:
+        invariants["minimum_interval_coverage_met"] = False
+
+    return BenchmarkCaseScore(
+        dataset_id=dataset_id,
+        case_id=case_id,
+        task=task,
+        slice_id=slice_id,
+        metrics=metrics,
+        invariants=invariants,
         sample_size=sample_size,
         runtime_seconds=runtime_seconds,
     )

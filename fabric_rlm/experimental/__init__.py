@@ -53,6 +53,7 @@ from fabric_rlm.experimental.analysis_scoring import (
     BenchmarkReport,
     score_binary_classification_case,
     score_decomposition_case,
+    score_regression_case,
 )
 from fabric_rlm.experimental.analysis_validation import (
     SplitFold,
@@ -108,6 +109,7 @@ __all__ = [
     "RunBudget",
     "score_binary_classification_case",
     "score_decomposition_case",
+    "score_regression_case",
     "SplitFold",
     "SplitPlan",
     "SyntheticBenchmark",
