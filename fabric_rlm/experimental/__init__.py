@@ -28,6 +28,10 @@ from fabric_rlm.experimental.analysis_dag import (
     validate_analysis_dag,
 )
 from fabric_rlm.experimental.analysis_evidence import EvidenceRegistry
+from fabric_rlm.experimental.analysis_operators import (
+    additive_decomposition,
+    rate_decomposition,
+)
 from fabric_rlm.experimental.analysis_reproducibility import (
     canonical_json,
     derive_seed,
@@ -43,6 +47,7 @@ from fabric_rlm.experimental.effort_ladder_policy import (
 __all__ = [
     "AdaptiveResult",
     "AdaptiveRunner",
+    "additive_decomposition",
     "AnalysisBrief",
     "AnalysisDAG",
     "AttemptConfig",
@@ -63,6 +68,7 @@ __all__ = [
     "OperatorNode",
     "OperatorResult",
     "OperatorSpec",
+    "rate_decomposition",
     "RunBudget",
     "ValidatedDAG",
     "ValidationVerdict",

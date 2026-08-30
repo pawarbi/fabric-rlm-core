@@ -26,7 +26,7 @@ def _canonical_value(value: object, path: str = "value") -> object:
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError(f"{path} must be JSON-compatible")
-        return value
+        return value + 0.0
     if isinstance(value, Mapping):
         if any(not isinstance(key, str) for key in value):
             raise ValueError(f"{path} must have string object keys")

@@ -370,6 +370,11 @@ def test_fingerprint_uses_canonical_json_for_equivalent_values() -> None:
     assert fingerprint(first) != fingerprint({"metric": "profit"})
 
 
+def test_fingerprint_normalizes_ieee_signed_zero() -> None:
+    assert canonical_json({"value": -0.0}) == canonical_json({"value": 0.0})
+    assert fingerprint({"value": -0.0}) == fingerprint({"value": 0.0})
+
+
 def test_seed_and_fingerprint_are_stable_in_a_fresh_process() -> None:
     code = (
         "from fabric_rlm.experimental.analysis_reproducibility import "
