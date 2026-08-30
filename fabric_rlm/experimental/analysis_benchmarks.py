@@ -19,6 +19,8 @@ from fabric_rlm.experimental.analysis_reproducibility import (
 
 
 _DECOMPOSITION_DATASET_ID = "decomposition-ground-truth-v1"
+_PANEL_DATASET_ID = "panel-ground-truth-v1"
+_PANEL_COHORT_SIZE = 60
 _TIME_SERIES_DATASET_ID = "time-series-ground-truth-v1"
 _GENERATOR_VERSION = "2"
 _RANDOM_ENGINE = "python.random.Random"
@@ -27,6 +29,10 @@ _DATASET_SOURCE_FILES = {
         "additive": "additive.csv",
         "rate": "rate.csv",
         "volume_rate_mix": "volume_rate_mix.csv",
+    },
+    _PANEL_DATASET_ID: {
+        "customers": "customers.csv",
+        "events": "events.csv",
     },
     _TIME_SERIES_DATASET_ID: {
         "time_series": "time_series.csv",
@@ -38,6 +44,7 @@ _DATASET_SEED_NAMES = {
         "rate",
         "volume_rate_mix",
     },
+    _PANEL_DATASET_ID: {"attributes", "structure"},
     _TIME_SERIES_DATASET_ID: {"noise", "structure"},
 }
 
@@ -482,6 +489,246 @@ def write_time_series_benchmark(
         manifest_path=manifest_path,
         truth_path=truth_path,
         worker_source_paths=MappingProxyType({"time_series": source_path}),
+        dataset_fingerprint=dataset_fingerprint,
+    )
+
+
+def write_panel_benchmark(
+    output_dir: str | Path,
+    *,
+    root_seed: int,
+) -> SyntheticBenchmark:
+    """Write a customer-event panel with cohort, funnel, and leakage truth."""
+
+    if type(root_seed) is not int or root_seed < 0:
+        raise ValueError("root_seed must be a non-negative integer")
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    if any(root.iterdir()):
+        raise ValueError(f"output_dir must be empty: {root}")
+
+    derived_seeds = {
+        name: derive_seed(
+            root_seed,
+            dataset_id=_PANEL_DATASET_ID,
+            operator_id=f"generate.panel.{name}.v1",
+        )
+        for name in ("attributes", "structure")
+    }
+    attribute_rng = random.Random(derived_seeds["attributes"])
+    structure_rng = random.Random(derived_seeds["structure"])
+    # cohort, signup_day, activated, converted, retained among converted
+    cohort_specs = (
+        ("2026-01", 0, 48, 30, 24),
+        ("2026-02", 30, 45, 28, 20),
+        ("2026-03", 60, 42, 20, 12),
+        ("2026-04", 120, 40, 20, 12),
+    )
+    observation_cutoff = 180
+    retention_exposure = 90
+    channels = ("direct", "partner", "paid", "organic")
+
+    customer_rows: list[tuple[object, ...]] = []
+    event_rows: list[tuple[object, ...]] = []
+    truth_cohorts: list[dict[str, object]] = []
+    eligible_duplicate_rows: list[tuple[object, ...]] = []
+
+    for cohort, signup_day, activated_count, converted_count, retained_count in cohort_specs:
+        customer_ids = [
+            f"{cohort}-{index:03d}"
+            for index in range(1, _PANEL_COHORT_SIZE + 1)
+        ]
+        shuffled = list(customer_ids)
+        structure_rng.shuffle(shuffled)
+        activated = set(shuffled[:activated_count])
+        converted_candidates = list(shuffled[:activated_count])
+        structure_rng.shuffle(converted_candidates)
+        converted = set(converted_candidates[:converted_count])
+        retained_candidates = sorted(converted)
+        structure_rng.shuffle(retained_candidates)
+        retained = set(retained_candidates[:retained_count])
+        eligible_for_retention = (
+            observation_cutoff - signup_day >= retention_exposure
+        )
+
+        for customer_id in customer_ids:
+            customer_rows.append(
+                (
+                    customer_id,
+                    cohort,
+                    signup_day,
+                    channels[attribute_rng.randrange(len(channels))],
+                    attribute_rng.randint(0, 12),
+                    int(customer_id in converted),
+                    int(customer_id in retained),
+                )
+            )
+            signup_event = (
+                f"evt-{customer_id}-signup",
+                customer_id,
+                cohort,
+                "signup",
+                signup_day,
+            )
+            event_rows.append(signup_event)
+            if customer_id in activated:
+                activated_event = (
+                    f"evt-{customer_id}-activated",
+                    customer_id,
+                    cohort,
+                    "activated",
+                    signup_day + 7,
+                )
+                event_rows.append(activated_event)
+                eligible_duplicate_rows.append(activated_event)
+            if customer_id in converted:
+                converted_event = (
+                    f"evt-{customer_id}-converted",
+                    customer_id,
+                    cohort,
+                    "converted",
+                    signup_day + 30,
+                )
+                event_rows.append(converted_event)
+                eligible_duplicate_rows.append(converted_event)
+            if customer_id in retained and eligible_for_retention:
+                retained_event = (
+                    f"evt-{customer_id}-retained-day-90",
+                    customer_id,
+                    cohort,
+                    "retained_day_90",
+                    signup_day + retention_exposure,
+                )
+                event_rows.append(retained_event)
+
+        truth_cohorts.append(
+            {
+                "cohort": cohort,
+                "signup_day": signup_day,
+                "signup": len(customer_ids),
+                "activated": activated_count,
+                "converted": converted_count,
+                "eligible_for_day_90_retention": eligible_for_retention,
+                "day_90_retained": (
+                    retained_count if eligible_for_retention else None
+                ),
+                "day_90_retention_denominator": (
+                    converted_count if eligible_for_retention else None
+                ),
+                "day_90_retention_rate": (
+                    retained_count / converted_count
+                    if eligible_for_retention
+                    else None
+                ),
+            }
+        )
+
+    duplicate_rows = structure_rng.sample(eligible_duplicate_rows, 8)
+    event_rows.extend(duplicate_rows)
+    customer_rows.sort(key=lambda row: str(row[0]))
+    event_rows.sort(key=lambda row: (str(row[0]), int(row[4])))
+
+    source_files = _DATASET_SOURCE_FILES[_PANEL_DATASET_ID]
+    customers_path = root / source_files["customers"]
+    events_path = root / source_files["events"]
+    _write_csv(
+        customers_path,
+        (
+            "customer_id",
+            "cohort",
+            "signup_day",
+            "acquisition_channel",
+            "early_sessions",
+            "future_converted_label",
+            "future_retained_day_90_label",
+        ),
+        customer_rows,
+    )
+    _write_csv(
+        events_path,
+        ("event_id", "customer_id", "cohort", "event_type", "event_day"),
+        event_rows,
+    )
+    sources = [
+        _file_record(root, "customers", customers_path, len(customer_rows)),
+        _file_record(root, "events", events_path, len(event_rows)),
+    ]
+    dataset_fingerprint = _dataset_fingerprint(
+        dataset_id=_PANEL_DATASET_ID,
+        root_seed=root_seed,
+        derived_seeds=derived_seeds,
+        sources=sources,
+    )
+    truth_path = root / "truth.json"
+    _write_json(
+        truth_path,
+        {
+            "dataset_id": _PANEL_DATASET_ID,
+            "dataset_fingerprint": dataset_fingerprint,
+            "generator_version": _GENERATOR_VERSION,
+            "root_seed": root_seed,
+            "cohorts": truth_cohorts,
+            "funnel": {
+                "signup": sum(_PANEL_COHORT_SIZE for _ in cohort_specs),
+                "activated": sum(spec[2] for spec in cohort_specs),
+                "converted": sum(spec[3] for spec in cohort_specs),
+                "eligible_day_90_retained": sum(
+                    spec[4]
+                    for spec in cohort_specs
+                    if observation_cutoff - spec[1] >= retention_exposure
+                ),
+                "counting_rule": "distinct customer_id",
+            },
+            "censoring": {
+                "observation_cutoff_day": observation_cutoff,
+                "minimum_retention_exposure_days": retention_exposure,
+                "censored_cohorts": [
+                    spec[0]
+                    for spec in cohort_specs
+                    if observation_cutoff - spec[1] < retention_exposure
+                ],
+            },
+            "data_quality": {
+                "duplicate_event_ids": sorted(
+                    str(row[0]) for row in duplicate_rows
+                ),
+                "duplicate_event_rows": len(duplicate_rows),
+            },
+            "leakage": {
+                "prohibited_feature_columns": [
+                    "future_converted_label",
+                    "future_retained_day_90_label",
+                ],
+                "reason": "post-outcome information",
+            },
+        },
+    )
+    truth_bytes = truth_path.read_bytes()
+    manifest_path = root / "manifest.json"
+    _write_json(
+        manifest_path,
+        {
+            "dataset_id": _PANEL_DATASET_ID,
+            "dataset_fingerprint": dataset_fingerprint,
+            "generator_version": _GENERATOR_VERSION,
+            "random_engine": _RANDOM_ENGINE,
+            "root_seed": root_seed,
+            "derived_seeds": derived_seeds,
+            "sources": sources,
+            "truth_integrity": {
+                "sha256": hashlib.sha256(truth_bytes).hexdigest(),
+                "size_bytes": len(truth_bytes),
+            },
+        },
+    )
+    return SyntheticBenchmark(
+        dataset_id=_PANEL_DATASET_ID,
+        root_seed=root_seed,
+        manifest_path=manifest_path,
+        truth_path=truth_path,
+        worker_source_paths=MappingProxyType(
+            {"customers": customers_path, "events": events_path}
+        ),
         dataset_fingerprint=dataset_fingerprint,
     )
 

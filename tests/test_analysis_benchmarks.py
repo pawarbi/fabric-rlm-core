@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import csv
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
+import textwrap
 
 import pytest
 
 from fabric_rlm.experimental import (
     load_synthetic_benchmark,
     write_decomposition_benchmark,
+    write_panel_benchmark,
     write_time_series_benchmark,
 )
 from fabric_rlm.experimental.analysis_reproducibility import derive_seed
@@ -109,7 +115,11 @@ def test_load_synthetic_benchmark_rejects_tampered_truth(tmp_path: Path) -> None
 
 @pytest.mark.parametrize(
     "writer",
-    [write_decomposition_benchmark, write_time_series_benchmark],
+    [
+        write_decomposition_benchmark,
+        write_panel_benchmark,
+        write_time_series_benchmark,
+    ],
 )
 @pytest.mark.parametrize("bad_seed", [-1, True, False, 1.5, "42", None])
 def test_synthetic_benchmark_writers_reject_invalid_root_seed(
@@ -286,3 +296,152 @@ def test_time_series_seed_changes_anomaly_and_missing_patterns(
     assert first_truth["series"][1]["missing_indices"] != second_truth["series"][1][
         "missing_indices"
     ]
+
+
+def test_panel_benchmark_is_byte_reproducible_for_same_seed(
+    tmp_path: Path,
+) -> None:
+    write_panel_benchmark(tmp_path / "first", root_seed=20260830)
+    write_panel_benchmark(tmp_path / "second", root_seed=20260830)
+
+    assert _bundle_bytes(tmp_path / "first") == _bundle_bytes(tmp_path / "second")
+
+
+def test_panel_benchmark_is_byte_reproducible_across_hash_seeds(
+    tmp_path: Path,
+) -> None:
+    script = textwrap.dedent(
+        """
+        import sys
+        from pathlib import Path
+        from fabric_rlm.experimental import write_panel_benchmark
+
+        write_panel_benchmark(Path(sys.argv[1]), root_seed=73)
+        """
+    )
+    for directory, hash_seed in (("first", "1"), ("second", "2")):
+        environment = os.environ.copy()
+        environment["PYTHONHASHSEED"] = hash_seed
+        subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path / directory)],
+            check=True,
+            env=environment,
+        )
+
+    assert _bundle_bytes(tmp_path / "first") == _bundle_bytes(tmp_path / "second")
+
+
+def test_panel_benchmark_records_cohort_funnel_and_censoring_truth(
+    tmp_path: Path,
+) -> None:
+    bundle = write_panel_benchmark(tmp_path, root_seed=73)
+    manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
+    truth = json.loads(bundle.truth_path.read_text(encoding="utf-8"))
+    cohorts = {entry["cohort"]: entry for entry in truth["cohorts"]}
+
+    assert manifest["dataset_id"] == "panel-ground-truth-v1"
+    assert {source["identity"] for source in manifest["sources"]} == {
+        "customers",
+        "events",
+    }
+    assert cohorts["2026-01"]["eligible_for_day_90_retention"] is True
+    assert cohorts["2026-01"]["day_90_retained"] == 24
+    assert cohorts["2026-01"]["day_90_retention_denominator"] == 30
+    assert cohorts["2026-01"]["day_90_retention_rate"] == pytest.approx(24 / 30)
+    assert cohorts["2026-03"]["day_90_retained"] == 12
+    assert cohorts["2026-04"]["eligible_for_day_90_retention"] is False
+    assert cohorts["2026-04"]["day_90_retained"] is None
+    assert cohorts["2026-04"]["day_90_retention_denominator"] is None
+    assert cohorts["2026-04"]["day_90_retention_rate"] is None
+    assert truth["funnel"]["signup"] == 240
+    assert truth["funnel"]["activated"] == 175
+    assert truth["funnel"]["converted"] == 98
+    assert truth["funnel"]["eligible_day_90_retained"] == 56
+    assert truth["funnel"]["counting_rule"] == "distinct customer_id"
+    assert truth["censoring"]["observation_cutoff_day"] == 180
+    assert truth["censoring"]["minimum_retention_exposure_days"] == 90
+    assert truth["censoring"]["censored_cohorts"] == ["2026-04"]
+
+    with bundle.worker_source_paths["events"].open(
+        "r",
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        events = list(csv.DictReader(handle))
+    april_retention = [
+        event
+        for event in events
+        if event["cohort"] == "2026-04"
+        and event["event_type"] == "retained_day_90"
+    ]
+    assert april_retention == []
+
+    events_by_customer: dict[str, set[str]] = {}
+    for event in events:
+        events_by_customer.setdefault(event["customer_id"], set()).add(
+            event["event_type"]
+        )
+    assert all(
+        "converted" in event_types
+        for event_types in events_by_customer.values()
+        if "retained_day_90" in event_types
+    )
+    distinct_customers_by_event = {
+        event_type: {
+            event["customer_id"]
+            for event in events
+            if event["event_type"] == event_type
+        }
+        for event_type in ("signup", "activated", "converted", "retained_day_90")
+    }
+    assert len(distinct_customers_by_event["signup"]) == truth["funnel"]["signup"]
+    assert len(distinct_customers_by_event["activated"]) == truth["funnel"][
+        "activated"
+    ]
+    assert len(distinct_customers_by_event["converted"]) == truth["funnel"][
+        "converted"
+    ]
+    assert len(distinct_customers_by_event["retained_day_90"]) == truth["funnel"][
+        "eligible_day_90_retained"
+    ]
+
+
+def test_panel_benchmark_records_duplicate_and_leakage_traps(
+    tmp_path: Path,
+) -> None:
+    bundle = write_panel_benchmark(tmp_path, root_seed=73)
+    truth = json.loads(bundle.truth_path.read_text(encoding="utf-8"))
+
+    assert len(truth["data_quality"]["duplicate_event_ids"]) == 8
+    assert truth["data_quality"]["duplicate_event_rows"] == 8
+    assert truth["leakage"]["prohibited_feature_columns"] == [
+        "future_converted_label",
+        "future_retained_day_90_label",
+    ]
+    assert truth["leakage"]["reason"] == "post-outcome information"
+
+
+def test_panel_seed_changes_assignments_but_not_aggregate_truth(
+    tmp_path: Path,
+) -> None:
+    first = write_panel_benchmark(tmp_path / "first", root_seed=1)
+    second = write_panel_benchmark(tmp_path / "second", root_seed=2)
+    first_truth = json.loads(first.truth_path.read_text(encoding="utf-8"))
+    second_truth = json.loads(second.truth_path.read_text(encoding="utf-8"))
+
+    assert first.dataset_fingerprint != second.dataset_fingerprint
+    assert first.worker_source_paths["customers"].read_bytes() != second.worker_source_paths[
+        "customers"
+    ].read_bytes()
+    assert first_truth["cohorts"] == second_truth["cohorts"]
+    assert first_truth["funnel"] == second_truth["funnel"]
+
+
+def test_panel_benchmark_loader_verifies_sources_and_truth(tmp_path: Path) -> None:
+    written = write_panel_benchmark(tmp_path, root_seed=73)
+
+    loaded = load_synthetic_benchmark(written.manifest_path)
+
+    assert loaded.dataset_id == "panel-ground-truth-v1"
+    assert loaded.worker_source_paths == written.worker_source_paths
+    assert loaded.dataset_fingerprint == written.dataset_fingerprint
