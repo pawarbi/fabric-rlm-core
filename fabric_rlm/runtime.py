@@ -613,12 +613,15 @@ class RLMResult:
         *,
         max_chars: int = 20_000,
         slow_turn_seconds: float = 10.0,
-        expanded: bool = False,
+        expanded: bool = True,
+        visible_turns: int = 15,
     ) -> "RunInspector":
         """Return an interactive notebook view of this run's observable turns.
 
         The returned object renders automatically as HTML in Jupyter and Fabric
-        notebooks. It can also be exported with ``.save_html(path)``.
+        notebooks. The view starts open with individually collapsed turns and a
+        scrollable turn viewport. It can also be exported with
+        ``.save_html(path)``.
         """
 
         from .inspector import RunInspector
@@ -628,6 +631,7 @@ class RLMResult:
             max_chars=max_chars,
             slow_turn_seconds=slow_turn_seconds,
             expanded=expanded,
+            visible_turns=visible_turns,
         )
 
     def __getattribute__(self, name: str) -> Any:

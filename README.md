@@ -539,8 +539,10 @@ result.inspect()
 Each turn expands to show the observable model response, executed code, output,
 errors, validator feedback, submitted payload, timing, and token usage. Slow,
 error, repair, and submission turns are labeled in the timeline. Model-provider
-private chain-of-thought is not exposed. The inspector is collapsed by default;
-use `result.inspect(expanded=True)` when it should render open initially.
+private chain-of-thought is not exposed. The inspector renders open with each
+turn collapsed, and the turn list scrolls after 15 rows. Use
+`result.inspect(visible_turns=10)` to change the viewport or
+`result.inspect(expanded=False)` when the whole inspector should start collapsed.
 
 The inspector is dependency-free and escapes trajectory content before
 rendering. Save the same view as a standalone file when you need to share or
