@@ -1,5 +1,6 @@
 from fabric_rlm import RLM
 from fabric_rlm.runtime import validate_submit_payload
+from fabric_rlm.skill_loader import SkillLoader
 
 
 class ScriptedLM:
@@ -88,6 +89,45 @@ def test_submit_validation_rejects_missing_required_field_at_max_turns() -> None
     assert not result.submitted
     assert result.failure_reason == "output_validation_failed"
     assert result.trajectory[0].validation_errors == ["Missing required output field 'answer'."]
+
+
+def test_skill_verifier_rejection_at_max_turns_reports_validation_failure(
+    tmp_path,
+) -> None:
+    (tmp_path / "strict.md").write_text(
+        """---
+applies_when:
+  keywords: [strict]
+specificity: domain
+---
+# Strict
+
+## Required verifier
+
+```python
+def verify(payload):
+    assert payload.get("answer") == 42, "answer must be 42"
+```
+""",
+        encoding="utf-8",
+    )
+    lm = ScriptedLM(["```python\nSUBMIT(answer=7)\n```"])
+    result = RLM.from_task(
+        "Return a strict answer.",
+        outputs=["answer"],
+        lm=lm,
+        max_turns=1,
+        timeout=5,
+        skills=["strict"],
+        skill_loader=SkillLoader(skill_dir=tmp_path),
+        enable_router=False,
+    ).run()
+
+    assert not result.submitted
+    assert result.failure_reason == "output_validation_failed"
+    history = result.trajectory.metadata["verifier_repair_history"]
+    assert history[-1]["assertion"] == "answer must be 42"
+    assert history[-1]["turn"] == 1
 
 
 def test_submit_validation_allows_empty_specific_collection_outputs() -> None:
