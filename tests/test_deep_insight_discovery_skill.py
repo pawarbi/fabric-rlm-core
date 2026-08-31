@@ -141,6 +141,7 @@ def _strong_insight() -> dict:
         "confidence": {"level": "high", "reason": "Four cohorts and 412 accounts"},
         "evidence_tier": "associational",
         "limitations": ["Observational data does not establish causality."],
+        "temporal_context": _temporal_context(),
         "supporting_claims": [],
         "discovery": {
             "pattern_type": "subgroup",
@@ -1804,7 +1805,7 @@ def _temporal_context(status: str = "current_change") -> dict:
         "timezone": "UTC",
         "requested_as_of": "2026-08-31",
         "data_as_of": "2026-08-15T23:59:59Z",
-        "trustworthy_through": "2026-06-30T23:59:59Z",
+        "trustworthy_through": "2026-07-01T00:00:00Z",
         "latest_complete_period": {
             "grain": "quarter",
             "start": "2026-04-01",
@@ -1819,6 +1820,7 @@ def _temporal_context(status: str = "current_change") -> dict:
         "comparators": [
             {
                 "kind": "same_period_prior_year",
+                "grain": "quarter",
                 "start": "2025-04-01",
                 "end": "2025-06-30",
                 "periods": ["2025-Q2"],
@@ -1834,11 +1836,16 @@ def _temporal_context(status: str = "current_change") -> dict:
             "current_level",
             "persistent",
         },
+        "evidence_fingerprints": {
+            "coverage": "a" * 64,
+            "window": "b" * 64,
+        },
     }
 
 
 def test_verifier_requires_temporal_context_for_current_claim_title() -> None:
     insight = _strong_insight()
+    insight.pop("temporal_context")
     insight["title"] = "Current enterprise retention is declining"
 
     with pytest.raises(AssertionError, match="temporal_context"):
@@ -1869,6 +1876,43 @@ def test_verifier_rejects_current_change_without_comparator() -> None:
     insight["temporal_context"]["comparators"] = []
 
     with pytest.raises(AssertionError, match="current_change.*comparator"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_temporal_context_for_current_statement() -> None:
+    insight = _strong_insight()
+    insight.pop("temporal_context")
+    insight["statement"] = "Current enterprise retention is 78%."
+
+    with pytest.raises(AssertionError, match="temporal_context"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_temporal_context_for_program_action() -> None:
+    insight = _strong_insight()
+    insight.pop("temporal_context")
+    insight["action"]["kind"] = "program"
+
+    with pytest.raises(AssertionError, match="program action.*temporal_context"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_contradictory_temporal_watermarks() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context()
+    insight["temporal_context"]["data_as_of"] = "not-a-timestamp"
+
+    with pytest.raises(AssertionError, match="data_as_of.*ISO"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_unlinked_or_empty_current_temporal_evidence() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context("current_level")
+    insight["temporal_context"]["latest_complete_period"] = {}
+    insight["temporal_context"]["evidence_fingerprints"]["coverage"] = ""
+
+    with pytest.raises(AssertionError, match="coverage fingerprint"):
         _verify({"insights": [insight]})
 
 

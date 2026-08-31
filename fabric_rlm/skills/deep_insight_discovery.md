@@ -103,7 +103,8 @@ Each insight must contain:
   `requested_as_of`, `data_as_of`, `trustworthy_through`,
   `latest_complete_period`, `current_window`, `comparators`,
   `partial_period_policy`, `completeness_basis`, `recency_status`, and boolean
-  `supports_current_action`. Status is `current_change`, `current_level`,
+  `supports_current_action`, plus `evidence_fingerprints` linking the temporal
+  status to deterministic coverage and window results. Status is `current_change`, `current_level`,
   `persistent`, `recurring_seasonal`, `historical`, `stale`, or
   `not_applicable`. A current change requires a complete current window and at
   least one comparator. Only current-change, current-level, and persistent
@@ -187,7 +188,9 @@ measured zero.
 def verify(payload):
     import math
     import re
+    from datetime import date, datetime, timedelta
     from decimal import Decimal, localcontext
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
     def collect_strings(value):
         strings = []
@@ -1048,8 +1051,44 @@ def verify(payload):
             assert isinstance(context.get(field), str) and context[field].strip(), (
                 f"{label} temporal_context {field} is required"
             )
-        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", context["requested_as_of"]), (
-            f"{label} temporal_context requested_as_of must be an ISO date"
+        try:
+            requested_as_of = date.fromisoformat(context["requested_as_of"])
+        except ValueError:
+            raise AssertionError(
+                f"{label} temporal_context requested_as_of must be an ISO date"
+            ) from None
+        try:
+            source_timezone = ZoneInfo(context["timezone"])
+        except ZoneInfoNotFoundError:
+            raise AssertionError(
+                f"{label} temporal_context timezone must be a valid IANA timezone"
+            ) from None
+
+        def parse_instant(field):
+            text = context[field]
+            try:
+                instant = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                raise AssertionError(
+                    f"{label} temporal_context {field} must be an ISO timestamp"
+                ) from None
+            assert instant.tzinfo is not None, (
+                f"{label} temporal_context {field} must include a timezone"
+            )
+            return instant
+
+        data_as_of = parse_instant("data_as_of")
+        trustworthy_through = parse_instant("trustworthy_through")
+        assert trustworthy_through <= data_as_of, (
+            f"{label} temporal_context trustworthy_through exceeds data_as_of"
+        )
+        requested_exclusive = datetime.combine(
+            requested_as_of + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=source_timezone,
+        )
+        assert data_as_of <= requested_exclusive, (
+            f"{label} temporal_context data_as_of exceeds requested_as_of"
         )
         assert context["partial_period_policy"] in {"exclude", "include_flagged"}, (
             f"{label} temporal_context partial_period_policy is invalid"
@@ -1069,22 +1108,119 @@ def verify(payload):
         assert supports_current_action == (status in current_statuses), (
             f"{label} temporal_context action support contradicts recency_status"
         )
+        evidence_fingerprints = context.get("evidence_fingerprints")
+        assert isinstance(evidence_fingerprints, dict), (
+            f"{label} temporal_context evidence_fingerprints are required"
+        )
+        assert re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(evidence_fingerprints.get("coverage", "")),
+        ), f"{label} temporal_context coverage fingerprint is invalid"
+        window_fingerprint = evidence_fingerprints.get("window")
+        assert window_fingerprint is None or re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(window_fingerprint),
+        ), f"{label} temporal_context window fingerprint is invalid"
+
+        def period_start(value, grain):
+            if grain == "day":
+                return value
+            if grain == "week":
+                return value - timedelta(days=value.weekday())
+            if grain == "month":
+                return value.replace(day=1)
+            return value.replace(
+                month=3 * ((value.month - 1) // 3) + 1,
+                day=1,
+            )
+
+        def next_period(value, grain):
+            if grain == "day":
+                return value + timedelta(days=1)
+            if grain == "week":
+                return value + timedelta(days=7)
+            months = 1 if grain == "month" else 3
+            month_index = value.year * 12 + value.month - 1 + months
+            return date(month_index // 12, month_index % 12 + 1, 1)
+
+        def validate_period(period, field):
+            assert isinstance(period, dict), (
+                f"{label} temporal_context {field} must be structured"
+            )
+            assert period.get("grain") in {"day", "week", "month", "quarter"}, (
+                f"{label} temporal_context {field} grain is invalid"
+            )
+            try:
+                start = date.fromisoformat(period.get("start", ""))
+                end = date.fromisoformat(period.get("end", ""))
+            except ValueError:
+                raise AssertionError(
+                    f"{label} temporal_context {field} requires ISO dates"
+                ) from None
+            assert start <= end, (
+                f"{label} temporal_context {field} start exceeds end"
+            )
+            grain = period["grain"]
+            assert start == period_start(start, grain), (
+                f"{label} temporal_context {field} start is not grain-aligned"
+            )
+            assert end == next_period(period_start(end, grain), grain) - timedelta(days=1), (
+                f"{label} temporal_context {field} end is not grain-aligned"
+            )
+            periods = period.get("periods")
+            if periods is not None:
+                assert (
+                    isinstance(periods, list)
+                    and periods
+                    and all(isinstance(item, str) and item for item in periods)
+                ), f"{label} temporal_context {field} periods are invalid"
+            return start, end
+
         if status in current_statuses:
-            assert isinstance(context.get("latest_complete_period"), dict), (
+            latest_complete = context.get("latest_complete_period")
+            assert isinstance(latest_complete, dict), (
                 f"{label} temporal_context current status requires "
                 "latest_complete_period"
+            )
+            _, complete_end = validate_period(
+                latest_complete,
+                "latest_complete_period",
+            )
+            complete_exclusive = datetime.combine(
+                complete_end + timedelta(days=1),
+                datetime.min.time(),
+                tzinfo=source_timezone,
+            )
+            assert trustworthy_through >= complete_exclusive, (
+                f"{label} temporal_context latest_complete_period exceeds "
+                "trustworthy coverage"
             )
         comparators = context.get("comparators")
         assert isinstance(comparators, list), (
             f"{label} temporal_context comparators must be a list"
         )
         if status == "current_change":
-            assert isinstance(context.get("current_window"), dict), (
+            current_window = context.get("current_window")
+            assert isinstance(current_window, dict), (
                 f"{label} temporal_context current_change requires current_window"
             )
+            validate_period(current_window, "current_window")
             assert comparators, (
                 f"{label} temporal_context current_change requires a comparator"
             )
+            for comparator_index, comparator in enumerate(comparators, start=1):
+                assert isinstance(comparator, dict), (
+                    f"{label} temporal_context comparator {comparator_index} "
+                    "must be structured"
+                )
+                assert isinstance(comparator.get("kind"), str) and comparator["kind"], (
+                    f"{label} temporal_context comparator {comparator_index} "
+                    "kind is required"
+                )
+                validate_period(
+                    comparator,
+                    f"comparator {comparator_index}",
+                )
         return status, supports_current_action
 
     sentinel = {"none", "n/a", "na", "unknown", "not applicable", "null"}
@@ -1234,10 +1370,19 @@ def verify(payload):
         assert title_fingerprint not in seen, f"duplicate insight title: {title}"
         assert statement_fingerprint not in seen, f"duplicate insight statement: {title}"
         seen.update((title_fingerprint, statement_fingerprint))
+        current_claim_text = " ".join(
+            [
+                title,
+                statement,
+                interpretation,
+                *collect_strings(insight.get("supporting_claims", [])),
+                *collect_strings(insight.get("action", {})),
+            ]
+        )
         current_claim = re.search(
             r"\b(current|currently|latest|recent|today|"
             r"this\s+(?:day|week|month|quarter|year))\b",
-            title,
+            current_claim_text,
             flags=re.I,
         )
         temporal_context = insight.get("temporal_context")
@@ -1331,6 +1476,10 @@ def verify(payload):
         for field in ("owner", "segment", "decision", "target", "time_horizon"):
             assert isinstance(action.get(field), str) and action[field].strip(), (
                 f"insight {index} action missing {field}"
+            )
+        if action.get("kind") == "program":
+            assert temporal_context is not None, (
+                f"insight {index} program action requires temporal_context"
             )
         if (
             temporal_context is not None

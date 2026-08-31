@@ -3,13 +3,14 @@ from __future__ import annotations
 import pytest
 
 from fabric_rlm.experimental import (
+    AnalysisBrief,
+    TemporalAssessment,
     assess_cohort_exposure,
     classify_temporal_relevance,
     combine_time_coverage,
     profile_time_coverage,
     select_latest_complete_window,
 )
-from fabric_rlm.experimental.analysis_contracts import AnalysisBrief
 
 
 def test_analysis_brief_defaults_to_non_current_temporal_claims() -> None:
@@ -67,14 +68,14 @@ def test_profile_time_coverage_separates_event_and_trustworthy_watermarks() -> N
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
         timezone="UTC",
     )
 
     assert result.values["event_time_min"] == "2025-04-02T10:00:00Z"
     assert result.values["event_time_max"] == "2025-08-14T11:00:00Z"
     assert result.values["source_watermark"] == "2025-08-14T23:59:59Z"
-    assert result.values["trustworthy_through"] == "2025-07-31T23:59:59Z"
+    assert result.values["trustworthy_through"] == "2025-08-01T00:00:00Z"
     assert result.values["observed_periods"] == (
         "2025-04",
         "2025-05",
@@ -103,12 +104,116 @@ def test_profile_time_coverage_marks_stale_source_without_inventing_currentness(
         grain="month",
         requested_as_of="2026-08-31",
         source_watermark="2024-12-31T23:59:59Z",
-        trustworthy_through="2024-11-30T23:59:59Z",
+        trustworthy_through="2024-12-01T00:00:00Z",
     )
 
     assert result.values["latest_complete_period"]["start"] == "2024-11-01"
     assert result.values["freshness_status"] == "stale"
     assert result.values["freshness_lag_days"] == 608
+
+
+def test_profile_time_coverage_buckets_periods_in_source_timezone() -> None:
+    result = profile_time_coverage(
+        node_id="local-calendar",
+        timestamps=("2025-03-01T00:30:00Z",),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-03-02",
+        source_watermark="2025-03-01T08:00:00Z",
+        trustworthy_through="2025-03-01T08:00:00Z",
+        timezone="America/Los_Angeles",
+    )
+
+    assert result.values["observed_periods"] == ("2025-02",)
+
+
+@pytest.mark.parametrize(
+    ("timestamp", "timezone", "expected_day"),
+    [
+        ("2025-02-28T20:00:00Z", "Asia/Kolkata", "2025-03-01"),
+        ("2025-03-09T07:30:00Z", "America/Los_Angeles", "2025-03-08"),
+        ("2025-11-02T07:30:00Z", "America/Los_Angeles", "2025-11-02"),
+    ],
+)
+def test_daily_period_bucketing_handles_offsets_and_dst(
+    timestamp: str,
+    timezone: str,
+    expected_day: str,
+) -> None:
+    result = profile_time_coverage(
+        node_id="local-day",
+        timestamps=(timestamp,),
+        seed=1,
+        grain="day",
+        requested_as_of="2025-12-31",
+        source_watermark=timestamp,
+        trustworthy_through=timestamp,
+        timezone=timezone,
+    )
+
+    assert result.values["observed_periods"] == (expected_day,)
+
+
+def test_period_is_complete_only_at_exclusive_next_period_boundary() -> None:
+    incomplete = profile_time_coverage(
+        node_id="incomplete",
+        timestamps=("2025-06-10", "2025-07-10"),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-01",
+        source_watermark="2025-07-31T00:00:00Z",
+        trustworthy_through="2025-07-31T00:00:00Z",
+    )
+    complete = profile_time_coverage(
+        node_id="complete",
+        timestamps=("2025-06-10", "2025-07-10"),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-01",
+        source_watermark="2025-08-01T00:00:00Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
+    )
+
+    assert incomplete.values["latest_complete_period"]["start"] == "2025-06-01"
+    assert complete.values["latest_complete_period"]["start"] == "2025-07-01"
+
+
+@pytest.mark.parametrize(
+    ("grain", "timestamp", "before_boundary", "boundary"),
+    [
+        ("day", "2025-07-10T12:00:00Z", "2025-07-10T23:59:59Z", "2025-07-11T00:00:00Z"),
+        ("week", "2025-07-09T12:00:00Z", "2025-07-13T23:59:59Z", "2025-07-14T00:00:00Z"),
+        ("month", "2025-07-10T12:00:00Z", "2025-07-31T23:59:59Z", "2025-08-01T00:00:00Z"),
+        ("quarter", "2025-05-10T12:00:00Z", "2025-06-30T23:59:59Z", "2025-07-01T00:00:00Z"),
+    ],
+)
+def test_all_grains_use_exclusive_completion_boundary(
+    grain: str,
+    timestamp: str,
+    before_boundary: str,
+    boundary: str,
+) -> None:
+    incomplete = profile_time_coverage(
+        node_id="incomplete",
+        timestamps=(timestamp,),
+        seed=1,
+        grain=grain,
+        requested_as_of="2025-12-31",
+        source_watermark=before_boundary,
+        trustworthy_through=before_boundary,
+    )
+    complete = profile_time_coverage(
+        node_id="complete",
+        timestamps=(timestamp,),
+        seed=1,
+        grain=grain,
+        requested_as_of="2025-12-31",
+        source_watermark=boundary,
+        trustworthy_through=boundary,
+    )
+
+    assert incomplete.values["latest_complete_period"] is None
+    assert complete.values["latest_complete_period"] is not None
 
 
 @pytest.mark.parametrize(
@@ -124,6 +229,13 @@ def test_profile_time_coverage_marks_stale_source_without_inventing_currentness(
                 "trustworthy_through": "2025-02-01",
             },
             "trustworthy_through",
+        ),
+        (
+            {
+                "timestamps": ("1900-01-01", "2100-01-01"),
+                "grain": "day",
+            },
+            "period span",
         ),
     ],
 )
@@ -151,7 +263,7 @@ def test_latest_complete_window_excludes_partial_period_and_builds_yoy_comparato
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
 
     result = select_latest_complete_window(
@@ -171,6 +283,7 @@ def test_latest_complete_window_excludes_partial_period_and_builds_yoy_comparato
     }
     assert result.values["comparator"] == {
         "kind": "same_period_prior_year",
+        "grain": "month",
         "start": "2024-05-01",
         "end": "2024-07-31",
         "periods": ("2024-05", "2024-06", "2024-07"),
@@ -190,7 +303,7 @@ def test_latest_complete_window_abstains_when_current_periods_are_missing() -> N
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
 
     result = select_latest_complete_window(
@@ -214,7 +327,7 @@ def test_latest_complete_window_abstains_without_comparable_history() -> None:
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
 
     result = select_latest_complete_window(
@@ -241,7 +354,7 @@ def test_daily_yoy_window_abstains_for_leap_day_without_exact_comparator() -> No
         grain="day",
         requested_as_of="2024-03-01",
         source_watermark="2024-03-01T00:00:00Z",
-        trustworthy_through="2024-02-29T23:59:59Z",
+        trustworthy_through="2024-03-01T00:00:00Z",
     )
 
     result = select_latest_complete_window(
@@ -254,6 +367,36 @@ def test_daily_yoy_window_abstains_for_leap_day_without_exact_comparator() -> No
 
     assert result.status == "failed"
     assert result.failure_code == "non_comparable_calendar_period"
+
+
+def test_weekly_yoy_comparator_preserves_iso_week_boundaries() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=("2024-01-02", "2024-12-31"),
+        seed=1,
+        grain="week",
+        requested_as_of="2025-01-06",
+        source_watermark="2025-01-06T00:00:00Z",
+        trustworthy_through="2025-01-06T00:00:00Z",
+    )
+
+    result = select_latest_complete_window(
+        node_id="window",
+        coverage=coverage,
+        seed=2,
+        window_periods=1,
+        comparator_kind="same_period_prior_year",
+    )
+
+    assert result.status == "completed"
+    assert result.values["current_window"]["periods"] == ("2025-W01",)
+    assert result.values["comparator"] == {
+        "kind": "same_period_prior_year",
+        "grain": "week",
+        "start": "2024-01-01",
+        "end": "2024-01-07",
+        "periods": ("2024-W01",),
+    }
 
 
 @pytest.mark.parametrize(
@@ -276,7 +419,7 @@ def test_latest_complete_window_rejects_invalid_contracts(
             grain="month",
             requested_as_of="2025-08-15",
             source_watermark="2025-08-14T23:59:59Z",
-            trustworthy_through="2025-07-31T23:59:59Z",
+            trustworthy_through="2025-08-01T00:00:00Z",
         ),
         "window_periods": 1,
         "comparator_kind": "none",
@@ -305,7 +448,7 @@ def test_recent_change_requires_current_comparable_change_evidence() -> None:
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
     window = select_latest_complete_window(
         node_id="window",
@@ -340,7 +483,7 @@ def test_recent_change_without_comparator_is_historical_not_current() -> None:
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
     window = select_latest_complete_window(
         node_id="window",
@@ -371,7 +514,7 @@ def test_stale_extract_cannot_support_current_action() -> None:
         grain="month",
         requested_as_of="2026-08-31",
         source_watermark="2024-12-31T23:59:59Z",
-        trustworthy_through="2024-11-30T23:59:59Z",
+        trustworthy_through="2024-12-01T00:00:00Z",
     )
 
     assessment = classify_temporal_relevance(
@@ -386,27 +529,46 @@ def test_stale_extract_cannot_support_current_action() -> None:
 
 
 def test_structural_pattern_distinguishes_persistence_from_seasonality() -> None:
-    coverage = profile_time_coverage(
+    seasonal_coverage = profile_time_coverage(
         node_id="coverage",
         timestamps=("2024-07-10", "2025-07-10"),
         seed=1,
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
+    )
+    persistent_coverage = profile_time_coverage(
+        node_id="persistent-coverage",
+        timestamps=(
+            "2025-04-10",
+            "2025-05-10",
+            "2025-06-10",
+            "2025-07-10",
+        ),
+        seed=2,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
 
     seasonal = classify_temporal_relevance(
         temporal_intent="structural_pattern",
-        coverage=coverage,
+        coverage=seasonal_coverage,
         time_basis="booking_created_at",
-        seasonal_cycles=2,
+        seasonal_cycles=(("2024-07",), ("2025-07",)),
     )
     persistent = classify_temporal_relevance(
         temporal_intent="structural_pattern",
-        coverage=coverage,
+        coverage=persistent_coverage,
         time_basis="booking_created_at",
-        persistence_periods=4,
+        persistence_periods=(
+            "2025-04",
+            "2025-05",
+            "2025-06",
+            "2025-07",
+        ),
     )
 
     assert seasonal.status == "recurring_seasonal"
@@ -423,7 +585,7 @@ def test_missing_time_basis_is_explicitly_not_applicable() -> None:
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
 
     assessment = classify_temporal_relevance(
@@ -441,8 +603,8 @@ def test_missing_time_basis_is_explicitly_not_applicable() -> None:
     [
         ({"temporal_intent": "latest"}, "temporal_intent"),
         ({"has_change_evidence": 1}, "has_change_evidence"),
-        ({"persistence_periods": -1}, "persistence_periods"),
-        ({"seasonal_cycles": -1}, "seasonal_cycles"),
+        ({"persistence_periods": 3}, "persistence_periods"),
+        ({"seasonal_cycles": 2}, "seasonal_cycles"),
     ],
 )
 def test_temporal_relevance_rejects_invalid_classification_inputs(
@@ -456,7 +618,7 @@ def test_temporal_relevance_rejects_invalid_classification_inputs(
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
     defaults = {
         "temporal_intent": "current_state",
@@ -469,6 +631,63 @@ def test_temporal_relevance_rejects_invalid_classification_inputs(
         classify_temporal_relevance(**defaults)
 
 
+def test_strict_recency_policy_does_not_treat_eight_day_lag_as_current() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=("2025-07-10",),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-07T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
+    )
+    brief = AnalysisBrief(
+        objective="Describe the current level",
+        temporal_intent="current_state",
+        requested_as_of="2025-08-15",
+        recency_policy="strict",
+    )
+
+    assessment = classify_temporal_relevance(
+        brief=brief,
+        coverage=coverage,
+        time_basis="order_created_at",
+    )
+
+    assert assessment.status == "historical"
+    assert assessment.supports_current_action is False
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {
+            "status": "bogus",
+            "supports_current_action": False,
+            "reason": "reason",
+            "context": {},
+        },
+        {
+            "status": "historical",
+            "supports_current_action": True,
+            "reason": "reason",
+            "context": {},
+        },
+        {
+            "status": "historical",
+            "supports_current_action": False,
+            "reason": "",
+            "context": {},
+        },
+    ],
+)
+def test_temporal_assessment_rejects_invalid_direct_construction(
+    kwargs: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        TemporalAssessment(**kwargs)
+
+
 def test_joined_coverage_uses_least_fresh_required_source() -> None:
     orders = profile_time_coverage(
         node_id="orders",
@@ -477,7 +696,7 @@ def test_joined_coverage_uses_least_fresh_required_source() -> None:
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
     reviews = profile_time_coverage(
         node_id="reviews",
@@ -486,7 +705,7 @@ def test_joined_coverage_uses_least_fresh_required_source() -> None:
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-13T23:59:59Z",
-        trustworthy_through="2025-05-31T23:59:59Z",
+        trustworthy_through="2025-06-01T00:00:00Z",
     )
 
     joined = combine_time_coverage(
@@ -495,7 +714,7 @@ def test_joined_coverage_uses_least_fresh_required_source() -> None:
         seed=3,
     )
 
-    assert joined.values["trustworthy_through"] == "2025-05-31T23:59:59Z"
+    assert joined.values["trustworthy_through"] == "2025-06-01T00:00:00Z"
     assert joined.values["latest_complete_period"] == {
         "grain": "month",
         "start": "2025-05-01",
@@ -508,8 +727,8 @@ def test_joined_coverage_uses_least_fresh_required_source() -> None:
     )
     assert joined.values["freshness_status"] == "mismatched"
     assert joined.diagnostics["source_trustworthy_through"] == {
-        "orders": "2025-07-31T23:59:59Z",
-        "reviews": "2025-05-31T23:59:59Z",
+        "orders": "2025-08-01T00:00:00Z",
+        "reviews": "2025-06-01T00:00:00Z",
     }
 
 
@@ -521,7 +740,7 @@ def test_joined_freshness_mismatch_blocks_current_action() -> None:
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
     lagged = profile_time_coverage(
         node_id="lagged",
@@ -530,7 +749,7 @@ def test_joined_freshness_mismatch_blocks_current_action() -> None:
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-05-31T23:59:59Z",
+        trustworthy_through="2025-06-01T00:00:00Z",
     )
     joined = combine_time_coverage(
         node_id="joined",
@@ -557,7 +776,7 @@ def test_joined_coverage_reports_common_period_gaps() -> None:
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
     second = profile_time_coverage(
         node_id="second",
@@ -566,7 +785,7 @@ def test_joined_coverage_reports_common_period_gaps() -> None:
         grain="month",
         requested_as_of="2025-08-15",
         source_watermark="2025-08-14T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
 
     joined = combine_time_coverage(
@@ -585,8 +804,8 @@ def test_joined_coverage_abstains_when_sources_do_not_overlap() -> None:
         seed=1,
         grain="month",
         requested_as_of="2025-08-15",
-        source_watermark="2024-01-31T23:59:59Z",
-        trustworthy_through="2024-01-31T23:59:59Z",
+        source_watermark="2024-02-01T00:00:00Z",
+        trustworthy_through="2024-02-01T00:00:00Z",
     )
     new = profile_time_coverage(
         node_id="new",
@@ -594,8 +813,8 @@ def test_joined_coverage_abstains_when_sources_do_not_overlap() -> None:
         seed=2,
         grain="month",
         requested_as_of="2025-08-15",
-        source_watermark="2025-07-31T23:59:59Z",
-        trustworthy_through="2025-07-31T23:59:59Z",
+        source_watermark="2025-08-01T00:00:00Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
     )
 
     joined = combine_time_coverage(
@@ -624,6 +843,45 @@ def test_joined_coverage_rejects_invalid_sources(
             node_id="invalid",
             coverages=coverages,
             seed=1,
+        )
+
+
+def test_temporal_source_and_cohort_names_reject_normalized_collisions() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=("2025-07-10",),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
+    )
+    with pytest.raises(ValueError, match="duplicate normalized source"):
+        combine_time_coverage(
+            node_id="joined",
+            coverages={"orders": coverage, " orders ": coverage},
+            seed=1,
+        )
+    with pytest.raises(ValueError, match="duplicate normalized cohort"):
+        assess_cohort_exposure(
+            node_id="cohorts",
+            cohorts={
+                "2024": {
+                    "customers": 10,
+                    "repeat_customers": 1,
+                    "exposure_days": 400,
+                },
+                " 2024 ": {
+                    "customers": 20,
+                    "repeat_customers": 2,
+                    "exposure_days": 400,
+                },
+            },
+            seed=1,
+            minimum_exposure_days=365,
+            identity_key="customer_unique_id",
+            repeat_definition="More than one delivered order",
+            cohort_basis="First observed delivered order",
         )
 
 

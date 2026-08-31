@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fabric_rlm.experimental.analysis_contracts import (
+    AnalysisBrief,
     OperatorResult,
     _freeze_json,
     _thaw_json,
@@ -29,6 +30,16 @@ _TEMPORAL_INTENTS = {
     "historical_context",
     "structural_pattern",
 }
+_TEMPORAL_STATUSES = {
+    "current_change",
+    "current_level",
+    "persistent",
+    "recurring_seasonal",
+    "historical",
+    "stale",
+    "not_applicable",
+}
+_CURRENT_ACTION_STATUSES = {"current_change", "current_level", "persistent"}
 
 
 @dataclass(frozen=True)
@@ -41,6 +52,21 @@ class TemporalAssessment:
     context: Mapping[str, object]
 
     def __post_init__(self) -> None:
+        if self.status not in _TEMPORAL_STATUSES:
+            raise ValueError("status is invalid")
+        if type(self.supports_current_action) is not bool:
+            raise ValueError("supports_current_action must be boolean")
+        if self.supports_current_action != (
+            self.status in _CURRENT_ACTION_STATUSES
+        ):
+            raise ValueError(
+                "supports_current_action contradicts temporal status"
+            )
+        if not isinstance(self.reason, str) or not self.reason.strip():
+            raise ValueError("reason must be non-empty text")
+        if not isinstance(self.context, Mapping):
+            raise ValueError("context must be a mapping")
+        object.__setattr__(self, "reason", self.reason.strip())
         object.__setattr__(
             self,
             "context",
@@ -56,24 +82,76 @@ class TemporalAssessment:
         }
 
 
-def _nonnegative_int(value: object, field_name: str) -> int:
-    if type(value) is not int or value < 0:
-        raise ValueError(f"{field_name} must be a non-negative integer")
-    return value
+def _period_evidence(
+    value: object,
+    field_name: str,
+    observed_periods: set[str],
+) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(
+            f"{field_name} must be a sequence of observed period labels"
+        )
+    normalized: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(
+                f"{field_name}[{index}] must be a non-empty period label"
+            )
+        label = item.strip()
+        if label not in observed_periods:
+            raise ValueError(
+                f"{field_name}[{index}] is not present in coverage evidence"
+            )
+        normalized.append(label)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(f"{field_name} must not contain duplicates")
+    return tuple(normalized)
+
+
+def _seasonal_evidence(
+    value: object,
+    observed_periods: set[str],
+) -> tuple[tuple[str, ...], ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(
+            "seasonal_cycles must be a sequence of observed-period sequences"
+        )
+    cycles: list[tuple[str, ...]] = []
+    for index, cycle in enumerate(value):
+        labels = _period_evidence(
+            cycle,
+            f"seasonal_cycles[{index}]",
+            observed_periods,
+        )
+        if not labels:
+            raise ValueError(f"seasonal_cycles[{index}] must not be empty")
+        cycles.append(labels)
+    return tuple(cycles)
 
 
 def classify_temporal_relevance(
     *,
-    temporal_intent: str,
+    temporal_intent: str | None = None,
+    brief: AnalysisBrief | None = None,
     coverage: OperatorResult,
     time_basis: str | None,
     window: OperatorResult | None = None,
     has_change_evidence: bool = False,
-    persistence_periods: int = 0,
-    seasonal_cycles: int = 0,
+    persistence_periods: object = (),
+    seasonal_cycles: object = (),
+    recency_policy: str = "strict",
+    latest_complete_period_only: bool = True,
 ) -> TemporalAssessment:
     """Classify whether evidence is current, historical, persistent, or stale."""
 
+    if brief is not None:
+        if not isinstance(brief, AnalysisBrief):
+            raise ValueError("brief must be an AnalysisBrief")
+        if temporal_intent is not None and temporal_intent != brief.temporal_intent:
+            raise ValueError("temporal_intent conflicts with brief")
+        temporal_intent = brief.temporal_intent
+        recency_policy = brief.recency_policy
+        latest_complete_period_only = brief.latest_complete_period_only
     if temporal_intent not in _TEMPORAL_INTENTS:
         raise ValueError(
             "temporal_intent must be current_state, recent_change, "
@@ -99,11 +177,20 @@ def classify_temporal_relevance(
         )
     if type(has_change_evidence) is not bool:
         raise ValueError("has_change_evidence must be boolean")
-    persistence_periods = _nonnegative_int(
+    if recency_policy not in {"strict", "allow_historical"}:
+        raise ValueError("recency_policy must be strict or allow_historical")
+    if type(latest_complete_period_only) is not bool:
+        raise ValueError("latest_complete_period_only must be boolean")
+    observed_periods = set(coverage.values.get("observed_periods", ()))
+    persistence_periods = _period_evidence(
         persistence_periods,
         "persistence_periods",
+        observed_periods,
     )
-    seasonal_cycles = _nonnegative_int(seasonal_cycles, "seasonal_cycles")
+    seasonal_cycles = _seasonal_evidence(
+        seasonal_cycles,
+        observed_periods,
+    )
     if time_basis is not None and (
         not isinstance(time_basis, str) or not time_basis.strip()
     ):
@@ -136,6 +223,14 @@ def classify_temporal_relevance(
             "calendar_complete_and_source_marked_trustworthy"
         ),
         "recency_status": coverage.values.get("freshness_status"),
+        "evidence_fingerprints": {
+            "coverage": coverage.diagnostics.get("input_fingerprint"),
+            "window": (
+                window.diagnostics.get("input_fingerprint")
+                if window is not None
+                else None
+            ),
+        },
     }
 
     if time_basis is None:
@@ -152,6 +247,22 @@ def classify_temporal_relevance(
             reason=(
                 "Source freshness is stale or inconsistent across required "
                 "inputs, so it cannot support a current claim."
+            ),
+            context=context,
+        )
+    if (
+        temporal_intent in {"current_state", "recent_change"}
+        and (
+            coverage.values.get("freshness_status") != "current"
+            or not latest_complete_period_only
+        )
+    ):
+        return TemporalAssessment(
+            status="historical",
+            supports_current_action=False,
+            reason=(
+                "The configured recency and complete-period policy does not "
+                "permit this evidence to be classified as current."
             ),
             context=context,
         )
@@ -204,7 +315,7 @@ def classify_temporal_relevance(
             ),
             context=context,
         )
-    if seasonal_cycles >= 2:
+    if len(seasonal_cycles) >= 2:
         return TemporalAssessment(
             status="recurring_seasonal",
             supports_current_action=False,
@@ -214,7 +325,7 @@ def classify_temporal_relevance(
             ),
             context=context,
         )
-    if persistence_periods >= 3:
+    if len(persistence_periods) >= 3:
         return TemporalAssessment(
             status="persistent",
             supports_current_action=True,

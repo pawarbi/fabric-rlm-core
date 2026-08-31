@@ -12,6 +12,7 @@ from fabric_rlm.experimental.analysis_reproducibility import fingerprint
 
 
 _TIME_GRAINS = {"day", "week", "month", "quarter"}
+_MAX_PROFILE_PERIODS = 10_000
 
 
 def _parse_timestamp(
@@ -122,6 +123,19 @@ def _period_payload(value: date, grain: str) -> dict[str, str]:
     }
 
 
+def _period_boundary_utc(
+    value: date,
+    grain: str,
+    source_timezone: ZoneInfo,
+) -> datetime:
+    local_boundary = datetime.combine(
+        _next_period(value, grain),
+        datetime.min.time(),
+        tzinfo=source_timezone,
+    )
+    return local_boundary.astimezone(datetime_timezone.utc)
+
+
 def profile_time_coverage(
     *,
     node_id: str,
@@ -185,17 +199,41 @@ def profile_time_coverage(
         if trustworthy_through is not None
         else watermark
     )
-    if watermark > requested + timedelta(days=1):
+    requested_local_date = requested.astimezone(source_timezone).date()
+    requested_exclusive = datetime.combine(
+        requested_local_date + timedelta(days=1),
+        datetime.min.time(),
+        tzinfo=source_timezone,
+    ).astimezone(datetime_timezone.utc)
+    if watermark > requested_exclusive:
         raise ValueError("source_watermark must not be after requested_as_of")
     if trustworthy > watermark:
         raise ValueError("trustworthy_through must not exceed source_watermark")
 
     observed_starts = tuple(
-        sorted({_period_start(value.date(), grain) for value in parsed})
+        sorted(
+            {
+                _period_start(
+                    value.astimezone(source_timezone).date(),
+                    grain,
+                )
+                for value in parsed
+            }
+        )
     )
+    if (
+        observed_starts[-1] - observed_starts[0]
+    ).days > _MAX_PROFILE_PERIODS * (
+        1 if grain == "day" else 7 if grain == "week" else 31
+    ):
+        raise ValueError("period span exceeds the deterministic profile limit")
     all_starts: list[date] = []
     cursor = observed_starts[0]
     while cursor <= observed_starts[-1]:
+        if len(all_starts) >= _MAX_PROFILE_PERIODS:
+            raise ValueError(
+                "period span exceeds the deterministic profile limit"
+            )
         all_starts.append(cursor)
         cursor = _next_period(cursor, grain)
     missing_starts = tuple(
@@ -204,7 +242,8 @@ def profile_time_coverage(
     complete_starts = tuple(
         value
         for value in observed_starts
-        if _period_end(value, grain) <= trustworthy.date()
+        if trustworthy
+        >= _period_boundary_utc(value, grain, source_timezone)
     )
     latest_complete = (
         _period_payload(complete_starts[-1], grain)
@@ -214,10 +253,17 @@ def profile_time_coverage(
     final_start = observed_starts[-1]
     partial_final = (
         _period_payload(final_start, grain)
-        if _period_end(final_start, grain) > trustworthy.date()
+        if trustworthy
+        < _period_boundary_utc(final_start, grain, source_timezone)
         else None
     )
-    freshness_lag_days = max(0, (requested.date() - watermark.date()).days)
+    freshness_lag_days = max(
+        0,
+        (
+            requested_local_date
+            - watermark.astimezone(source_timezone).date()
+        ).days,
+    )
     freshness_status = (
         "current"
         if freshness_lag_days <= 7
@@ -228,7 +274,7 @@ def profile_time_coverage(
     input_values = {
         "timestamps": tuple(_iso_utc(value) for value in parsed),
         "grain": grain,
-        "requested_as_of": requested.date().isoformat(),
+        "requested_as_of": requested_local_date.isoformat(),
         "source_watermark": _iso_utc(watermark),
         "trustworthy_through": _iso_utc(trustworthy),
         "timezone": timezone.strip(),
@@ -260,7 +306,7 @@ def profile_time_coverage(
             "input_fingerprint": fingerprint(input_values),
             "method": "calendar_coverage_v1",
             "watermarks": {
-                "requested_as_of": requested.date().isoformat(),
+                "requested_as_of": requested_local_date.isoformat(),
                 "source_watermark": _iso_utc(watermark),
                 "trustworthy_through": _iso_utc(trustworthy),
                 "timezone": timezone.strip(),
@@ -286,6 +332,11 @@ def combine_time_coverage(
     for source_id, coverage in coverages.items():
         if not isinstance(source_id, str) or not source_id.strip():
             raise ValueError("coverages source names must be non-empty strings")
+        identity = source_id.strip()
+        if identity in normalized:
+            raise ValueError(
+                f"duplicate normalized source identifier: {identity}"
+            )
         if (
             not isinstance(coverage, OperatorResult)
             or coverage.operator != "profile_time_coverage.v1"
@@ -295,7 +346,7 @@ def combine_time_coverage(
                 f"coverages.{source_id} must be a completed "
                 "profile_time_coverage.v1 result"
             )
-        normalized[source_id.strip()] = coverage
+        normalized[identity] = coverage
 
     grains = {
         coverage.values["latest_complete_period"]["grain"]
@@ -322,6 +373,7 @@ def combine_time_coverage(
         raise ValueError("coverages must use the same requested_as_of")
     if len(timezone_values) != 1:
         raise ValueError("coverages must use the same timezone")
+    source_timezone = ZoneInfo(next(iter(timezone_values)))
 
     source_watermarks = {
         source_id: coverage.values["source_watermark"]
@@ -384,6 +436,10 @@ def combine_time_coverage(
     all_starts: list[date] = []
     cursor = observed_starts[0]
     while cursor <= observed_starts[-1]:
+        if len(all_starts) >= _MAX_PROFILE_PERIODS:
+            raise ValueError(
+                "period span exceeds the deterministic profile limit"
+            )
         all_starts.append(cursor)
         cursor = _next_period(cursor, grain)
     observed_start_set = set(observed_starts)
@@ -393,7 +449,8 @@ def combine_time_coverage(
     complete_starts = tuple(
         value
         for value in observed_starts
-        if _period_end(value, grain) <= common_trustworthy.date()
+        if common_trustworthy
+        >= _period_boundary_utc(value, grain, source_timezone)
     )
     latest_complete = (
         _period_payload(complete_starts[-1], grain)
@@ -418,7 +475,8 @@ def combine_time_coverage(
     final_start = observed_starts[-1]
     partial_final = (
         _period_payload(final_start, grain)
-        if _period_end(final_start, grain) > common_trustworthy.date()
+        if common_trustworthy
+        < _period_boundary_utc(final_start, grain, source_timezone)
         else None
     )
     return OperatorResult(
@@ -497,6 +555,11 @@ def assess_cohort_exposure(
     for cohort_name, payload in cohorts.items():
         if not isinstance(cohort_name, str) or not cohort_name.strip():
             raise ValueError("cohort names must be non-empty strings")
+        identity = cohort_name.strip()
+        if identity in validated:
+            raise ValueError(
+                f"duplicate normalized cohort identifier: {identity}"
+            )
         if not isinstance(payload, Mapping):
             raise ValueError(f"cohorts.{cohort_name} must be an object")
         required = {"customers", "repeat_customers", "exposure_days"}
@@ -532,7 +595,7 @@ def assess_cohort_exposure(
                 f"cohorts.{cohort_name}.exposure_days must be a "
                 "non-negative integer"
             )
-        validated[cohort_name.strip()] = {
+        validated[identity] = {
             "customers": customers,
             "repeat_customers": repeat_customers,
             "exposure_days": exposure_days,
@@ -729,10 +792,20 @@ def select_latest_complete_window(
             comparator_starts.reverse()
         else:
             try:
-                comparator_starts = [
-                    value.replace(year=value.year - 1)
-                    for value in current_starts
-                ]
+                if grain == "week":
+                    comparator_starts = [
+                        date.fromisocalendar(
+                            value.isocalendar().year - 1,
+                            value.isocalendar().week,
+                            1,
+                        )
+                        for value in current_starts
+                    ]
+                else:
+                    comparator_starts = [
+                        value.replace(year=value.year - 1)
+                        for value in current_starts
+                    ]
             except ValueError:
                 return OperatorResult(
                     node_id=node_id,
@@ -780,6 +853,7 @@ def select_latest_complete_window(
             )
         comparator = {
             "kind": comparator_kind,
+            "grain": grain,
             "start": comparator_starts[0].isoformat(),
             "end": _period_end(comparator_starts[-1], grain).isoformat(),
             "periods": comparator_labels,
