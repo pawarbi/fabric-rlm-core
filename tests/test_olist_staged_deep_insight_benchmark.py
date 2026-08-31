@@ -4311,6 +4311,129 @@ def test_repair_exhaustion_names_target_attempts_and_preserves_cause(
     assert str(captured.value.__cause__) == "final verifier message"
 
 
+def test_unsupported_derived_metric_is_demoted_after_targeted_repairs_exhaust(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bench = load_module()
+    data_dir = tmp_path / "olist"
+    make_bundle(data_dir)
+    research = valid_research()
+    scaffold = {
+        "analysis_plan": {
+            "search_space": {"dimensions_available": ["month", "price"]},
+        },
+        "candidates": [
+            {
+                "candidate": "Seasonal booking volume",
+                "dimensions_tested": ["month"],
+                "disposition": "promoted",
+                "reason": "The monthly distribution is materially uneven.",
+                "promoted_as": "Booking volume is seasonal",
+            },
+            {
+                "candidate": "Price and rating correlation",
+                "dimensions_tested": ["price"],
+                "disposition": "promoted",
+                "reason": "The generated correlation was close to zero.",
+                "promoted_as": "Ratings versus price",
+            },
+        ],
+    }
+    invalid_correlation = {
+        "title": "Ratings versus price",
+        "discovery": {"dimensions_tested": ["price"]},
+        "metric_spec": {
+            "type": "value",
+            "expected_value": -0.00125,
+            "components": [
+                {
+                    "name": "corr_price_rating",
+                    "role": "value",
+                    "expected_value": -0.00125,
+                    "verification": {
+                        "method": "sql",
+                        "expression": (
+                            "SELECT corr(base_price, average_rating) "
+                            "AS metric_value FROM properties"
+                        ),
+                        "sources": {"properties": "properties"},
+                    },
+                }
+            ],
+        },
+    }
+    insights = {
+        "insights": [
+            {
+                "title": "Booking volume is seasonal",
+                "discovery": {"dimensions_tested": ["month"]},
+            },
+            invalid_correlation,
+        ]
+    }
+    caches = write_all_caches(tmp_path, research, scaffold, insights)
+
+    def verifier(payload):
+        if len(payload["insights"]) == 2:
+            raise AssertionError(
+                "insight 2 metric component 'corr_price_rating' verification "
+                "must recompute metric_value with a source column or one "
+                "aggregate; verify derived metrics as components"
+            )
+
+    calls, _ = install_cached_repair_fakes(
+        bench,
+        monkeypatch,
+        [{"insight": invalid_correlation}],
+        verifier,
+    )
+
+    record = bench.run_staged_benchmark(
+        data_dir,
+        research_cache_path=caches[0],
+        scaffold_cache_path=caches[1],
+        insights_cache_path=caches[2],
+        max_insight_repairs=1,
+    )
+
+    assert len(calls) == 1
+    assert [item["title"] for item in record["payload"]["insights"]] == [
+        "Booking volume is seasonal"
+    ]
+    rejected = record["payload"]["candidates"][1]
+    assert rejected["disposition"] == "rejected"
+    assert rejected["rejection_type"] == "not_computable"
+    assert rejected["promoted_as"] == ""
+    assert "independently verified" in rejected["reason"]
+    assert record["repairs"][-1]["mode"] == "deterministic-demotion"
+    assert record["repairs"][-1]["insight_index"] == 2
+
+
+def test_staged_helpers_recompute_correlation_from_sufficient_statistics() -> None:
+    bench = load_module()
+    metric_spec = {
+        "type": "correlation",
+        "expected_value": 0,
+        "components": [
+            {"role": "pair_count", "expected_value": 3},
+            {"role": "sum_x", "expected_value": 6},
+            {"role": "sum_y", "expected_value": 12},
+            {"role": "sum_x_squared", "expected_value": 14},
+            {"role": "sum_y_squared", "expected_value": 56},
+            {"role": "sum_xy", "expected_value": 28},
+        ],
+    }
+
+    assert bench._derived_metric_value(metric_spec) == pytest.approx(1.0)
+
+    payload = {"metric_spec": deepcopy(metric_spec)}
+    normalized, _changes = bench.normalize_mechanical_contract(
+        payload,
+        {"properties": Path("properties.csv")},
+    )
+    assert normalized["metric_spec"]["expected_value"] == pytest.approx(1.0)
+
+
 def test_invalid_targeted_component_repair_consumes_attempt_and_retries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -104,16 +104,19 @@ Each insight must contain:
   components; every claim must provide one form or the other.
 - **metric_spec: dict | omitted** - additive, discriminated metric metadata for
   the primary claim. `type` is `value`, `count`, `amount`, `average`, `rate`,
-  `share`, `delta`, `rate_of_change`, or `decomposition`; `expected_value` is
-  finite numeric; and `components` contains unique, named, source-derived
-  values with `role`, finite numeric `expected_value`, and independent
-  `verification`. Simple types use role `value`; every count also declares
+  `share`, `delta`, `rate_of_change`, `decomposition`, or `correlation`;
+  `expected_value` is finite numeric; and `components` contains unique, named,
+  source-derived values with `role`, finite numeric `expected_value`, and
+  independent `verification`. Simple types use role `value`; every count also declares
   `comparison.kind` as `none` or `cross_period`. Rates and shares use
   `numerator` and `denominator`; deltas and rates of change use `current` and
   `comparison`. Arithmetic is `numerator / denominator`, `current -
   comparison`, and `(current - comparison) / abs(comparison)`, respectively,
   compared with `rel_tol=1e-9` and `abs_tol=1e-9`. A decomposition uses one `total_delta`, one or more
   `contribution` components, and exactly one explicit `residual`.
+  Correlation uses complete cases and independently verified `pair_count`,
+  `sum_x`, `sum_y`, `sum_x_squared`, `sum_y_squared`, and `sum_xy` components,
+  plus named `x`/`y` variables and an explicit population.
 - **supporting_claims: list[dict]** - zero or more secondary quantitative facts,
   each with `claim` text, `expected_value`, and either its own legacy
   `verification` or `metric_spec`. A supporting metric spec's expected value
@@ -615,6 +618,7 @@ def verify(payload):
         simple_types = {"value", "count", "amount", "average"}
         derived_types = {
             "rate", "share", "delta", "rate_of_change", "decomposition",
+            "correlation",
         }
         assert metric_type in simple_types | derived_types, (
             f"{label} metric_spec type is invalid"
@@ -718,6 +722,43 @@ def verify(payload):
                 f"{label} decomposition components do not reconcile to total delta"
             )
             recomputed = total_delta
+        elif metric_type == "correlation":
+            variables = metric_spec.get("variables")
+            assert (
+                isinstance(variables, dict)
+                and set(variables) == {"x", "y"}
+                and all(
+                    isinstance(value, str) and value.strip()
+                    for value in variables.values()
+                )
+            ), f"{label} correlation requires named x and y variables"
+            population = metric_spec.get("population")
+            assert isinstance(population, str) and population.strip(), (
+                f"{label} correlation population is required"
+            )
+            assert metric_spec.get("pairwise_missing_policy") == "complete_cases", (
+                f"{label} correlation requires a complete-case missing policy"
+            )
+            pair_count = exactly_one("pair_count")
+            assert pair_count >= 2 and close(pair_count, round(pair_count)), (
+                f"{label} correlation pair_count must be an integer of at least 2"
+            )
+            sum_x = exactly_one("sum_x")
+            sum_y = exactly_one("sum_y")
+            sum_x_squared = exactly_one("sum_x_squared")
+            sum_y_squared = exactly_one("sum_y_squared")
+            sum_xy = exactly_one("sum_xy")
+            x_variance_term = pair_count * sum_x_squared - sum_x * sum_x
+            y_variance_term = pair_count * sum_y_squared - sum_y * sum_y
+            assert x_variance_term > 0 and y_variance_term > 0, (
+                f"{label} correlation requires positive variance in both variables"
+            )
+            recomputed = (
+                pair_count * sum_xy - sum_x * sum_y
+            ) / math.sqrt(x_variance_term * y_variance_term)
+            assert -1.0 <= recomputed <= 1.0, (
+                f"{label} correlation must be between -1 and 1"
+            )
         elif metric_type == "count" and count_comparison["kind"] == "cross_period":
             comparison = count_comparison
             recomputed = exactly_one("current")

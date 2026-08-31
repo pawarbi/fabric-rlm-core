@@ -1027,6 +1027,63 @@ def test_verifier_recomputes_supported_derived_metric_types(
     _verify({"insights": [insight]})
 
 
+def _correlation_metric_spec(expected_value: float = 1.0) -> dict:
+    spec = _derived_metric_spec(
+        "correlation",
+        expected_value,
+        [
+            _metric_component("pair_count", "pair_count", 3),
+            _metric_component("sum_price", "sum_x", 6),
+            _metric_component("sum_rating", "sum_y", 12),
+            _metric_component("sum_price_squared", "sum_x_squared", 14),
+            _metric_component("sum_rating_squared", "sum_y_squared", 56),
+            _metric_component("sum_price_rating", "sum_xy", 28),
+        ],
+    )
+    spec["variables"] = {
+        "x": "properties.base_price",
+        "y": "reviews.average_rating",
+    }
+    spec["population"] = "Properties with a non-null price and average rating"
+    spec["pairwise_missing_policy"] = "complete_cases"
+    return spec
+
+
+def test_verifier_recomputes_correlation_from_sufficient_statistics() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_model_supplied_correlation_value() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec(-0.00125)
+
+    with pytest.raises(AssertionError, match="does not reconcile"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_correlation_population_and_missing_policy() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+    del insight["metric_spec"]["pairwise_missing_policy"]
+
+    with pytest.raises(AssertionError, match="complete-case"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_correlation_with_zero_variance() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+    for component in insight["metric_spec"]["components"]:
+        if component["role"] == "sum_x_squared":
+            component["expected_value"] = 12
+
+    with pytest.raises(AssertionError, match="positive variance"):
+        _verify({"insights": [insight]})
+
+
 def test_verifier_rejects_zero_denominator_for_derived_metric() -> None:
     insight = _strong_insight()
     insight["metric_spec"] = _derived_metric_spec(
