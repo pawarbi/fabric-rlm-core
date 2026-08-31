@@ -34,7 +34,9 @@ first, aggregate in DAX, bring back small results.
 Works inside a Fabric notebook, where `sempy` ships in the runtime.
 
 If the model was passed as a `SemanticModel` input, it is already bound in your
-namespace: call `.schema()` on it and skip the connection work below.
+namespace. Call `.schema()` for formatted text or `.metadata()` for ordinary
+pandas DataFrames with stable snake-case columns. Do not treat `.schema()` as a
+dictionary. Skip the lower-level connection work below.
 
 ## sempy is available. Do not conclude otherwise.
 
@@ -51,6 +53,21 @@ column or measure. That is a statement about the model, never about the sandbox.
 
 Do this before writing any DAX. Names are not guessable and each guess costs a
 turn.
+
+For a bound `SemanticModel`, prefer:
+
+```python
+metadata = model.metadata()
+print(metadata.tables.to_string(index=False))
+print(metadata.measures.to_string(index=False))
+print(metadata.relationships.to_string(index=False))
+print(metadata.columns.to_string(index=False))
+```
+
+The normalized columns include `table_name`, `column_name`, `measure_name`,
+`measure_expression`, `from_table`, and `to_table`.
+
+For direct SemPy access, use its provider-specific names:
 
 ```python
 import sempy.fabric as fabric
@@ -73,6 +90,9 @@ print(fabric.list_relationships(DATASET).to_string()[:2000])
 
 ## Querying
 
+- For a bound handle, prefer `model.dax(query, normalize_columns=True)`. This
+  returns an ordinary pandas DataFrame with snake-case columns rather than
+  SemPy names such as `[ARR]` and `Period[Year]`.
 - `fabric.evaluate_measure(DATASET, "Total Sales", groupby_columns=[...],
   filters={...})` for "measure by dimension". No DAX to get wrong.
 - `fabric.evaluate_dax(DATASET, "EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(...),
