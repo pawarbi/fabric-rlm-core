@@ -763,7 +763,7 @@ class KnowledgePackage:
             },
         )
         format_version = payload.pop("format_version", _MISSING)
-        if format_version != 1:
+        if type(format_version) is not int or format_version != 1:
             raise ValueError("format_version must be 1")
         for field_name, record_type in (
             ("sources", SourceProfile),
