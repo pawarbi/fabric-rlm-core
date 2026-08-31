@@ -26,6 +26,19 @@ _STAGED = _load_example("olist_staged_deep_insight_benchmark.py")
 _CRITIC = _load_example("olist_deep_insight_critic.py")
 
 
+def resolve_closure_audit(
+    record: dict[str, Any], original_audit: dict[str, Any]
+) -> dict[str, Any]:
+    """Preserve the attested input audit when critic closure has no targets."""
+
+    closure_audit = record.get("audit")
+    if closure_audit is None:
+        if record.get("summary", {}).get("skipped") is not True:
+            raise ValueError("critic closure returned no audit without skipping")
+        return original_audit
+    return _STAGED.audit_to_dict(closure_audit)
+
+
 def run_critic_closure(
     manifest_path: str | Path,
     payload_path: str | Path,
@@ -94,7 +107,8 @@ def run_critic_closure(
         "run": output / "run.json",
     }
     _STAGED._atomic_json(paths["payload"], record["payload"])
-    _STAGED._atomic_json(paths["audit"], _STAGED.audit_to_dict(record["audit"]))
+    persisted_audit = resolve_closure_audit(record, audit)
+    _STAGED._atomic_json(paths["audit"], persisted_audit)
     _STAGED._atomic_json(
         paths["run"],
         {
@@ -103,7 +117,7 @@ def run_critic_closure(
             "summary": record["summary"],
             "counts": {
                 "insights": len(record["payload"]["insights"]),
-                "audit_checks": record["audit"].total_checks,
+                "audit_checks": len(persisted_audit["checks"]),
             },
         },
     )
@@ -143,7 +157,11 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "status": "success",
-                "audit_checks": result["record"]["audit"].total_checks,
+                "audit_checks": len(
+                    json.loads(
+                        result["paths"]["audit"].read_text(encoding="utf-8")
+                    )["checks"]
+                ),
                 "artifacts": {
                     name: str(path) for name, path in result["paths"].items()
                 },

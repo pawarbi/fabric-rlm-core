@@ -102,6 +102,15 @@ def test_research_prompt_names_sources_and_demands_depth_without_final_contract(
         "regression",
     ):
         assert method in lowered
+    for phrase in (
+        "group sample sizes",
+        "median",
+        "distribution tails",
+        "censoring",
+        "exposure normalization",
+        "obvious confounders",
+    ):
+        assert phrase in lowered
 
 
 @pytest.mark.parametrize(
@@ -169,12 +178,19 @@ def test_scaffold_and_insight_prompts_embed_deterministic_inputs_and_contract_ru
     assert "dimensions_deferred" in scaffold_prompt
     assert "promoted titles" in scaffold_lowered
     assert "3-5" in scaffold_prompt
+    assert "do not promote averages-only" in scaffold_lowered
+    assert "distribution and tail evidence" in scaffold_lowered
+    assert "censoring, selection, exposure, and confounder" in scaffold_lowered
     assert "exactly match" in insight_lowered
     assert "contract v2 diagnostics" in insight_lowered
     assert "metric specs" in insight_lowered
     assert "no broad exploration" in insight_lowered
     assert "exact alias->source" in insight_lowered
     assert "self-contained sql" in insight_lowered
+    assert "group sample sizes, denominator" in insight_lowered
+    assert "median and distribution tails" in insight_lowered
+    assert "exposure-normalized" in insight_lowered
+    assert "investigate_first" in insight_prompt
     for identity, path in sources.items():
         assert f"{identity}: {path}" in scaffold_prompt
         assert f"{identity}: {path}" in insight_prompt
@@ -479,6 +495,258 @@ def test_mechanical_normalizer_marks_fully_closed_evidence_act_ready() -> None:
         "$.insights[0].diagnostic_assessment.explanations[0].verification.sources.facts",
         "$.insights[0].diagnostic_assessment.decision_readiness",
     )
+
+
+def test_mechanical_normalizer_assigns_unique_closure_explanation_ids() -> None:
+    bench = load_module()
+    payload = {
+        "insights": [
+            {
+                "diagnostic_assessment": {
+                    "explanations": [
+                        {
+                            "explanation_id": "existing-id",
+                            "closure_status": "pending",
+                        },
+                        {
+                            "explanation_id": "existing-id",
+                            "closure_status": "pending",
+                        },
+                        {"closure_status": "pending"},
+                    ]
+                }
+            }
+        ]
+    }
+
+    normalized, changes = bench.normalize_mechanical_contract(payload, [])
+    explanations = normalized["insights"][0]["diagnostic_assessment"][
+        "explanations"
+    ]
+
+    assert [item["explanation_id"] for item in explanations] == [
+        "existing-id",
+        "explanation-2",
+        "explanation-3",
+    ]
+    assert changes == (
+        "$.insights[0].diagnostic_assessment.explanations[1].explanation_id",
+        "$.insights[0].diagnostic_assessment.explanations[2].explanation_id",
+    )
+
+
+def test_mechanical_normalizer_assigns_ids_before_diagnostic_closure() -> None:
+    bench = load_module()
+    payload = {
+        "insights": [
+            {
+                "diagnostic_assessment": {
+                    "explanations": [
+                        {
+                            "explanation": "Customer tenure may explain repeat spend.",
+                            "measurable": True,
+                            "disposition": "unresolved",
+                            "required_check": "Compare customers within tenure cohorts.",
+                        },
+                        {
+                            "explanation": "Basket composition may explain spend.",
+                            "measurable": True,
+                            "disposition": "unresolved",
+                            "required_check": "Decompose spend into visits and basket value.",
+                        },
+                    ]
+                }
+            }
+        ]
+    }
+
+    normalized, changes = bench.normalize_mechanical_contract(payload, [])
+    explanations = normalized["insights"][0]["diagnostic_assessment"][
+        "explanations"
+    ]
+
+    assert [item["explanation_id"] for item in explanations] == [
+        "explanation-1",
+        "explanation-2",
+    ]
+    assert changes == (
+        "$.insights[0].diagnostic_assessment.explanations[0].explanation_id",
+        "$.insights[0].diagnostic_assessment.explanations[1].explanation_id",
+        "$.insights[0].diagnostic_measurability",
+        "$.insights[0].diagnostic_assessment.decision_readiness",
+        "$.insights[0].action.kind",
+    )
+
+
+def test_mechanical_normalizer_assigns_payload_unique_explanation_ids() -> None:
+    bench = load_module()
+    payload = {
+        "insights": [
+            {
+                "diagnostic_assessment": {
+                    "explanations": [
+                        {
+                            "explanation_id": "explanation-1",
+                            "closure_status": "pending",
+                        },
+                        {
+                            "explanation_id": "explanation-2",
+                            "closure_status": "pending",
+                        },
+                    ]
+                }
+            },
+            {
+                "diagnostic_assessment": {
+                    "explanations": [
+                        {
+                            "explanation_id": "explanation-1",
+                            "closure_status": "pending",
+                        },
+                        {
+                            "explanation_id": "explanation-2",
+                            "closure_status": "pending",
+                        },
+                    ]
+                }
+            },
+        ]
+    }
+
+    normalized, changes = bench.normalize_mechanical_contract(payload, [])
+    ids = [
+        explanation["explanation_id"]
+        for insight in normalized["insights"]
+        for explanation in insight["diagnostic_assessment"]["explanations"]
+    ]
+
+    assert ids == [
+        "explanation-1",
+        "explanation-2",
+        "explanation-3",
+        "explanation-4",
+    ]
+    assert changes == (
+        "$.insights[1].diagnostic_assessment.explanations[0].explanation_id",
+        "$.insights[1].diagnostic_assessment.explanations[1].explanation_id",
+    )
+
+
+@pytest.mark.parametrize(
+    ("metric_type", "expected_value", "statement", "expected_statement"),
+    [
+        (
+            "delta",
+            49.183098591549296,
+            "Transferred cases averaged 54.0 hours versus 4.8 hours.",
+            "The primary measured difference is 49.183098591549296.",
+        ),
+        (
+            "share",
+            0.389,
+            "The top 25 hold 38.9%, and the top 10 hold 19.3%.",
+            "The primary measured share is 38.9%.",
+        ),
+        (
+            "delta",
+            837.0,
+            "The revenue spread is 837, or 7.8% of the minimum.",
+            "The primary measured difference is 837.",
+        ),
+    ],
+)
+def test_mechanical_normalizer_replaces_packed_primary_statements(
+    metric_type: str,
+    expected_value: float,
+    statement: str,
+    expected_statement: str,
+) -> None:
+    bench = load_module()
+    payload = {
+        "insights": [
+            {
+                "statement": statement,
+                "metric_spec": {
+                    "type": metric_type,
+                    "expected_value": expected_value,
+                },
+            }
+        ]
+    }
+
+    normalized, changes = bench.normalize_mechanical_contract(payload, [])
+
+    assert normalized["insights"][0]["statement"] == expected_statement
+    assert changes == ("$.insights[0].statement",)
+
+
+def test_mechanical_normalizer_aggregates_distinct_metric_value() -> None:
+    bench = load_module()
+    payload = {
+        "verification": {
+            "method": "sql",
+            "expression": (
+                "SELECT DISTINCT unitPrice AS metric_value "
+                "FROM sales_transactions"
+            ),
+            "sources": {"sales_transactions": "sales_transactions"},
+        }
+    }
+
+    normalized, changes = bench.normalize_mechanical_contract(
+        payload, ["sales_transactions"]
+    )
+
+    assert normalized["verification"]["expression"] == (
+        "SELECT min(unitPrice) AS metric_value FROM sales_transactions"
+    )
+    assert changes == ("$.verification.expression",)
+
+
+def test_mechanical_normalizer_corrects_cached_statement_unit_mismatch() -> None:
+    bench = load_module()
+    payload = {
+        "insights": [
+            {
+                "statement": "The primary measured difference is 83700%.",
+                "metric_spec": {
+                    "type": "delta",
+                    "expected_value": 837.0,
+                },
+            }
+        ]
+    }
+
+    normalized, changes = bench.normalize_mechanical_contract(payload, [])
+
+    assert normalized["insights"][0]["statement"] == (
+        "The primary measured difference is 837."
+    )
+    assert changes == ("$.insights[0].statement",)
+
+
+def test_mechanical_normalizer_reconciles_supporting_claim_expected_value() -> None:
+    bench = load_module()
+    payload = {
+        "supporting_claims": [
+            {
+                "claim": "Top-10 accounts hold 19.30% of total amount.",
+                "expected_value": 19.2977,
+                "metric_spec": {
+                    "type": "share",
+                    "expected_value": 0.1929545923253972,
+                    "components": [],
+                },
+            }
+        ]
+    }
+
+    normalized, changes = bench.normalize_mechanical_contract(payload, [])
+
+    assert normalized["supporting_claims"][0]["expected_value"] == (
+        0.1929545923253972
+    )
+    assert changes == ("$.supporting_claims[0].expected_value",)
 
 
 def test_run_evidence_closure_verifies_and_audits_before_checkpoint(
@@ -949,8 +1217,279 @@ def test_critic_closure_prompt_targets_only_gated_material_or_blocking_challenge
     assert "challenge-2" not in prompt
     assert "insight-1-explanation-1" in prompt
     assert "insight-1-explanation-2" in prompt
+    assert "critic-follow-up-1-1" in prompt
+    assert "Measure exposure-normalized rates." in prompt
     assert "do not weaken" in prompt.lower()
     assert "aggregate" in prompt.lower()
+    assert "investigate_first is not a disposition" in prompt
+    assert "unresolvable" in prompt
+    assert "explicit JOIN syntax" in prompt
+    assert "SELECT metric_value FROM contrast" in prompt
+
+
+def test_critic_closure_targets_unresolved_material_revision_as_follow_up() -> None:
+    bench = load_module()
+    payload = _closure_ready_payload()
+    payload["insights"][0]["diagnostic_assessment"]["explanations"] = []
+    critic = _gated_critic()
+    review = critic["reviewed_insights"][0]
+    review["verdict"] = "revise"
+    review["resolutions"] = [
+        {
+            "challenge_index": 1,
+            "challenge_type": "obviousness",
+            "status": "resolved",
+        }
+    ]
+
+    targets = bench._critic_closure_targets(payload, critic)
+
+    assert len(targets) == 1
+    assert targets[0]["challenge_id"] == "challenge-1"
+    assert targets[0]["explanations"] == [
+        {
+            "explanation": (
+                "Exposure time may explain the difference. "
+                "Measure exposure-normalized rates."
+            ),
+            "explanation_id": "critic-follow-up-1-1",
+            "measurable": True,
+            "disposition": "untested",
+            "target_kind": "critic_follow_up",
+        }
+    ]
+
+
+def test_merge_critic_closure_plan_appends_first_class_follow_up_analysis(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    plan = {
+        "critic_closure_plans": [
+            {
+                "challenge_id": "challenge-1",
+                "explanation_id": "critic-follow-up-1-1",
+                "required_check": "Compare rates per equal exposure window.",
+                "disposition": "weakened",
+                "expected_value": 0.04,
+                "verification": {
+                    "method": "sql",
+                    "expression": "SELECT AVG(exposure_rate) FROM facts",
+                    "sources": {"f": "facts"},
+                },
+            }
+        ]
+    }
+
+    merged = bench.merge_critic_closure_plan(
+        _closure_ready_payload(),
+        _gated_critic(),
+        plan,
+        {"facts": tmp_path / "facts.csv"},
+    )
+
+    explanations = merged["insights"][0]["diagnostic_assessment"]["explanations"]
+    follow_up = explanations[-1]
+    assert follow_up["explanation_id"] == "critic-follow-up-1-1"
+    assert follow_up["critic_challenge_id"] == "challenge-1"
+    assert follow_up["measurable"] is True
+    assert follow_up["disposition"] == "weakened"
+    assert follow_up["closure_status"] == "weakened"
+    assert follow_up["required_check"] == "Compare rates per equal exposure window."
+    assert follow_up["verification"]["sources"] == {"f": "facts"}
+    assert "Exposure time may explain the difference." in follow_up["explanation"]
+    assert merged["insights"][0]["competing_explanations"][-1] == follow_up[
+        "explanation"
+    ]
+
+
+def test_merge_critic_closure_plan_preserves_unresolvable_follow_up_abstention(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    plan = {
+        "critic_closure_plans": [
+            {
+                "challenge_id": "challenge-1",
+                "explanation_id": "critic-follow-up-1-1",
+                "required_check": "Compare against the unavailable future period.",
+                "disposition": "unresolvable",
+                "limitation": "The frozen source ends before the requested period.",
+            }
+        ]
+    }
+
+    merged = bench.merge_critic_closure_plan(
+        _closure_ready_payload(),
+        _gated_critic(),
+        plan,
+        {"facts": tmp_path / "facts.csv"},
+    )
+
+    follow_up = merged["insights"][0]["diagnostic_assessment"]["explanations"][-1]
+    assert follow_up["measurable"] is False
+    assert follow_up["disposition"] == "not_measurable"
+    assert follow_up["closure_status"] == "unresolvable"
+    assert follow_up["limitation"] == (
+        "The frozen source ends before the requested period."
+    )
+    assert "expected_value" not in follow_up
+    assert "verification" not in follow_up
+    assert merged["insights"][0]["competing_explanations"][-1] == follow_up[
+        "explanation"
+    ]
+
+
+def test_merge_critic_closure_plan_requires_check_for_unresolvable_follow_up(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    plan = {
+        "critic_closure_plans": [
+            {
+                "challenge_id": "challenge-1",
+                "explanation_id": "critic-follow-up-1-1",
+                "disposition": "unresolvable",
+                "limitation": "The frozen source ends before the requested period.",
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="required_check must be non-empty"):
+        bench.merge_critic_closure_plan(
+            _closure_ready_payload(),
+            _gated_critic(),
+            plan,
+            {"facts": tmp_path / "facts.csv"},
+        )
+
+
+def test_merge_critic_closure_plan_rejects_reused_sql_for_distinct_challenges(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    critic = _gated_critic()
+    review = critic["reviewed_insights"][0]
+    review["challenges"].append(
+        {
+            "id": "challenge-3",
+            "type": "confounder",
+            "assessment": "Tenure may explain the difference.",
+            "severity": "material",
+        }
+    )
+    review["resolutions"].append(
+        {
+            "challenge_index": 2,
+            "challenge_type": "confounder",
+            "status": "gated",
+        }
+    )
+    plan = {
+        "critic_closure_plans": [
+            {
+                "challenge_id": "challenge-1",
+                "explanation_id": "critic-follow-up-1-1",
+                "required_check": "Normalize by exposure.",
+                "disposition": "weakened",
+                "expected_value": 0.04,
+                "verification": {
+                    "method": "sql",
+                    "expression": "SELECT AVG(exposure_rate) FROM facts",
+                    "sources": {"f": "facts"},
+                },
+            },
+            {
+                "challenge_id": "challenge-3",
+                "explanation_id": "critic-follow-up-1-3",
+                "required_check": "Stratify by tenure.",
+                "disposition": "weakened",
+                "expected_value": 0.04,
+                "verification": {
+                    "method": "sql",
+                    "expression": "SELECT AVG(exposure_rate) FROM facts",
+                    "sources": {"f": "facts"},
+                },
+            },
+        ]
+    }
+
+    with pytest.raises(ValueError, match="distinct verification SQL"):
+        bench.merge_critic_closure_plan(
+            _closure_ready_payload(),
+            critic,
+            plan,
+            {"facts": tmp_path / "facts.csv"},
+        )
+
+
+def test_merge_critic_closure_plan_rejects_zero_count_as_comparator_evidence(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    plan = {
+        "critic_closure_plans": [
+            {
+                "challenge_id": "challenge-1",
+                "explanation_id": "critic-follow-up-1-1",
+                "required_check": "Compare the requested future month.",
+                "disposition": "supported",
+                "expected_value": 0,
+                "verification": {
+                    "method": "sql",
+                    "expression": (
+                        "SELECT count(*) FILTER (WHERE status='done') "
+                        "AS metric_value FROM facts WHERE month='2018-11'"
+                    ),
+                    "sources": {"f": "facts"},
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="zero-valued count"):
+        bench.merge_critic_closure_plan(
+            _closure_ready_payload(),
+            _gated_critic(),
+            plan,
+            {"facts": tmp_path / "facts.csv"},
+        )
+
+
+def test_merge_critic_closure_plan_rejects_one_group_mean_as_comparison(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    plan = {
+        "critic_closure_plans": [
+            {
+                "challenge_id": "challenge-1",
+                "explanation_id": "critic-follow-up-1-1",
+                "required_check": (
+                    "Compare same-state versus cross-state delivery duration; "
+                    "same-state is shorter than cross-state."
+                ),
+                "disposition": "weakened",
+                "expected_value": 7.86,
+                "verification": {
+                    "method": "sql",
+                    "expression": (
+                        "SELECT AVG(duration) FILTER (WHERE same_state) "
+                        "AS metric_value FROM facts"
+                    ),
+                    "sources": {"f": "facts"},
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="scalar contrast"):
+        bench.merge_critic_closure_plan(
+            _closure_ready_payload(),
+            _gated_critic(),
+            plan,
+            {"facts": tmp_path / "facts.csv"},
+        )
 
 
 def test_merge_critic_closure_plan_reopens_exact_existing_explanation(
@@ -1018,6 +1557,12 @@ def test_merge_critic_closure_plan_reopens_exact_existing_explanation(
                 "sources"
             ].update(f="unknown"),
             "authoritative source",
+        ),
+        (
+            lambda plan: plan["critic_closure_plans"][0].update(
+                disposition="investigate_first"
+            ),
+            "disposition 'investigate_first' is invalid",
         ),
     ],
 )
@@ -1121,6 +1666,163 @@ def test_run_critic_evidence_closure_executes_before_persisting(
     assert record["payload"]["contract_version"] == 3
     assert record["audit"].total_checks == 1
     assert checkpoint.is_file()
+
+
+def test_run_critic_evidence_closure_repairs_invalid_verified_plan(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    sources = {"facts": tmp_path / "facts.csv"}
+    invalid_plan = {
+        "critic_closure_plans": [
+            {
+                "challenge_id": "challenge-1",
+                "explanation_id": "insight-1-explanation-1",
+                "required_check": "Measure exposure-normalized rates.",
+                "disposition": "weakened",
+                "expected_value": 0.04,
+                "verification": {
+                    "method": "sql",
+                    "expression": "SELECT count(*) / count(DISTINCT id) FROM facts",
+                    "sources": {"f": "facts"},
+                },
+            }
+        ]
+    }
+    valid_plan = deepcopy(invalid_plan)
+    valid_plan["critic_closure_plans"][0]["verification"][
+        "expression"
+    ] = "SELECT AVG(exposure_rate) FROM facts"
+    plans = iter((invalid_plan, valid_plan))
+    calls = []
+    verify_count = 0
+
+    class RLM:
+        @classmethod
+        def from_task(cls, **kwargs):
+            calls.append(kwargs)
+            plan = next(plans)
+            result = type(
+                "Result",
+                (),
+                {"payload": plan, "trajectory": f"turn-{len(calls)}"},
+            )()
+            return type("Runner", (), {"run": lambda self: result})()
+
+    class Executor:
+        def __init__(self, actual_sources):
+            assert actual_sources == sources
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    def verifier(actual):
+        nonlocal verify_count
+        verify_count += 1
+        if verify_count == 1:
+            raise AssertionError(
+                "verification must recompute metric_value with one aggregate"
+            )
+
+    record = bench.run_critic_evidence_closure(
+        _closure_ready_payload(),
+        _gated_critic(),
+        sources,
+        lm=object(),
+        rlm_type=RLM,
+        executor_type=Executor,
+        audit_function=lambda actual, executor: FakeAudit(
+            (FakeCheck("closure", 0.04, 0.04),)
+        ),
+        summarize_trajectory=lambda value: {"trajectory": value, "turns": 2},
+        verify_function=verifier,
+        max_turns=8,
+        timeout=60,
+    )
+
+    assert len(calls) == 2
+    assert "CURRENT INVALID CRITIC CLOSURE PLAN" in calls[1]["task"]
+    assert "one aggregate" in calls[1]["task"]
+    assert record["summary"]["plan_repairs"] == 1
+    assert record["audit"].total_checks == 1
+
+
+def test_run_critic_evidence_closure_retries_invalid_repair_response(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    sources = {"facts": tmp_path / "facts.csv"}
+    invalid_plan = {
+        "critic_closure_plans": [
+            {
+                "challenge_id": "challenge-1",
+                "explanation_id": "insight-1-explanation-1",
+                "required_check": "Measure exposure-normalized rates.",
+                "disposition": "weakened",
+                "expected_value": 0.04,
+                "verification": {
+                    "method": "sql",
+                    "expression": "SELECT AVG(exposure_rate) FROM facts",
+                    "sources": {"f": "facts"},
+                },
+            }
+        ]
+    }
+    responses = iter((invalid_plan, None, invalid_plan))
+    calls = []
+    verify_count = 0
+
+    class RLM:
+        @classmethod
+        def from_task(cls, **kwargs):
+            calls.append(kwargs)
+            payload = next(responses)
+            result = type(
+                "Result",
+                (),
+                {"payload": payload, "trajectory": f"turn-{len(calls)}"},
+            )()
+            return type("Runner", (), {"run": lambda self: result})()
+
+    class Executor:
+        def __init__(self, actual_sources):
+            assert actual_sources == sources
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    def verifier(actual):
+        nonlocal verify_count
+        verify_count += 1
+        if verify_count == 1:
+            raise AssertionError("comparison requires a scalar contrast")
+
+    record = bench.run_critic_evidence_closure(
+        _closure_ready_payload(),
+        _gated_critic(),
+        sources,
+        lm=object(),
+        rlm_type=RLM,
+        executor_type=Executor,
+        audit_function=lambda actual, executor: FakeAudit(
+            (FakeCheck("closure", 0.04, 0.04),)
+        ),
+        summarize_trajectory=lambda value: {},
+        verify_function=verifier,
+        max_turns=8,
+        timeout=60,
+    )
+
+    assert len(calls) == 3
+    assert "RLM payload must be a JSON object" in calls[2]["task"]
+    assert "unparseable repair response" in calls[2]["task"]
+    assert record["summary"]["plan_repairs"] == 2
 
 
 def _approved_action_critic() -> dict:
@@ -1373,6 +2075,49 @@ def test_run_action_synthesis_verifies_before_checkpoint(tmp_path: Path) -> None
     assert events[1] == "verify"
     assert record["payload"]["insights"][0]["action"]["kind"] == "program"
     assert checkpoint.is_file()
+
+
+def test_run_action_synthesis_downgrades_program_actions_not_allowlisted() -> None:
+    bench = load_module()
+    payload = _closure_ready_payload()
+    payload["contract_version"] = 3
+    payload["insights"][0]["action"]["kind"] = "program"
+    critic = _approved_action_critic()
+    critic["reviewed_insights"][0].update(
+        {
+            "verdict": "revise",
+            "synthesis_eligible": True,
+            "required_changes": [
+                {"change": "Run exposure normalization.", "gate": "investigate_first"}
+            ],
+        }
+    )
+    critic["synthesis_manifest"]["program_action_titles"] = []
+    critic["synthesis_manifest"]["diagnostic_only_titles"] = [
+        "Observed group difference"
+    ]
+    calls = []
+
+    class RLM:
+        @classmethod
+        def from_task(cls, **kwargs):
+            calls.append(kwargs)
+            raise AssertionError("action synthesis must be skipped")
+
+    record = bench.run_action_synthesis(
+        payload,
+        critic,
+        lm=object(),
+        rlm_type=RLM,
+        summarize_trajectory=lambda value: {},
+        verify_function=lambda actual: None,
+        max_turns=8,
+        timeout=60,
+    )
+
+    assert calls == []
+    assert record["summary"]["skipped"] is True
+    assert record["payload"]["insights"][0]["action"]["kind"] == "diagnostic"
 
 
 def test_assemble_contract_is_strict_detached_and_does_not_mutate_inputs() -> None:
@@ -1910,6 +2655,50 @@ def test_mechanical_normalizer_rewrites_exact_authorized_paths_to_identities(
     assert changes == ("$.verification.sources.orders",)
 
 
+def test_mechanical_normalizer_rewrites_authorized_csv_relations_to_identities(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    cases_path = tmp_path / "cases.csv"
+    metrics_path = tmp_path / "case_owner_metrics.csv"
+    payload = {
+        "verification": {
+            "method": "sql",
+            "expression": (
+                "SELECT AVG(c.hours) AS metric_value "
+                f"FROM read_csv_auto('{cases_path}') c "
+                f"JOIN read_csv_auto('{metrics_path}') m ON m.case_id = c.id"
+            ),
+            "sources": {"c": "cases", "m": "case_owner_metrics"},
+        }
+    }
+
+    normalized, changes = bench.normalize_mechanical_contract(
+        payload,
+        {
+            "cases": cases_path,
+            "case_owner_metrics": metrics_path,
+        },
+    )
+
+    assert normalized["verification"]["expression"] == (
+        "SELECT AVG(c.hours) AS metric_value "
+        "FROM cases c JOIN case_owner_metrics m ON m.case_id = c.id"
+    )
+    assert normalized["verification"]["sources"] == {
+        "c": "cases",
+        "m": "case_owner_metrics",
+        "cases": "cases",
+        "case_owner_metrics": "case_owner_metrics",
+    }
+    assert changes == (
+        "$.verification.expression",
+        "$.verification.sources.cases",
+        "$.verification.sources.case_owner_metrics",
+    )
+    assert "read_csv_auto" in payload["verification"]["expression"]
+
+
 def test_mechanical_normalizer_rewrites_unique_authorized_filenames_to_identities(
     tmp_path: Path,
 ) -> None:
@@ -2390,6 +3179,27 @@ def test_targeted_metric_component_repair_prompt_requires_source_recomputation(
     assert "one source column or one aggregate" in lowered
 
 
+def test_targeted_insight_repair_prompt_demotes_unsupported_causal_language(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    prompt = bench.build_targeted_insight_repair_prompt(
+        {"facts": tmp_path / "facts.csv"},
+        {"candidates": []},
+        {
+            "title": "Calls drive progression",
+            "statement": "Calls increase with stage.",
+            "interpretation": "Calls drive progression.",
+        },
+        "insight 5 uses causal language without structured causal evidence",
+    ).lower()
+
+    assert "remove unsupported causal language" in prompt
+    assert "is associated with" in prompt
+    assert "may reflect" in prompt
+    assert "do not add causal_evidence" in prompt
+
+
 def test_targeted_statement_repair_prompt_requests_only_the_failing_field() -> None:
     bench = load_module()
     insight = {
@@ -2614,6 +3424,7 @@ def test_targeted_merge_replaces_only_named_metric_component() -> None:
         ("kpi_map must name its source field", "scaffold"),
         ("dimensions_available conflicts with dimensions_deferred", "scaffold"),
         ("deferred dimension Specification/model is not available", "scaffold"),
+        ("unsearched dimension: ['owner_user']", "scaffold"),
         ("promotion lineage for candidate 2 is incomplete", "scaffold"),
         ("insight 1 must include a diagnostic", "insights"),
         ("metric_spec denominator is not measurable", "insights"),
@@ -2954,6 +3765,76 @@ def test_repair_exhaustion_names_target_attempts_and_preserves_cause(
     assert str(captured.value.__cause__) == "final verifier message"
 
 
+def test_invalid_targeted_component_repair_consumes_attempt_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bench = load_module()
+    data_dir = tmp_path / "olist"
+    make_bundle(data_dir)
+    research = valid_research()
+    scaffold = {"analysis_plan": {}, "candidates": []}
+    original_insight = {
+        "title": "Stage activity association",
+        "metric_spec": {
+            "type": "average",
+            "expected_value": 3.6,
+            "components": [
+                {
+                    "name": "closed_calls_per_opp",
+                    "role": "value",
+                    "expected_value": 3.6,
+                    "verification": {
+                        "method": "sql",
+                        "expression": "SELECT 3.6 AS metric_value",
+                        "sources": {"orders": "orders"},
+                    },
+                }
+            ],
+        },
+    }
+    insights = {"insights": [original_insight]}
+    caches = write_all_caches(tmp_path, research, scaffold, insights)
+    verifier_calls = 0
+
+    def verifier(payload):
+        nonlocal verifier_calls
+        verifier_calls += 1
+        if verifier_calls < 3:
+            raise AssertionError(
+                "insight 1 metric component 'closed_calls_per_opp' "
+                "verification must recompute metric_value from source data"
+            )
+
+    valid_repair = deepcopy(original_insight)
+    valid_repair["metric_spec"]["components"][0]["verification"][
+        "expression"
+    ] = "SELECT avg(call_count) AS metric_value FROM orders"
+    calls, _ = install_cached_repair_fakes(
+        bench,
+        monkeypatch,
+        [
+            {"insight": {"title": "Stage activity association"}},
+            {"insight": valid_repair},
+        ],
+        verifier,
+    )
+
+    record = bench.run_staged_benchmark(
+        data_dir,
+        research_cache_path=caches[0],
+        scaffold_cache_path=caches[1],
+        insights_cache_path=caches[2],
+        max_insight_repairs=2,
+    )
+
+    assert len(calls) == 2
+    assert record["repairs"][0]["mode"] == "targeted-invalid"
+    assert record["repairs"][1]["mode"] == "targeted"
+    assert record["payload"]["insights"][0]["metric_spec"]["components"][0][
+        "verification"
+    ]["expression"] == "SELECT avg(call_count) AS metric_value FROM orders"
+
+
 def test_candidate_error_repairs_scaffold_then_regenerates_insights_before_verify(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3047,6 +3928,52 @@ def test_candidate_error_repairs_scaffold_then_regenerates_insights_before_verif
     )
     assert resumed_calls == []
     assert resumed["payload"]["insights"] == new_insights["insights"]
+
+
+def test_truncated_scaffold_repair_consumes_attempt_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bench = load_module()
+    data_dir = tmp_path / "olist"
+    make_bundle(data_dir)
+    research = valid_research()
+    old_scaffold = {"analysis_plan": {"grain": "old"}, "candidates": []}
+    old_insights = {"insights": [{"title": "old"}]}
+    new_scaffold = {
+        "analysis_plan": {"grain": "order"},
+        "candidates": [{"candidate": "new"}],
+    }
+    new_insights = {"insights": [{"title": "new"}]}
+    caches = write_all_caches(tmp_path, research, old_scaffold, old_insights)
+    verify_count = 0
+
+    def verifier(payload):
+        nonlocal verify_count
+        verify_count += 1
+        if verify_count < 3:
+            raise AssertionError(
+                "deferred dimension geolocation_distance is not available"
+            )
+
+    calls, _ = install_cached_repair_fakes(
+        bench,
+        monkeypatch,
+        [None, new_scaffold, new_insights],
+        verifier,
+    )
+
+    record = bench.run_staged_benchmark(
+        data_dir,
+        research_cache_path=caches[0],
+        scaffold_cache_path=caches[1],
+        insights_cache_path=caches[2],
+        max_scaffold_repairs=2,
+    )
+
+    assert len(calls) == 3
+    assert record["repairs"][0]["mode"] == "scaffold-invalid"
+    assert record["repairs"][1]["mode"] == "full"
+    assert record["payload"]["insights"] == new_insights["insights"]
 
 
 def test_repair_target_transitions_use_separate_budgets(

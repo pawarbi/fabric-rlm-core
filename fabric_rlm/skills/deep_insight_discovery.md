@@ -150,6 +150,14 @@ declarations and source checks are auditable inputs; a semantic critic remains
 responsible for challenging false `not_measurable` declarations, but cannot
 waive current-version structure.
 
+Critic-driven closure may append a new explanation only when it is a bounded
+follow-up analysis for a specific material or blocking challenge. The follow-up
+must be added to both `competing_explanations` and the typed assessment. If the
+frozen sources lack the requested field, period, denominator, or comparator,
+record `closure_status: unresolvable` and `disposition: not_measurable` with a
+substantive limitation; an empty population must never be reported as a
+measured zero.
+
 ## Required verifier
 
 ```python
@@ -1554,6 +1562,13 @@ diagnostic measurability and use the typed assessment for every insight.
 Version `1` omission remains valid only for existing-consumer compatibility.
 Prefer "is associated with," "is consistent
 with," or "may reflect" unless the design supports causality.
+
+Do not promote averages-only findings. Group comparisons must report explicit
+group sizes and denominators, median and distribution tails, and sensitivity to
+skew. Test censoring, selection effects, obvious confounders, and comparable
+populations. Normalize accumulating lifecycle or activity measures by exposure;
+when these checks are unavailable or materially unresolved, use
+`investigate_first` with a diagnostic action or reject the candidate.
 
 ### 7. Synthesize
 

@@ -386,6 +386,11 @@ def test_prompt_is_source_agnostic_exhaustive_and_contains_safe_attestation() ->
     assert "style" in lowered and "rewrite" in lowered
     assert "exact discovery/audit paths" in lowered
     assert "rejecting every" in lowered
+    assert "median" in lowered and "tail" in lowered
+    assert "censoring" in lowered and "confound" in lowered
+    assert "exposure-normalized" in lowered
+    assert "model-proposed threshold" in lowered
+    assert "averages-only" in lowered
     assert '"path":"insights[0].metric_spec.value"' in prompt
     assert "olist" not in lowered
     assert "api_key" not in lowered
@@ -610,3 +615,35 @@ def test_critic_normalization_preserves_minor_low_risk_challenge() -> None:
 
     assert normalized == partial
     assert changes == ()
+
+
+def test_critic_normalization_disables_unresolved_material_revision() -> None:
+    critic = load_module()
+    partial = rejected_partial()
+    review = partial["reviewed_insights"][0]
+    review.update(
+        {
+            "verdict": "revise",
+            "synthesis_eligible": True,
+            "required_changes": [
+                {"change": "Correct the descriptive headline.", "gate": "none"}
+            ],
+            "challenges": [
+                {
+                    "id": "challenge-1",
+                    "type": "denominator_integrity",
+                    "severity": "material",
+                    "assessment": "The denominator remains unresolved.",
+                    "evidence_refs": ["insights[0].metric_spec"],
+                }
+            ],
+            "resolutions": [],
+        }
+    )
+
+    normalized, changes = critic.normalize_critic_partial(partial)
+
+    assert normalized["reviewed_insights"][0]["synthesis_eligible"] is False
+    assert changes == (
+        "$.reviewed_insights[0].synthesis_eligible",
+    )

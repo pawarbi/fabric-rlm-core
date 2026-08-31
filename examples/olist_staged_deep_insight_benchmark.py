@@ -131,6 +131,10 @@ RESEARCH REQUIREMENTS
   measured coverage permits.
 - Include quantitative rejected candidates, diagnostic alternatives,
   metric-definition sensitivities, and the benchmark/target basis.
+- For group comparisons and averages, measure group sample sizes, denominator
+  integrity, median, distribution tails, and skew sensitivity.
+- Test censoring, selection effects, exposure normalization, and obvious
+  confounders before attributing differences to a process or segment.
 - Favor decision-relevant findings over descriptive counts.
 
 EVIDENCE RULES
@@ -246,6 +250,10 @@ SCAFFOLD CONTRACT
   dimensions_deferred, along with applicable populations and time grains.
 - Promote 3-5 high-quality findings and establish their exact promoted titles
   and dimensions_tested. Quality wins over count.
+- Do not promote averages-only findings. Require distribution and tail evidence
+  plus explicit group sizes and denominators.
+- Require censoring, selection, exposure, and confounder checks when they can
+  materially change the interpretation; otherwise reject or defer the candidate.
 - Use only source-derived research candidates from the embedded ledger.
 - Keep diagnostic alternatives and metric-definition sensitivities explicit.
 - Do not invent insights in this stage.
@@ -282,6 +290,12 @@ INSIGHT CONTRACT
   promoted titles and dimensions in the scaffold.
 - Follow contract v2 diagnostics and metric specs, including competing
   explanations, robustness checks, limitations, and metric components.
+- For every promoted average or group comparison, include verified group sample
+  sizes, denominator integrity, median and distribution tails.
+- Accumulating lifecycle and activity measures must be exposure-normalized.
+- If censoring, selection, confounding, or distribution evidence remains
+  material and unresolved, set decision_readiness to investigate_first and
+  keep the action diagnostic.
 - Every verification must use self-contained SQL and an exact alias->source
   identity mapping containing only authoritative identities listed above.
 - Do not reference worker-created tables or views.
@@ -355,6 +369,8 @@ CLOSURE PLAN CONTRACT
   weakened, or supported, finite numeric expected_value, and verification.
 - Verification must use one self-contained aggregate DuckDB SQL query and an
   exact alias-to-source identity mapping containing only identities above.
+- Use explicit JOIN syntax for every multi-relation query; comma joins are not
+  supported.
 - The metric_value projection must be one source column or one aggregate.
   Do not divide or combine aggregates; express rates with one aggregate such
   as AVG(CASE WHEN ... THEN 1.0 ELSE 0.0 END).
@@ -612,20 +628,59 @@ def _critic_closure_targets(
             if not isinstance(challenge, Mapping):
                 continue
             resolution = resolution_by_index.get(challenge_index)
+            required_changes = review.get("required_changes")
+            has_investigation_gate = (
+                isinstance(required_changes, list)
+                and any(
+                    isinstance(change, Mapping)
+                    and change.get("gate") == "investigate_first"
+                    for change in required_changes
+                )
+            )
+            unresolved_revision = (
+                resolution is None
+                and (
+                    review.get("verdict") == "revise"
+                    or has_investigation_gate
+                )
+            )
+            gated_resolution = (
+                isinstance(resolution, Mapping)
+                and resolution.get("status") == "gated"
+            )
             if (
-                not isinstance(resolution, Mapping)
-                or resolution.get("status") != "gated"
-                or challenge.get("severity") not in {"material", "blocking"}
+                challenge.get("severity") not in {"material", "blocking"}
+                or not (gated_resolution or unresolved_revision)
             ):
                 continue
+            follow_up_parts = [str(challenge.get("assessment") or "").strip()]
+            if isinstance(required_changes, list):
+                follow_up_parts.extend(
+                    str(change.get("change") or "").strip()
+                    for change in required_changes
+                    if isinstance(change, Mapping)
+                    and str(change.get("change") or "").strip()
+                )
+            follow_up = {
+                "explanation": " ".join(
+                    part for part in follow_up_parts if part
+                ),
+                "explanation_id": (
+                    f"critic-follow-up-{insight_index + 1}-"
+                    f"{challenge_index + 1}"
+                ),
+                "measurable": True,
+                "disposition": "untested",
+                "target_kind": "critic_follow_up",
+            }
             targets.append(
                 {
                     "assessment": challenge.get("assessment"),
                     "challenge_id": challenge.get("id"),
                     "challenge_type": challenge.get("type"),
-                    "explanations": explanation_inventory,
+                    "explanations": [*explanation_inventory, follow_up],
                     "insight_title": review.get("title"),
-                    "required_changes": review.get("required_changes"),
+                    "required_changes": required_changes,
                 }
             )
     return targets
@@ -653,17 +708,85 @@ AUTHORITATIVE DISCOVERY PAYLOAD
 {_compact_json(payload)}
 
 CRITIC CLOSURE CONTRACT
-- Preserve challenge_id exactly and select exactly one existing explanation_id
-  from the same insight. Do not add or rewrite explanations.
-- Supply a substantive required_check, final disposition of ruled_out,
-  weakened, or supported, finite numeric expected_value, and verification.
+- Preserve challenge_id exactly and select exactly one authorized explanation_id
+  from the same insight. A critic-follow-up target is an authorized new analysis;
+  existing explanations must not be added to or rewritten.
+- Supply a substantive required_check. For an executable check, the disposition
+  must be exactly ruled_out, weakened, or supported and the plan must include a
+  finite numeric expected_value plus verification.
+- If the frozen sources do not contain the required field, period, denominator,
+  or comparator, use disposition unresolvable with a substantive limitation and
+  omit expected_value and verification. Never interpret an unavailable period
+  or empty population as a measured zero.
+- Except for that explicit abstention, disposition must be exactly ruled_out,
+  weakened, or supported.
+  investigate_first is not a disposition, and untested is target metadata that
+  must not be copied into the plan.
+- Distinct critic challenges must use distinct verification SQL. A query must
+  directly test the challenge and every material qualifier in required_changes.
+- Never use an expected zero count to prove that a requested comparator period
+  or population exists. Use an evidence-bearing scalar contrast; if the
+  comparator is unavailable, mark the follow-up unresolvable.
+- Comparative checks must return a scalar contrast such as a difference, ratio,
+  or normalized effect, not one group's mean followed by an unsupported prose
+  claim about the other group. Compute components in CTEs, compute the derived
+  value in a final contrast CTE, then use exactly
+  SELECT metric_value FROM contrast so the verifier sees one source column.
 - Verification must use one self-contained aggregate DuckDB SQL query and an
   exact alias-to-source identity mapping containing only identities above.
+- Use explicit JOIN syntax for every multi-relation query; comma joins are not
+  supported.
 - Do not weaken, remove, rename, or resolve a critic challenge by assertion.
   The later critic rerun decides whether executed evidence resolves it.
 - Include aggregate evidence only: no raw records, personal identifiers,
   contact details, free-text messages, transcripts, subjects, or descriptions.
 - Call SUBMIT immediately after constructing the bounded native partial.
+"""
+
+
+def build_critic_closure_repair_prompt(
+    sources: Mapping[str, Path],
+    payload: Mapping[str, Any],
+    critic: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    error: str,
+) -> str:
+    """Build a bounded correction task for an invalid critic closure plan."""
+
+    return f"""\
+Repair only the invalid critic evidence-closure plan below.
+Return exactly critic_closure_plans: list with one plan per exact target.
+
+AUTHORITATIVE SOURCE IDENTITIES
+{_source_lines(sources)}
+
+EXACT CRITIC CLOSURE TARGETS
+{_compact_json({"targets": _critic_closure_targets(payload, critic)})}
+
+CURRENT INVALID CRITIC CLOSURE PLAN
+{_compact_json(plan)}
+
+EXACT VALIDATION ERROR
+{error}
+
+REPAIR RULES
+- Make only the minimum correction required by the exact error.
+- Preserve every challenge_id and explanation_id and exact target coverage.
+- Set each executable disposition to exactly ruled_out, weakened, or supported.
+  investigate_first and untested are never valid dispositions. If the frozen
+  source cannot execute the requested check, use unresolvable with limitation
+  and omit expected_value and verification.
+- Distinct challenges require distinct SQL that directly tests each challenge.
+- Replace zero-valued count evidence with a scalar contrast or unresolvable
+  abstention. Comparative prose requires a comparative scalar, not one mean.
+- For derived contrasts, compute components in CTEs, create a contrast CTE with
+  one metric_value column, then end with SELECT metric_value FROM contrast.
+- Use explicit JOIN syntax only; never use comma joins.
+- Verification metric_value must be one source column or one aggregate; do
+  not divide or combine aggregates.
+- Use only authoritative source identities listed above.
+- Do not add findings, challenges, explanations, or source identities.
+- Call SUBMIT immediately.
 """
 
 
@@ -689,6 +812,7 @@ def merge_critic_closure_plan(
         )
     authorized = frozenset(sources)
     planned_by_challenge: dict[str, dict[str, Any]] = {}
+    verification_owners: dict[str, str] = {}
     for index, item in enumerate(plans):
         label = f"critic_closure_plans[{index}]"
         if not isinstance(item, dict):
@@ -702,18 +826,47 @@ def merge_critic_closure_plan(
             for explanation in target["explanations"]
         }
         if item.get("explanation_id") not in explanation_ids:
-            raise ValueError(f"{label} must reference an existing explanation")
-        if item.get("disposition") not in {
-            "ruled_out",
-            "weakened",
-            "supported",
-        }:
-            raise ValueError(f"{label} disposition is invalid")
+            raise ValueError(
+                f"{label} must reference an existing explanation or "
+                "authorized critic follow-up"
+            )
+        target_explanation = next(
+            explanation
+            for explanation in target["explanations"]
+            if explanation["explanation_id"] == item.get("explanation_id")
+        )
         if (
             not isinstance(item.get("required_check"), str)
             or not item["required_check"].strip()
         ):
             raise ValueError(f"{label} required_check must be non-empty")
+        disposition = item.get("disposition")
+        if disposition == "unresolvable":
+            if target_explanation.get("target_kind") != "critic_follow_up":
+                raise ValueError(
+                    f"{label} may mark only a critic follow-up as unresolvable"
+                )
+            if (
+                not isinstance(item.get("limitation"), str)
+                or not item["limitation"].strip()
+            ):
+                raise ValueError(
+                    f"{label} unresolvable follow-up requires a limitation"
+                )
+            if "expected_value" in item or "verification" in item:
+                raise ValueError(
+                    f"{label} unresolvable follow-up must not invent verification"
+                )
+            planned_by_challenge[challenge_id] = item
+            continue
+        if disposition not in {
+            "ruled_out",
+            "weakened",
+            "supported",
+        }:
+            raise ValueError(
+                f"{label} disposition {disposition!r} is invalid"
+            )
         expected_value = item.get("expected_value")
         if (
             type(expected_value) not in {int, float}
@@ -728,11 +881,52 @@ def merge_critic_closure_plan(
             or not verification["expression"].strip()
         ):
             raise ValueError(f"{label} verification must be executable SQL")
+        if (
+            float(expected_value) == 0.0
+            and re.search(
+                r"\bcount\s*\(",
+                verification["expression"],
+                flags=re.IGNORECASE,
+            )
+        ):
+            raise ValueError(
+                f"{label} zero-valued count cannot establish comparator "
+                "availability; use an evidence-bearing contrast or mark the "
+                "critic follow-up unresolvable"
+            )
+        if re.search(
+            r"\b(?:versus|compared|difference|ratio|shorter than|longer than)\b",
+            item["required_check"],
+            flags=re.IGNORECASE,
+        ):
+            sql_without_literals = _without_sql_literals_and_comments(
+                verification["expression"]
+            )
+            if not re.search(
+                r"[A-Za-z0-9_)]\s*[-/]\s*[A-Za-z_(]",
+                sql_without_literals,
+            ):
+                raise ValueError(
+                    f"{label} comparative claim requires a scalar contrast, "
+                    "not a one-group aggregate"
+                )
         declared_sources = verification.get("sources")
         if not isinstance(declared_sources, dict) or not declared_sources:
             raise ValueError(f"{label} verification sources are required")
         if any(identity not in authorized for identity in declared_sources.values()):
             raise ValueError(f"{label} must use an authoritative source identity")
+        normalized_sql = re.sub(
+            r"\s+",
+            " ",
+            verification["expression"],
+        ).strip().casefold()
+        prior_challenge = verification_owners.get(normalized_sql)
+        if prior_challenge is not None:
+            raise ValueError(
+                f"{label} must use distinct verification SQL from "
+                f"challenge {prior_challenge!r}"
+            )
+        verification_owners[normalized_sql] = str(challenge_id)
         planned_by_challenge[challenge_id] = item
 
     merged = deepcopy(dict(payload))
@@ -757,7 +951,43 @@ def merge_critic_closure_plan(
             if explanation_id == target_id:
                 selected = explanation
         if selected is None:
-            raise ValueError("critic closure target explanation disappeared")
+            target_explanation = next(
+                (
+                    explanation
+                    for explanation in target["explanations"]
+                    if explanation.get("explanation_id") == target_id
+                    and explanation.get("target_kind") == "critic_follow_up"
+                ),
+                None,
+            )
+            if target_explanation is None:
+                raise ValueError("critic closure target explanation disappeared")
+            selected = {
+                "explanation": target_explanation["explanation"],
+                "explanation_id": target_id,
+                "follow_up_source": "critic",
+            }
+            explanations.append(selected)
+            competing = insight.get("competing_explanations")
+            if not isinstance(competing, list):
+                competing = []
+                insight["competing_explanations"] = competing
+            if selected["explanation"] not in competing:
+                competing.append(selected["explanation"])
+        if item["disposition"] == "unresolvable":
+            selected.pop("expected_value", None)
+            selected.pop("verification", None)
+            selected.update(
+                {
+                    "closure_status": "unresolvable",
+                    "critic_challenge_id": challenge_id,
+                    "disposition": "not_measurable",
+                    "limitation": item["limitation"],
+                    "measurable": False,
+                    "required_check": item["required_check"],
+                }
+            )
+            continue
         selected.pop("limitation", None)
         selected.update(
             {
@@ -1134,6 +1364,10 @@ def _parse_numeric_token(token: str) -> Decimal | None:
     return parsed / Decimal(100) if is_percentage else parsed
 
 
+def _decimal_text(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
 def _replace_exact_numeric_value(
     text: str,
     expected: float,
@@ -1146,10 +1380,8 @@ def _replace_exact_numeric_value(
         is_percentage = token.endswith("%")
         if _parse_numeric_token(token) != expected_decimal:
             return token
-        rendered = format(
-            (actual_decimal * Decimal(100) if is_percentage else actual_decimal)
-            .normalize(),
-            "f",
+        rendered = _decimal_text(
+            actual_decimal * Decimal(100) if is_percentage else actual_decimal
         )
         if "," in token:
             whole, separator, fraction = rendered.partition(".")
@@ -2081,6 +2313,18 @@ METRIC COMPONENT REPAIR REQUIREMENTS
   ratios and other derived metrics through separately verified components.
 - Preserve every other valid metric component and metric_spec field.
 """
+    causal_guidance = ""
+    if "causal language" in str(verifier_error).casefold():
+        causal_guidance = """\
+
+CAUSAL LANGUAGE REPAIR REQUIREMENTS
+- Remove unsupported causal language from the title, statement, and
+  interpretation while preserving the measured association.
+- Prefer "is associated with", "is consistent with", or "may reflect".
+- State obvious exposure or selection confounders as limitations.
+- Do not add causal_evidence or promote the evidence tier without an actual
+  causal design already present in the authoritative evidence.
+"""
     return f"""\
 Repair one deep_insight_discovery contract v2 insight. Return exactly one
 native insight: dict and SUBMIT immediately.
@@ -2098,6 +2342,7 @@ EXACT PORTABLE VERIFIER ERROR
 {verifier_error}
 {interaction_guidance}
 {metric_guidance}
+{causal_guidance}
 
 RULES
 - Make only the minimum correction required by the exact error.
@@ -2224,6 +2469,7 @@ def classify_repair_target(error: str) -> str:
         "dimensions_available",
         "dimensions_deferred",
         "deferred dimension",
+        "unsearched dimension",
     )
     if any(marker in lowered for marker in scaffold_markers):
         return "scaffold"
@@ -2300,6 +2546,11 @@ _SQL_RELATION = re.compile(
     r"([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)",
     flags=re.IGNORECASE,
 )
+_SQL_CSV_RELATION = re.compile(
+    r"\bread_csv_auto\s*\(\s*'((?:''|[^'])*)'\s*\)",
+    flags=re.IGNORECASE,
+)
+_CLOSURE_EXPLANATION_ID = re.compile(r"[a-z][a-z0-9_-]{2,63}")
 _SQL_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[(),]")
 
 
@@ -2439,6 +2690,7 @@ def normalize_mechanical_contract(
     authorized = frozenset(supplied_names)
     normalized = deepcopy(payload)
     changes: list[str] = []
+    used_explanation_ids: set[str] = set()
 
     def record_set(mapping: dict[str, Any], key: str, value: Any, path: str) -> None:
         if mapping.get(key) != value:
@@ -2468,6 +2720,34 @@ def normalize_mechanical_contract(
                         changes.append(
                             f"{_safe_path(path, 'sources')}.{alias}"
                         )
+                def replace_csv_relation(match: re.Match[str]) -> str:
+                    source_path = match.group(1).replace("''", "'")
+                    return source_paths.get(source_path, match.group(0))
+
+                normalized_expression = _SQL_CSV_RELATION.sub(
+                    replace_csv_relation, expression
+                )
+                if normalized_expression != expression:
+                    record_set(
+                        value,
+                        "expression",
+                        normalized_expression,
+                        path,
+                    )
+                    expression = normalized_expression
+                distinct_metric = re.fullmatch(
+                    r"\s*SELECT\s+DISTINCT\s+"
+                    r"([A-Za-z_][A-Za-z0-9_.]*)\s+AS\s+metric_value\s+"
+                    r"FROM\s+([A-Za-z_][A-Za-z0-9_]*)\s*;?\s*",
+                    expression,
+                    flags=re.IGNORECASE,
+                )
+                if distinct_metric is not None:
+                    expression = (
+                        f"SELECT min({distinct_metric.group(1)}) AS metric_value "
+                        f"FROM {distinct_metric.group(2)}"
+                    )
+                    record_set(value, "expression", expression, path)
                 sanitized = _without_sql_literals_and_comments(expression)
                 ctes = _cte_names(sanitized)
                 relations: list[str] = []
@@ -2487,6 +2767,153 @@ def normalize_mechanical_contract(
 
             for key, child in tuple(value.items()):
                 visit(child, _safe_path(path, key))
+
+            assessment = value.get("diagnostic_assessment")
+            explanations = (
+                assessment.get("explanations")
+                if isinstance(assessment, dict)
+                else None
+            )
+            closure_shaped = isinstance(explanations, list) and any(
+                isinstance(explanation, dict)
+                and (
+                    "closure_status" in explanation
+                    or "explanation_id" in explanation
+                )
+                for explanation in explanations
+            )
+            complete_preclosure = (
+                isinstance(explanations, list)
+                and bool(explanations)
+                and all(
+                    isinstance(explanation, dict)
+                    and isinstance(explanation.get("explanation"), str)
+                    and isinstance(explanation.get("measurable"), bool)
+                    and isinstance(explanation.get("disposition"), str)
+                    and (
+                        (
+                            explanation["measurable"]
+                            and isinstance(explanation.get("required_check"), str)
+                        )
+                        or (
+                            not explanation["measurable"]
+                            and isinstance(explanation.get("limitation"), str)
+                        )
+                    )
+                    for explanation in explanations
+                )
+            )
+            if closure_shaped or complete_preclosure:
+                for index, explanation in enumerate(explanations, start=1):
+                    if not isinstance(explanation, dict):
+                        continue
+                    explanation_id = explanation.get("explanation_id")
+                    if (
+                        isinstance(explanation_id, str)
+                        and _CLOSURE_EXPLANATION_ID.fullmatch(explanation_id)
+                        and explanation_id not in used_explanation_ids
+                    ):
+                        used_explanation_ids.add(explanation_id)
+                        continue
+                    candidate_id = f"explanation-{index}"
+                    suffix = index
+                    while candidate_id in used_explanation_ids:
+                        suffix += 1
+                        candidate_id = f"explanation-{suffix}"
+                    record_set(
+                        explanation,
+                        "explanation_id",
+                        candidate_id,
+                        (
+                            f"{path}.diagnostic_assessment"
+                            f".explanations[{index - 1}]"
+                        ),
+                    )
+                    used_explanation_ids.add(candidate_id)
+
+            claim = value.get("claim")
+            claim_metric_spec = value.get("metric_spec")
+            if isinstance(claim, str) and isinstance(claim_metric_spec, Mapping):
+                claim_expected = claim_metric_spec.get("expected_value")
+                if (
+                    type(claim_expected) in {int, float}
+                    and math.isfinite(claim_expected)
+                ):
+                    record_set(
+                        value,
+                        "expected_value",
+                        claim_expected,
+                        path,
+                    )
+
+            statement = value.get("statement")
+            metric_spec = value.get("metric_spec")
+            if isinstance(statement, str) and isinstance(metric_spec, Mapping):
+                metric_type = metric_spec.get("type")
+                expected_value = metric_spec.get("expected_value")
+                numeric_tokens = tuple(_EXACT_NUMBER.finditer(statement))
+                packed_claim = re.search(
+                    r"(?:\d|%|\$).{0,160}"
+                    r"\b(?:while|whereas|versus|and|or|as|with|alongside)\b"
+                    r".{0,160}(?:\d|%|\$)",
+                    statement,
+                    flags=re.IGNORECASE,
+                )
+                unit_mismatch = (
+                    metric_type
+                    not in {"rate", "share", "rate_of_change"}
+                    and statement.startswith("The primary measured ")
+                    and "%" in statement
+                )
+                if (
+                    metric_type
+                    in {
+                        "value",
+                        "count",
+                        "amount",
+                        "average",
+                        "rate",
+                        "share",
+                        "delta",
+                        "rate_of_change",
+                        "decomposition",
+                    }
+                    and type(expected_value) in {int, float}
+                    and math.isfinite(expected_value)
+                    and (
+                        len(numeric_tokens) > 1
+                        or packed_claim is not None
+                        or unit_mismatch
+                        or ";" in statement
+                        or len(re.findall(r"[.!?](?:\s|$)", statement)) > 1
+                    )
+                ):
+                    labels = {
+                        "value": "value",
+                        "count": "count",
+                        "amount": "amount",
+                        "average": "average",
+                        "rate": "rate",
+                        "share": "share",
+                        "delta": "difference",
+                        "rate_of_change": "rate of change",
+                        "decomposition": "total change",
+                    }
+                    rendered_value = Decimal(str(expected_value))
+                    if metric_type in {"rate", "share", "rate_of_change"}:
+                        rendered_value *= Decimal(100)
+                        rendered = f"{_decimal_text(rendered_value)}%"
+                    else:
+                        rendered = _decimal_text(rendered_value)
+                    record_set(
+                        value,
+                        "statement",
+                        (
+                            f"The primary measured {labels[metric_type]} "
+                            f"is {rendered}."
+                        ),
+                        path,
+                    )
 
             interpretation = value.get("interpretation")
             if isinstance(interpretation, str):
@@ -3055,14 +3482,63 @@ def run_critic_evidence_closure(
     else:
         summary = {"cached": True, "submitted": True, "turns": 0}
 
-    closed_payload = merge_critic_closure_plan(
-        payload,
-        critic,
-        plan,
-        sources,
-    )
-    closed_payload, _ = normalize_mechanical_contract(closed_payload, sources)
-    verify_function(closed_payload)
+    plan_repairs = 0
+    while True:
+        try:
+            closed_payload = merge_critic_closure_plan(
+                payload,
+                critic,
+                plan,
+                sources,
+            )
+            closed_payload, _ = normalize_mechanical_contract(
+                closed_payload, sources
+            )
+            verify_function(closed_payload)
+            break
+        except (AssertionError, ValueError) as exc:
+            repair_error = str(exc)
+            repair_context: Mapping[str, Any] = plan
+            while True:
+                if plan_repairs >= 3:
+                    raise ValueError(
+                        "critic evidence closure plan remained invalid after "
+                        f"{plan_repairs} repair attempts: {repair_error}"
+                    ) from exc
+                plan_repairs += 1
+                repair_rlm = rlm_type.from_task(
+                    task=build_critic_closure_repair_prompt(
+                        sources,
+                        payload,
+                        critic,
+                        repair_context,
+                        repair_error,
+                    ),
+                    outputs=CRITIC_CLOSURE_OUTPUTS,
+                    lm=lm,
+                    skills=list(SYNTHESIS_SKILLS),
+                    enable_verifier=False,
+                    block_network=True,
+                    engine="default",
+                    max_turns=max_turns,
+                    reserve_finalize_turns=min(3, max_turns),
+                    timeout=timeout,
+                    verbose=False,
+                )
+                repair_result = repair_rlm.run()
+                try:
+                    plan = _extract_partial(
+                        repair_result,
+                        CRITIC_CLOSURE_OUTPUTS,
+                        "critic evidence closure repair",
+                    )
+                    break
+                except (AssertionError, ValueError) as repair_exc:
+                    repair_error = str(repair_exc)
+                    repair_context = {
+                        "unparseable repair response": repair_error,
+                    }
+    summary["plan_repairs"] = plan_repairs
     with executor_type(sources) as executor:
         audit = audit_function(closed_payload, executor)
     if checkpoint is not None and not cached:
@@ -3088,9 +3564,31 @@ def run_action_synthesis(
 ) -> dict[str, Any]:
     """Create and verify bounded program actions for exact eligible findings."""
 
-    if not _action_synthesis_targets(payload, critic):
+    sanitized_payload = deepcopy(dict(payload))
+    manifest = critic.get("synthesis_manifest")
+    program_titles = (
+        manifest.get("program_action_titles")
+        if isinstance(manifest, Mapping)
+        else ()
+    )
+    allowed_program_titles = {
+        title for title in program_titles if isinstance(title, str)
+    }
+    for insight in sanitized_payload.get("insights", ()):
+        if not isinstance(insight, dict):
+            continue
+        action = insight.get("action")
+        if (
+            isinstance(action, dict)
+            and action.get("kind") == "program"
+            and insight.get("title") not in allowed_program_titles
+        ):
+            action["kind"] = "diagnostic"
+
+    if not _action_synthesis_targets(sanitized_payload, critic):
+        verify_function(sanitized_payload)
         return {
-            "payload": deepcopy(dict(payload)),
+            "payload": sanitized_payload,
             "summary": {
                 "cached": True,
                 "submitted": True,
@@ -3108,7 +3606,7 @@ def run_action_synthesis(
         raise ValueError("action synthesis timeout must be finite and positive")
 
     checkpoint = Path(checkpoint_path) if checkpoint_path is not None else None
-    fingerprint = _input_fingerprint(payload, critic)
+    fingerprint = _input_fingerprint(sanitized_payload, critic)
     updates = (
         _load_synthesis_checkpoint(
             checkpoint,
@@ -3122,7 +3620,7 @@ def run_action_synthesis(
     cached = updates is not None
     if updates is None:
         rlm = rlm_type.from_task(
-            task=build_action_synthesis_prompt(payload, critic),
+            task=build_action_synthesis_prompt(sanitized_payload, critic),
             outputs=ACTION_SYNTHESIS_OUTPUTS,
             lm=lm,
             skills=list(SYNTHESIS_SKILLS),
@@ -3146,7 +3644,9 @@ def run_action_synthesis(
     else:
         summary = {"cached": True, "submitted": True, "turns": 0}
 
-    updated_payload = merge_action_synthesis(payload, critic, updates)
+    updated_payload = merge_action_synthesis(
+        sanitized_payload, critic, updates
+    )
     verify_function(updated_payload)
     if checkpoint is not None and not cached:
         _write_synthesis_checkpoint(checkpoint, fingerprint, updates)
@@ -3452,13 +3952,28 @@ def run_staged_benchmark(
                             TARGETED_INSIGHT_OUTPUTS,
                             "targeted insight repair",
                         )
-                        updated_insights[insight_index] = (
-                            merge_targeted_insight_repair(
-                                updated_insights[insight_index],
-                                targeted["insight"],
-                                str(exc),
+                        try:
+                            updated_insights[insight_index] = (
+                                merge_targeted_insight_repair(
+                                    updated_insights[insight_index],
+                                    targeted["insight"],
+                                    str(exc),
+                                )
                             )
-                        )
+                        except ValueError as repair_exc:
+                            repairs.append(
+                                {
+                                    "target": target,
+                                    "attempt": attempt,
+                                    "mode": "targeted-invalid",
+                                    "insight_index": insight_index + 1,
+                                    "error": str(repair_exc),
+                                    "insights": summarize_trajectory(
+                                        repair_result.trajectory
+                                    ),
+                                }
+                            )
+                            continue
                     insights = {"insights": updated_insights}
                     payload = assemble_contract(
                         scaffold,
@@ -3560,11 +4075,25 @@ def run_staged_benchmark(
                 verbose=False,
             )
             scaffold_repair_result = scaffold_repair_rlm.run()
-            scaffold = _extract_partial(
-                scaffold_repair_result,
-                SCAFFOLD_OUTPUTS,
-                "contract scaffold repair",
-            )
+            try:
+                scaffold = _extract_partial(
+                    scaffold_repair_result,
+                    SCAFFOLD_OUTPUTS,
+                    "contract scaffold repair",
+                )
+            except ValueError as repair_exc:
+                repairs.append(
+                    {
+                        "target": target,
+                        "attempt": attempt,
+                        "mode": "scaffold-invalid",
+                        "error": str(repair_exc),
+                        "scaffold": summarize_trajectory(
+                            scaffold_repair_result.trajectory
+                        ),
+                    }
+                )
+                continue
             scaffold, changes = normalize_mechanical_contract(scaffold, sources)
             mechanical_changes.extend(changes)
             if scaffold_path is not None:
