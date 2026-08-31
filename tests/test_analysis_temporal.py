@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from fabric_rlm.experimental import (
+    classify_temporal_relevance,
     profile_time_coverage,
     select_latest_complete_window,
 )
@@ -286,3 +287,181 @@ def test_latest_complete_window_rejects_invalid_contracts(
             seed=2,
             **defaults,
         )
+
+
+def test_recent_change_requires_current_comparable_change_evidence() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=(
+            "2024-06-10",
+            "2024-07-10",
+            "2025-06-10",
+            "2025-07-10",
+            "2025-08-10",
+        ),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-07-31T23:59:59Z",
+    )
+    window = select_latest_complete_window(
+        node_id="window",
+        coverage=coverage,
+        seed=2,
+        window_periods=2,
+        comparator_kind="same_period_prior_year",
+    )
+
+    assessment = classify_temporal_relevance(
+        temporal_intent="recent_change",
+        coverage=coverage,
+        window=window,
+        time_basis="booking_created_at",
+        has_change_evidence=True,
+    )
+
+    assert assessment.status == "current_change"
+    assert assessment.supports_current_action is True
+    assert assessment.context["current_window"]["start"] == "2025-06-01"
+    assert assessment.context["comparators"][0]["kind"] == (
+        "same_period_prior_year"
+    )
+    assert assessment.context["partial_period_policy"] == "exclude"
+
+
+def test_recent_change_without_comparator_is_historical_not_current() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=("2025-06-10", "2025-07-10"),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-07-31T23:59:59Z",
+    )
+    window = select_latest_complete_window(
+        node_id="window",
+        coverage=coverage,
+        seed=2,
+        window_periods=2,
+        comparator_kind="none",
+    )
+
+    assessment = classify_temporal_relevance(
+        temporal_intent="recent_change",
+        coverage=coverage,
+        window=window,
+        time_basis="booking_created_at",
+        has_change_evidence=True,
+    )
+
+    assert assessment.status == "historical"
+    assert assessment.supports_current_action is False
+    assert "comparable" in assessment.reason
+
+
+def test_stale_extract_cannot_support_current_action() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=("2024-11-10",),
+        seed=1,
+        grain="month",
+        requested_as_of="2026-08-31",
+        source_watermark="2024-12-31T23:59:59Z",
+        trustworthy_through="2024-11-30T23:59:59Z",
+    )
+
+    assessment = classify_temporal_relevance(
+        temporal_intent="current_state",
+        coverage=coverage,
+        time_basis="order_created_at",
+    )
+
+    assert assessment.status == "stale"
+    assert assessment.supports_current_action is False
+    assert assessment.context["data_as_of"] == "2024-12-31T23:59:59Z"
+
+
+def test_structural_pattern_distinguishes_persistence_from_seasonality() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=("2024-07-10", "2025-07-10"),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-07-31T23:59:59Z",
+    )
+
+    seasonal = classify_temporal_relevance(
+        temporal_intent="structural_pattern",
+        coverage=coverage,
+        time_basis="booking_created_at",
+        seasonal_cycles=2,
+    )
+    persistent = classify_temporal_relevance(
+        temporal_intent="structural_pattern",
+        coverage=coverage,
+        time_basis="booking_created_at",
+        persistence_periods=4,
+    )
+
+    assert seasonal.status == "recurring_seasonal"
+    assert seasonal.supports_current_action is False
+    assert persistent.status == "persistent"
+    assert persistent.supports_current_action is True
+
+
+def test_missing_time_basis_is_explicitly_not_applicable() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=("2025-07-10",),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-07-31T23:59:59Z",
+    )
+
+    assessment = classify_temporal_relevance(
+        temporal_intent="historical_context",
+        coverage=coverage,
+        time_basis=None,
+    )
+
+    assert assessment.status == "not_applicable"
+    assert assessment.supports_current_action is False
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"temporal_intent": "latest"}, "temporal_intent"),
+        ({"has_change_evidence": 1}, "has_change_evidence"),
+        ({"persistence_periods": -1}, "persistence_periods"),
+        ({"seasonal_cycles": -1}, "seasonal_cycles"),
+    ],
+)
+def test_temporal_relevance_rejects_invalid_classification_inputs(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=("2025-07-10",),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-07-31T23:59:59Z",
+    )
+    defaults = {
+        "temporal_intent": "current_state",
+        "coverage": coverage,
+        "time_basis": "order_created_at",
+    }
+    defaults.update(kwargs)
+
+    with pytest.raises(ValueError, match=match):
+        classify_temporal_relevance(**defaults)

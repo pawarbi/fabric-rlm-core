@@ -60,6 +60,10 @@ from fabric_rlm.experimental.analysis_scoring import (
     score_decomposition_case,
     score_regression_case,
 )
+from fabric_rlm.experimental.analysis_temporal import (
+    TemporalAssessment,
+    classify_temporal_relevance,
+)
 from fabric_rlm.experimental.analysis_validation import (
     SplitFold,
     SplitPlan,
@@ -97,6 +101,7 @@ __all__ = [
     "build_temporal_split_plan",
     "Budget",
     "canonical_json",
+    "classify_temporal_relevance",
     "derive_seed",
     "DifficultyVerdict",
     "EFFORT_RUNG_COST",
@@ -123,6 +128,7 @@ __all__ = [
     "SplitFold",
     "SplitPlan",
     "SyntheticBenchmark",
+    "TemporalAssessment",
     "ValidatedSplitPlan",
     "ValidatedDAG",
     "ValidationVerdict",
