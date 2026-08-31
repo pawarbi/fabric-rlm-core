@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **`RLMResult.inspect()`** now opens the full run inspector by default while
+  keeping individual turns collapsed. The keyboard-scrollable timeline shows
+  15 turn rows by default and supports a custom `visible_turns` viewport.
+
 ## 0.4.2 — 2026-08-29 — secure Lakehouse analysis and verified insights
 
 ### Added

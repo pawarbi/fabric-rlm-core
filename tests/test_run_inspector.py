@@ -76,16 +76,49 @@ def test_result_inspect_returns_notebook_renderable_timeline() -> None:
     assert "<details" in html
 
 
-def test_inspector_is_collapsed_by_default_and_can_start_expanded() -> None:
+def test_inspector_is_expanded_by_default_and_can_start_collapsed() -> None:
     result = _result(_turn(1, submitted=True))
 
-    collapsed = result.inspect().to_html()
-    expanded = result.inspect(expanded=True).to_html()
+    expanded = result.inspect().to_html()
+    collapsed = result.inspect(expanded=False).to_html()
 
+    assert '<details class="frlm-inspector" open>' in expanded
     assert '<details class="frlm-inspector">' in collapsed
     assert '<details class="frlm-inspector" open>' not in collapsed
     assert '<summary class="frlm-inspector-summary">' in collapsed
-    assert '<details class="frlm-inspector" open>' in expanded
+
+
+def test_inspector_keeps_all_turns_collapsed_until_selected() -> None:
+    result = _result(
+        _turn(1, error="ValueError: bad query"),
+        _turn(2, submitted=True),
+    )
+
+    html = result.inspect().to_html()
+
+    assert html.count('<details class="frlm-turn">') == 2
+    assert '<details class="frlm-turn" open>' not in html
+
+
+def test_inspector_turn_list_is_keyboard_scrollable_with_15_visible_rows() -> None:
+    result = _result(*(_turn(number) for number in range(1, 18)))
+
+    html = result.inspect().to_html()
+
+    assert 'class="frlm-turns"' in html
+    assert 'role="region"' in html
+    assert 'aria-label="Run turns"' in html
+    assert 'tabindex="0"' in html
+    assert "--frlm-visible-turns: 15" in html
+    assert "min-height: var(--frlm-turn-row-height)" in html
+    assert "Turn 1" in html
+    assert "Turn 17" in html
+
+
+def test_inspector_can_customize_visible_turn_rows() -> None:
+    html = _result(_turn(1)).inspect(visible_turns=5).to_html()
+
+    assert "--frlm-visible-turns: 5" in html
 
 
 def test_inspect_output_field_remains_available_as_an_attribute() -> None:
@@ -177,6 +210,10 @@ def test_inspector_can_save_a_standalone_html_document(tmp_path: Path) -> None:
         ({"slow_turn_seconds": -1.0}, "slow_turn_seconds"),
         ({"slow_turn_seconds": False}, "slow_turn_seconds"),
         ({"slow_turn_seconds": "10"}, "slow_turn_seconds"),
+        ({"visible_turns": 0}, "visible_turns"),
+        ({"visible_turns": -1}, "visible_turns"),
+        ({"visible_turns": True}, "visible_turns"),
+        ({"visible_turns": "15"}, "visible_turns"),
     ],
 )
 def test_inspector_validates_display_limits(kwargs, message: str) -> None:

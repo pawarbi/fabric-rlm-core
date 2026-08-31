@@ -33,6 +33,8 @@ _STYLES = """
   font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overflow: hidden;
 }
+.frlm-inspector summary { list-style: none; }
+.frlm-inspector summary::-webkit-details-marker { display: none; }
 .frlm-inspector-summary { cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 14px 16px; }
 .frlm-inspector-summary:hover { background: var(--frlm-surface); }
 .frlm-inspector-title { font-size: 18px; font-weight: 600; margin-right: auto; }
@@ -43,10 +45,17 @@ _STYLES = """
 .frlm-metric { background: var(--frlm-surface); border: 1px solid var(--frlm-border); border-radius: 4px; padding: 6px 10px; }
 .frlm-metric strong { display: block; font-size: 16px; }
 .frlm-metric span { color: var(--frlm-muted); font-size: 12px; }
-.frlm-turns { border-top: 1px solid var(--frlm-border); }
-.frlm-turn { border-bottom: 1px solid var(--frlm-border); }
-.frlm-turn:last-child { border-bottom: 0; }
-.frlm-turn > summary { cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
+.frlm-turns {
+  --frlm-turn-row-height: 3.25rem;
+  border-top: 1px solid var(--frlm-border);
+  max-height: calc(var(--frlm-visible-turns, 15) * var(--frlm-turn-row-height));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.frlm-turns:focus-visible { outline: 2px solid var(--frlm-accent); outline-offset: -2px; }
+.frlm-turn > summary { border-bottom: 1px solid var(--frlm-border); box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 8px; min-height: var(--frlm-turn-row-height); padding: 12px 16px; }
+.frlm-turn:last-child > summary { border-bottom: 0; }
 .frlm-turn > summary:hover { background: var(--frlm-surface); }
 .frlm-turn-title { font-weight: 600; margin-right: auto; }
 .frlm-badge { border: 1px solid currentColor; border-radius: 999px; font-size: 11px; font-weight: 600; padding: 1px 7px; }
@@ -91,7 +100,8 @@ class RunInspector:
     result: "RLMResult"
     max_chars: int = 20_000
     slow_turn_seconds: float = 10.0
-    expanded: bool = False
+    expanded: bool = True
+    visible_turns: int = 15
 
     def __post_init__(self) -> None:
         if (
@@ -108,6 +118,12 @@ class RunInspector:
             raise ValueError("slow_turn_seconds must be greater than zero.")
         if not isinstance(self.expanded, bool):
             raise ValueError("expanded must be a bool.")
+        if (
+            isinstance(self.visible_turns, bool)
+            or not isinstance(self.visible_turns, int)
+            or self.visible_turns <= 0
+        ):
+            raise ValueError("visible_turns must be greater than zero.")
 
     def _text(self, value: Any) -> str:
         text = "" if value is None else str(value)
@@ -171,9 +187,8 @@ class RunInspector:
             self._section("Submitted payload", turn.submit_payload, open_by_default=True),
             self._section("Metrics", metrics),
         ]
-        opened = " open" if turn.error or turn.submitted else ""
         return (
-            f'<details class="frlm-turn"{opened}><summary>'
+            '<details class="frlm-turn"><summary>'
             f'<span class="frlm-turn-title">Turn {turn.turn}</span>'
             f'{"".join(badges)}'
             f'<span class="frlm-neutral">{_format_number(elapsed, suffix="s")}</span>'
@@ -222,7 +237,9 @@ class RunInspector:
             "<p class=\"frlm-subtitle\">Observable model responses, code, execution, "
             "validation, and performance by turn.</p></header>"
             f'<div class="frlm-summary">{cards}</div>'
-            f'<div class="frlm-turns">{turns}</div></div></details>'
+            f'<div class="frlm-turns" role="region" aria-label="Run turns" '
+            f'tabindex="0" style="--frlm-visible-turns: {self.visible_turns}">'
+            f"{turns}</div></div></details>"
         )
 
     def _repr_html_(self) -> str:
