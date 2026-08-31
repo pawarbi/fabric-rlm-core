@@ -90,6 +90,9 @@ pdf = [
 ]
 analytics = [
   "duckdb>=1.1",
+  # SemanticModel.metadata() and normalized DAX results return ordinary pandas
+  # DataFrames outside Fabric as well as in the SemPy notebook runtime.
+  "pandas>=2.0",
   "polars>=1.0",
   # delta_lakehouse skill: the reader used when DuckDB's `delta` extension
   # cannot be downloaded (no-egress runtimes). Pure-Python wheel, no build step.
