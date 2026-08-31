@@ -91,15 +91,25 @@ def _plain_frame(frame: Any, aliases: dict[str, str] | None = None) -> Any:
             "Normalized semantic-model results require pandas."
         ) from exc
 
-    records = frame.to_dict(orient="records")
-    result = pd.DataFrame.from_records(records)
+    if isinstance(frame, pd.DataFrame):
+        result = pd.DataFrame(frame.copy())
+    else:
+        records = frame.to_dict(orient="records")
+        result = pd.DataFrame.from_records(records, columns=list(frame.columns))
     aliases = aliases or {}
-    used: dict[str, int] = {}
+    assigned: set[str] = set()
+    next_suffix: dict[str, int] = {}
     normalized: list[str] = []
     for column in result.columns:
         base = aliases.get(str(column), _normalized_column_name(column))
-        used[base] = used.get(base, 0) + 1
-        normalized.append(base if used[base] == 1 else f"{base}_{used[base]}")
+        candidate = base
+        suffix = next_suffix.get(base, 2)
+        while candidate in assigned:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        next_suffix[base] = suffix
+        assigned.add(candidate)
+        normalized.append(candidate)
     result.columns = normalized
     return result
 

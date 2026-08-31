@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 from copy import deepcopy
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 import hashlib
 import importlib.util
 import json
@@ -1301,6 +1301,55 @@ def demote_irreparable_derived_insight(
     title = current_insights[insight_index].get("title")
     if not isinstance(title, str) or not title.strip():
         return None
+    metric_spec = current_insights[insight_index].get("metric_spec")
+    if not isinstance(metric_spec, Mapping):
+        return None
+    components = metric_spec.get("components")
+    component_match = re.search(
+        r"metric component ['\"]([^'\"]+)['\"]",
+        str(verifier_error),
+        flags=re.IGNORECASE,
+    )
+    if not isinstance(components, list) or component_match is None:
+        return None
+    failed_name = component_match.group(1)
+    failed_components = [
+        component
+        for component in components
+        if isinstance(component, Mapping)
+        and component.get("name") == failed_name
+    ]
+    if len(failed_components) != 1:
+        return None
+    verification = failed_components[0].get("verification")
+    expression = (
+        str(verification.get("expression", ""))
+        if isinstance(verification, Mapping)
+        else ""
+    )
+    derived_type = metric_spec.get("type") in {
+        "rate",
+        "share",
+        "delta",
+        "rate_of_change",
+        "decomposition",
+        "correlation",
+    }
+    opaque_derived_expression = bool(
+        re.search(
+            r"\b(?:corr|covar(?:iance)?|regr_\w+|percentile_\w+)\s*\(",
+            expression,
+            flags=re.IGNORECASE,
+        )
+        or re.search(
+            r"\b(?:sum|avg|count|min|max)\s*\([^)]*\)\s*[/+*-]\s*"
+            r"(?:sum|avg|count|min|max)\s*\(",
+            expression,
+            flags=re.IGNORECASE,
+        )
+    )
+    if not derived_type and not opaque_derived_expression:
+        return None
 
     updated_scaffold = deepcopy(dict(scaffold))
     candidates = updated_scaffold.get("candidates")
@@ -1638,7 +1687,7 @@ def _derived_metric_value(metric_spec: Mapping[str, Any]) -> float | None:
         or not isinstance(components, list)
     ):
         return None
-    role_values: dict[str, float] = {}
+    role_values: dict[str, int | float] = {}
     for component in components:
         if not isinstance(component, Mapping):
             return None
@@ -1651,7 +1700,7 @@ def _derived_metric_value(metric_spec: Mapping[str, Any]) -> float | None:
             or role in role_values
         ):
             return None
-        role_values[role] = float(expected_value)
+        role_values[role] = expected_value
     if metric_type == "delta" and set(role_values) == {"current", "comparison"}:
         return role_values["current"] - role_values["comparison"]
     if (
@@ -1676,21 +1725,31 @@ def _derived_metric_value(metric_spec: Mapping[str, Any]) -> float | None:
         "sum_y_squared",
         "sum_xy",
     }:
-        pair_count = role_values["pair_count"]
-        x_variance_term = (
-            pair_count * role_values["sum_x_squared"]
-            - role_values["sum_x"] ** 2
-        )
-        y_variance_term = (
-            pair_count * role_values["sum_y_squared"]
-            - role_values["sum_y"] ** 2
-        )
+        with localcontext() as context:
+            context.prec = 50
+            pair_count = Decimal(str(role_values["pair_count"]))
+            sum_x = Decimal(str(role_values["sum_x"]))
+            sum_y = Decimal(str(role_values["sum_y"]))
+            x_variance_term = (
+                pair_count * Decimal(str(role_values["sum_x_squared"]))
+                - sum_x * sum_x
+            )
+            y_variance_term = (
+                pair_count * Decimal(str(role_values["sum_y_squared"]))
+                - sum_y * sum_y
+            )
+            covariance_term = (
+                pair_count * Decimal(str(role_values["sum_xy"]))
+                - sum_x * sum_y
+            )
         if pair_count < 2 or x_variance_term <= 0 or y_variance_term <= 0:
             return None
-        return (
-            pair_count * role_values["sum_xy"]
-            - role_values["sum_x"] * role_values["sum_y"]
-        ) / math.sqrt(x_variance_term * y_variance_term)
+        value = float(
+            covariance_term / (x_variance_term * y_variance_term).sqrt()
+        )
+        if value < -1.0 - 1e-9 or value > 1.0 + 1e-9:
+            return None
+        return min(1.0, max(-1.0, value))
     return None
 
 
@@ -2433,6 +2492,8 @@ METRIC COMPONENT REPAIR REQUIREMENTS
   sum_x_squared, sum_y_squared, and sum_xy components.
 - Declare variables.x, variables.y, population, and
   pairwise_missing_policy=complete_cases.
+- Repeat the exact same variables, population, and pairwise_missing_policy on
+  every correlation component so all sufficient statistics use one sample.
 """
     causal_guidance = ""
     if "causal language" in str(verifier_error).casefold():
@@ -4395,6 +4456,7 @@ def run_staged_benchmark(
         )
     repairs: list[dict[str, Any]] = []
     repair_attempts = {"scaffold": 0, "insights": 0}
+    deterministic_demotion_used = False
     repair_limits = {
         "scaffold": max_scaffold_repairs,
         "insights": max_insight_repairs,
@@ -4412,10 +4474,11 @@ def run_staged_benchmark(
                         insights,
                         str(exc),
                     )
-                    if target == "insights"
+                    if target == "insights" and not deterministic_demotion_used
                     else None
                 )
                 if demoted is not None:
+                    deterministic_demotion_used = True
                     scaffold, insights, insight_index = demoted
                     payload = assemble_contract(
                         scaffold,

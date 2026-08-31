@@ -1028,6 +1028,11 @@ def test_verifier_recomputes_supported_derived_metric_types(
 
 
 def _correlation_metric_spec(expected_value: float = 1.0) -> dict:
+    variables = {
+        "x": "properties.base_price",
+        "y": "reviews.average_rating",
+    }
+    population = "Properties with a non-null price and average rating"
     spec = _derived_metric_spec(
         "correlation",
         expected_value,
@@ -1040,11 +1045,12 @@ def _correlation_metric_spec(expected_value: float = 1.0) -> dict:
             _metric_component("sum_price_rating", "sum_xy", 28),
         ],
     )
-    spec["variables"] = {
-        "x": "properties.base_price",
-        "y": "reviews.average_rating",
-    }
-    spec["population"] = "Properties with a non-null price and average rating"
+    for component in spec["components"]:
+        component["variables"] = variables
+        component["population"] = population
+        component["pairwise_missing_policy"] = "complete_cases"
+    spec["variables"] = variables
+    spec["population"] = population
     spec["pairwise_missing_policy"] = "complete_cases"
     return spec
 
@@ -1081,6 +1087,46 @@ def test_verifier_rejects_correlation_with_zero_variance() -> None:
             component["expected_value"] = 12
 
     with pytest.raises(AssertionError, match="positive variance"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_large_offset_correlation_statistics() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+    offset = 10**12
+    values = {
+        "pair_count": 3,
+        "sum_x": 3 * offset + 6,
+        "sum_y": 6 * offset + 12,
+        "sum_x_squared": 3 * offset**2 + 12 * offset + 14,
+        "sum_y_squared": 12 * offset**2 + 48 * offset + 56,
+        "sum_xy": 6 * offset**2 + 24 * offset + 28,
+    }
+    for component in insight["metric_spec"]["components"]:
+        component["expected_value"] = values[component["role"]]
+    insight["metric_spec"]["expected_value"] = 1.0
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_inconsistent_correlation_component_population() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+    insight["metric_spec"]["components"][0]["population"] = "All properties"
+
+    with pytest.raises(AssertionError, match="same population"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_inconsistent_correlation_component_variables() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+    insight["metric_spec"]["components"][-1]["variables"] = {
+        "x": "properties.base_price",
+        "y": "reviews.review_id",
+    }
+
+    with pytest.raises(AssertionError, match="same variables"):
         _verify({"insights": [insight]})
 
 
@@ -1690,6 +1736,61 @@ ROW(
             "arr": "[ARR $]",
             "active_customers": "[Active Customers #]",
             "period": "Period",
+        },
+    }
+
+    with pytest.raises(AssertionError, match="declared source"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_partial_dax_measure_name_match() -> None:
+    insight = _strong_insight()
+    insight["verification"] = {
+        "method": "dax",
+        "expression": 'EVALUATE ROW("metric_value", [ARR Growth])',
+        "sources": {"arr": "[ARR $]"},
+    }
+
+    with pytest.raises(AssertionError, match="declared source"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_declared_dax_filter_with_unrelated_metric() -> None:
+    insight = _strong_insight()
+    insight["verification"] = {
+        "method": "dax",
+        "expression": """
+EVALUATE
+ROW(
+    "metric_value",
+    CALCULATE([Unrelated Amount], 'Period'[Year] = 2024)
+)
+""",
+        "sources": {
+            "period_year": "Period[Year]",
+            "arr": "[ARR $]",
+        },
+    }
+
+    with pytest.raises(AssertionError, match="declared source"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_undeclared_dax_measure_hidden_behind_var() -> None:
+    insight = _strong_insight()
+    insight["verification"] = {
+        "method": "dax",
+        "expression": """
+VAR hidden = [Unrelated Amount]
+EVALUATE
+ROW(
+    "metric_value",
+    CALCULATE(hidden, 'Period'[Year] = 2024)
+)
+""",
+        "sources": {
+            "period_year": "Period[Year]",
+            "arr": "[ARR $]",
         },
     }
 

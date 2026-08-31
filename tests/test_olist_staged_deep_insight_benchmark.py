@@ -4434,6 +4434,169 @@ def test_staged_helpers_recompute_correlation_from_sufficient_statistics() -> No
     assert normalized["metric_spec"]["expected_value"] == pytest.approx(1.0)
 
 
+def test_staged_helpers_stabilize_large_offset_correlation() -> None:
+    bench = load_module()
+    offset = 10**12
+    metric_spec = {
+        "type": "correlation",
+        "expected_value": 1.0,
+        "components": [
+            {"role": "pair_count", "expected_value": 3},
+            {"role": "sum_x", "expected_value": 3 * offset + 6},
+            {"role": "sum_y", "expected_value": 6 * offset + 12},
+            {
+                "role": "sum_x_squared",
+                "expected_value": 3 * offset**2 + 12 * offset + 14,
+            },
+            {
+                "role": "sum_y_squared",
+                "expected_value": 12 * offset**2 + 48 * offset + 56,
+            },
+            {
+                "role": "sum_xy",
+                "expected_value": 6 * offset**2 + 24 * offset + 28,
+            },
+        ],
+    }
+
+    assert bench._derived_metric_value(metric_spec) == pytest.approx(1.0)
+
+
+def test_deterministic_demotion_rejects_non_derived_component_failure() -> None:
+    bench = load_module()
+    scaffold = {
+        "candidates": [
+            {
+                "disposition": "promoted",
+                "promoted_as": "Simple count",
+            },
+            {
+                "disposition": "promoted",
+                "promoted_as": "Other insight",
+            },
+        ]
+    }
+    insights = {
+        "insights": [
+            {
+                "title": "Simple count",
+                "metric_spec": {
+                    "type": "count",
+                    "components": [
+                        {
+                            "name": "orders",
+                            "role": "value",
+                            "verification": {
+                                "method": "sql",
+                                "expression": (
+                                    "SELECT COUNT(*) AS metric_value FROM orders"
+                                ),
+                            },
+                        }
+                    ],
+                },
+            },
+            {"title": "Other insight"},
+        ]
+    }
+    error = (
+        "insight 1 metric component 'orders' verification must recompute "
+        "metric_value with a source column or one aggregate; verify derived "
+        "metrics as components"
+    )
+
+    assert bench.demote_irreparable_derived_insight(
+        scaffold, insights, error
+    ) is None
+
+
+def test_only_one_deterministic_demotion_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bench = load_module()
+    data_dir = tmp_path / "olist"
+    make_bundle(data_dir)
+    research = valid_research()
+    titles = ["Valid", "Bad correlation", "Bad ratio"]
+    scaffold = {
+        "analysis_plan": {},
+        "candidates": [
+            {
+                "candidate": title,
+                "dimensions_tested": ["month"],
+                "disposition": "promoted",
+                "reason": "Candidate",
+                "promoted_as": title,
+            }
+            for title in titles
+        ],
+    }
+
+    def derived_insight(title, name, expression):
+        return {
+            "title": title,
+            "discovery": {"dimensions_tested": ["month"]},
+            "metric_spec": {
+                "type": "value",
+                "expected_value": 0.5,
+                "components": [
+                    {
+                        "name": name,
+                        "role": "value",
+                        "expected_value": 0.5,
+                        "verification": {
+                            "method": "sql",
+                            "expression": expression,
+                            "sources": {"orders": "orders"},
+                        },
+                    }
+                ],
+            },
+        }
+
+    insights = {
+        "insights": [
+            {"title": "Valid", "discovery": {"dimensions_tested": ["month"]}},
+            derived_insight(
+                "Bad correlation",
+                "bad_corr",
+                "SELECT corr(x, y) AS metric_value FROM orders",
+            ),
+            derived_insight(
+                "Bad ratio",
+                "bad_ratio",
+                "SELECT SUM(x) / SUM(y) AS metric_value FROM orders",
+            ),
+        ]
+    }
+    caches = write_all_caches(tmp_path, research, scaffold, insights)
+
+    def verifier(payload):
+        bad_title = payload["insights"][-1]["title"]
+        name = "bad_ratio" if bad_title == "Bad ratio" else "bad_corr"
+        raise AssertionError(
+            f"insight {len(payload['insights'])} metric component '{name}' "
+            "verification must recompute metric_value with a source column or "
+            "one aggregate; verify derived metrics as components"
+        )
+
+    install_cached_repair_fakes(
+        bench,
+        monkeypatch,
+        [{"insight": insights["insights"][-1]}],
+        verifier,
+    )
+
+    with pytest.raises(AssertionError, match="after insights target"):
+        bench.run_staged_benchmark(
+            data_dir,
+            research_cache_path=caches[0],
+            scaffold_cache_path=caches[1],
+            insights_cache_path=caches[2],
+            max_insight_repairs=1,
+        )
+
+
 def test_invalid_targeted_component_repair_consumes_attempt_and_retries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

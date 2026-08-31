@@ -116,7 +116,10 @@ Each insight must contain:
   `contribution` components, and exactly one explicit `residual`.
   Correlation uses complete cases and independently verified `pair_count`,
   `sum_x`, `sum_y`, `sum_x_squared`, `sum_y_squared`, and `sum_xy` components,
-  plus named `x`/`y` variables and an explicit population.
+  plus named `x`/`y` variables and an explicit population. Every correlation
+  component repeats the same `variables`, `population`, and
+  `pairwise_missing_policy="complete_cases"` metadata so the sufficient
+  statistics cannot be assembled from inconsistent samples.
 - **supporting_claims: list[dict]** - zero or more secondary quantitative facts,
   each with `claim` text, `expected_value`, and either its own legacy
   `verification` or `metric_spec`. A supporting metric spec's expected value
@@ -174,6 +177,7 @@ measured zero.
 def verify(payload):
     import math
     import re
+    from decimal import Decimal, localcontext
 
     def collect_strings(value):
         strings = []
@@ -460,6 +464,27 @@ def verify(payload):
         text = re.sub(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"", " ", text)
         return set(re.findall(r"\b[a-z_]\w*\b", text.lower()))
 
+    def dax_references(text):
+        clean = strip_comments(text)
+        measures = {
+            normalize_identifier(match.group(1))
+            for match in re.finditer(
+                r"(?<![\w'\]])\[([^\]]+)\]",
+                clean,
+            )
+        }
+        qualified = {
+            normalize_identifier(
+                f"{table_name}.{match.group(3)}"
+            ).replace(".", "")
+            for match in re.finditer(
+                r"(?:'([^']+)'|([A-Za-z_]\w*))\s*\[([^\]]+)\]",
+                clean,
+            )
+            for table_name in [match.group(1) or match.group(2)]
+        }
+        return measures, qualified
+
     def dax_row_metrics(expression):
         text = strip_comments(expression)
         metrics = []
@@ -580,15 +605,23 @@ def verify(payload):
             assert row_metrics and all(
                 not constant_expression(item) for item in row_metrics
             ), f"{label} verification must recompute metric_value from source data"
-            declared_tokens = {
-                normalize_identifier(value).split(".")[-1]
+            declared_references = {
+                normalize_identifier(value).replace(".", "")
                 for pair in sources.items()
                 for value in pair
             }
-            metric_tokens = set().union(
-                *(expression_tokens(item) for item in row_metrics)
-            )
-            assert metric_tokens & declared_tokens, (
+            measure_references, _ = dax_references(expression)
+            qualified_references = set()
+            for item in row_metrics:
+                _, item_qualified = dax_references(item)
+                qualified_references.update(item_qualified)
+            if measure_references:
+                valid_lineage = measure_references <= declared_references
+            else:
+                valid_lineage = bool(
+                    qualified_references & declared_references
+                )
+            assert valid_lineage, (
                 f"{label} verification does not reference a declared source"
             )
         else:
@@ -638,7 +671,7 @@ def verify(payload):
             assert math.isfinite(numeric), (
                 f"{value_label} must be finite numeric"
             )
-            return numeric
+            return value
 
         def close(left, right):
             return math.isclose(left, right, rel_tol=1e-9, abs_tol=1e-9)
@@ -659,6 +692,7 @@ def verify(payload):
         )
         names = set()
         by_role = {}
+        component_contexts = []
         for component_index, component in enumerate(components, start=1):
             assert isinstance(component, dict), (
                 f"{label} metric component {component_index} must be structured"
@@ -677,6 +711,7 @@ def verify(payload):
                 f"{label} metric component {name!r} expected_value",
             )
             by_role.setdefault(role, []).append(value)
+            component_contexts.append(component)
             validate_verification(
                 component.get("verification"),
                 f"{label} metric component {name!r}",
@@ -739,6 +774,21 @@ def verify(payload):
             assert metric_spec.get("pairwise_missing_policy") == "complete_cases", (
                 f"{label} correlation requires a complete-case missing policy"
             )
+            assert all(
+                component.get("variables") == variables
+                for component in component_contexts
+            ), f"{label} correlation components must use the same variables"
+            assert all(
+                component.get("population") == population
+                for component in component_contexts
+            ), f"{label} correlation components must use the same population"
+            assert all(
+                component.get("pairwise_missing_policy") == "complete_cases"
+                for component in component_contexts
+            ), (
+                f"{label} correlation components must use the same "
+                "complete-case missing policy"
+            )
             pair_count = exactly_one("pair_count")
             assert pair_count >= 2 and close(pair_count, round(pair_count)), (
                 f"{label} correlation pair_count must be an integer of at least 2"
@@ -748,17 +798,34 @@ def verify(payload):
             sum_x_squared = exactly_one("sum_x_squared")
             sum_y_squared = exactly_one("sum_y_squared")
             sum_xy = exactly_one("sum_xy")
-            x_variance_term = pair_count * sum_x_squared - sum_x * sum_x
-            y_variance_term = pair_count * sum_y_squared - sum_y * sum_y
+            with localcontext() as context:
+                context.prec = 50
+                n_decimal = Decimal(str(pair_count))
+                sum_x_decimal = Decimal(str(sum_x))
+                sum_y_decimal = Decimal(str(sum_y))
+                x_variance_term = (
+                    n_decimal * Decimal(str(sum_x_squared))
+                    - sum_x_decimal * sum_x_decimal
+                )
+                y_variance_term = (
+                    n_decimal * Decimal(str(sum_y_squared))
+                    - sum_y_decimal * sum_y_decimal
+                )
+                covariance_term = (
+                    n_decimal * Decimal(str(sum_xy))
+                    - sum_x_decimal * sum_y_decimal
+                )
             assert x_variance_term > 0 and y_variance_term > 0, (
                 f"{label} correlation requires positive variance in both variables"
             )
-            recomputed = (
-                pair_count * sum_xy - sum_x * sum_y
-            ) / math.sqrt(x_variance_term * y_variance_term)
-            assert -1.0 <= recomputed <= 1.0, (
+            recomputed = float(
+                covariance_term / (x_variance_term * y_variance_term).sqrt()
+            )
+            tolerance = 1e-9
+            assert -1.0 - tolerance <= recomputed <= 1.0 + tolerance, (
                 f"{label} correlation must be between -1 and 1"
             )
+            recomputed = min(1.0, max(-1.0, recomputed))
         elif metric_type == "count" and count_comparison["kind"] == "cross_period":
             comparison = count_comparison
             recomputed = exactly_one("current")

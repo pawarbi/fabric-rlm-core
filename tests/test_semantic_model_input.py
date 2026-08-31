@@ -279,6 +279,75 @@ def test_dax_normalization_disambiguates_colliding_columns(
     assert result.columns.tolist() == ["arr", "arr_2"]
 
 
+def test_dax_normalization_avoids_suffix_name_collisions(
+    fake_sempy, monkeypatch
+):
+    import pandas as pd
+    import sempy.fabric as fabric
+
+    monkeypatch.setattr(
+        fabric,
+        "evaluate_dax",
+        lambda *args, **kwargs: pd.DataFrame(
+            [[1, 2, 3]],
+            columns=["ARR", "ARR_2", "[ARR]"],
+        ),
+    )
+
+    result = SemanticModel("D", validate=False).dax(
+        "EVALUATE 1",
+        normalize_columns=True,
+    )
+
+    assert result.columns.tolist() == ["arr", "arr_2", "arr_3"]
+    assert result.iloc[0].tolist() == [1, 2, 3]
+
+
+def test_dax_normalization_preserves_duplicate_source_columns(
+    fake_sempy, monkeypatch
+):
+    import pandas as pd
+    import sempy.fabric as fabric
+
+    monkeypatch.setattr(
+        fabric,
+        "evaluate_dax",
+        lambda *args, **kwargs: pd.DataFrame(
+            [[1, 2]],
+            columns=["[ARR]", "[ARR]"],
+        ),
+    )
+
+    result = SemanticModel("D", validate=False).dax(
+        "EVALUATE 1",
+        normalize_columns=True,
+    )
+
+    assert result.columns.tolist() == ["arr", "arr_2"]
+    assert result.iloc[0].tolist() == [1, 2]
+
+
+def test_dax_normalization_preserves_empty_result_schema(
+    fake_sempy, monkeypatch
+):
+    import pandas as pd
+    import sempy.fabric as fabric
+
+    monkeypatch.setattr(
+        fabric,
+        "evaluate_dax",
+        lambda *args, **kwargs: pd.DataFrame(columns=["[ARR]", "Period[Year]"]),
+    )
+
+    result = SemanticModel("D", validate=False).dax(
+        "EVALUATE 1",
+        normalize_columns=True,
+    )
+
+    assert result.empty
+    assert result.columns.tolist() == ["arr", "period_year"]
+
+
 def test_measure_maps_to_sempy_argument_names(fake_sempy):
     SemanticModel("D", validate=False).measure(
         "Total Sales", groupby=["Owner[Country]"], filters={"Owner[Tier]": ["Tier1"]})
