@@ -31,11 +31,16 @@ def _source(
     )
 
 
-def _relationship() -> Relationship:
+def _relationship(
+    relationship_id: str = "orders.customers",
+    *,
+    left_source: str = "sales.orders",
+    right_source: str = "sales.customers",
+) -> Relationship:
     return Relationship(
-        relationship_id="orders.customers",
-        left_source="sales.orders",
-        right_source="sales.customers",
+        relationship_id=relationship_id,
+        left_source=left_source,
+        right_source=right_source,
         key="customer_id",
         cardinality="many_to_one",
         left_coverage=0.99,
@@ -46,12 +51,17 @@ def _relationship() -> Relationship:
     )
 
 
-def _operation() -> RegisteredOperation:
+def _operation(
+    operation_id: str = "sales.total_by_region",
+    *,
+    required_sources: tuple[str, ...] = ("sales.orders", "sales.customers"),
+    required_relationships: tuple[str, ...] = ("orders.customers",),
+) -> RegisteredOperation:
     return RegisteredOperation(
-        operation_id="sales.total_by_region",
+        operation_id=operation_id,
         operation="aggregate",
-        required_sources=("sales.orders", "sales.customers"),
-        required_relationships=("orders.customers",),
+        required_sources=required_sources,
+        required_relationships=required_relationships,
         parameter_schema={
             "region": {"type": "string", "enum": ["east", "west"]},
             "include_tax": {"type": "boolean"},
@@ -61,7 +71,8 @@ def _operation() -> RegisteredOperation:
         max_output_rows=100,
         max_output_columns=2,
         grain="region",
-        sql_template="SELECT region, SUM(total) AS total FROM orders GROUP BY region",
+        host_implementation_id=f"registry.{operation_id}",
+        operation_version="1",
         status="active",
     )
 
@@ -107,6 +118,10 @@ def test_records_reject_unsafe_logical_identifiers(identifier: str) -> None:
     "locator",
     [
         r"C:\data\orders",
+        r"C:orders.csv",
+        r"C:.",
+        "C%3Aorders.csv",
+        "%43%3Aorders.csv",
         r"\\server\share\orders",
         "/var/data/orders",
         "../orders",
@@ -263,12 +278,38 @@ def test_package_validates_event_subject_references() -> None:
 
 
 def test_canonical_fingerprints_ignore_mapping_and_graph_record_order() -> None:
-    first = _package()
+    first = KnowledgePackage(
+        package_id="sales.knowledge.v1",
+        sources=(
+            _source("sales.orders", schema={"state": {"type": "string"}}),
+            _source("sales.customers"),
+            _source("sales.regions"),
+        ),
+        relationships=(
+            _relationship(),
+            _relationship(
+                "customers.regions",
+                left_source="sales.customers",
+                right_source="sales.regions",
+            ),
+        ),
+        operations=(
+            _operation(
+                required_sources=("sales.orders", "sales.customers"),
+                required_relationships=("orders.customers",),
+            ),
+            _operation(
+                "sales.customers_by_region",
+                required_sources=("sales.regions", "sales.customers"),
+                required_relationships=("customers.regions",),
+            ),
+        ),
+    )
     reordered = KnowledgePackage(
         package_id=first.package_id,
         sources=tuple(reversed(first.sources)),
-        relationships=first.relationships,
-        operations=(
+        relationships=tuple(reversed(first.relationships)),
+        operations=tuple(reversed((
             RegisteredOperation(
                 **{
                     **first.operations[0].to_dict(),
@@ -281,15 +322,67 @@ def test_canonical_fingerprints_ignore_mapping_and_graph_record_order() -> None:
                         "region": "east",
                     },
                     "output_schema": {"total": "number", "region": "string"},
+                    "required_sources": list(
+                        reversed(first.operations[0].required_sources)
+                    ),
                 }
             ),
-        ),
+            RegisteredOperation(
+                **{
+                    **first.operations[1].to_dict(),
+                    "required_sources": list(
+                        reversed(first.operations[1].required_sources)
+                    ),
+                }
+            ),
+        ))),
     )
 
     assert canonical_json(first.to_dict()) == canonical_json(reordered.to_dict())
     assert first.snapshot_fingerprint == reordered.snapshot_fingerprint
     assert first.schema_fingerprint == reordered.schema_fingerprint
     assert first.fingerprint == reordered.fingerprint
+
+
+def test_set_like_tuple_permutations_have_identical_canonical_forms() -> None:
+    first_source = SourceProfile(
+        **{
+            **_source(schema={"content": {"type": "string"}}).to_dict(),
+            "sensitive_columns": ["zeta", "alpha"],
+        }
+    )
+    second_source = SourceProfile(
+        **{
+            **first_source.to_dict(),
+            "sensitive_columns": ["alpha", "zeta"],
+        }
+    )
+    first_operation = _operation(
+        required_sources=("sales.customers", "sales.orders"),
+        required_relationships=("z.relationship", "a.relationship"),
+    )
+    second_operation = _operation(
+        required_sources=("sales.orders", "sales.customers"),
+        required_relationships=("a.relationship", "z.relationship"),
+    )
+
+    assert first_source.to_dict() == second_source.to_dict()
+    assert first_operation.to_dict() == second_operation.to_dict()
+
+
+def test_fingerprint_is_sensitive_and_domain_separated() -> None:
+    package = _package()
+    changed = KnowledgePackage(
+        package_id="sales.knowledge.v2",
+        sources=package.sources,
+        relationships=package.relationships,
+        operations=package.operations,
+        events=package.events,
+    )
+
+    assert package.fingerprint != changed.fingerprint
+    assert package.fingerprint != package.snapshot_fingerprint
+    assert package.fingerprint != package.schema_fingerprint
 
 
 def test_package_fingerprint_preserves_event_sequence() -> None:
@@ -340,3 +433,102 @@ def test_package_round_trips_and_rejects_unknown_fields() -> None:
 
     with pytest.raises(ValueError, match="string keys"):
         SourceProfile.from_dict({1: "not-a-field"})
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        _relationship(),
+        _operation(),
+        KnowledgeEvent(
+            event_id="event-1",
+            event_type="source.quarantined",
+            subject_type="source",
+            subject_id="sales.orders",
+            status="quarantined",
+        ),
+    ],
+)
+def test_reason_code_round_trips_as_a_bounded_logical_identifier(
+    record: Relationship | RegisteredOperation | KnowledgeEvent,
+) -> None:
+    payload = record.to_dict()
+    payload["reason_code"] = "schema_mismatch"
+
+    restored = type(record).from_dict(payload)
+
+    assert restored.reason_code == "schema_mismatch"
+    assert restored.to_dict()["reason_code"] == "schema_mismatch"
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature",
+        "sk-proj-short-key-material",
+        "x" * 65,
+        "SELECT * FROM sales.orders",
+        "CALCULATE([Total Sales], ALL(Sales))",
+        "print('secret')",
+        "customer status changed",
+        r"C:\data\reason.txt",
+        "/var/data/reason.txt",
+        "https://example.test/reasons/quarantined",
+    ],
+)
+@pytest.mark.parametrize(
+    "record",
+    [
+        _relationship(),
+        _operation(),
+        KnowledgeEvent(
+            event_id="event-1",
+            event_type="source.quarantined",
+            subject_type="source",
+            subject_id="sales.orders",
+            status="quarantined",
+        ),
+    ],
+)
+def test_reason_code_rejects_secrets_prose_code_and_locations(
+    record: Relationship | RegisteredOperation | KnowledgeEvent,
+    reason_code: str,
+) -> None:
+    payload = record.to_dict()
+    payload["reason_code"] = reason_code
+
+    with pytest.raises(ValueError, match="reason_code"):
+        type(record).from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        _relationship(),
+        _operation(),
+        KnowledgeEvent(
+            event_id="event-1",
+            event_type="source.quarantined",
+            subject_type="source",
+            subject_id="sales.orders",
+            status="quarantined",
+        ),
+    ],
+)
+def test_persisted_records_reject_legacy_reason_field(
+    record: Relationship | RegisteredOperation | KnowledgeEvent,
+) -> None:
+    payload = record.to_dict()
+    payload["reason"] = "human-readable free text"
+
+    with pytest.raises(ValueError, match="unknown field: reason"):
+        type(record).from_dict(payload)
+
+
+@pytest.mark.parametrize("field", ["sql_template", "code", "dax", "python"])
+def test_registered_operation_rejects_legacy_executable_fields(field: str) -> None:
+    payload = _operation().to_dict()
+    payload[field] = "arbitrary executable text"
+
+    with pytest.raises(ValueError, match="unknown field"):
+        RegisteredOperation.from_dict(payload)

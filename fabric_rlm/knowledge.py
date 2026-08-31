@@ -39,7 +39,11 @@ _CARDINALITIES = {"one_to_one", "one_to_many", "many_to_one", "many_to_many"}
 _SUBJECT_TYPES = {"source", "relationship", "operation", "package"}
 _SCALAR_TYPES = {"string", "integer", "number", "boolean", "null"}
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
-_WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
+_JWT_LIKE = re.compile(
+    r"^eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$"
+)
+_MAX_REASON_CODE_LENGTH = 64
+_WINDOWS_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
 _MISSING = object()
 
 
@@ -62,6 +66,17 @@ def _logical_identifier(value: object, field_name: str) -> str:
     return normalized
 
 
+def _reason_code(value: object) -> str:
+    normalized = _logical_identifier(value, "reason_code")
+    if len(normalized) > _MAX_REASON_CODE_LENGTH:
+        raise ValueError(
+            f"reason_code must be at most {_MAX_REASON_CODE_LENGTH} characters"
+        )
+    if normalized.lower().startswith("sk-proj-") or _JWT_LIKE.fullmatch(normalized):
+        raise ValueError("reason_code must not contain a secret-like value")
+    return normalized
+
+
 def _logical_locator(value: object) -> str:
     locator = _required_text(value, "locator")
     if any(character.isspace() or ord(character) < 32 for character in locator):
@@ -78,7 +93,7 @@ def _logical_locator(value: object) -> str:
             for character in decoded_locator
         )
         or decoded_locator.startswith(("/", "\\"))
-        or _WINDOWS_ABSOLUTE.match(decoded_locator)
+        or _WINDOWS_DRIVE_PREFIX.match(decoded_locator)
         or "\\" in decoded_locator
     ):
         raise ValueError("locator must be logical, not an absolute filesystem path")
@@ -145,7 +160,7 @@ def _text_tuple(
         raise ValueError(f"{field_name} must not be empty")
     if len(set(normalized)) != len(normalized):
         raise ValueError(f"{field_name} must not contain duplicates")
-    return normalized
+    return tuple(sorted(normalized))
 
 
 def _strict_payload(
@@ -391,7 +406,7 @@ class Relationship:
     right_key_unique: bool
     max_right_rows_per_key: int
     status: Status = "candidate"
-    reason: str | None = None
+    reason_code: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("relationship_id", "left_source", "right_source", "key"):
@@ -416,8 +431,8 @@ class Relationship:
         ):
             raise ValueError("max_right_rows_per_key must be a non-negative integer")
         object.__setattr__(self, "status", _status(self.status))
-        if self.reason is not None:
-            object.__setattr__(self, "reason", _required_text(self.reason, "reason"))
+        if self.reason_code is not None:
+            object.__setattr__(self, "reason_code", _reason_code(self.reason_code))
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -431,7 +446,7 @@ class Relationship:
             "right_key_unique": self.right_key_unique,
             "max_right_rows_per_key": self.max_right_rows_per_key,
             "status": self.status,
-            "reason": self.reason,
+            "reason_code": self.reason_code,
         }
 
     @classmethod
@@ -450,7 +465,7 @@ class Relationship:
                 "right_key_unique",
                 "max_right_rows_per_key",
                 "status",
-                "reason",
+                "reason_code",
             },
         )
         return cls(**payload)
@@ -468,9 +483,10 @@ class RegisteredOperation:
     max_output_rows: int = 1_000
     max_output_columns: int = 100
     grain: str = ""
-    sql_template: str = ""
+    host_implementation_id: str = ""
+    operation_version: str | None = None
     status: Status = "candidate"
-    reason: str | None = None
+    reason_code: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("operation_id", "operation"):
@@ -512,11 +528,22 @@ class RegisteredOperation:
             raise ValueError("output_schema exceeds max_output_columns")
         object.__setattr__(self, "grain", _required_text(self.grain, "grain"))
         object.__setattr__(
-            self, "sql_template", _required_text(self.sql_template, "sql_template")
+            self,
+            "host_implementation_id",
+            _logical_identifier(
+                self.host_implementation_id,
+                "host_implementation_id",
+            ),
         )
+        if self.operation_version is not None:
+            object.__setattr__(
+                self,
+                "operation_version",
+                _logical_identifier(self.operation_version, "operation_version"),
+            )
         object.__setattr__(self, "status", _status(self.status))
-        if self.reason is not None:
-            object.__setattr__(self, "reason", _required_text(self.reason, "reason"))
+        if self.reason_code is not None:
+            object.__setattr__(self, "reason_code", _reason_code(self.reason_code))
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -530,9 +557,10 @@ class RegisteredOperation:
             "max_output_rows": self.max_output_rows,
             "max_output_columns": self.max_output_columns,
             "grain": self.grain,
-            "sql_template": self.sql_template,
+            "host_implementation_id": self.host_implementation_id,
+            "operation_version": self.operation_version,
             "status": self.status,
-            "reason": self.reason,
+            "reason_code": self.reason_code,
         }
 
     @classmethod
@@ -551,9 +579,10 @@ class RegisteredOperation:
                 "max_output_rows",
                 "max_output_columns",
                 "grain",
-                "sql_template",
+                "host_implementation_id",
+                "operation_version",
                 "status",
-                "reason",
+                "reason_code",
             },
         )
         return cls(**payload)
@@ -566,7 +595,7 @@ class KnowledgeEvent:
     subject_type: SubjectType
     subject_id: str
     status: Status
-    reason: str | None = None
+    reason_code: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("event_id", "event_type", "subject_id"):
@@ -576,8 +605,8 @@ class KnowledgeEvent:
         if self.subject_type not in _SUBJECT_TYPES:
             raise ValueError("subject_type is not supported")
         object.__setattr__(self, "status", _status(self.status))
-        if self.reason is not None:
-            object.__setattr__(self, "reason", _required_text(self.reason, "reason"))
+        if self.reason_code is not None:
+            object.__setattr__(self, "reason_code", _reason_code(self.reason_code))
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -586,7 +615,7 @@ class KnowledgeEvent:
             "subject_type": self.subject_type,
             "subject_id": self.subject_id,
             "status": self.status,
-            "reason": self.reason,
+            "reason_code": self.reason_code,
         }
 
     @classmethod
@@ -600,7 +629,7 @@ class KnowledgeEvent:
                 "subject_type",
                 "subject_id",
                 "status",
-                "reason",
+                "reason_code",
             },
         )
         return cls(**payload)
