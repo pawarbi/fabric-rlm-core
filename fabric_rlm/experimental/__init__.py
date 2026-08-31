@@ -30,7 +30,11 @@ from fabric_rlm.experimental.analysis_dag import (
 from fabric_rlm.experimental.analysis_evidence import EvidenceRegistry
 from fabric_rlm.experimental.analysis_operators import (
     additive_decomposition,
+    assess_cohort_exposure,
+    combine_time_coverage,
+    profile_time_coverage,
     rate_decomposition,
+    select_latest_complete_window,
     volume_rate_mix_decomposition,
 )
 from fabric_rlm.experimental.analysis_benchmarks import (
@@ -58,6 +62,10 @@ from fabric_rlm.experimental.analysis_scoring import (
     score_decomposition_case,
     score_regression_case,
 )
+from fabric_rlm.experimental.analysis_temporal import (
+    TemporalAssessment,
+    classify_temporal_relevance,
+)
 from fabric_rlm.experimental.analysis_validation import (
     SplitFold,
     SplitPlan,
@@ -80,6 +88,7 @@ __all__ = [
     "AdaptiveResult",
     "AdaptiveRunner",
     "additive_decomposition",
+    "assess_cohort_exposure",
     "AnalysisBrief",
     "AnalysisDAG",
     "AttemptConfig",
@@ -95,6 +104,8 @@ __all__ = [
     "build_temporal_split_plan",
     "Budget",
     "canonical_json",
+    "classify_temporal_relevance",
+    "combine_time_coverage",
     "derive_seed",
     "DifficultyVerdict",
     "EFFORT_RUNG_COST",
@@ -108,6 +119,7 @@ __all__ = [
     "OperatorNode",
     "OperatorResult",
     "OperatorSpec",
+    "profile_time_coverage",
     "rate_decomposition",
     "RunBudget",
     "score_binary_classification_case",
@@ -116,9 +128,11 @@ __all__ = [
     "score_detection_case",
     "score_decomposition_case",
     "score_regression_case",
+    "select_latest_complete_window",
     "SplitFold",
     "SplitPlan",
     "SyntheticBenchmark",
+    "TemporalAssessment",
     "ValidatedSplitPlan",
     "ValidatedDAG",
     "ValidationVerdict",

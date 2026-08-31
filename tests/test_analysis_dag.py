@@ -40,6 +40,7 @@ def test_analysis_brief_records_explicit_focus_and_safe_defaults() -> None:
 
     assert brief.focus_areas == ("drivers", "cohorts")
     assert brief.interpretation_level == "descriptive"
+    assert brief.temporal_intent == "historical_context"
     assert brief.exclusions == ()
     assert brief.to_dict()["objective"] == brief.objective
 

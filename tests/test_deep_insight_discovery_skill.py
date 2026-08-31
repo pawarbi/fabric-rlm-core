@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from fabric_rlm.experimental.analysis_reproducibility import fingerprint
+
 from fabric_rlm.skill_loader import SkillLoader
 from fabric_rlm.skill_router import SkillRouter
 
@@ -141,6 +143,7 @@ def _strong_insight() -> dict:
         "confidence": {"level": "high", "reason": "Four cohorts and 412 accounts"},
         "evidence_tier": "associational",
         "limitations": ["Observational data does not establish causality."],
+        "temporal_context": _temporal_context(),
         "supporting_claims": [],
         "discovery": {
             "pattern_type": "subgroup",
@@ -1796,6 +1799,284 @@ ROW(
 
     with pytest.raises(AssertionError, match="declared source"):
         _verify({"insights": [insight]})
+
+
+def _temporal_context(status: str = "current_change") -> dict:
+    coverage_payload = {
+        "kind": "coverage",
+        "source": "customer_cohorts",
+        "requested_as_of": "2026-08-31",
+    }
+    coverage_fingerprint = fingerprint(coverage_payload)
+    current_window = {
+        "grain": "quarter",
+        "start": "2026-04-01",
+        "end": "2026-06-30",
+        "periods": ["2026-Q2"],
+    }
+    comparator = {
+        "kind": "same_period_prior_year",
+        "grain": "quarter",
+        "start": "2025-04-01",
+        "end": "2025-06-30",
+        "periods": ["2025-Q2"],
+    }
+    window_payload = {
+        "coverage_fingerprint": coverage_fingerprint,
+        "window_periods": 1,
+        "comparator_kind": "same_period_prior_year",
+        "current_window": current_window,
+        "comparator": comparator,
+    }
+    return {
+        "time_basis": "customer_cohorts.cohort_quarter",
+        "timezone": "UTC",
+        "requested_as_of": "2026-08-31",
+        "data_as_of": "2026-08-15T23:59:59Z",
+        "trustworthy_through": "2026-07-01T00:00:00Z",
+        "latest_complete_period": {
+            "grain": "quarter",
+            "start": "2026-04-01",
+            "end": "2026-06-30",
+        },
+        "complete_periods": ["2025-Q2", "2026-Q1", "2026-Q2"],
+        "current_window": current_window,
+        "comparators": [comparator],
+        "partial_period_policy": "exclude",
+        "completeness_basis": (
+            "calendar_complete_and_source_marked_trustworthy"
+        ),
+        "recency_status": status,
+        "supports_current_action": status in {
+            "current_change",
+            "current_level",
+            "persistent",
+        },
+        "evidence_fingerprints": {
+            "coverage": coverage_fingerprint,
+            "window": fingerprint(window_payload),
+        },
+        "evidence_fingerprint_payloads": {
+            "coverage": coverage_payload,
+            "window": window_payload,
+        },
+        "persistence_periods": (
+            ["2025-Q2", "2026-Q2", "2026-Q1"]
+            if status == "persistent"
+            else []
+        ),
+        "seasonal_cycles": (
+            [["2025-Q2"], ["2026-Q2"]]
+            if status == "recurring_seasonal"
+            else []
+        ),
+    }
+
+
+def test_verifier_requires_temporal_context_for_current_claim_title() -> None:
+    insight = _strong_insight()
+    insight.pop("temporal_context")
+    insight["title"] = "Current enterprise retention is declining"
+
+    with pytest.raises(AssertionError, match="temporal_context"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_current_change_with_comparable_temporal_context() -> None:
+    insight = _strong_insight()
+    insight["title"] = "Recent enterprise retention decline"
+    insight["temporal_context"] = _temporal_context()
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_february_month_yoy_across_leap_year() -> None:
+    insight = _strong_insight()
+    context = _temporal_context()
+    current_window = {
+        "grain": "month",
+        "start": "2025-02-01",
+        "end": "2025-02-28",
+        "periods": ["2025-02"],
+    }
+    comparator = {
+        "kind": "same_period_prior_year",
+        "grain": "month",
+        "start": "2024-02-01",
+        "end": "2024-02-29",
+        "periods": ["2024-02"],
+    }
+    context["latest_complete_period"] = {
+        "grain": "month",
+        "start": "2025-02-01",
+        "end": "2025-02-28",
+    }
+    context["complete_periods"] = ["2024-02", "2025-02"]
+    context["current_window"] = current_window
+    context["comparators"] = [comparator]
+    window_payload = context["evidence_fingerprint_payloads"]["window"]
+    window_payload["current_window"] = current_window
+    window_payload["comparator"] = comparator
+    context["evidence_fingerprints"]["window"] = fingerprint(window_payload)
+    insight["temporal_context"] = context
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_stale_temporal_context_for_program_action() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context("stale")
+    insight["temporal_context"]["supports_current_action"] = False
+    insight["action"]["kind"] = "program"
+
+    with pytest.raises(AssertionError, match="stale.*program action"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_current_change_without_comparator() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context()
+    insight["temporal_context"]["comparators"] = []
+
+    with pytest.raises(AssertionError, match="current_change.*comparator"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_temporal_context_for_current_statement() -> None:
+    insight = _strong_insight()
+    insight.pop("temporal_context")
+    insight["statement"] = "Current enterprise retention is 78%."
+
+    with pytest.raises(AssertionError, match="temporal_context"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_temporal_context_for_program_action() -> None:
+    insight = _strong_insight()
+    insight.pop("temporal_context")
+    insight["action"]["kind"] = "program"
+
+    with pytest.raises(AssertionError, match="program action.*temporal_context"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_contradictory_temporal_watermarks() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context()
+    insight["temporal_context"]["data_as_of"] = "not-a-timestamp"
+
+    with pytest.raises(AssertionError, match="data_as_of.*ISO"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_unlinked_or_empty_current_temporal_evidence() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context("current_level")
+    insight["temporal_context"]["latest_complete_period"] = {}
+    insight["temporal_context"]["evidence_fingerprints"]["coverage"] = ""
+
+    with pytest.raises(AssertionError, match="coverage fingerprint"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_incoherent_temporal_period_labels_and_grains() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context()
+    insight["temporal_context"]["current_window"]["periods"] = ["bogus"]
+    window_payload = insight["temporal_context"][
+        "evidence_fingerprint_payloads"
+    ]["window"]
+    window_payload["current_window"] = insight["temporal_context"][
+        "current_window"
+    ]
+    insight["temporal_context"]["evidence_fingerprints"]["window"] = (
+        fingerprint(window_payload)
+    )
+
+    with pytest.raises(AssertionError, match="periods do not match"):
+        _verify({"insights": [insight]})
+
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context()
+    insight["temporal_context"]["comparators"][0]["grain"] = "day"
+    window_payload = insight["temporal_context"][
+        "evidence_fingerprint_payloads"
+    ]["window"]
+    window_payload["comparator"] = insight["temporal_context"]["comparators"][0]
+    insight["temporal_context"]["evidence_fingerprints"]["window"] = (
+        fingerprint(window_payload)
+    )
+
+    with pytest.raises(
+        AssertionError,
+        match="periods do not match|grain must match",
+    ):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_temporal_fingerprint_payload_mismatch() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context()
+    insight["temporal_context"]["evidence_fingerprint_payloads"]["coverage"] = {
+        "tampered": True
+    }
+
+    with pytest.raises(AssertionError, match="fingerprint does not match"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_linked_window_evidence_for_current_change() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context()
+    insight["temporal_context"]["evidence_fingerprints"]["window"] = None
+    insight["temporal_context"]["evidence_fingerprint_payloads"]["window"] = None
+
+    with pytest.raises(AssertionError, match="current_change.*window evidence"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_unequal_multi_period_comparator() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context()
+    insight["temporal_context"]["current_window"] = {
+        "grain": "quarter",
+        "start": "2026-01-01",
+        "end": "2026-06-30",
+        "periods": ["2026-Q1", "2026-Q2"],
+    }
+    window_payload = insight["temporal_context"][
+        "evidence_fingerprint_payloads"
+    ]["window"]
+    window_payload["current_window"] = insight["temporal_context"][
+        "current_window"
+    ]
+    insight["temporal_context"]["evidence_fingerprints"]["window"] = (
+        fingerprint(window_payload)
+    )
+
+    with pytest.raises(AssertionError, match="period count"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_persistence_and_seasonality_evidence() -> None:
+    persistent = _strong_insight()
+    persistent["temporal_context"] = _temporal_context("persistent")
+    persistent["temporal_context"]["current_window"] = None
+    persistent["temporal_context"]["comparators"] = []
+    persistent["temporal_context"]["persistence_periods"] = []
+
+    with pytest.raises(AssertionError, match="persistence_periods"):
+        _verify({"insights": [persistent]})
+
+    seasonal = _strong_insight()
+    seasonal["temporal_context"] = _temporal_context("recurring_seasonal")
+    seasonal["temporal_context"]["supports_current_action"] = False
+    seasonal["temporal_context"]["current_window"] = None
+    seasonal["temporal_context"]["comparators"] = []
+    seasonal["temporal_context"]["seasonal_cycles"] = []
+
+    with pytest.raises(AssertionError, match="seasonal_cycles"):
+        _verify({"insights": [seasonal]})
 
 
 def test_verifier_rejects_unsupported_causal_language() -> None:

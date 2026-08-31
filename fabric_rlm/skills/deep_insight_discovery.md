@@ -98,6 +98,17 @@ Each insight must contain:
 - **evidence_tier: str** - `descriptive`, `associational`, or `causal`.
   Causal language and causal tier both require structured causal evidence.
 - **limitations: list[str]** - what the data cannot establish.
+- **temporal_context: dict | omitted** - required for titles framed as current,
+  latest, recent, today, or this period. It declares `time_basis`, `timezone`,
+  `requested_as_of`, `data_as_of`, `trustworthy_through`,
+  `latest_complete_period`, `current_window`, `comparators`,
+  `partial_period_policy`, `completeness_basis`, `recency_status`, and boolean
+  `supports_current_action`, plus `evidence_fingerprints` linking the temporal
+  status to deterministic coverage and window results. Status is `current_change`, `current_level`,
+  `persistent`, `recurring_seasonal`, `historical`, `stale`, or
+  `not_applicable`. A current change requires a complete current window and at
+  least one comparator. Only current-change, current-level, and persistent
+  evidence may support a current program action.
 - **verification: dict | omitted** - legacy simple-metric form containing
   `method`, source-derived `expression`, and non-empty alias-to-source
   `sources`. Omit it when `metric_spec` supplies independently verified
@@ -175,9 +186,13 @@ measured zero.
 
 ```python
 def verify(payload):
+    import hashlib
+    import json
     import math
     import re
+    from datetime import date, datetime, timedelta
     from decimal import Decimal, localcontext
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
     def collect_strings(value):
         strings = []
@@ -1021,6 +1036,390 @@ def verify(payload):
                 f"{label} investigate_first requires a diagnostic action"
             )
 
+    def validate_temporal_context(context, label):
+        assert isinstance(context, dict), (
+            f"{label} temporal_context must be structured"
+        )
+        for field in (
+            "time_basis",
+            "timezone",
+            "requested_as_of",
+            "data_as_of",
+            "trustworthy_through",
+            "partial_period_policy",
+            "completeness_basis",
+            "recency_status",
+        ):
+            assert isinstance(context.get(field), str) and context[field].strip(), (
+                f"{label} temporal_context {field} is required"
+            )
+        try:
+            requested_as_of = date.fromisoformat(context["requested_as_of"])
+        except ValueError:
+            raise AssertionError(
+                f"{label} temporal_context requested_as_of must be an ISO date"
+            ) from None
+        try:
+            source_timezone = ZoneInfo(context["timezone"])
+        except ZoneInfoNotFoundError:
+            raise AssertionError(
+                f"{label} temporal_context timezone must be a valid IANA timezone"
+            ) from None
+
+        def parse_instant(field):
+            text = context[field]
+            try:
+                instant = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                raise AssertionError(
+                    f"{label} temporal_context {field} must be an ISO timestamp"
+                ) from None
+            assert instant.tzinfo is not None, (
+                f"{label} temporal_context {field} must include a timezone"
+            )
+            return instant
+
+        data_as_of = parse_instant("data_as_of")
+        trustworthy_through = parse_instant("trustworthy_through")
+        assert trustworthy_through <= data_as_of, (
+            f"{label} temporal_context trustworthy_through exceeds data_as_of"
+        )
+        requested_exclusive = datetime.combine(
+            requested_as_of + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=source_timezone,
+        )
+        assert data_as_of <= requested_exclusive, (
+            f"{label} temporal_context data_as_of exceeds requested_as_of"
+        )
+        assert context["partial_period_policy"] in {"exclude", "include_flagged"}, (
+            f"{label} temporal_context partial_period_policy is invalid"
+        )
+        status = context["recency_status"]
+        current_statuses = {"current_change", "current_level", "persistent"}
+        assert status in current_statuses | {
+            "recurring_seasonal",
+            "historical",
+            "stale",
+            "not_applicable",
+        }, f"{label} temporal_context recency_status is invalid"
+        supports_current_action = context.get("supports_current_action")
+        assert isinstance(supports_current_action, bool), (
+            f"{label} temporal_context supports_current_action must be boolean"
+        )
+        assert supports_current_action == (status in current_statuses), (
+            f"{label} temporal_context action support contradicts recency_status"
+        )
+        evidence_fingerprints = context.get("evidence_fingerprints")
+        assert isinstance(evidence_fingerprints, dict), (
+            f"{label} temporal_context evidence_fingerprints are required"
+        )
+        assert re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(evidence_fingerprints.get("coverage", "")),
+        ), f"{label} temporal_context coverage fingerprint is invalid"
+        window_fingerprint = evidence_fingerprints.get("window")
+        assert window_fingerprint is None or re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(window_fingerprint),
+        ), f"{label} temporal_context window fingerprint is invalid"
+        fingerprint_payloads = context.get("evidence_fingerprint_payloads")
+        assert isinstance(fingerprint_payloads, dict), (
+            f"{label} temporal_context evidence_fingerprint_payloads are required"
+        )
+
+        def evidence_fingerprint(value):
+            canonical = json.dumps(
+                value,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            encoded = (
+                "fabric-rlm.analysis.fingerprint.v1\0" + canonical
+            ).encode("utf-8")
+            return hashlib.sha256(encoded).hexdigest()
+
+        assert evidence_fingerprint(
+            fingerprint_payloads.get("coverage")
+        ) == evidence_fingerprints["coverage"], (
+            f"{label} temporal_context coverage fingerprint does not match evidence"
+        )
+        coverage_payload = fingerprint_payloads.get("coverage")
+        assert isinstance(coverage_payload, dict), (
+            f"{label} temporal_context coverage evidence must be structured"
+        )
+        payload_requested_as_of = coverage_payload.get("requested_as_of")
+        if payload_requested_as_of is None:
+            payload_requested_as_of = (
+                coverage_payload.get("diagnostics", {})
+                .get("watermarks", {})
+                .get("requested_as_of")
+            )
+        assert payload_requested_as_of == context["requested_as_of"], (
+            f"{label} temporal_context coverage requested_as_of does not match"
+        )
+        window_payload = fingerprint_payloads.get("window")
+        assert (
+            window_fingerprint is None and window_payload is None
+        ) or (
+            window_fingerprint is not None
+            and evidence_fingerprint(window_payload) == window_fingerprint
+        ), f"{label} temporal_context window fingerprint does not match evidence"
+        if status == "current_change":
+            assert window_fingerprint is not None and isinstance(
+                window_payload,
+                dict,
+            ), (
+                f"{label} temporal_context current_change requires linked "
+                "window evidence"
+            )
+            assert (
+                window_payload.get("coverage_fingerprint")
+                == evidence_fingerprints["coverage"]
+            ), (
+                f"{label} temporal_context window evidence does not reference "
+                "coverage"
+            )
+
+        def period_start(value, grain):
+            if grain == "day":
+                return value
+            if grain == "week":
+                return value - timedelta(days=value.weekday())
+            if grain == "month":
+                return value.replace(day=1)
+            return value.replace(
+                month=3 * ((value.month - 1) // 3) + 1,
+                day=1,
+            )
+
+        def next_period(value, grain):
+            if grain == "day":
+                return value + timedelta(days=1)
+            if grain == "week":
+                return value + timedelta(days=7)
+            months = 1 if grain == "month" else 3
+            month_index = value.year * 12 + value.month - 1 + months
+            return date(month_index // 12, month_index % 12 + 1, 1)
+
+        def period_label(value, grain):
+            if grain == "day":
+                return value.isoformat()
+            if grain == "week":
+                iso_year, iso_week, _ = value.isocalendar()
+                return f"{iso_year}-W{iso_week:02d}"
+            if grain == "month":
+                return value.strftime("%Y-%m")
+            return f"{value.year}-Q{((value.month - 1) // 3) + 1}"
+
+        def validate_period(period, field, require_periods=False):
+            assert isinstance(period, dict), (
+                f"{label} temporal_context {field} must be structured"
+            )
+            assert period.get("grain") in {"day", "week", "month", "quarter"}, (
+                f"{label} temporal_context {field} grain is invalid"
+            )
+            try:
+                start = date.fromisoformat(period.get("start", ""))
+                end = date.fromisoformat(period.get("end", ""))
+            except ValueError:
+                raise AssertionError(
+                    f"{label} temporal_context {field} requires ISO dates"
+                ) from None
+            assert start <= end, (
+                f"{label} temporal_context {field} start exceeds end"
+            )
+            grain = period["grain"]
+            assert start == period_start(start, grain), (
+                f"{label} temporal_context {field} start is not grain-aligned"
+            )
+            assert end == next_period(period_start(end, grain), grain) - timedelta(days=1), (
+                f"{label} temporal_context {field} end is not grain-aligned"
+            )
+            periods = period.get("periods")
+            if require_periods:
+                assert (
+                    isinstance(periods, list)
+                    and periods
+                    and all(isinstance(item, str) and item for item in periods)
+                ), f"{label} temporal_context {field} periods are invalid"
+                expected_periods = []
+                cursor = start
+                while cursor <= end:
+                    assert len(expected_periods) < 10000, (
+                        f"{label} temporal_context {field} period range is too large"
+                    )
+                    expected_periods.append(period_label(cursor, grain))
+                    cursor = next_period(cursor, grain)
+                assert periods == expected_periods, (
+                    f"{label} temporal_context {field} periods do not match "
+                    "the declared range"
+                )
+            return start, end
+
+        if status in current_statuses:
+            latest_complete = context.get("latest_complete_period")
+            assert isinstance(latest_complete, dict), (
+                f"{label} temporal_context current status requires "
+                "latest_complete_period"
+            )
+            _, complete_end = validate_period(
+                latest_complete,
+                "latest_complete_period",
+            )
+            complete_exclusive = datetime.combine(
+                complete_end + timedelta(days=1),
+                datetime.min.time(),
+                tzinfo=source_timezone,
+            )
+            assert trustworthy_through >= complete_exclusive, (
+                f"{label} temporal_context latest_complete_period exceeds "
+                "trustworthy coverage"
+            )
+        comparators = context.get("comparators")
+        assert isinstance(comparators, list), (
+            f"{label} temporal_context comparators must be a list"
+        )
+        if status == "current_change":
+            current_window = context.get("current_window")
+            assert isinstance(current_window, dict), (
+                f"{label} temporal_context current_change requires current_window"
+            )
+            current_start, current_end = validate_period(
+                current_window,
+                "current_window",
+                require_periods=True,
+            )
+            assert current_window["grain"] == latest_complete["grain"], (
+                f"{label} temporal_context current_window grain must match "
+                "latest_complete_period"
+            )
+            assert current_end == complete_end, (
+                f"{label} temporal_context current_window must end at "
+                "latest_complete_period"
+            )
+            assert comparators, (
+                f"{label} temporal_context current_change requires a comparator"
+            )
+            assert window_payload.get("current_window") == current_window, (
+                f"{label} temporal_context current_window does not match "
+                "window evidence"
+            )
+            assert len(comparators) == 1, (
+                f"{label} temporal_context current_change requires exactly "
+                "one comparator"
+            )
+            assert window_payload.get("comparator") == comparators[0], (
+                f"{label} temporal_context comparator does not match "
+                "window evidence"
+            )
+            for comparator_index, comparator in enumerate(comparators, start=1):
+                assert isinstance(comparator, dict), (
+                    f"{label} temporal_context comparator {comparator_index} "
+                    "must be structured"
+                )
+                assert isinstance(comparator.get("kind"), str) and comparator["kind"], (
+                    f"{label} temporal_context comparator {comparator_index} "
+                    "kind is required"
+                )
+                comparator_start, comparator_end = validate_period(
+                    comparator,
+                    f"comparator {comparator_index}",
+                    require_periods=True,
+                )
+                assert comparator["grain"] == current_window["grain"], (
+                    f"{label} temporal_context comparator {comparator_index} "
+                    "grain must match current_window"
+                )
+                kind = comparator["kind"]
+                assert kind in {
+                    "previous_window",
+                    "same_period_prior_year",
+                }, (
+                    f"{label} temporal_context comparator {comparator_index} "
+                    "kind is invalid"
+                )
+                assert len(comparator["periods"]) == len(
+                    current_window["periods"]
+                ), (
+                    f"{label} temporal_context comparator period count must "
+                    "match current_window"
+                )
+                if kind == "previous_window":
+                    assert comparator_end + timedelta(days=1) == current_start, (
+                        f"{label} temporal_context previous_window comparator "
+                        "must immediately precede current_window"
+                    )
+                else:
+                    if current_window["grain"] == "week":
+                        current_iso = current_start.isocalendar()
+                        comparator_iso = comparator_start.isocalendar()
+                        same_prior_period = (
+                            comparator_iso.year == current_iso.year - 1
+                            and comparator_iso.week == current_iso.week
+                        )
+                    else:
+                        same_prior_period = (
+                            comparator_start.month == current_start.month
+                            and comparator_start.day == current_start.day
+                            and comparator_start.year == current_start.year - 1
+                        )
+                    assert same_prior_period, (
+                        f"{label} temporal_context same_period_prior_year "
+                        "comparator is not calendar-aligned"
+                    )
+        complete_periods = context.get("complete_periods")
+        assert isinstance(complete_periods, list) and all(
+            isinstance(item, str) and item for item in complete_periods
+        ), f"{label} temporal_context complete_periods must be a list of text"
+        complete_set = set(complete_periods)
+        persistence_periods = context.get("persistence_periods")
+        seasonal_cycles = context.get("seasonal_cycles")
+        assert isinstance(persistence_periods, list), (
+            f"{label} temporal_context persistence_periods must be a list"
+        )
+        assert isinstance(seasonal_cycles, list), (
+            f"{label} temporal_context seasonal_cycles must be a list"
+        )
+        if status == "persistent":
+            assert (
+                len(persistence_periods) >= 3
+                and len(set(persistence_periods)) == len(persistence_periods)
+                and set(persistence_periods) <= complete_set
+            ), (
+                f"{label} temporal_context persistent status requires at "
+                "least three distinct complete persistence_periods"
+            )
+        if status == "recurring_seasonal":
+            assert len(seasonal_cycles) >= 2, (
+                f"{label} temporal_context recurring_seasonal status requires "
+                "at least two seasonal_cycles"
+            )
+            normalized_cycles = []
+            used_periods = set()
+            for cycle_index, cycle in enumerate(seasonal_cycles, start=1):
+                assert (
+                    isinstance(cycle, list)
+                    and cycle
+                    and len(set(cycle)) == len(cycle)
+                    and set(cycle) <= complete_set
+                ), (
+                    f"{label} temporal_context seasonal cycle {cycle_index} "
+                    "must contain distinct complete periods"
+                )
+                normalized = tuple(cycle)
+                assert normalized not in normalized_cycles, (
+                    f"{label} temporal_context seasonal_cycles must be distinct"
+                )
+                assert not (used_periods & set(cycle)), (
+                    f"{label} temporal_context seasonal_cycles must not overlap"
+                )
+                normalized_cycles.append(normalized)
+                used_periods.update(cycle)
+        return status, supports_current_action
+
     sentinel = {"none", "n/a", "na", "unknown", "not applicable", "null"}
     contract_version = payload.get("contract_version", 1)
     assert (
@@ -1168,6 +1567,42 @@ def verify(payload):
         assert title_fingerprint not in seen, f"duplicate insight title: {title}"
         assert statement_fingerprint not in seen, f"duplicate insight statement: {title}"
         seen.update((title_fingerprint, statement_fingerprint))
+        current_claim_text = " ".join(
+            [
+                title,
+                statement,
+                interpretation,
+                *collect_strings(insight.get("supporting_claims", [])),
+                *collect_strings(insight.get("action", {})),
+            ]
+        )
+        current_claim = re.search(
+            r"\b(current|currently|latest|recent|today|"
+            r"this\s+(?:day|week|month|quarter|year))\b",
+            current_claim_text,
+            flags=re.I,
+        )
+        temporal_context = insight.get("temporal_context")
+        if current_claim:
+            assert temporal_context is not None, (
+                f"insight {index} current claim requires temporal_context"
+            )
+        temporal_status = None
+        supports_current_action = None
+        if temporal_context is not None:
+            temporal_status, supports_current_action = validate_temporal_context(
+                temporal_context,
+                f"insight {index}",
+            )
+            if current_claim:
+                assert temporal_status in {
+                    "current_change",
+                    "current_level",
+                    "persistent",
+                }, (
+                    f"insight {index} current claim is not supported by its "
+                    "temporal status"
+                )
 
         competing = insight["competing_explanations"]
         assert (
@@ -1238,6 +1673,19 @@ def verify(payload):
         for field in ("owner", "segment", "decision", "target", "time_horizon"):
             assert isinstance(action.get(field), str) and action[field].strip(), (
                 f"insight {index} action missing {field}"
+            )
+        if action.get("kind") == "program":
+            assert temporal_context is not None, (
+                f"insight {index} program action requires temporal_context"
+            )
+        if (
+            temporal_context is not None
+            and action.get("kind") == "program"
+            and not supports_current_action
+        ):
+            raise AssertionError(
+                f"insight {index} {temporal_status} temporal evidence "
+                "cannot support a program action"
             )
 
         priority = insight["priority"]

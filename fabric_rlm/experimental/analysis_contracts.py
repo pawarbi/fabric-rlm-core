@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import date
 import math
 from types import MappingProxyType
 from typing import Literal
@@ -11,6 +12,13 @@ from typing import Literal
 
 ExecutionMode = Literal["sequential", "parallel"]
 InterpretationLevel = Literal["descriptive", "associational", "predictive"]
+TemporalIntent = Literal[
+    "current_state",
+    "recent_change",
+    "historical_context",
+    "structural_pattern",
+]
+RecencyPolicy = Literal["strict", "allow_historical"]
 OperatorStatus = Literal["completed", "failed"]
 EvidenceState = Literal[
     "planned",
@@ -23,6 +31,13 @@ EvidenceState = Literal[
 
 _EXECUTION_MODES = {"sequential", "parallel"}
 _INTERPRETATION_LEVELS = {"descriptive", "associational", "predictive"}
+_TEMPORAL_INTENTS = {
+    "current_state",
+    "recent_change",
+    "historical_context",
+    "structural_pattern",
+}
+_RECENCY_POLICIES = {"strict", "allow_historical"}
 _OPERATOR_STATUSES = {"completed", "failed"}
 _EVIDENCE_STATES = {
     "planned",
@@ -113,6 +128,10 @@ class AnalysisBrief:
     target_metrics: tuple[str, ...] = ()
     time_window: str | None = None
     comparison_basis: str | None = None
+    temporal_intent: TemporalIntent = "historical_context"
+    requested_as_of: str | None = None
+    recency_policy: RecencyPolicy = "strict"
+    latest_complete_period_only: bool = True
     population: str | None = None
     exclusions: tuple[str, ...] = ()
     privacy_constraints: tuple[str, ...] = ()
@@ -135,6 +154,29 @@ class AnalysisBrief:
             value = getattr(self, field_name)
             if value is not None:
                 object.__setattr__(self, field_name, _required_text(value, field_name))
+        if self.temporal_intent not in _TEMPORAL_INTENTS:
+            raise ValueError(
+                "temporal_intent must be current_state, recent_change, "
+                "historical_context, or structural_pattern"
+            )
+        if self.requested_as_of is not None:
+            requested_as_of = _required_text(
+                self.requested_as_of,
+                "requested_as_of",
+            )
+            try:
+                date.fromisoformat(requested_as_of)
+            except ValueError:
+                raise ValueError(
+                    "requested_as_of must be an ISO calendar date"
+                ) from None
+            object.__setattr__(self, "requested_as_of", requested_as_of)
+        if self.recency_policy not in _RECENCY_POLICIES:
+            raise ValueError(
+                "recency_policy must be strict or allow_historical"
+            )
+        if type(self.latest_complete_period_only) is not bool:
+            raise ValueError("latest_complete_period_only must be boolean")
         if self.interpretation_level not in _INTERPRETATION_LEVELS:
             raise ValueError(
                 "interpretation_level must be descriptive, associational, or predictive"
@@ -147,6 +189,10 @@ class AnalysisBrief:
             "target_metrics": list(self.target_metrics),
             "time_window": self.time_window,
             "comparison_basis": self.comparison_basis,
+            "temporal_intent": self.temporal_intent,
+            "requested_as_of": self.requested_as_of,
+            "recency_policy": self.recency_policy,
+            "latest_complete_period_only": self.latest_complete_period_only,
             "population": self.population,
             "exclusions": list(self.exclusions),
             "privacy_constraints": list(self.privacy_constraints),
