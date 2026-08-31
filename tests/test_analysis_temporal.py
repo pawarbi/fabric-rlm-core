@@ -4,6 +4,7 @@ import pytest
 
 from fabric_rlm.experimental import (
     classify_temporal_relevance,
+    combine_time_coverage,
     profile_time_coverage,
     select_latest_complete_window,
 )
@@ -465,3 +466,161 @@ def test_temporal_relevance_rejects_invalid_classification_inputs(
 
     with pytest.raises(ValueError, match=match):
         classify_temporal_relevance(**defaults)
+
+
+def test_joined_coverage_uses_least_fresh_required_source() -> None:
+    orders = profile_time_coverage(
+        node_id="orders",
+        timestamps=("2025-05-10", "2025-06-10", "2025-07-10"),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-07-31T23:59:59Z",
+    )
+    reviews = profile_time_coverage(
+        node_id="reviews",
+        timestamps=("2025-05-20", "2025-06-20", "2025-07-20"),
+        seed=2,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-13T23:59:59Z",
+        trustworthy_through="2025-05-31T23:59:59Z",
+    )
+
+    joined = combine_time_coverage(
+        node_id="orders-reviews",
+        coverages={"orders": orders, "reviews": reviews},
+        seed=3,
+    )
+
+    assert joined.values["trustworthy_through"] == "2025-05-31T23:59:59Z"
+    assert joined.values["latest_complete_period"] == {
+        "grain": "month",
+        "start": "2025-05-01",
+        "end": "2025-05-31",
+    }
+    assert joined.values["observed_periods"] == (
+        "2025-05",
+        "2025-06",
+        "2025-07",
+    )
+    assert joined.values["freshness_status"] == "mismatched"
+    assert joined.diagnostics["source_trustworthy_through"] == {
+        "orders": "2025-07-31T23:59:59Z",
+        "reviews": "2025-05-31T23:59:59Z",
+    }
+
+
+def test_joined_freshness_mismatch_blocks_current_action() -> None:
+    current = profile_time_coverage(
+        node_id="current",
+        timestamps=("2025-07-10",),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-07-31T23:59:59Z",
+    )
+    lagged = profile_time_coverage(
+        node_id="lagged",
+        timestamps=("2025-05-10", "2025-07-10"),
+        seed=2,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-05-31T23:59:59Z",
+    )
+    joined = combine_time_coverage(
+        node_id="joined",
+        coverages={"current": current, "lagged": lagged},
+        seed=3,
+    )
+
+    assessment = classify_temporal_relevance(
+        temporal_intent="current_state",
+        coverage=joined,
+        time_basis="order_id",
+    )
+
+    assert assessment.status == "stale"
+    assert assessment.supports_current_action is False
+    assert "freshness" in assessment.reason
+
+
+def test_joined_coverage_reports_common_period_gaps() -> None:
+    first = profile_time_coverage(
+        node_id="first",
+        timestamps=("2025-05-10", "2025-07-10"),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-07-31T23:59:59Z",
+    )
+    second = profile_time_coverage(
+        node_id="second",
+        timestamps=("2025-05-20", "2025-07-20"),
+        seed=2,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-07-31T23:59:59Z",
+    )
+
+    joined = combine_time_coverage(
+        node_id="joined",
+        coverages={"first": first, "second": second},
+        seed=3,
+    )
+
+    assert joined.values["missing_periods"] == ("2025-06",)
+
+
+def test_joined_coverage_abstains_when_sources_do_not_overlap() -> None:
+    old = profile_time_coverage(
+        node_id="old",
+        timestamps=("2024-01-10",),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2024-01-31T23:59:59Z",
+        trustworthy_through="2024-01-31T23:59:59Z",
+    )
+    new = profile_time_coverage(
+        node_id="new",
+        timestamps=("2025-07-10",),
+        seed=2,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-07-31T23:59:59Z",
+        trustworthy_through="2025-07-31T23:59:59Z",
+    )
+
+    joined = combine_time_coverage(
+        node_id="joined",
+        coverages={"old": old, "new": new},
+        seed=3,
+    )
+
+    assert joined.status == "failed"
+    assert joined.failure_code == "no_common_time_coverage"
+
+
+@pytest.mark.parametrize(
+    ("coverages", "match"),
+    [
+        ({}, "coverages"),
+        ({"orders": "not coverage"}, "coverages.orders"),
+    ],
+)
+def test_joined_coverage_rejects_invalid_sources(
+    coverages: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        combine_time_coverage(
+            node_id="invalid",
+            coverages=coverages,
+            seed=1,
+        )

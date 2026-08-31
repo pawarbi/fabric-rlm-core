@@ -81,11 +81,14 @@ def classify_temporal_relevance(
         )
     if (
         not isinstance(coverage, OperatorResult)
-        or coverage.operator != "profile_time_coverage.v1"
+        or coverage.operator not in {
+            "profile_time_coverage.v1",
+            "profile_joined_time_coverage.v1",
+        }
         or coverage.status != "completed"
     ):
         raise ValueError(
-            "coverage must be a completed profile_time_coverage.v1 result"
+            "coverage must be a completed temporal coverage result"
         )
     if window is not None and (
         not isinstance(window, OperatorResult)
@@ -142,12 +145,13 @@ def classify_temporal_relevance(
             reason="No event-time basis was declared for this finding.",
             context=context,
         )
-    if coverage.values.get("freshness_status") == "stale":
+    if coverage.values.get("freshness_status") in {"stale", "mismatched"}:
         return TemporalAssessment(
             status="stale",
             supports_current_action=False,
             reason=(
-                "The source watermark is too old to support a current claim."
+                "Source freshness is stale or inconsistent across required "
+                "inputs, so it cannot support a current claim."
             ),
             context=context,
         )

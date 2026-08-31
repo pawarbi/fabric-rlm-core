@@ -102,6 +102,18 @@ def _period_label(value: date, grain: str) -> str:
     return f"{value.year}-Q{((value.month - 1) // 3) + 1}"
 
 
+def _period_from_label(value: str, grain: str) -> date:
+    if grain == "day":
+        return date.fromisoformat(value)
+    if grain == "week":
+        year_text, week_text = value.split("-W", maxsplit=1)
+        return date.fromisocalendar(int(year_text), int(week_text), 1)
+    if grain == "month":
+        return date.fromisoformat(f"{value}-01")
+    year_text, quarter_text = value.split("-Q", maxsplit=1)
+    return date(int(year_text), (int(quarter_text) - 1) * 3 + 1, 1)
+
+
 def _period_payload(value: date, grain: str) -> dict[str, str]:
     return {
         "grain": grain,
@@ -257,6 +269,202 @@ def profile_time_coverage(
     )
 
 
+def combine_time_coverage(
+    *,
+    node_id: str,
+    coverages: object,
+    seed: int,
+    mismatch_tolerance_days: int = 7,
+) -> OperatorResult:
+    """Combine required sources using their common trustworthy time coverage."""
+
+    if not isinstance(coverages, Mapping) or not coverages:
+        raise ValueError("coverages must be a non-empty mapping")
+    if type(mismatch_tolerance_days) is not int or mismatch_tolerance_days < 0:
+        raise ValueError("mismatch_tolerance_days must be non-negative")
+    normalized: dict[str, OperatorResult] = {}
+    for source_id, coverage in coverages.items():
+        if not isinstance(source_id, str) or not source_id.strip():
+            raise ValueError("coverages source names must be non-empty strings")
+        if (
+            not isinstance(coverage, OperatorResult)
+            or coverage.operator != "profile_time_coverage.v1"
+            or coverage.status != "completed"
+        ):
+            raise ValueError(
+                f"coverages.{source_id} must be a completed "
+                "profile_time_coverage.v1 result"
+            )
+        normalized[source_id.strip()] = coverage
+
+    grains = {
+        coverage.values["latest_complete_period"]["grain"]
+        for coverage in normalized.values()
+        if isinstance(coverage.values.get("latest_complete_period"), Mapping)
+    }
+    if len(grains) != 1 or any(
+        coverage.values.get("latest_complete_period") is None
+        for coverage in normalized.values()
+    ):
+        raise ValueError(
+            "coverages must have one shared grain and a complete period"
+        )
+    grain = next(iter(grains))
+    requested_values = {
+        coverage.diagnostics["watermarks"]["requested_as_of"]
+        for coverage in normalized.values()
+    }
+    timezone_values = {
+        coverage.diagnostics["watermarks"]["timezone"]
+        for coverage in normalized.values()
+    }
+    if len(requested_values) != 1:
+        raise ValueError("coverages must use the same requested_as_of")
+    if len(timezone_values) != 1:
+        raise ValueError("coverages must use the same timezone")
+
+    source_watermarks = {
+        source_id: coverage.values["source_watermark"]
+        for source_id, coverage in sorted(normalized.items())
+    }
+    source_trustworthy = {
+        source_id: coverage.values["trustworthy_through"]
+        for source_id, coverage in sorted(normalized.items())
+    }
+    watermark_times = {
+        source_id: datetime.fromisoformat(value.replace("Z", "+00:00"))
+        for source_id, value in source_watermarks.items()
+    }
+    trustworthy_times = {
+        source_id: datetime.fromisoformat(value.replace("Z", "+00:00"))
+        for source_id, value in source_trustworthy.items()
+    }
+    common_watermark = min(watermark_times.values())
+    common_trustworthy = min(trustworthy_times.values())
+    trustworthy_spread = (
+        max(trustworthy_times.values()) - common_trustworthy
+    ).days
+    observed_sets = [
+        set(coverage.values.get("observed_periods", ()))
+        for coverage in normalized.values()
+    ]
+    common_observed = set.intersection(*observed_sets)
+    input_values = {
+        "coverages": {
+            source_id: coverage.to_dict()
+            for source_id, coverage in sorted(normalized.items())
+        },
+        "mismatch_tolerance_days": mismatch_tolerance_days,
+    }
+    if not common_observed:
+        return OperatorResult(
+            node_id=node_id,
+            operator="profile_joined_time_coverage.v1",
+            status="failed",
+            seed=seed,
+            sample_size=len(normalized),
+            diagnostics={
+                "input_fingerprint": fingerprint(input_values),
+                "method": "joined_trustworthy_coverage_v1",
+                "source_watermarks": source_watermarks,
+                "source_trustworthy_through": source_trustworthy,
+            },
+            limitations=(
+                "Required sources have no overlapping observed time period.",
+            ),
+            failure_code="no_common_time_coverage",
+            failure_message=(
+                "Required sources do not share any observed period at the "
+                f"{grain} grain."
+            ),
+        )
+    observed_starts = tuple(
+        sorted(_period_from_label(label, grain) for label in common_observed)
+    )
+    all_starts: list[date] = []
+    cursor = observed_starts[0]
+    while cursor <= observed_starts[-1]:
+        all_starts.append(cursor)
+        cursor = _next_period(cursor, grain)
+    observed_start_set = set(observed_starts)
+    missing_starts = tuple(
+        value for value in all_starts if value not in observed_start_set
+    )
+    complete_starts = tuple(
+        value
+        for value in observed_starts
+        if _period_end(value, grain) <= common_trustworthy.date()
+    )
+    latest_complete = (
+        _period_payload(complete_starts[-1], grain)
+        if complete_starts
+        else None
+    )
+    requested_as_of = next(iter(requested_values))
+    requested_date = date.fromisoformat(requested_as_of)
+    freshness_lag_days = max(
+        0,
+        (requested_date - common_watermark.date()).days,
+    )
+    if trustworthy_spread > mismatch_tolerance_days:
+        freshness_status = "mismatched"
+    elif freshness_lag_days <= 7:
+        freshness_status = "current"
+    elif freshness_lag_days <= 45:
+        freshness_status = "recent"
+    else:
+        freshness_status = "stale"
+
+    final_start = observed_starts[-1]
+    partial_final = (
+        _period_payload(final_start, grain)
+        if _period_end(final_start, grain) > common_trustworthy.date()
+        else None
+    )
+    return OperatorResult(
+        node_id=node_id,
+        operator="profile_joined_time_coverage.v1",
+        status="completed",
+        seed=seed,
+        sample_size=len(normalized),
+        values={
+            "event_time_min": max(
+                coverage.values["event_time_min"]
+                for coverage in normalized.values()
+            ),
+            "event_time_max": min(
+                coverage.values["event_time_max"]
+                for coverage in normalized.values()
+            ),
+            "source_watermark": _iso_utc(common_watermark),
+            "trustworthy_through": _iso_utc(common_trustworthy),
+            "observed_periods": tuple(
+                _period_label(value, grain) for value in observed_starts
+            ),
+            "missing_periods": tuple(
+                _period_label(value, grain) for value in missing_starts
+            ),
+            "latest_complete_period": latest_complete,
+            "partial_final_period": partial_final,
+            "freshness_lag_days": freshness_lag_days,
+            "freshness_status": freshness_status,
+        },
+        diagnostics={
+            "input_fingerprint": fingerprint(input_values),
+            "method": "joined_trustworthy_coverage_v1",
+            "source_watermarks": source_watermarks,
+            "source_trustworthy_through": source_trustworthy,
+            "trustworthy_spread_days": trustworthy_spread,
+            "watermarks": {
+                "requested_as_of": requested_as_of,
+                "source_watermark": _iso_utc(common_watermark),
+                "trustworthy_through": _iso_utc(common_trustworthy),
+                "timezone": next(iter(timezone_values)),
+            },
+        },
+    )
+
+
 def select_latest_complete_window(
     *,
     node_id: str,
@@ -269,11 +477,14 @@ def select_latest_complete_window(
 
     if (
         not isinstance(coverage, OperatorResult)
-        or coverage.operator != "profile_time_coverage.v1"
+        or coverage.operator not in {
+            "profile_time_coverage.v1",
+            "profile_joined_time_coverage.v1",
+        }
         or coverage.status != "completed"
     ):
         raise ValueError(
-            "coverage must be a completed profile_time_coverage.v1 result"
+            "coverage must be a completed temporal coverage result"
         )
     if type(window_periods) is not int or window_periods <= 0:
         raise ValueError("window_periods must be a positive integer")

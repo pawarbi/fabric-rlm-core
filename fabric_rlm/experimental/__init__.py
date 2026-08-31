@@ -30,6 +30,7 @@ from fabric_rlm.experimental.analysis_dag import (
 from fabric_rlm.experimental.analysis_evidence import EvidenceRegistry
 from fabric_rlm.experimental.analysis_operators import (
     additive_decomposition,
+    combine_time_coverage,
     profile_time_coverage,
     rate_decomposition,
     select_latest_complete_window,
@@ -102,6 +103,7 @@ __all__ = [
     "Budget",
     "canonical_json",
     "classify_temporal_relevance",
+    "combine_time_coverage",
     "derive_seed",
     "DifficultyVerdict",
     "EFFORT_RUNG_COST",
