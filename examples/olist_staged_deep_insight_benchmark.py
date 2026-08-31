@@ -296,6 +296,23 @@ INSIGHT CONTRACT
 - If censoring, selection, confounding, or distribution evidence remains
   material and unresolved, set decision_readiness to investigate_first and
   keep the action diagnostic.
+- A title must not claim more than the evidence tier and decision_readiness.
+  Investigate-first titles and interpretations must not use affects, drives,
+  causes, root cause, primary lever, intervention target, or failure language.
+- Use possible or candidate wording for a level shift or step-change unless a
+  formal change-point diagnostic with explicit windows supports the claim.
+- Heavy-tail language requires verified P95 or P99 evidence. Otherwise use
+  neutral right-skew or tail-risk-investigation wording.
+- Qualitative severity such as extreme, severe, unusually high, or nearly absent
+  requires an approved benchmark, policy threshold, or governed target.
+- Do not use opaque statements such as "the primary measured difference is X."
+  State the compared populations, period, unit, denominator, and effect.
+- A concentration title must state both the selected count and total eligible
+  population. Program action additionally requires a governed threshold.
+- Bound language must agree with the competing explanation: under-merging that
+  can make the true rate higher implies a lower bound, not an upper bound.
+- Concentration findings must state the total eligible population, not only the
+  top-N count or share.
 - Every verification must use self-contained SQL and an exact alias->source
   identity mapping containing only authoritative identities listed above.
 - Do not reference worker-created tables or views.
@@ -732,6 +749,10 @@ CRITIC CLOSURE CONTRACT
   claim about the other group. Compute components in CTEs, compute the derived
   value in a final contrast CTE, then use exactly
   SELECT metric_value FROM contrast so the verifier sees one source column.
+- Formal change-point, CUSUM, PELT, model-fit, or other multi-output diagnostics
+  that cannot be represented by this portable scalar contract must be marked
+  unresolvable with the contract limitation. Do not approximate them with a
+  simpler statistic and claim the requested diagnostic was executed.
 - Verification must use one self-contained aggregate DuckDB SQL query and an
   exact alias-to-source identity mapping containing only identities above.
 - Use explicit JOIN syntax for every multi-relation query; comma joins are not
@@ -781,6 +802,10 @@ REPAIR RULES
   abstention. Comparative prose requires a comparative scalar, not one mean.
 - For derived contrasts, compute components in CTEs, create a contrast CTE with
   one metric_value column, then end with SELECT metric_value FROM contrast.
+- If a formal change-point, CUSUM, PELT, model-fit, or other multi-output
+  diagnostic still cannot satisfy the portable scalar contract, mark the critic
+  follow-up unresolvable with a substantive contract limitation. Do not
+  approximate the requested diagnostic with a simpler statistic.
 - Use explicit JOIN syntax only; never use comma joins.
 - Verification metric_value must be one source column or one aggregate; do
   not divide or combine aggregates.
@@ -2357,12 +2382,16 @@ RULES
 
 
 def build_targeted_statement_repair_prompt(
-    current_insight: Mapping[str, Any], verifier_error: str
+    current_insight: Mapping[str, Any],
+    verifier_error: str,
+    *,
+    attempt: int = 1,
 ) -> str:
     """Build a field-only repair brief for a measured-claim statement error."""
 
     context = {
         "title": current_insight.get("title"),
+        "rejected_statement": current_insight.get("statement"),
         "primary_metric": {
             "type": (
                 current_insight.get("metric_spec", {}).get("type")
@@ -2379,6 +2408,7 @@ def build_targeted_statement_repair_prompt(
     return f"""\
 Repair only the statement field of one deep_insight_discovery contract v2
 insight. Return exactly one native statement: str and SUBMIT immediately.
+This is repair attempt {attempt}.
 
 RELEVANT INSIGHT FIELDS
 {_compact_json(context)}
@@ -2394,10 +2424,104 @@ RULES
 - Do not repeat component, threshold, numerator, denominator, sample-size, or
   other quantitative facts in the statement.
 - Preserve the meaning, population, and direction of the primary metric.
+- Include a named business entity or population and metric context from the
+  title; never return a context-free number.
+- Never use the phrase "the primary measured difference/count/rate/share/value
+  is". Use a form such as "Among [population], [entity or metric] was [value]
+  [unit or direction]."
+- Do not repeat the rejected statement shown above.
 - Do not invent evidence or alter any other insight field.
 - Return no wrapper or other fields: exactly statement: str.
 - SUBMIT immediately.
 """
+
+
+def render_contextual_metric_statement(insight: Mapping[str, Any]) -> str:
+    """Render a contextual statement from already-audited metric metadata."""
+
+    metric_spec = insight.get("metric_spec")
+    discovery = insight.get("discovery")
+    if not isinstance(metric_spec, Mapping) or not isinstance(discovery, Mapping):
+        raise ValueError("contextual statement requires metric_spec and discovery")
+    metric_type = metric_spec.get("type")
+    expected = metric_spec.get("expected_value")
+    if (
+        metric_type
+        not in {
+            "count",
+            "delta",
+            "rate",
+            "share",
+            "value",
+            "amount",
+            "average",
+            "rate_of_change",
+            "decomposition",
+        }
+        or type(expected) not in {int, float}
+        or not math.isfinite(expected)
+    ):
+        raise ValueError("contextual statement requires a finite supported metric")
+
+    components = metric_spec.get("components")
+    component_names = [
+        str(component.get("name") or "").casefold()
+        for component in components
+        if isinstance(component, Mapping)
+    ] if isinstance(components, list) else []
+    joined_names = " ".join(component_names)
+
+    def number(value: int | float) -> str:
+        numeric = float(value)
+        if numeric.is_integer():
+            return f"{int(numeric):,}"
+        return f"{numeric:,.2f}".rstrip("0").rstrip(".")
+
+    if metric_type == "count" and "repeat_customer" in joined_names:
+        return (
+            f"Within the measured customer population, {number(expected)} "
+            "repeat customers were observed."
+        )
+    if metric_type == "count" and "seller" in joined_names:
+        return (
+            f"Within the measured seller population, {number(expected)} sellers "
+            "formed the modeled concentration group."
+        )
+    if metric_type == "delta" and "delivered_order" in joined_names:
+        return (
+            f"Delivered-order volume was {number(abs(expected))} orders "
+            f"{'higher' if expected >= 0 else 'lower'} in the current period "
+            "than the comparison period."
+        )
+    if metric_type in {"rate", "share"} and "late_delivered_order" in joined_names:
+        percent = f"{float(expected) * 100:.2f}".rstrip("0").rstrip(".")
+        return (
+            f"Within delivered orders with a delivery date, {percent}% arrived "
+            "after the estimated delivery date."
+        )
+
+    population = str(discovery.get("population") or "the measured population")
+    population = re.sub(
+        r"\b\d{4}(?:-\d{1,2})?\s+(?:to|through|-)\s+"
+        r"\d{4}(?:-\d{1,2})?\b",
+        "",
+        population,
+        flags=re.IGNORECASE,
+    )
+    population = re.sub(r"\b\d[\d,]*(?:\.\d+)?\b", "", population)
+    population = re.sub(r"\s+", " ", population).strip(" ,-")
+    if metric_type in {"rate", "share", "rate_of_change"}:
+        rendered = f"{float(expected) * 100:.2f}".rstrip("0").rstrip(".") + "%"
+    else:
+        rendered = number(expected)
+    label = {
+        "delta": "difference",
+        "rate_of_change": "rate of change",
+        "decomposition": "total change",
+    }.get(str(metric_type), str(metric_type))
+    return (
+        f"Within {population}, the measured {label} was {rendered}."
+    )
 
 
 def build_targeted_interpretation_repair_prompt(
@@ -2439,7 +2563,8 @@ def is_targeted_statement_error(error: str) -> bool:
 
     return re.search(
         r"\binsight\s+\d+\s+"
-        r"statement\s+must contain one primary measured claim\b",
+        r"statement\s+(?:must contain one primary measured claim"
+        r"|lacks decision context)\b",
         str(error),
         flags=re.IGNORECASE,
     ) is not None
@@ -2905,13 +3030,19 @@ def normalize_mechanical_contract(
                         rendered = f"{_decimal_text(rendered_value)}%"
                     else:
                         rendered = _decimal_text(rendered_value)
+                    try:
+                        contextual_statement = render_contextual_metric_statement(
+                            value
+                        )
+                    except ValueError:
+                        contextual_statement = (
+                            f"The primary measured {labels[metric_type]} "
+                            f"is {rendered}."
+                        )
                     record_set(
                         value,
                         "statement",
-                        (
-                            f"The primary measured {labels[metric_type]} "
-                            f"is {rendered}."
-                        ),
+                        contextual_statement,
                         path,
                     )
 
@@ -3183,9 +3314,298 @@ def _load_skill_loader():
     return SkillLoader
 
 
+def verify_semantic_calibration(payload: Mapping[str, Any]) -> None:
+    """Reject wording that claims more than the typed evidence permits."""
+
+    def collect_strings(value: Any) -> list[str]:
+        strings: list[str] = []
+        if isinstance(value, str):
+            strings.append(value)
+        elif isinstance(value, Mapping):
+            for child in value.values():
+                strings.extend(collect_strings(child))
+        elif isinstance(value, list):
+            for child in value:
+                strings.extend(collect_strings(child))
+        return strings
+
+    for index, insight in enumerate(payload.get("insights", ())):
+        if not isinstance(insight, Mapping):
+            continue
+        label = f"insight {index + 1}"
+        title = str(insight.get("title") or "")
+        statement = str(insight.get("statement") or "")
+        interpretation = str(insight.get("interpretation") or "")
+        assessment = insight.get("diagnostic_assessment")
+        readiness = (
+            assessment.get("decision_readiness")
+            if isinstance(assessment, Mapping)
+            else None
+        )
+        if readiness == "investigate_first":
+            if re.search(
+                r"\baffects?\b"
+                r"|(?<!usb )(?<!hard )(?<!disk )(?<!flash )"
+                r"\bdrives?\b(?![- ]time\b)"
+                r"|\bcauses?\b(?!\s+(?:for|analysis|investigation)\b)"
+                r"|\bcaused\b|\bfailure tail\b|\broot cause\b",
+                title,
+                flags=re.IGNORECASE,
+            ):
+                raise AssertionError(
+                    f"{label} title overclaims investigate-first evidence"
+                )
+            if re.search(
+                r"primary lever|intervention target|will improve|failure tail"
+                r"|planning baseline|economics (?:are|is) dominated"
+                r"|\b(?:is|are) dominated by\b|\bwould (?:over|under)shoot\b"
+                r"|\banchor(?:s|ed|ing)? capacity planning\b"
+                r"|\bmost associated\b"
+                r"|\b(?:revenue|growth|outcomes?|performance|retention|conversion"
+                r"|sales|demand|profitability|economics?) depends on\b"
+                r"|\bbehaves as (?:a )?one[- ]shot\b"
+                r"|\bacquisition economics dominate\b"
+                r"|\bconcentrat(?:e|es) leverage\b",
+                interpretation,
+                flags=re.IGNORECASE,
+            ):
+                raise AssertionError(
+                    f"{label} interpretation overclaims investigate-first evidence"
+                )
+
+        if re.fullmatch(
+            r"\s*the primary measured (?:difference|count|rate|share|value)"
+            r" is [-+]?\d[\d,]*(?:\.\d+)?%?\.?\s*",
+            statement,
+            flags=re.IGNORECASE,
+        ):
+            raise AssertionError(f"{label} statement lacks decision context")
+
+        if re.search(
+            r"\b(?:step[- ]change|level shift)\b",
+            title,
+            flags=re.IGNORECASE,
+        ) and not re.search(
+            r"\b(?:possible|potential|candidate|signal|suggests?|may)\b",
+            title,
+            flags=re.IGNORECASE,
+        ):
+            raise AssertionError(
+                f"{label} unverified level shift title must say possible or candidate"
+            )
+
+        evidence_text = " ".join(
+            collect_strings(insight.get("supporting_claims", ()))
+        )
+        assessment_text = " ".join(collect_strings(assessment or {}))
+        governed_basis = bool(
+            re.search(
+                r"\b(?:approved|governed|policy[- ]owned|contractual|sla)\b"
+                r".{0,40}\b(?:benchmark|target|threshold)\b"
+                r"|\b(?:benchmark|target|threshold)\b.{0,40}"
+                r"\b(?:approved|governed|policy[- ]owned|contractual|sla)\b",
+                evidence_text,
+                flags=re.IGNORECASE,
+            )
+        )
+        if re.search(
+            r"heav(?:y|ily) (?:right[- ]skewed|tail)|long (?:failure )?tail",
+            f"{title} {interpretation}",
+            flags=re.IGNORECASE,
+        ) and not re.search(
+            r"\bp(?:95|99)\b|\b0\.(?:95|99)\b",
+            evidence_text,
+            flags=re.IGNORECASE,
+        ):
+            raise AssertionError(
+                f"{label} heavy-tail language requires P95 or P99 evidence"
+            )
+
+        if re.search(
+            r"\b(?:extreme|severe|unusually|exceptionally|nearly absent|rare"
+            r"|heav(?:y|ily))\b",
+            title,
+            flags=re.IGNORECASE,
+        ) or re.search(
+            r"\bhigh\b.{0,30}\bconcentrat",
+            title,
+            flags=re.IGNORECASE,
+        ):
+            if governed_basis:
+                pass
+            else:
+                raise AssertionError(
+                    f"{label} qualitative severity requires a governed benchmark"
+                )
+
+        if re.search(r"\bconcentrat", title, flags=re.IGNORECASE):
+            if not re.search(
+                r"\b(?:distinct|total|active|eligible)\s+\w*\s*"
+                r"(?:seller|customer|account|product|supplier|franchise)s?\b",
+                evidence_text,
+                flags=re.IGNORECASE,
+            ) or not re.search(
+                r"\b\d[\d,]*(?:\.\d+)?\s+(?:of|out of)\s+"
+                r"\d[\d,]*(?:\.\d+)?\b",
+                title,
+                flags=re.IGNORECASE,
+            ):
+                raise AssertionError(
+                    f"{label} concentration requires its eligible population in its title"
+                )
+            action = insight.get("action")
+            if (
+                isinstance(action, Mapping)
+                and action.get("kind") == "program"
+                and not governed_basis
+            ):
+                raise AssertionError(
+                    f"{label} concentration program requires a governed threshold"
+                )
+
+        if re.search(
+            r"\bunder[- ]?merg(?:e|es|ed|ing)\b.{0,100}"
+            r"\btrue\b.{0,30}\b(?:higher|larger|greater)\b",
+            assessment_text,
+            flags=re.IGNORECASE,
+        ) and re.search(r"\bupper bound\b", interpretation, flags=re.IGNORECASE):
+            raise AssertionError(f"{label} has reversed bound direction")
+
+        if re.search(
+            r"\bover[- ]?merg(?:e|es|ed|ing)\b.{0,100}"
+            r"\btrue\b.{0,30}\b(?:lower|smaller|less)\b",
+            assessment_text,
+            flags=re.IGNORECASE,
+        ) and re.search(r"\blower bound\b", interpretation, flags=re.IGNORECASE):
+            raise AssertionError(f"{label} has reversed bound direction")
+
+
+def calibrate_semantic_language(
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Safely calibrate prose without changing audited evidence structures."""
+
+    calibrated = deepcopy(dict(payload))
+    changes: list[str] = []
+    unsafe_interpretation = re.compile(
+        r"primary lever|intervention target|will improve|failure tail"
+        r"|planning baseline|economics (?:are|is) dominated"
+        r"|\b(?:is|are) dominated by\b|\bwould (?:over|under)shoot\b"
+        r"|\banchor(?:s|ed|ing)? capacity planning\b"
+        r"|\bmost associated\b"
+        r"|\b(?:revenue|growth|outcomes?|performance|retention|conversion"
+        r"|sales|demand|profitability|economics?) depends on\b"
+        r"|\bbehaves as (?:a )?one[- ]shot\b"
+        r"|\bacquisition economics dominate\b"
+        r"|\bconcentrat(?:e|es) leverage\b",
+        flags=re.IGNORECASE,
+    )
+    safe_interpretation = (
+        "This audited result is a finding for further investigation. It does not "
+        "establish causation or authorize a program action. Unresolved competing "
+        "explanations and stated limitations must be closed before decision use."
+    )
+    opaque_statement = re.compile(
+        r"\s*the primary measured (?:difference|count|rate|share|value)"
+        r" is [-+]?\d[\d,]*(?:\.\d+)?%?\.?\s*",
+        flags=re.IGNORECASE,
+    )
+    renamed_titles: dict[str, str] = {}
+
+    for index, insight in enumerate(calibrated.get("insights", ())):
+        if not isinstance(insight, dict):
+            continue
+        assessment = insight.get("diagnostic_assessment")
+        readiness = (
+            assessment.get("decision_readiness")
+            if isinstance(assessment, Mapping)
+            else None
+        )
+        if readiness != "investigate_first":
+            continue
+        prefix = f"$.insights[{index}]"
+
+        title = str(insight.get("title") or "")
+        safe_title = re.sub(
+            r"^\s*(?:extreme|high|severe)\s+",
+            "",
+            title,
+            flags=re.IGNORECASE,
+        )
+        safe_title = re.sub(
+            r"\bis rare\b",
+            "is observed",
+            safe_title,
+            flags=re.IGNORECASE,
+        )
+        safe_title = re.sub(
+            r"\bheavily right[- ]skewed\b",
+            "right-skewed",
+            safe_title,
+            flags=re.IGNORECASE,
+        )
+        if safe_title:
+            safe_title = safe_title[0].upper() + safe_title[1:]
+        if safe_title != title:
+            insight["title"] = safe_title
+            renamed_titles[title] = safe_title
+            changes.append(f"{prefix}.title")
+
+        statement = str(insight.get("statement") or "")
+        if opaque_statement.fullmatch(statement):
+            insight["statement"] = render_contextual_metric_statement(insight)
+            changes.append(f"{prefix}.statement")
+
+        interpretation = str(insight.get("interpretation") or "")
+        if unsafe_interpretation.search(interpretation):
+            insight["interpretation"] = safe_interpretation
+            changes.append(f"{prefix}.interpretation")
+
+        assessment_text = " ".join(
+            str(value)
+            for explanation in (
+                assessment.get("explanations", ())
+                if isinstance(assessment, Mapping)
+                else ()
+            )
+            if isinstance(explanation, Mapping)
+            for value in explanation.values()
+            if isinstance(value, str)
+        )
+        if re.search(
+            r"\bunder[- ]?merg(?:e|es|ed|ing)\b.{0,100}"
+            r"\btrue\b.{0,30}\b(?:higher|larger|greater)\b",
+            assessment_text,
+            flags=re.IGNORECASE,
+        ) and re.search(
+            r"\bupper bound\b",
+            str(insight.get("interpretation") or ""),
+            flags=re.IGNORECASE,
+        ):
+            insight["interpretation"] = re.sub(
+                r"\bupper bound\b",
+                "lower bound",
+                str(insight["interpretation"]),
+                flags=re.IGNORECASE,
+            )
+            changes.append(f"{prefix}.interpretation")
+
+    for index, candidate in enumerate(calibrated.get("candidates", ())):
+        if not isinstance(candidate, dict):
+            continue
+        for field in ("promoted_as", "duplicate_of"):
+            referenced_title = candidate.get(field)
+            if referenced_title in renamed_titles:
+                candidate[field] = renamed_titles[referenced_title]
+                changes.append(f"$.candidates[{index}].{field}")
+
+    return calibrated, tuple(dict.fromkeys(changes))
+
+
 def verify_portable_contract(payload: Mapping[str, Any]) -> None:
     """Run the packaged portable deep-insight verifier on the host."""
 
+    verify_semantic_calibration(payload)
     loader_type = _load_skill_loader()
     source = loader_type().load("deep_insight_discovery").verifier_source
     if not source:
@@ -3342,6 +3762,7 @@ def run_evidence_closure(
                 closed_payload,
                 sources,
             )
+            closed_payload, _ = calibrate_semantic_language(closed_payload)
             verify_function(closed_payload)
             break
         except (AssertionError, ValueError) as exc:
@@ -3494,6 +3915,7 @@ def run_critic_evidence_closure(
             closed_payload, _ = normalize_mechanical_contract(
                 closed_payload, sources
             )
+            closed_payload, _ = calibrate_semantic_language(closed_payload)
             verify_function(closed_payload)
             break
         except (AssertionError, ValueError) as exc:
@@ -3846,6 +4268,8 @@ def run_staged_benchmark(
     )
     payload, initial_changes = normalize_mechanical_contract(payload, sources)
     mechanical_changes.extend(initial_changes)
+    payload, semantic_changes = calibrate_semantic_language(payload)
+    mechanical_changes.extend(semantic_changes)
     normalized_insights = {"insights": deepcopy(payload["insights"])}
     insights_changed = normalized_insights != insights
     insights = normalized_insights
@@ -3890,45 +4314,60 @@ def run_staged_benchmark(
                     interpretation_only = is_targeted_interpretation_error(
                         str(exc)
                     )
-                    repair_rlm = RLM.from_task(
-                        task=(
-                            build_targeted_statement_repair_prompt(
-                                insights["insights"][insight_index],
-                                str(exc),
-                            )
-                            if statement_only
-                            else build_targeted_interpretation_repair_prompt(
-                                insights["insights"][insight_index],
-                                str(exc),
-                            )
-                            if interpretation_only
-                            else build_targeted_insight_repair_prompt(
-                                sources,
-                                scaffold,
-                                insights["insights"][insight_index],
-                                str(exc),
-                            )
-                        ),
-                        outputs=(
-                            TARGETED_STATEMENT_OUTPUTS
-                            if statement_only
-                            else TARGETED_INTERPRETATION_OUTPUTS
-                            if interpretation_only
-                            else TARGETED_INSIGHT_OUTPUTS
-                        ),
-                        lm=lm,
-                        skills=list(SYNTHESIS_SKILLS),
-                        enable_verifier=False,
-                        block_network=True,
-                        engine="default",
-                        max_turns=repair_turns,
-                        reserve_finalize_turns=3,
-                        timeout=timeout,
-                        verbose=False,
-                    )
-                    repair_result = repair_rlm.run()
                     updated_insights = deepcopy(insights["insights"])
-                    if statement_only:
+                    deterministic_statement = (
+                        statement_only
+                        and "statement lacks decision context" in str(exc).casefold()
+                    )
+                    repair_result = None
+                    if deterministic_statement:
+                        updated_insights[insight_index]["statement"] = (
+                            render_contextual_metric_statement(
+                                updated_insights[insight_index]
+                            )
+                        )
+                    else:
+                        repair_rlm = RLM.from_task(
+                            task=(
+                                build_targeted_statement_repair_prompt(
+                                    insights["insights"][insight_index],
+                                    str(exc),
+                                    attempt=attempt,
+                                )
+                                if statement_only
+                                else build_targeted_interpretation_repair_prompt(
+                                    insights["insights"][insight_index],
+                                    str(exc),
+                                )
+                                if interpretation_only
+                                else build_targeted_insight_repair_prompt(
+                                    sources,
+                                    scaffold,
+                                    insights["insights"][insight_index],
+                                    str(exc),
+                                )
+                            ),
+                            outputs=(
+                                TARGETED_STATEMENT_OUTPUTS
+                                if statement_only
+                                else TARGETED_INTERPRETATION_OUTPUTS
+                                if interpretation_only
+                                else TARGETED_INSIGHT_OUTPUTS
+                            ),
+                            lm=lm,
+                            skills=list(SYNTHESIS_SKILLS),
+                            enable_verifier=False,
+                            block_network=True,
+                            engine="default",
+                            max_turns=repair_turns,
+                            reserve_finalize_turns=3,
+                            timeout=timeout,
+                            verbose=False,
+                        )
+                        repair_result = repair_rlm.run()
+                    if deterministic_statement:
+                        pass
+                    elif statement_only:
                         targeted = _extract_partial(
                             repair_result,
                             TARGETED_STATEMENT_OUTPUTS,
@@ -3984,6 +4423,10 @@ def run_staged_benchmark(
                         payload, sources
                     )
                     mechanical_changes.extend(changes)
+                    payload, semantic_changes = calibrate_semantic_language(
+                        payload
+                    )
+                    mechanical_changes.extend(semantic_changes)
                     insights = {"insights": deepcopy(payload["insights"])}
                     if insights_path is not None:
                         _write_synthesis_checkpoint(
@@ -3994,15 +4437,19 @@ def run_staged_benchmark(
                             "target": target,
                             "attempt": attempt,
                             "mode": (
-                                "targeted-statement"
+                                "deterministic-statement"
+                                if deterministic_statement
+                                else "targeted-statement"
                                 if statement_only
                                 else "targeted-interpretation"
                                 if interpretation_only
                                 else "targeted"
                             ),
                             "insight_index": insight_index + 1,
-                            "insights": summarize_trajectory(
-                                repair_result.trajectory
+                            "insights": (
+                                {"renderer": "contextual-metric-statement"}
+                                if deterministic_statement
+                                else summarize_trajectory(repair_result.trajectory)
                             ),
                         }
                     )
