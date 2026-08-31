@@ -32,6 +32,7 @@ from fabric_rlm.experimental.analysis_operators import (
     additive_decomposition,
     profile_time_coverage,
     rate_decomposition,
+    select_latest_complete_window,
     volume_rate_mix_decomposition,
 )
 from fabric_rlm.experimental.analysis_benchmarks import (
@@ -118,6 +119,7 @@ __all__ = [
     "score_detection_case",
     "score_decomposition_case",
     "score_regression_case",
+    "select_latest_complete_window",
     "SplitFold",
     "SplitPlan",
     "SyntheticBenchmark",

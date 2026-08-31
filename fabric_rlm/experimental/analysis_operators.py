@@ -70,6 +70,23 @@ def _next_period(value: date, grain: str) -> date:
     return date(year, (month - 1) % 12 + 1, 1)
 
 
+def _previous_period(value: date, grain: str) -> date:
+    if grain == "day":
+        return value - timedelta(days=1)
+    if grain == "week":
+        return value - timedelta(days=7)
+    if grain == "month":
+        year = value.year - (1 if value.month == 1 else 0)
+        month = 12 if value.month == 1 else value.month - 1
+        return date(year, month, 1)
+    month = value.month - 3
+    year = value.year
+    if month <= 0:
+        month += 12
+        year -= 1
+    return date(year, month, 1)
+
+
 def _period_end(value: date, grain: str) -> date:
     return _next_period(value, grain) - timedelta(days=1)
 
@@ -237,6 +254,178 @@ def profile_time_coverage(
                 "timezone": timezone.strip(),
             },
         },
+    )
+
+
+def select_latest_complete_window(
+    *,
+    node_id: str,
+    coverage: object,
+    seed: int,
+    window_periods: int,
+    comparator_kind: str = "none",
+) -> OperatorResult:
+    """Select a complete current window and require comparable history."""
+
+    if (
+        not isinstance(coverage, OperatorResult)
+        or coverage.operator != "profile_time_coverage.v1"
+        or coverage.status != "completed"
+    ):
+        raise ValueError(
+            "coverage must be a completed profile_time_coverage.v1 result"
+        )
+    if type(window_periods) is not int or window_periods <= 0:
+        raise ValueError("window_periods must be a positive integer")
+    if comparator_kind not in {
+        "none",
+        "previous_window",
+        "same_period_prior_year",
+    }:
+        raise ValueError(
+            "comparator_kind must be none, previous_window, or "
+            "same_period_prior_year"
+        )
+
+    latest_complete = coverage.values.get("latest_complete_period")
+    if not isinstance(latest_complete, Mapping):
+        raise ValueError("coverage must include a latest_complete_period")
+    grain = latest_complete.get("grain")
+    start_text = latest_complete.get("start")
+    if grain not in _TIME_GRAINS or not isinstance(start_text, str):
+        raise ValueError("coverage latest_complete_period is invalid")
+    latest_start = date.fromisoformat(start_text)
+    current_starts = [latest_start]
+    for _ in range(window_periods - 1):
+        current_starts.append(_previous_period(current_starts[-1], grain))
+    current_starts.reverse()
+    current_labels = tuple(
+        _period_label(value, grain) for value in current_starts
+    )
+    observed = set(coverage.values.get("observed_periods", ()))
+    missing_current = tuple(
+        label for label in current_labels if label not in observed
+    )
+    base_diagnostics = {
+        "coverage_fingerprint": coverage.diagnostics.get("input_fingerprint"),
+        "input_fingerprint": fingerprint(
+            {
+                "coverage": coverage.to_dict(),
+                "window_periods": window_periods,
+                "comparator_kind": comparator_kind,
+            }
+        ),
+        "method": "latest_complete_window_v1",
+    }
+    if missing_current:
+        return OperatorResult(
+            node_id=node_id,
+            operator="select_latest_complete_window.v1",
+            status="failed",
+            seed=seed,
+            sample_size=len(current_labels) - len(missing_current),
+            diagnostics={
+                **base_diagnostics,
+                "missing_current_periods": missing_current,
+            },
+            limitations=(
+                "The latest requested window contains missing periods.",
+            ),
+            failure_code="incomplete_current_window",
+            failure_message=(
+                "Current window is missing periods: "
+                + ", ".join(missing_current)
+            ),
+        )
+
+    current_window = {
+        "grain": grain,
+        "start": current_starts[0].isoformat(),
+        "end": _period_end(current_starts[-1], grain).isoformat(),
+        "periods": current_labels,
+    }
+    comparator = None
+    if comparator_kind != "none":
+        if comparator_kind == "previous_window":
+            comparator_starts = []
+            cursor = _previous_period(current_starts[0], grain)
+            for _ in range(window_periods):
+                comparator_starts.append(cursor)
+                cursor = _previous_period(cursor, grain)
+            comparator_starts.reverse()
+        else:
+            try:
+                comparator_starts = [
+                    value.replace(year=value.year - 1)
+                    for value in current_starts
+                ]
+            except ValueError:
+                return OperatorResult(
+                    node_id=node_id,
+                    operator="select_latest_complete_window.v1",
+                    status="failed",
+                    seed=seed,
+                    sample_size=len(current_labels),
+                    diagnostics=base_diagnostics,
+                    limitations=(
+                        "The selected calendar period has no exact "
+                        "same-period-prior-year comparator.",
+                    ),
+                    failure_code="non_comparable_calendar_period",
+                    failure_message=(
+                        "Same-period-prior-year comparison is undefined for "
+                        "the selected calendar window."
+                    ),
+                )
+        comparator_labels = tuple(
+            _period_label(value, grain) for value in comparator_starts
+        )
+        missing_comparator = tuple(
+            label for label in comparator_labels if label not in observed
+        )
+        if missing_comparator:
+            return OperatorResult(
+                node_id=node_id,
+                operator="select_latest_complete_window.v1",
+                status="failed",
+                seed=seed,
+                sample_size=len(current_labels),
+                diagnostics={
+                    **base_diagnostics,
+                    "missing_comparator_periods": missing_comparator,
+                },
+                limitations=(
+                    "Current evidence cannot support a recent-change claim "
+                    "without the requested comparable periods.",
+                ),
+                failure_code="insufficient_comparable_history",
+                failure_message=(
+                    "Comparator is missing periods: "
+                    + ", ".join(missing_comparator)
+                ),
+            )
+        comparator = {
+            "kind": comparator_kind,
+            "start": comparator_starts[0].isoformat(),
+            "end": _period_end(comparator_starts[-1], grain).isoformat(),
+            "periods": comparator_labels,
+        }
+
+    return OperatorResult(
+        node_id=node_id,
+        operator="select_latest_complete_window.v1",
+        status="completed",
+        seed=seed,
+        sample_size=window_periods,
+        values={
+            "current_window": current_window,
+            "comparator": comparator,
+            "excluded_partial_period": coverage.values.get(
+                "partial_final_period"
+            ),
+            "freshness_status": coverage.values.get("freshness_status"),
+        },
+        diagnostics=base_diagnostics,
     )
 
 
