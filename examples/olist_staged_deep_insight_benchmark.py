@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 import hashlib
 import importlib.util
 import json
@@ -354,6 +355,9 @@ CLOSURE PLAN CONTRACT
   weakened, or supported, finite numeric expected_value, and verification.
 - Verification must use one self-contained aggregate DuckDB SQL query and an
   exact alias-to-source identity mapping containing only identities above.
+- The metric_value projection must be one source column or one aggregate.
+  Do not divide or combine aggregates; express rates with one aggregate such
+  as AVG(CASE WHEN ... THEN 1.0 ELSE 0.0 END).
 - Test only the declared explanation. Do not add candidates, explanations,
   findings, actions, or source identities.
 - Include aggregate evidence only: no raw records.
@@ -365,6 +369,43 @@ CLOSURE PLAN CONTRACT
 """
 
 
+def build_evidence_closure_repair_prompt(
+    sources: Mapping[str, Path],
+    payload: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    error: str,
+) -> str:
+    """Build a bounded repair task for an invalid closure plan."""
+
+    return f"""\
+Repair only the invalid evidence-closure plan below.
+Return exactly closure_plans: list with one plan per pending target.
+
+AUTHORITATIVE SOURCE IDENTITIES
+{_source_lines(sources)}
+
+EXACT PENDING TARGETS
+{_compact_json({"targets": _pending_evidence_closure_targets(payload)})}
+
+CURRENT INVALID CLOSURE PLAN
+{_compact_json(plan)}
+
+EXACT VALIDATION ERROR
+{error}
+
+REPAIR RULES
+- Make only the minimum correction required by the exact error.
+- Preserve explanation_id values and exact target coverage.
+- Each plan must contain only explanation_id, required_check, disposition,
+  expected_value, and verification.
+- Use only authoritative source identities listed above.
+- Verification metric_value must be one source column or one aggregate; do
+  not divide or combine aggregates.
+- Do not invent evidence, targets, findings, actions, or source identities.
+- Call SUBMIT immediately.
+"""
+
+
 def validate_evidence_closure_plan(
     payload: Mapping[str, Any],
     plan: Mapping[str, Any],
@@ -373,14 +414,24 @@ def validate_evidence_closure_plan(
     """Validate exact target coverage and source authority for a closure plan."""
 
     _validate_partial(plan, EVIDENCE_CLOSURE_OUTPUTS, "evidence closure plan")
+    validated = deepcopy(dict(plan))
     targets = _pending_evidence_closure_targets(payload)
     expected_ids = [target["explanation_id"] for target in targets]
-    plans = plan["closure_plans"]
+    plans = validated["closure_plans"]
     if len(plans) != len(expected_ids):
         raise ValueError(
             "evidence closure plan must contain exactly one plan per pending target"
         )
     authorized = frozenset(sources)
+    source_reference_candidates: dict[str, set[str]] = {}
+    for identity, path in sources.items():
+        for reference in (identity, str(path), path.name):
+            source_reference_candidates.setdefault(reference, set()).add(identity)
+    source_references = {
+        reference: next(iter(identities))
+        for reference, identities in source_reference_candidates.items()
+        if len(identities) == 1
+    }
     seen: set[str] = set()
     for index, item in enumerate(plans):
         label = f"closure_plans[{index}]"
@@ -430,15 +481,21 @@ def validate_evidence_closure_plan(
                 or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", alias) is None
             ):
                 raise ValueError(f"{label} source alias is invalid")
-            if identity not in authorized:
+            normalized_identity = (
+                source_references.get(identity)
+                if isinstance(identity, str)
+                else None
+            )
+            if normalized_identity not in authorized:
                 raise ValueError(
                     f"{label} must use an authoritative source identity"
                 )
+            declared_sources[alias] = normalized_identity
     if seen != set(expected_ids):
         raise ValueError(
             "evidence closure plan must contain exactly one plan per pending target"
         )
-    return deepcopy(dict(plan))
+    return validated
 
 
 def merge_evidence_closure_plan(
@@ -1052,19 +1109,244 @@ def _without_audit_immutables(value: Any) -> Any:
     return deepcopy(value)
 
 
-def _numeric_text_variants(number: float) -> tuple[str, ...]:
-    number = float(number)
-    variants = {format(number, "g"), format(number, ",g")}
-    if number.is_integer():
-        variants.add(f"{int(number):,}")
-    percentage = number * 100
-    variants.add(f"{percentage:g}%")
-    variants.add(f"{percentage:,g}%")
-    return tuple(sorted(variants, key=len, reverse=True))
+def _contains_exact_numeric_value(text: str, number: float) -> bool:
+    expected = Decimal(str(number))
+    for match in _EXACT_NUMBER.finditer(text):
+        parsed = _parse_numeric_token(match.group(0))
+        if parsed == expected:
+            return True
+    return False
 
 
-def _contains_numeric_value(text: str, number: float) -> bool:
-    return any(variant in text for variant in _numeric_text_variants(number))
+_EXACT_NUMBER = re.compile(
+    r"(?<![\w.,%+-])[+-]?"
+    r"(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)"
+    r"(?:[eE][+-]?\d+)?%?(?![\w,%+-]|\.(?:\d|\.))"
+)
+
+
+def _parse_numeric_token(token: str) -> Decimal | None:
+    is_percentage = token.endswith("%")
+    try:
+        parsed = Decimal(token.rstrip("%").replace(",", ""))
+    except InvalidOperation:
+        return None
+    return parsed / Decimal(100) if is_percentage else parsed
+
+
+def _replace_exact_numeric_value(
+    text: str,
+    expected: float,
+    actual: float,
+) -> str:
+    expected_decimal = Decimal(str(expected))
+    actual_decimal = Decimal(str(actual))
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        is_percentage = token.endswith("%")
+        if _parse_numeric_token(token) != expected_decimal:
+            return token
+        rendered = format(
+            (actual_decimal * Decimal(100) if is_percentage else actual_decimal)
+            .normalize(),
+            "f",
+        )
+        if "," in token:
+            whole, separator, fraction = rendered.partition(".")
+            rendered = f"{int(whole):,}"
+            if separator:
+                rendered += f".{fraction}"
+        return f"{rendered}%" if is_percentage else rendered
+
+    return _EXACT_NUMBER.sub(replace, text)
+
+
+def _reconcile_numeric_prose(value: Any, expected: float, actual: float) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _reconcile_numeric_prose(child, expected, actual)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _reconcile_numeric_prose(child, expected, actual)
+            for child in value
+        ]
+    if isinstance(value, str):
+        return _replace_exact_numeric_value(value, expected, actual)
+    return deepcopy(value)
+
+
+def _validate_numeric_repair_proposal(
+    old: Any,
+    proposed: Any,
+    expected: float,
+    actual: float,
+    path: str = "",
+) -> None:
+    if isinstance(old, Mapping) and isinstance(proposed, Mapping):
+        for key, proposed_child in proposed.items():
+            child_path = f"{path}.{key}" if path else key
+            if key in _AUDIT_IMMUTABLE_KEYS:
+                if key not in old or proposed_child != old[key]:
+                    raise ValueError(
+                        "host audit repair attempted to alter immutable "
+                        f"SQL/source/expression field at {child_path}"
+                    )
+            elif key in old:
+                _validate_numeric_repair_proposal(
+                    old[key], proposed_child, expected, actual, child_path
+                )
+        return
+    if isinstance(old, list) and isinstance(proposed, list):
+        for index, (old_child, proposed_child) in enumerate(zip(old, proposed)):
+            _validate_numeric_repair_proposal(
+                old_child,
+                proposed_child,
+                expected,
+                actual,
+                f"{path}[{index}]",
+            )
+        return
+    if isinstance(old, str) and _contains_exact_numeric_value(old, expected):
+        deterministic = _replace_exact_numeric_value(old, expected, actual)
+        if proposed != deterministic:
+            raise ValueError(
+                "host audit repair did not update numeric explanatory prose at "
+                f"{path}"
+            )
+
+
+def _validate_audit_immutables(old: Any, proposed: Any, path: str = "") -> None:
+    if isinstance(old, Mapping) and isinstance(proposed, Mapping):
+        for key, proposed_child in proposed.items():
+            child_path = f"{path}.{key}" if path else key
+            if key in _AUDIT_IMMUTABLE_KEYS:
+                if key not in old or proposed_child != old[key]:
+                    raise ValueError(
+                        "host audit repair attempted to alter immutable "
+                        f"SQL/source/expression field at {child_path}"
+                    )
+            elif key in old:
+                _validate_audit_immutables(old[key], proposed_child, child_path)
+    elif isinstance(old, list) and isinstance(proposed, list):
+        for index, (old_child, proposed_child) in enumerate(zip(old, proposed)):
+            _validate_audit_immutables(
+                old_child, proposed_child, f"{path}[{index}]"
+            )
+
+
+def _validate_numeric_repair_path(
+    old: Any,
+    proposed: Any,
+    tokens: tuple[str | int, ...],
+    expected: float,
+    actual: float,
+) -> None:
+    if not tokens:
+        _validate_numeric_repair_proposal(old, proposed, expected, actual)
+        return
+    if isinstance(old, Mapping) and isinstance(proposed, Mapping):
+        old_expected = old.get("expected_value")
+        if (
+            type(old_expected) in {int, float}
+            and math.isclose(
+                float(old_expected), expected, rel_tol=1e-12, abs_tol=1e-12
+            )
+        ):
+            for key, old_child in old.items():
+                if isinstance(old_child, str) and key in proposed:
+                    _validate_numeric_repair_proposal(
+                        old_child, proposed[key], expected, actual, key
+                    )
+        token = tokens[0]
+        if token in old and token in proposed:
+            _validate_numeric_repair_path(
+                old[token], proposed[token], tokens[1:], expected, actual
+            )
+    elif isinstance(old, list) and isinstance(proposed, list):
+        token = tokens[0]
+        if isinstance(token, int) and 0 <= token < len(old) and token < len(proposed):
+            _validate_numeric_repair_path(
+                old[token], proposed[token], tokens[1:], expected, actual
+            )
+
+
+def _reconcile_numeric_repair_path(
+    old: Any,
+    tokens: tuple[str | int, ...],
+    expected: float,
+    actual: float,
+) -> Any:
+    if not tokens:
+        return _reconcile_numeric_prose(old, expected, actual)
+    merged = deepcopy(old)
+    if isinstance(old, Mapping) and isinstance(merged, dict):
+        old_expected = old.get("expected_value")
+        if (
+            type(old_expected) in {int, float}
+            and math.isclose(
+                float(old_expected), expected, rel_tol=1e-12, abs_tol=1e-12
+            )
+        ):
+            for key, child in old.items():
+                if isinstance(child, str):
+                    merged[key] = _replace_exact_numeric_value(
+                        child, expected, actual
+                    )
+        token = tokens[0]
+        if token in old:
+            merged[token] = _reconcile_numeric_repair_path(
+                old[token], tokens[1:], expected, actual
+            )
+    elif isinstance(old, list) and isinstance(merged, list):
+        token = tokens[0]
+        if isinstance(token, int) and 0 <= token < len(old):
+            merged[token] = _reconcile_numeric_repair_path(
+                old[token], tokens[1:], expected, actual
+            )
+    return merged
+
+
+def _derived_metric_value(metric_spec: Mapping[str, Any]) -> float | None:
+    metric_type = metric_spec.get("type")
+    components = metric_spec.get("components")
+    if (
+        metric_type not in {"delta", "rate", "share", "rate_of_change"}
+        or not isinstance(components, list)
+    ):
+        return None
+    role_values: dict[str, float] = {}
+    for component in components:
+        if not isinstance(component, Mapping):
+            return None
+        role = component.get("role")
+        expected_value = component.get("expected_value")
+        if (
+            not isinstance(role, str)
+            or type(expected_value) not in {int, float}
+            or not math.isfinite(expected_value)
+            or role in role_values
+        ):
+            return None
+        role_values[role] = float(expected_value)
+    if metric_type == "delta" and set(role_values) == {"current", "comparison"}:
+        return role_values["current"] - role_values["comparison"]
+    if (
+        metric_type in {"rate", "share"}
+        and set(role_values) == {"numerator", "denominator"}
+        and role_values["denominator"] != 0
+    ):
+        return role_values["numerator"] / role_values["denominator"]
+    if (
+        metric_type == "rate_of_change"
+        and set(role_values) == {"current", "comparison"}
+        and role_values["comparison"] != 0
+    ):
+        return (
+            role_values["current"] - role_values["comparison"]
+        ) / abs(role_values["comparison"])
+    return None
 
 
 def _audit_target(
@@ -1102,7 +1384,7 @@ def _audit_target(
         statement = insight_list[insight_index].get("statement")
         if (
             isinstance(statement, str)
-            and _contains_numeric_value(statement, mismatch.expected)
+            and _contains_exact_numeric_value(statement, mismatch.expected)
         ):
             return (
                 insight_index,
@@ -1310,29 +1592,6 @@ def _verification_values(value: Any, path: str = "") -> dict[str, Any]:
     return values
 
 
-def _overlay_preserving_audit_immutables(
-    old: Mapping[str, Any], proposed: Mapping[str, Any], path: str = ""
-) -> dict[str, Any]:
-    merged = deepcopy(dict(old))
-    for key, value in proposed.items():
-        key_path = f"{path}.{key}" if path else key
-        if key in _AUDIT_IMMUTABLE_KEYS:
-            if key not in old or value != old[key]:
-                raise ValueError(
-                    "host audit repair attempted to alter immutable "
-                    f"SQL/source/expression field at {key_path}"
-                )
-            continue
-        old_value = old.get(key)
-        if isinstance(old_value, Mapping) and isinstance(value, Mapping):
-            merged[key] = _overlay_preserving_audit_immutables(
-                old_value, value, key_path
-            )
-        else:
-            merged[key] = deepcopy(value)
-    return merged
-
-
 def _validate_updated_numeric_prose(
     old: Any,
     repaired: Any,
@@ -1357,11 +1616,11 @@ def _validate_updated_numeric_prose(
             )
     elif (
         isinstance(old, str)
-        and _contains_numeric_value(old, mismatch.expected)
+        and _contains_exact_numeric_value(old, mismatch.expected)
         and (
             not isinstance(repaired, str)
-            or _contains_numeric_value(repaired, mismatch.expected)
-            or not _contains_numeric_value(repaired, mismatch.actual)
+            or _contains_exact_numeric_value(repaired, mismatch.expected)
+            or not _contains_exact_numeric_value(repaired, mismatch.actual)
         )
     ):
         raise ValueError(
@@ -1388,6 +1647,9 @@ def merge_host_candidate_audit_repair(
     proposed = repair["rejection_component"]
     if not isinstance(proposed, Mapping):
         raise ValueError("host audit repair rejection_component must be dict")
+    _validate_numeric_repair_proposal(
+        old_component, proposed, mismatch.expected, mismatch.actual
+    )
     old_expected = _expected_values(old_component)
     if not any(
         math.isclose(value, mismatch.expected, rel_tol=1e-12, abs_tol=1e-12)
@@ -1396,7 +1658,10 @@ def merge_host_candidate_audit_repair(
         raise ValueError(
             f"host audit expected value is absent from target: {mismatch.path}"
         )
-    component = _overlay_preserving_audit_immutables(old_component, proposed)
+    component = _reconcile_numeric_prose(
+        old_component, mismatch.expected, mismatch.actual
+    )
+    component["expected_value"] = mismatch.actual
     repaired_expected = _expected_values(component)
     if not repaired_expected or any(
         not math.isclose(value, mismatch.actual, rel_tol=1e-12, abs_tol=1e-12)
@@ -1452,6 +1717,26 @@ def merge_host_audit_repair(
     candidate = repair[output_name]
     if not isinstance(candidate, Mapping):
         raise ValueError(f"host audit repair {output_name} must be dict")
+    relative_tokens = _path_tokens(
+        re.sub(r"^insights\[\d+\]", "insights[0]", mismatch.path)
+    )[2:]
+    if relative_tokens[: len(target_tokens)] != target_tokens:
+        raise ValueError(f"host audit target is inconsistent: {mismatch.path}")
+    audited_tokens = relative_tokens[len(target_tokens):]
+    try:
+        _validate_audit_immutables(old_leaf, candidate)
+        _validate_numeric_repair_path(
+            old_leaf,
+            candidate,
+            audited_tokens,
+            mismatch.expected,
+            mismatch.actual,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "host audit repair did not reconcile every expected_value with "
+            f"authoritative actual {mismatch.actual:g}"
+        ) from exc
     old_expected = _expected_values(old_leaf)
     if not any(
         math.isclose(value, mismatch.expected, rel_tol=1e-12, abs_tol=1e-12)
@@ -1460,12 +1745,40 @@ def merge_host_audit_repair(
         raise ValueError(
             f"host audit expected value is absent from target: {mismatch.path}"
         )
-    candidate_expected = _expected_values(candidate)
-    if not candidate_expected or any(
+    candidate = _reconcile_numeric_repair_path(
+        old_leaf, audited_tokens, mismatch.expected, mismatch.actual
+    )
+    audited_leaf = (
+        _resolve_path(candidate, audited_tokens)
+        if audited_tokens
+        else candidate
+    )
+    if not isinstance(audited_leaf, dict) or "expected_value" not in audited_leaf:
+        raise ValueError(
+            f"host audit target has no expected_value: {mismatch.path}"
+        )
+    audited_leaf["expected_value"] = mismatch.actual
+    for depth in range(len(audited_tokens)):
+        ancestor = _resolve_path(candidate, audited_tokens[:depth])
+        old_ancestor = _resolve_path(old_leaf, audited_tokens[:depth])
+        if (
+            isinstance(ancestor, dict)
+            and isinstance(old_ancestor, Mapping)
+            and type(old_ancestor.get("expected_value")) in {int, float}
+            and math.isclose(
+                float(old_ancestor["expected_value"]),
+                mismatch.expected,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+        ):
+            ancestor["expected_value"] = mismatch.actual
+    audited_expected = _expected_values(audited_leaf)
+    if not audited_expected or any(
         not math.isclose(
             value, mismatch.actual, rel_tol=1e-12, abs_tol=1e-12
         )
-        for value in candidate_expected
+        for value in audited_expected
     ):
         raise ValueError(
             "host audit repair did not reconcile every expected_value with "
@@ -1475,7 +1788,49 @@ def merge_host_audit_repair(
     candidate_verifications = _verification_values(candidate)
     if candidate_verifications and candidate_verifications != old_verifications:
         raise ValueError("host audit repair attempted to modify verification or SQL")
-    candidate = deepcopy(candidate)
+    try:
+        _validate_numeric_repair_path(
+            old_leaf,
+            candidate,
+            audited_tokens,
+            mismatch.expected,
+            mismatch.actual,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "host audit repair did not reconcile every expected_value with "
+            f"authoritative actual {mismatch.actual:g}"
+        ) from exc
+    candidate_metric = (
+        candidate
+        if target_tokens == ("metric_spec",)
+        else candidate.get("metric_spec")
+    )
+    old_metric = (
+        old_leaf
+        if target_tokens == ("metric_spec",)
+        else old_leaf.get("metric_spec")
+        if isinstance(old_leaf, Mapping)
+        else None
+    )
+    if isinstance(candidate_metric, dict) and isinstance(old_metric, Mapping):
+        derived_value = _derived_metric_value(candidate_metric)
+        old_derived_value = old_metric.get("expected_value")
+        if (
+            derived_value is not None
+            and type(old_derived_value) in {int, float}
+        ):
+            candidate_metric["expected_value"] = derived_value
+            if "expected_value" in candidate:
+                candidate["expected_value"] = derived_value
+            for prose_key in ("claim", "statement"):
+                prose = candidate.get(prose_key)
+                if isinstance(prose, str):
+                    candidate[prose_key] = _replace_exact_numeric_value(
+                        prose,
+                        float(old_derived_value),
+                        derived_value,
+                    )
     if (
         len(target_tokens) >= 3
         and target_tokens[0] == "diagnostic_assessment"
@@ -1517,11 +1872,32 @@ def merge_host_audit_repair(
         if not isinstance(statement, str):
             raise ValueError("host audit repair statement must be str")
         old_statement = current_insight.get("statement")
+        if isinstance(old_statement, str):
+            deterministic_statement = _replace_exact_numeric_value(
+                old_statement, mismatch.expected, mismatch.actual
+            )
+            if statement != deterministic_statement and not any(
+                _contains_exact_numeric_value(
+                    statement,
+                    round(mismatch.actual, digits),
+                )
+                for digits in range(7)
+            ):
+                raise ValueError(
+                    "host audit repair statement did not replace the old primary "
+                    "value with the authoritative actual"
+                )
+            statement = _replace_exact_numeric_value(
+                old_statement, mismatch.expected, mismatch.actual
+            )
         if (
             not isinstance(old_statement, str)
-            or not _contains_numeric_value(old_statement, mismatch.expected)
-            or _contains_numeric_value(statement, mismatch.expected)
-            or not _contains_numeric_value(statement, mismatch.actual)
+            or not _contains_exact_numeric_value(
+                old_statement,
+                mismatch.expected,
+            )
+            or _contains_exact_numeric_value(statement, mismatch.expected)
+            or not _contains_exact_numeric_value(statement, mismatch.actual)
         ):
             raise ValueError(
                 "host audit repair statement did not replace the old primary "
@@ -1593,6 +1969,45 @@ def merge_targeted_insight_repair(
         current_explanations[index] = deepcopy(repaired_explanations[index])
         return merged
 
+    component_match = re.search(
+        r"\bmetric component ['\"]([^'\"]+)['\"]",
+        str(verifier_error),
+        flags=re.IGNORECASE,
+    )
+    if component_match is not None:
+        component_name = component_match.group(1)
+        current_metric = merged.get("metric_spec")
+        repaired_metric = repaired_insight.get("metric_spec")
+        current_components = (
+            current_metric.get("components")
+            if isinstance(current_metric, dict)
+            else None
+        )
+        repaired_components = (
+            repaired_metric.get("components")
+            if isinstance(repaired_metric, Mapping)
+            else None
+        )
+        current_matches = [
+            index
+            for index, component in enumerate(current_components or ())
+            if isinstance(component, Mapping)
+            and component.get("name") == component_name
+        ]
+        repaired_matches = [
+            component
+            for component in repaired_components or ()
+            if isinstance(component, Mapping)
+            and component.get("name") == component_name
+        ]
+        if len(current_matches) != 1 or len(repaired_matches) != 1:
+            raise ValueError(
+                "targeted insight repair did not return the addressed "
+                f"metric component {component_name!r}"
+            )
+        current_components[current_matches[0]] = deepcopy(repaired_matches[0])
+        return merged
+
     if re.search(r"\bmetric_spec\b", str(verifier_error), flags=re.IGNORECASE):
         metric_spec = repaired_insight.get("metric_spec")
         if not isinstance(metric_spec, Mapping):
@@ -1632,6 +2047,40 @@ def build_targeted_insight_repair_prompt(
     source_identities = json.dumps(
         list(sources), separators=(",", ":"), ensure_ascii=False
     )
+    interaction_guidance = ""
+    if re.search(r"\binteraction\b", str(verifier_error), flags=re.IGNORECASE):
+        interaction_guidance = """\
+
+INTERACTION REPAIR REQUIREMENTS
+- If pattern_type remains interaction, discovery.interaction_evidence must be
+  an object containing cells, heterogeneity, and baseline_effect.
+- cells must contain at least two objects. Each cell requires a non-empty cell
+  label, a numeric effect measured on the same scale, and a positive integer
+  sample_size. At least two cell effects must differ.
+- heterogeneity must explain the measured difference between cell effects.
+- baseline_effect must be the numeric reference effect used for comparison.
+- Use only verified values already present or measured from the authoritative
+  sources. If valid heterogeneity evidence is unavailable, change pattern_type
+  to the closest accurate non-interaction type and remove interaction claims.
+"""
+    metric_guidance = ""
+    component_match = re.search(
+        r"\bmetric component ['\"]([^'\"]+)['\"]",
+        str(verifier_error),
+        flags=re.IGNORECASE,
+    )
+    if component_match is not None:
+        component_name = component_match.group(1)
+        metric_guidance = f"""\
+
+METRIC COMPONENT REPAIR REQUIREMENTS
+- Repair the metric_spec component named {component_name!r}.
+- Its verification expression must recompute metric_value from a declared
+  source rather than returning the literal expected value.
+- Project metric_value from one source column or one aggregate. Represent
+  ratios and other derived metrics through separately verified components.
+- Preserve every other valid metric component and metric_spec field.
+"""
     return f"""\
 Repair one deep_insight_discovery contract v2 insight. Return exactly one
 native insight: dict and SUBMIT immediately.
@@ -1647,6 +2096,8 @@ CURRENT INSIGHT
 
 EXACT PORTABLE VERIFIER ERROR
 {verifier_error}
+{interaction_guidance}
+{metric_guidance}
 
 RULES
 - Make only the minimum correction required by the exact error.
@@ -1772,6 +2223,7 @@ def classify_repair_target(error: str) -> str:
         "kpi_map",
         "dimensions_available",
         "dimensions_deferred",
+        "deferred dimension",
     )
     if any(marker in lowered for marker in scaffold_markers):
         return "scaffold"
@@ -1959,14 +2411,20 @@ def normalize_mechanical_contract(
 
     if isinstance(source_names, (str, bytes)):
         raise ValueError("source_names must be a finite collection of identifiers")
-    source_paths: dict[str, str | None] = {}
+    source_path_candidates: dict[str, set[str]] = {}
     if isinstance(source_names, Mapping):
         for identity, raw_path in source_names.items():
             if isinstance(raw_path, (str, Path)):
-                path_text = str(raw_path)
-                source_paths[path_text] = (
-                    identity if path_text not in source_paths else None
-                )
+                path = Path(raw_path)
+                for reference in (str(raw_path), path.name):
+                    source_path_candidates.setdefault(reference, set()).add(
+                        identity
+                    )
+    source_paths = {
+        reference: next(iter(identities))
+        for reference, identities in source_path_candidates.items()
+        if len(identities) == 1
+    }
     try:
         supplied_names = tuple(source_names)
     except TypeError as exc:
@@ -2250,15 +2708,42 @@ def normalize_mechanical_contract(
     return normalized, tuple(changes)
 
 
+def _insights_contract_version(insights: Mapping[str, Any]) -> int:
+    for insight in insights.get("insights", ()):
+        if not isinstance(insight, Mapping):
+            continue
+        assessment = insight.get("diagnostic_assessment")
+        explanations = (
+            assessment.get("explanations")
+            if isinstance(assessment, Mapping)
+            else ()
+        )
+        for explanation in explanations:
+            if (
+                isinstance(explanation, Mapping)
+                and (
+                    "closure_status" in explanation
+                    or explanation.get("disposition") == "supported"
+                )
+            ):
+                return 3
+    return 2
+
+
 def assemble_contract(
-    scaffold: Mapping[str, Any], insights: Mapping[str, Any]
+    scaffold: Mapping[str, Any],
+    insights: Mapping[str, Any],
+    *,
+    contract_version: int = 2,
 ) -> dict[str, Any]:
-    """Assemble detached, strictly shaped partial outputs into contract v2."""
+    """Assemble detached, strictly shaped partial outputs into a contract."""
 
     _validate_partial(scaffold, SCAFFOLD_OUTPUTS, "contract scaffold")
     _validate_partial(insights, INSIGHT_OUTPUTS, "insights partial")
+    if type(contract_version) is not int or contract_version not in {2, 3}:
+        raise ValueError("contract_version must be 2 or 3")
     return {
-        "contract_version": 2,
+        "contract_version": contract_version,
         "analysis_plan": deepcopy(scaffold["analysis_plan"]),
         "candidates": deepcopy(scaffold["candidates"]),
         "insights": deepcopy(insights["insights"]),
@@ -2346,6 +2831,8 @@ def run_evidence_closure(
     max_turns: int,
     timeout: float,
     checkpoint_path: str | Path | None = None,
+    deferred_audit_error_type: type[Exception] | None = None,
+    max_plan_repairs: int = 3,
 ) -> dict[str, Any]:
     """Plan, verify, execute, and persist one bounded evidence-closure pass."""
 
@@ -2362,6 +2849,10 @@ def run_evidence_closure(
         }
     if type(max_turns) is not int or max_turns <= 0:
         raise ValueError("evidence closure max_turns must be a positive integer")
+    if type(max_plan_repairs) is not int or max_plan_repairs < 0:
+        raise ValueError(
+            "evidence closure max_plan_repairs must be a non-negative integer"
+        )
     if (
         not isinstance(timeout, (int, float))
         or not math.isfinite(timeout)
@@ -2411,14 +2902,68 @@ def run_evidence_closure(
     else:
         summary = {"cached": True, "submitted": True, "turns": 0}
 
-    validated = validate_evidence_closure_plan(payload, plan, sources)
-    closed_payload = merge_evidence_closure_plan(payload, validated, sources)
-    closed_payload, _ = normalize_mechanical_contract(closed_payload, sources)
-    verify_function(closed_payload)
+    plan_repairs = 0
+    while True:
+        try:
+            validated = validate_evidence_closure_plan(payload, plan, sources)
+            closed_payload = merge_evidence_closure_plan(
+                payload,
+                validated,
+                sources,
+            )
+            closed_payload, _ = normalize_mechanical_contract(
+                closed_payload,
+                sources,
+            )
+            verify_function(closed_payload)
+            break
+        except (AssertionError, ValueError) as exc:
+            if plan_repairs >= max_plan_repairs:
+                raise ValueError(
+                    "evidence closure plan remained invalid after "
+                    f"{plan_repairs} repair attempts: {exc}"
+                ) from exc
+            plan_repairs += 1
+            repair_rlm = rlm_type.from_task(
+                task=build_evidence_closure_repair_prompt(
+                    sources,
+                    payload,
+                    plan,
+                    str(exc),
+                ),
+                outputs=EVIDENCE_CLOSURE_OUTPUTS,
+                lm=lm,
+                skills=list(SYNTHESIS_SKILLS),
+                enable_verifier=False,
+                block_network=True,
+                engine="default",
+                max_turns=max_turns,
+                reserve_finalize_turns=min(3, max_turns),
+                timeout=timeout,
+                verbose=False,
+            )
+            repair_result = repair_rlm.run()
+            plan = _extract_partial(
+                repair_result,
+                EVIDENCE_CLOSURE_OUTPUTS,
+                "evidence closure repair",
+            )
+    if plan_repairs:
+        summary["plan_repairs"] = plan_repairs
+    audit = None
     with executor_type(sources) as executor:
-        audit = audit_function(closed_payload, executor)
-    if checkpoint is not None and not cached:
-        _write_synthesis_checkpoint(checkpoint, fingerprint, validated)
+        try:
+            audit = audit_function(closed_payload, executor)
+        except Exception as exc:
+            if (
+                deferred_audit_error_type is None
+                or not isinstance(exc, deferred_audit_error_type)
+                or parse_host_audit_mismatch(str(exc)) is None
+            ):
+                raise
+    if checkpoint is not None and (not cached or plan_repairs):
+        if audit is not None:
+            _write_synthesis_checkpoint(checkpoint, fingerprint, validated)
     return {
         "payload": closed_payload,
         "audit": audit,
@@ -2794,7 +3339,11 @@ def run_staged_benchmark(
         insight_result = insight_rlm.run()
         insights = _extract_partial(insight_result, INSIGHT_OUTPUTS, "insights")
         insights_summary = summarize_trajectory(insight_result.trajectory)
-    payload = assemble_contract(scaffold, insights)
+    payload = assemble_contract(
+        scaffold,
+        insights,
+        contract_version=_insights_contract_version(insights),
+    )
     payload, initial_changes = normalize_mechanical_contract(payload, sources)
     mechanical_changes.extend(initial_changes)
     normalized_insights = {"insights": deepcopy(payload["insights"])}
@@ -2911,7 +3460,11 @@ def run_staged_benchmark(
                             )
                         )
                     insights = {"insights": updated_insights}
-                    payload = assemble_contract(scaffold, insights)
+                    payload = assemble_contract(
+                        scaffold,
+                        insights,
+                        contract_version=int(payload.get("contract_version", 2)),
+                    )
                     payload, changes = normalize_mechanical_contract(
                         payload, sources
                     )
@@ -2963,7 +3516,11 @@ def run_staged_benchmark(
                 insights = _extract_partial(
                     repair_result, INSIGHT_OUTPUTS, "insight repair"
                 )
-                payload = assemble_contract(scaffold, insights)
+                payload = assemble_contract(
+                    scaffold,
+                    insights,
+                    contract_version=int(payload.get("contract_version", 2)),
+                )
                 payload, changes = normalize_mechanical_contract(payload, sources)
                 mechanical_changes.extend(changes)
                 insights = {"insights": deepcopy(payload["insights"])}
@@ -3035,7 +3592,11 @@ def run_staged_benchmark(
                 INSIGHT_OUTPUTS,
                 "dependent insight regeneration",
             )
-            payload = assemble_contract(scaffold, insights)
+            payload = assemble_contract(
+                scaffold,
+                insights,
+                contract_version=int(payload.get("contract_version", 2)),
+            )
             payload, changes = normalize_mechanical_contract(payload, sources)
             mechanical_changes.extend(changes)
             insights = {"insights": deepcopy(payload["insights"])}
@@ -3077,6 +3638,7 @@ def run_staged_benchmark(
             max_turns=closure_turns,
             timeout=timeout,
             checkpoint_path=closure_cache_path,
+            deferred_audit_error_type=DeepInsightAuditError,
         )
         payload = closure_record["payload"]
         insights = {"insights": deepcopy(payload["insights"])}
@@ -3160,7 +3722,9 @@ def run_staged_benchmark(
                 )
                 candidate_insights = {"insights": updated_insights}
             candidate_payload = assemble_contract(
-                candidate_scaffold, candidate_insights
+                candidate_scaffold,
+                candidate_insights,
+                contract_version=int(payload.get("contract_version", 2)),
             )
             candidate_payload, changes = normalize_mechanical_contract(
                 candidate_payload, sources

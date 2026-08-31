@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
@@ -234,6 +235,8 @@ def test_evidence_closure_prompt_targets_only_measurable_unresolved_explanations
     assert "personal identifiers" in lowered
     assert "free-text" in lowered
     assert "exactly one" in lowered
+    assert "one source column or one aggregate" in lowered
+    assert "do not divide or combine aggregates" in lowered
 
 
 def test_validate_evidence_closure_plan_accepts_exact_bounded_targets(
@@ -259,6 +262,38 @@ def test_validate_evidence_closure_plan_accepts_exact_bounded_targets(
     }
 
     assert bench.validate_evidence_closure_plan(payload, plan, sources) == plan
+
+
+def test_validate_evidence_closure_plan_normalizes_exact_authorized_filename(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    sources = {"facts": tmp_path / "facts.csv"}
+    payload = _closure_ready_payload()
+    plan = {
+        "closure_plans": [
+            {
+                "explanation_id": "insight-1-explanation-1",
+                "required_check": "Compare exposure-normalized group rates.",
+                "disposition": "weakened",
+                "expected_value": 0.04,
+                "verification": {
+                    "method": "sql",
+                    "expression": "SELECT AVG(exposure_rate) FROM facts",
+                    "sources": {"f": "facts.csv"},
+                },
+            }
+        ]
+    }
+
+    validated = bench.validate_evidence_closure_plan(payload, plan, sources)
+
+    assert validated["closure_plans"][0]["verification"]["sources"] == {
+        "f": "facts"
+    }
+    assert plan["closure_plans"][0]["verification"]["sources"] == {
+        "f": "facts.csv"
+    }
 
 
 @pytest.mark.parametrize(
@@ -527,6 +562,289 @@ def test_run_evidence_closure_verifies_and_audits_before_checkpoint(
         "turns": 2,
     }
     assert checkpoint.is_file()
+
+
+def test_run_evidence_closure_defers_numeric_audit_mismatch_to_outer_repair(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    payload = _closure_ready_payload()
+    sources = {"facts": tmp_path / "facts.csv"}
+    checkpoint = tmp_path / "closure.checkpoint.json"
+    plan = {
+        "closure_plans": [
+            {
+                "explanation_id": "insight-1-explanation-1",
+                "required_check": "Compare exposure-normalized group rates.",
+                "disposition": "weakened",
+                "expected_value": 0.04,
+                "verification": {
+                    "method": "sql",
+                    "expression": "SELECT AVG(exposure_rate) FROM facts",
+                    "sources": {"f": "facts"},
+                },
+            }
+        ]
+    }
+
+    class NumericAuditError(Exception):
+        pass
+
+    class Result:
+        payload = plan
+        trajectory = "closure-trajectory"
+
+    class RLM:
+        @classmethod
+        def from_task(cls, **kwargs):
+            return type("Runner", (), {"run": lambda self: Result()})()
+
+    class Executor:
+        def __init__(self, actual_sources):
+            assert actual_sources == sources
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    def audit(actual, executor):
+        raise NumericAuditError(
+            "insights[0].metric_spec.components[0]: expected 1, actual 2"
+        )
+
+    record = bench.run_evidence_closure(
+        payload,
+        sources,
+        lm=object(),
+        rlm_type=RLM,
+        executor_type=Executor,
+        audit_function=audit,
+        summarize_trajectory=lambda value: {"turns": 2},
+        verify_function=lambda actual: None,
+        max_turns=5,
+        timeout=60,
+        checkpoint_path=checkpoint,
+        deferred_audit_error_type=NumericAuditError,
+    )
+
+    assert record["payload"]["contract_version"] == 3
+    assert record["audit"] is None
+    assert not checkpoint.exists()
+
+
+def test_run_evidence_closure_repairs_invalid_plan_before_execution(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    payload = _closure_ready_payload()
+    sources = {"facts": tmp_path / "facts.csv"}
+    valid_item = {
+        "explanation_id": "insight-1-explanation-1",
+        "required_check": "Compare exposure-normalized group rates.",
+        "disposition": "weakened",
+        "expected_value": 0.04,
+        "verification": {
+            "method": "sql",
+            "expression": "SELECT AVG(exposure_rate) FROM facts",
+            "sources": {"f": "facts"},
+        },
+    }
+    results = [
+        {
+            "closure_plans": [
+                {**valid_item, "unsupported": "remove this field"}
+            ]
+        },
+        {"closure_plans": [valid_item]},
+    ]
+    tasks = []
+
+    class RLM:
+        @classmethod
+        def from_task(cls, **kwargs):
+            tasks.append(kwargs["task"])
+            result = type(
+                "Result",
+                (),
+                {"payload": results.pop(0), "trajectory": f"turn-{len(tasks)}"},
+            )()
+            return type("Runner", (), {"run": lambda self: result})()
+
+    class Executor:
+        def __init__(self, actual_sources):
+            assert actual_sources == sources
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    record = bench.run_evidence_closure(
+        payload,
+        sources,
+        lm=object(),
+        rlm_type=RLM,
+        executor_type=Executor,
+        audit_function=lambda actual, executor: FakeAudit(()),
+        summarize_trajectory=lambda value: {"trajectory": value},
+        verify_function=lambda actual: None,
+        max_turns=5,
+        timeout=60,
+        max_plan_repairs=1,
+    )
+
+    assert len(tasks) == 2
+    assert "unsupported fields" in tasks[1]
+    assert "CURRENT INVALID CLOSURE PLAN" in tasks[1]
+    assert record["summary"]["plan_repairs"] == 1
+
+
+def test_run_evidence_closure_persists_repaired_cached_plan(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    payload = _closure_ready_payload()
+    sources = {"facts": tmp_path / "facts.csv"}
+    checkpoint = tmp_path / "closure.checkpoint.json"
+    valid_item = {
+        "explanation_id": "insight-1-explanation-1",
+        "required_check": "Compare exposure-normalized group rates.",
+        "disposition": "weakened",
+        "expected_value": 0.04,
+        "verification": {
+            "method": "sql",
+            "expression": "SELECT AVG(exposure_rate) FROM facts",
+            "sources": {"f": "facts"},
+        },
+    }
+    invalid_plan = {
+        "closure_plans": [{**valid_item, "unsupported": "remove this field"}]
+    }
+    valid_plan = {"closure_plans": [valid_item]}
+    fingerprint = bench._input_fingerprint(
+        payload,
+        {"sources": {name: str(path) for name, path in sources.items()}},
+    )
+    bench._write_synthesis_checkpoint(checkpoint, fingerprint, invalid_plan)
+    calls = 0
+
+    class RLM:
+        @classmethod
+        def from_task(cls, **kwargs):
+            nonlocal calls
+            calls += 1
+            result = type(
+                "Result",
+                (),
+                {"payload": valid_plan, "trajectory": "repair"},
+            )()
+            return type("Runner", (), {"run": lambda self: result})()
+
+    class Executor:
+        def __init__(self, actual_sources):
+            assert actual_sources == sources
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    kwargs = {
+        "payload": payload,
+        "sources": sources,
+        "lm": object(),
+        "rlm_type": RLM,
+        "executor_type": Executor,
+        "audit_function": lambda actual, executor: FakeAudit(()),
+        "summarize_trajectory": lambda value: {},
+        "verify_function": lambda actual: None,
+        "max_turns": 5,
+        "timeout": 60,
+        "checkpoint_path": checkpoint,
+        "max_plan_repairs": 1,
+    }
+
+    bench.run_evidence_closure(**kwargs)
+    bench.run_evidence_closure(**kwargs)
+
+    assert calls == 1
+    assert json.loads(checkpoint.read_text(encoding="utf-8"))["partial"] == valid_plan
+
+
+def test_run_evidence_closure_repairs_plan_rejected_by_portable_verifier(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    payload = _closure_ready_payload()
+    sources = {"facts": tmp_path / "facts.csv"}
+    base_item = {
+        "explanation_id": "insight-1-explanation-1",
+        "required_check": "Compare exposure-normalized group rates.",
+        "disposition": "weakened",
+        "expected_value": 0.04,
+        "verification": {
+            "method": "sql",
+            "expression": "SELECT SUM(a) / SUM(b) AS metric_value FROM facts",
+            "sources": {"f": "facts"},
+        },
+    }
+    repaired_item = deepcopy(base_item)
+    repaired_item["verification"]["expression"] = (
+        "SELECT AVG(exposure_rate) AS metric_value FROM facts"
+    )
+    results = [
+        {"closure_plans": [base_item]},
+        {"closure_plans": [repaired_item]},
+    ]
+
+    class RLM:
+        @classmethod
+        def from_task(cls, **kwargs):
+            result = type(
+                "Result",
+                (),
+                {"payload": results.pop(0), "trajectory": "closure"},
+            )()
+            return type("Runner", (), {"run": lambda self: result})()
+
+    class Executor:
+        def __init__(self, actual_sources):
+            assert actual_sources == sources
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    def verify(actual):
+        expression = actual["insights"][0]["diagnostic_assessment"][
+            "explanations"
+        ][0]["verification"]["expression"]
+        assert " / " not in expression, (
+            "diagnostic verification must use one aggregate"
+        )
+
+    record = bench.run_evidence_closure(
+        payload,
+        sources,
+        lm=object(),
+        rlm_type=RLM,
+        executor_type=Executor,
+        audit_function=lambda actual, executor: FakeAudit(()),
+        summarize_trajectory=lambda value: {},
+        verify_function=verify,
+        max_turns=5,
+        timeout=60,
+        max_plan_repairs=1,
+    )
+
+    assert record["summary"]["plan_repairs"] == 1
+    assert not results
 
 
 def test_run_evidence_closure_skips_model_and_migration_without_targets(
@@ -1083,6 +1401,78 @@ def test_assemble_contract_is_strict_detached_and_does_not_mutate_inputs() -> No
     assert insights == original_insights
 
 
+def test_assemble_contract_preserves_explicit_closure_contract_version() -> None:
+    bench = load_module()
+
+    payload = bench.assemble_contract(
+        {"analysis_plan": {}, "candidates": []},
+        {"insights": []},
+        contract_version=3,
+    )
+
+    assert payload["contract_version"] == 3
+
+
+def test_cached_closed_insights_remain_contract_v3_on_next_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bench = load_module()
+    data_dir = tmp_path / "olist"
+    make_bundle(data_dir)
+    research = valid_research()
+    scaffold = {"analysis_plan": {}, "candidates": []}
+    insights = {
+        "insights": [
+            {
+                "diagnostic_assessment": {
+                    "explanations": [
+                        {
+                            "closure_status": "supported",
+                            "disposition": "supported",
+                            "expected_value": 1,
+                            "explanation": "Measured alternative.",
+                            "explanation_id": "insight-1-explanation-1",
+                            "measurable": True,
+                            "required_check": "Measure the alternative.",
+                            "verification": {
+                                "method": "sql",
+                                "expression": "SELECT COUNT(*) AS metric_value FROM orders",
+                                "sources": {"orders": "orders"},
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    caches = write_all_caches(tmp_path, research, scaffold, insights)
+    calls = install_synthesis_fakes(bench, monkeypatch, [])
+
+    first = bench.run_staged_benchmark(
+        data_dir,
+        enable_evidence_closure=True,
+        research_cache_path=caches[0],
+        scaffold_cache_path=caches[1],
+        insights_cache_path=caches[2],
+        max_insight_repairs=0,
+        max_scaffold_repairs=0,
+    )
+    second = bench.run_staged_benchmark(
+        data_dir,
+        enable_evidence_closure=True,
+        research_cache_path=caches[0],
+        scaffold_cache_path=caches[1],
+        insights_cache_path=caches[2],
+        max_insight_repairs=0,
+        max_scaffold_repairs=0,
+    )
+
+    assert first["payload"]["contract_version"] == 3
+    assert second["payload"]["contract_version"] == 3
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     ("scaffold", "insights", "match"),
     [
@@ -1520,6 +1910,28 @@ def test_mechanical_normalizer_rewrites_exact_authorized_paths_to_identities(
     assert changes == ("$.verification.sources.orders",)
 
 
+def test_mechanical_normalizer_rewrites_unique_authorized_filenames_to_identities(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    payload = {
+        "verification": {
+            "method": "sql",
+            "expression": "SELECT SUM(amount) AS metric_value FROM sales",
+            "sources": {"sales": "sales.csv"},
+        }
+    }
+
+    normalized, changes = bench.normalize_mechanical_contract(
+        payload,
+        {"sales": tmp_path / "sales.csv"},
+    )
+
+    assert normalized["verification"]["sources"] == {"sales": "sales"}
+    assert changes == ("$.verification.sources.sales",)
+    assert payload["verification"]["sources"] == {"sales": "sales.csv"}
+
+
 def test_mechanical_normalizer_supports_only_exact_authorized_qualification() -> None:
     bench = load_module()
     payload = {
@@ -1583,6 +1995,38 @@ def test_portable_verifier_wraps_only_assertions_and_preserves_cause(
     Skill.verifier_source = "def verify(payload):\n    raise RuntimeError('boom')\n"
     with pytest.raises(RuntimeError, match="boom"):
         bench.verify_portable_contract({"ok": True})
+
+
+def test_portable_verifier_treats_double_quoted_sql_columns_as_source_data() -> None:
+    bench = load_module()
+    loader_type = bench._load_skill_loader()
+    source = loader_type().load("deep_insight_discovery").verifier_source
+    tree = ast.parse(source)
+    verify = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "verify"
+    )
+    helpers = [
+        deepcopy(node)
+        for node in verify.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"constant_expression", "simple_source_metric"}
+    ]
+    module = ast.fix_missing_locations(
+        ast.Module(
+            body=[ast.Import(names=[ast.alias(name="re")]), *helpers],
+            type_ignores=[],
+        )
+    )
+    namespace: dict[str, object] = {}
+    exec(compile(module, "<verifier helpers>", "exec"), namespace)
+
+    assert namespace["simple_source_metric"](
+        'COUNT(DISTINCT "Minor category code")'
+    )
+    assert namespace["simple_source_metric"]('SUM("Sales Amount")')
+    assert not namespace["simple_source_metric"]("SUM(42)")
 
 
 @dataclass(frozen=True)
@@ -1879,6 +2323,73 @@ def test_targeted_insight_repair_prompt_is_compact_and_scoped(
     assert "submit immediately" in lowered
 
 
+def test_targeted_interaction_repair_prompt_explains_required_evidence_shape(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    make_bundle(tmp_path / "olist")
+    sources = bench.discover_sources(tmp_path / "olist")
+    current = {
+        "title": "Promotion response differs by category",
+        "discovery": {
+            "dimensions_tested": ["month", "category"],
+            "pattern_type": "interaction",
+        },
+    }
+    error = "insight 3 interaction requires effect heterogeneity evidence"
+
+    prompt = bench.build_targeted_insight_repair_prompt(
+        sources,
+        {"candidates": []},
+        current,
+        error,
+    )
+    lowered = " ".join(prompt.lower().split())
+
+    assert "interaction_evidence" in prompt
+    assert "cells" in lowered
+    assert "cell" in lowered
+    assert "effect" in lowered
+    assert "sample_size" in lowered
+    assert "heterogeneity" in lowered
+    assert "baseline_effect" in lowered
+    assert "at least two" in lowered
+    assert "change pattern_type" in prompt
+    assert "no invented evidence" in lowered
+
+
+def test_targeted_metric_component_repair_prompt_requires_source_recomputation(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+    make_bundle(tmp_path / "olist")
+    sources = bench.discover_sources(tmp_path / "olist")
+    error = (
+        "insight 5 metric component 'denominator' verification must recompute "
+        "metric_value from source data"
+    )
+
+    prompt = bench.build_targeted_insight_repair_prompt(
+        sources,
+        {"candidates": []},
+        {
+            "title": "Concentration",
+            "discovery": {
+                "dimensions_tested": ["product_id"],
+                "pattern_type": "subgroup",
+            },
+        },
+        error,
+    )
+    lowered = " ".join(prompt.lower().split())
+
+    assert "denominator" in prompt
+    assert "metric_value" in prompt
+    assert "declared source" in lowered
+    assert "literal expected value" in lowered
+    assert "one source column or one aggregate" in lowered
+
+
 def test_targeted_statement_repair_prompt_requests_only_the_failing_field() -> None:
     bench = load_module()
     insight = {
@@ -2045,6 +2556,51 @@ def test_targeted_merge_falls_back_to_full_replacement_for_unaddressed_error() -
     ) == repaired
 
 
+def test_targeted_merge_replaces_only_named_metric_component() -> None:
+    bench = load_module()
+    current = {
+        "title": "stable",
+        "metric_spec": {
+            "expected_value": 0.25,
+            "components": [
+                {"name": "numerator", "expected_value": 25},
+                {"name": "denominator", "expected_value": 100},
+            ],
+        },
+    }
+    repaired = {
+        "title": "regressed",
+        "metric_spec": {
+            "expected_value": 0.5,
+            "components": [
+                {"name": "numerator", "expected_value": 50},
+                {
+                    "name": "denominator",
+                    "expected_value": 100,
+                    "verification": {"expression": "SELECT SUM(value) AS metric_value"},
+                },
+            ],
+        },
+    }
+
+    merged = bench.merge_targeted_insight_repair(
+        current,
+        repaired,
+        "insight 5 metric component 'denominator' verification must recompute "
+        "metric_value from source data",
+    )
+
+    assert merged["title"] == "stable"
+    assert merged["metric_spec"]["expected_value"] == 0.25
+    assert merged["metric_spec"]["components"][0] == {
+        "name": "numerator",
+        "expected_value": 25,
+    }
+    assert merged["metric_spec"]["components"][1] == repaired["metric_spec"][
+        "components"
+    ][1]
+
+
 @pytest.mark.parametrize(
     ("error", "target"),
     [
@@ -2057,6 +2613,7 @@ def test_targeted_merge_falls_back_to_full_replacement_for_unaddressed_error() -
         ("analysis_plan.search_space is missing a population", "scaffold"),
         ("kpi_map must name its source field", "scaffold"),
         ("dimensions_available conflicts with dimensions_deferred", "scaffold"),
+        ("deferred dimension Specification/model is not available", "scaffold"),
         ("promotion lineage for candidate 2 is incomplete", "scaffold"),
         ("insight 1 must include a diagnostic", "insights"),
         ("metric_spec denominator is not measurable", "insights"),
@@ -3346,7 +3903,7 @@ def test_merge_host_audit_repair_replaces_only_supporting_claim_and_preserves_sq
         ],
     }
     replacement = {
-        "statement": "Observed 12 orders.",
+        "statement": "Expected 12 orders.",
         "expected_value": 12,
         "verification": {
             "expression": "SELECT COUNT(*) FROM orders",
@@ -3362,7 +3919,10 @@ def test_merge_host_audit_repair_replaces_only_supporting_claim_and_preserves_sq
     )
 
     assert merged["supporting_claims"] == [
-        replacement,
+        {
+            **replacement,
+            "statement": "Expected 12 orders.",
+        },
         current["supporting_claims"][1],
     ]
     assert merged["title"] == current["title"]
@@ -3393,6 +3953,289 @@ def test_host_audit_repair_prompt_preserves_round_trip_actual_precision() -> Non
 
     assert "1258681.3399999682" in prompt
     assert "1.25868e+06" not in prompt
+
+
+def test_host_audit_metric_component_uses_exact_actual_and_preserves_siblings(
+) -> None:
+    bench = load_module()
+    numerator_sql = {
+        "expression": "SELECT SUM(amount) AS metric_value FROM sales",
+        "sources": {"sales": "sales"},
+    }
+    denominator_sql = {
+        "expression": "SELECT SUM(total) AS metric_value FROM sales",
+        "sources": {"sales": "sales"},
+    }
+    current = {
+        "title": "Stable share",
+        "statement": "The measured share was 40.0%.",
+        "metric_spec": {
+            "type": "share",
+            "expected_value": 0.4,
+            "components": [
+                {
+                    "name": "numerator",
+                    "role": "numerator",
+                    "expected_value": 100.0,
+                    "verification": numerator_sql,
+                },
+                {
+                    "name": "denominator",
+                    "role": "denominator",
+                    "expected_value": 250.0,
+                    "verification": denominator_sql,
+                },
+            ],
+        },
+    }
+    repaired_metric = deepcopy(current["metric_spec"])
+    repaired_metric["expected_value"] = 0.5
+    repaired_metric["components"][0]["expected_value"] = 101
+    repaired_metric["components"][0]["name"] = "denominator"
+    repaired_metric["components"][0]["role"] = "denominator"
+    repaired_metric["components"][1]["expected_value"] = 999
+    repaired_metric["components"][1]["name"] = "numerator"
+    repaired_metric["components"][1]["role"] = "numerator"
+    repaired_metric["components"][1]["unit"] = "mutated"
+    mismatch = bench.HostAuditMismatch(
+        "insights[0].metric_spec.components[0]",
+        100.0,
+        100.66,
+    )
+
+    merged = bench.merge_host_audit_repair(
+        current,
+        mismatch,
+        {"metric_spec": repaired_metric},
+    )
+
+    assert merged["metric_spec"]["expected_value"] == pytest.approx(100.66 / 250)
+    assert merged["metric_spec"]["components"][0]["expected_value"] == 100.66
+    assert merged["metric_spec"]["components"][1]["expected_value"] == 250.0
+    assert merged["metric_spec"]["components"][0]["name"] == "numerator"
+    assert merged["metric_spec"]["components"][0]["role"] == "numerator"
+    assert merged["metric_spec"]["components"][1]["name"] == "denominator"
+    assert merged["metric_spec"]["components"][1]["role"] == "denominator"
+    assert "unit" not in merged["metric_spec"]["components"][1]
+    assert merged["metric_spec"]["components"][0]["verification"] == numerator_sql
+    assert merged["metric_spec"]["components"][1]["verification"] == denominator_sql
+
+
+def test_host_audit_metric_component_updates_only_exact_equal_valued_sibling() -> None:
+    bench = load_module()
+    current = {
+        "metric_spec": {
+            "components": [
+                {"name": "audited", "label": "Audited 10", "expected_value": 10},
+                {"name": "sibling", "label": "Sibling 10", "expected_value": 10},
+            ]
+        }
+    }
+
+    merged = bench.merge_host_audit_repair(
+        current,
+        bench.HostAuditMismatch(
+            "insights[0].metric_spec.components[0]",
+            10,
+            12,
+        ),
+        {
+            "metric_spec": {
+                "components": [
+                    {"name": "audited", "label": "Audited 12", "expected_value": 12},
+                    {"name": "sibling", "label": "Sibling 10", "expected_value": 10},
+                ]
+            }
+        },
+    )
+
+    assert merged["metric_spec"]["components"] == [
+        {"name": "audited", "label": "Audited 12", "expected_value": 12},
+        {"name": "sibling", "label": "Sibling 10", "expected_value": 10},
+    ]
+
+
+def test_exact_numeric_replacement_formats_percentage_with_decimal() -> None:
+    bench = load_module()
+
+    replaced = bench._replace_exact_numeric_value(
+        "The measured share was 40.0%.",
+        0.4,
+        0.29,
+    )
+
+    assert replaced == "The measured share was 29%."
+    assert bench._contains_exact_numeric_value(replaced, 0.29)
+
+
+def test_exact_numeric_replacement_updates_every_matching_token() -> None:
+    bench = load_module()
+
+    assert bench._replace_exact_numeric_value(
+        "From 10 to 10 orders.",
+        10,
+        12,
+    ) == "From 12 to 12 orders."
+    assert bench._replace_exact_numeric_value(
+        "From 1,000 to 1,000.",
+        1000,
+        1250,
+    ) == "From 1,250 to 1,250."
+    assert bench._replace_exact_numeric_value(
+        "Both rates were 10% and 10%.",
+        0.1,
+        0.12,
+    ) == "Both rates were 12% and 12%."
+
+
+@pytest.mark.parametrize(
+    ("text", "number", "expected"),
+    [
+        ("Volume was 100 orders.", 10.0, False),
+        ("Volume was 10.5 orders.", 10.0, False),
+        ("Malformed 10abc token.", 10.0, False),
+        ("Malformed 10.0.5 token.", 10.0, False),
+        ("Malformed grouped value 1,00.", 100.0, False),
+        ("Malformed percentage 10%%.", 0.1, False),
+        ("Malformed sign --10.", -10.0, False),
+        ("Malformed sign ++10.", 10.0, False),
+        ("Malformed decimal 10..", 10.0, False),
+        ("Large value 1000000000001.", 1000000000000.0, False),
+        ("The rate was 10%.", 0.1, True),
+        ("Revenue was 1,000.5.", 1000.5, True),
+    ],
+)
+def test_exact_numeric_matching_uses_complete_tokens(
+    text: str,
+    number: float,
+    expected: bool,
+) -> None:
+    bench = load_module()
+
+    assert bench._contains_exact_numeric_value(text, number) is expected
+
+
+def test_audit_target_does_not_match_expected_value_as_statement_substring() -> None:
+    bench = load_module()
+    insight = {
+        "statement": "Volume was 100 orders.",
+        "metric_spec": {
+            "expected_value": 0.1,
+            "components": [{"expected_value": 10}],
+        },
+    }
+
+    _, _, _, outputs = bench._audit_target(
+        {"insights": [insight]},
+        bench.HostAuditMismatch(
+            "insights[0].metric_spec.components[0]",
+            10,
+            12,
+        ),
+    )
+
+    assert outputs == bench.AUDIT_METRIC_SPEC_OUTPUTS
+
+
+def test_host_audit_repair_corrects_model_rounded_statement_value() -> None:
+    bench = load_module()
+    verification = {
+        "expression": "SELECT SUM(amount) AS metric_value FROM sales",
+        "sources": {"sales": "sales"},
+    }
+    current = {
+        "statement": "Window revenue was 105895.4.",
+        "metric_spec": {
+            "expected_value": 105895.4,
+            "components": [
+                {
+                    "expected_value": 105895.4,
+                    "verification": verification,
+                }
+            ],
+        },
+    }
+    mismatch = bench.HostAuditMismatch(
+        "insights[0].metric_spec.components[0]",
+        105895.4,
+        105909.66,
+    )
+
+    merged = bench.merge_host_audit_repair(
+        current,
+        mismatch,
+        {
+            "metric_spec": {
+                "expected_value": 105910,
+                "components": [
+                    {
+                        "expected_value": 105910,
+                        "verification": verification,
+                    }
+                ],
+            },
+            "statement": "Window revenue was 105910.",
+        },
+    )
+
+    assert merged["statement"] == "Window revenue was 105909.66."
+    assert merged["metric_spec"]["expected_value"] == 105909.66
+    assert merged["metric_spec"]["components"][0]["expected_value"] == 105909.66
+
+
+def test_host_audit_repair_reconciles_derived_supporting_claim_percentage() -> None:
+    bench = load_module()
+    numerator_sql = {
+        "expression": "SELECT SUM(amount) AS metric_value FROM sales",
+        "sources": {"sales": "sales"},
+    }
+    denominator_sql = {
+        "expression": "SELECT SUM(total) AS metric_value FROM sales",
+        "sources": {"sales": "sales"},
+    }
+    current = {
+        "supporting_claims": [
+            {
+                "claim": "The segment contributed 43.4% of revenue.",
+                "expected_value": 0.434,
+                "metric_spec": {
+                    "type": "share",
+                    "expected_value": 0.434,
+                    "components": [
+                        {
+                            "role": "numerator",
+                            "expected_value": 67.8342,
+                            "verification": numerator_sql,
+                        },
+                        {
+                            "role": "denominator",
+                            "expected_value": 156.2131,
+                            "verification": denominator_sql,
+                        },
+                    ],
+                },
+            }
+        ]
+    }
+    replacement = deepcopy(current["supporting_claims"][0])
+    mismatch = bench.HostAuditMismatch(
+        "insights[0].supporting_claims[0].metric_spec.components[0]",
+        67.8342,
+        48.29481,
+    )
+
+    merged = bench.merge_host_audit_repair(
+        current,
+        mismatch,
+        {"supporting_claim": replacement},
+    )
+
+    claim = merged["supporting_claims"][0]
+    expected_share = 48.29481 / 156.2131
+    assert claim["expected_value"] == pytest.approx(expected_share)
+    assert claim["metric_spec"]["expected_value"] == pytest.approx(expected_share)
+    assert bench._contains_exact_numeric_value(claim["claim"], expected_share)
+    assert "43.4%" not in claim["claim"]
 
 
 def test_host_audit_numeric_repair_preserves_diagnostic_identity_fields() -> None:
@@ -3629,9 +4472,10 @@ def test_candidate_audit_repair_merges_only_rejected_quantitative_component() ->
         mismatch,
         {
             "rejection_component": {
-                "label": "Observed 14,575 rows.",
-                "name": "effect_value",
+            "label": "Observed 14,575 rows.",
+                "name": "renamed_effect",
                 "expected_value": 14575,
+                "unit": "mutated",
             }
         },
     )
@@ -3703,6 +4547,17 @@ def test_candidate_audit_repair_merges_only_rejected_quantitative_component() ->
                 }
             },
             "immutable",
+        ),
+        (
+            "candidates[0].rejection_evidence.verification.components[0]",
+            {},
+            {
+                "rejection_component": {
+                    "label": "Arbitrary changed meaning with 14,575 rows.",
+                    "expected_value": 14575,
+                }
+            },
+            "numeric explanatory prose",
         ),
     ],
 )
@@ -3901,7 +4756,7 @@ def test_host_audit_mismatch_repairs_persists_portably_verifies_and_reaudits(
         }]
     }
     caches = write_all_caches(tmp_path, research, scaffold, insights)
-    repaired_claim = _audit_claim(12, "Observed 12 orders.")
+    repaired_claim = _audit_claim(12, "Expected 12 orders.")
     events: list[str] = []
     calls = _install_host_audit_fakes(
         bench,

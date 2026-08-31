@@ -166,7 +166,7 @@ def verify(payload):
         if re.search(r"(?:\*\s*0\b|\b0\s*\*)", text):
             return True
         text = re.sub(r"\b[a-z_]\w*\s*(?=\()", " ", text, flags=re.I)
-        text = re.sub(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"", " 0 ", text)
+        text = re.sub(r"'(?:''|[^'])*'", " 0 ", text)
         text = re.sub(r"(?<![\w.])[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?", " 0 ", text, flags=re.I)
         text = re.sub(
             r"\b(null|true|false|cast|try_cast|as|decimal|numeric|double|precision|"
@@ -205,11 +205,7 @@ def verify(payload):
         )
         if len(aggregate_calls) != 1 or constant_expression(text):
             return False
-        without_literals = re.sub(
-            r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"",
-            " ",
-            text,
-        )
+        without_literals = re.sub(r"'(?:''|[^'])*'", " ", text)
         function_names = {
             name.lower()
             for name in re.findall(
