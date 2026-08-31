@@ -30,6 +30,7 @@ from fabric_rlm.experimental.analysis_dag import (
 from fabric_rlm.experimental.analysis_evidence import EvidenceRegistry
 from fabric_rlm.experimental.analysis_operators import (
     additive_decomposition,
+    profile_time_coverage,
     rate_decomposition,
     volume_rate_mix_decomposition,
 )
@@ -108,6 +109,7 @@ __all__ = [
     "OperatorNode",
     "OperatorResult",
     "OperatorSpec",
+    "profile_time_coverage",
     "rate_decomposition",
     "RunBudget",
     "score_binary_classification_case",

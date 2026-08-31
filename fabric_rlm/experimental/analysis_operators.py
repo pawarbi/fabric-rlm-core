@@ -3,10 +3,241 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date, datetime, timedelta, timezone as datetime_timezone
 import math
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fabric_rlm.experimental.analysis_contracts import OperatorResult
 from fabric_rlm.experimental.analysis_reproducibility import fingerprint
+
+
+_TIME_GRAINS = {"day", "week", "month", "quarter"}
+
+
+def _parse_timestamp(
+    value: object,
+    field_name: str,
+    *,
+    source_timezone: ZoneInfo,
+) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        parsed = datetime.combine(value, datetime.min.time())
+    elif isinstance(value, str) and value.strip():
+        text = value.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            raise ValueError(
+                f"{field_name} must contain ISO dates or timestamps"
+            ) from None
+    else:
+        raise ValueError(f"{field_name} must contain ISO dates or timestamps")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=source_timezone)
+    return parsed.astimezone(datetime_timezone.utc)
+
+
+def _iso_utc(value: datetime) -> str:
+    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _period_start(value: date, grain: str) -> date:
+    if grain == "day":
+        return value
+    if grain == "week":
+        return value - timedelta(days=value.weekday())
+    if grain == "month":
+        return value.replace(day=1)
+    quarter_month = 3 * ((value.month - 1) // 3) + 1
+    return value.replace(month=quarter_month, day=1)
+
+
+def _next_period(value: date, grain: str) -> date:
+    if grain == "day":
+        return value + timedelta(days=1)
+    if grain == "week":
+        return value + timedelta(days=7)
+    if grain == "month":
+        year = value.year + (1 if value.month == 12 else 0)
+        month = 1 if value.month == 12 else value.month + 1
+        return date(year, month, 1)
+    month = value.month + 3
+    year = value.year + (month - 1) // 12
+    return date(year, (month - 1) % 12 + 1, 1)
+
+
+def _period_end(value: date, grain: str) -> date:
+    return _next_period(value, grain) - timedelta(days=1)
+
+
+def _period_label(value: date, grain: str) -> str:
+    if grain == "day":
+        return value.isoformat()
+    if grain == "week":
+        year, week, _ = value.isocalendar()
+        return f"{year}-W{week:02d}"
+    if grain == "month":
+        return value.strftime("%Y-%m")
+    return f"{value.year}-Q{((value.month - 1) // 3) + 1}"
+
+
+def _period_payload(value: date, grain: str) -> dict[str, str]:
+    return {
+        "grain": grain,
+        "start": value.isoformat(),
+        "end": _period_end(value, grain).isoformat(),
+    }
+
+
+def profile_time_coverage(
+    *,
+    node_id: str,
+    timestamps: object,
+    seed: int,
+    grain: str = "month",
+    requested_as_of: object | None = None,
+    source_watermark: object | None = None,
+    trustworthy_through: object | None = None,
+    timezone: str = "UTC",
+) -> OperatorResult:
+    """Profile source-time coverage without treating the event maximum as current."""
+
+    if not isinstance(timezone, str) or not timezone.strip():
+        raise ValueError("timezone must be a non-empty IANA timezone")
+    try:
+        source_timezone = ZoneInfo(timezone.strip())
+    except ZoneInfoNotFoundError:
+        raise ValueError("timezone must be a valid IANA timezone") from None
+    if grain not in _TIME_GRAINS:
+        raise ValueError("grain must be day, week, month, or quarter")
+    if not isinstance(timestamps, (list, tuple)) or not timestamps:
+        raise ValueError("timestamps must be a non-empty sequence")
+
+    parsed = tuple(
+        sorted(
+            _parse_timestamp(
+                value,
+                f"timestamps[{index}]",
+                source_timezone=source_timezone,
+            )
+            for index, value in enumerate(timestamps)
+        )
+    )
+    event_min = parsed[0]
+    event_max = parsed[-1]
+    watermark = (
+        _parse_timestamp(
+            source_watermark,
+            "source_watermark",
+            source_timezone=source_timezone,
+        )
+        if source_watermark is not None
+        else event_max
+    )
+    requested = (
+        _parse_timestamp(
+            requested_as_of,
+            "requested_as_of",
+            source_timezone=source_timezone,
+        )
+        if requested_as_of is not None
+        else watermark
+    )
+    trustworthy = (
+        _parse_timestamp(
+            trustworthy_through,
+            "trustworthy_through",
+            source_timezone=source_timezone,
+        )
+        if trustworthy_through is not None
+        else watermark
+    )
+    if watermark > requested + timedelta(days=1):
+        raise ValueError("source_watermark must not be after requested_as_of")
+    if trustworthy > watermark:
+        raise ValueError("trustworthy_through must not exceed source_watermark")
+
+    observed_starts = tuple(
+        sorted({_period_start(value.date(), grain) for value in parsed})
+    )
+    all_starts: list[date] = []
+    cursor = observed_starts[0]
+    while cursor <= observed_starts[-1]:
+        all_starts.append(cursor)
+        cursor = _next_period(cursor, grain)
+    missing_starts = tuple(
+        value for value in all_starts if value not in set(observed_starts)
+    )
+    complete_starts = tuple(
+        value
+        for value in observed_starts
+        if _period_end(value, grain) <= trustworthy.date()
+    )
+    latest_complete = (
+        _period_payload(complete_starts[-1], grain)
+        if complete_starts
+        else None
+    )
+    final_start = observed_starts[-1]
+    partial_final = (
+        _period_payload(final_start, grain)
+        if _period_end(final_start, grain) > trustworthy.date()
+        else None
+    )
+    freshness_lag_days = max(0, (requested.date() - watermark.date()).days)
+    freshness_status = (
+        "current"
+        if freshness_lag_days <= 7
+        else "recent"
+        if freshness_lag_days <= 45
+        else "stale"
+    )
+    input_values = {
+        "timestamps": tuple(_iso_utc(value) for value in parsed),
+        "grain": grain,
+        "requested_as_of": requested.date().isoformat(),
+        "source_watermark": _iso_utc(watermark),
+        "trustworthy_through": _iso_utc(trustworthy),
+        "timezone": timezone.strip(),
+    }
+
+    return OperatorResult(
+        node_id=node_id,
+        operator="profile_time_coverage.v1",
+        status="completed",
+        seed=seed,
+        sample_size=len(parsed),
+        values={
+            "event_time_min": _iso_utc(event_min),
+            "event_time_max": _iso_utc(event_max),
+            "source_watermark": _iso_utc(watermark),
+            "trustworthy_through": _iso_utc(trustworthy),
+            "observed_periods": tuple(
+                _period_label(value, grain) for value in observed_starts
+            ),
+            "missing_periods": tuple(
+                _period_label(value, grain) for value in missing_starts
+            ),
+            "latest_complete_period": latest_complete,
+            "partial_final_period": partial_final,
+            "freshness_lag_days": freshness_lag_days,
+            "freshness_status": freshness_status,
+        },
+        diagnostics={
+            "input_fingerprint": fingerprint(input_values),
+            "method": "calendar_coverage_v1",
+            "watermarks": {
+                "requested_as_of": requested.date().isoformat(),
+                "source_watermark": _iso_utc(watermark),
+                "trustworthy_through": _iso_utc(trustworthy),
+                "timezone": timezone.strip(),
+            },
+        },
+    )
 
 
 def _finite_number(value: object, field_name: str) -> float:
