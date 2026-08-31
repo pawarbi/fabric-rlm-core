@@ -1,12 +1,39 @@
 # Changelog
 
-## Unreleased
+## 0.4.3 — 2026-08-31 — portable semantic insights and temporal evidence
+
+### Added
+
+- **Deterministic temporal evidence** — source-local coverage, complete
+  comparable windows, cross-source freshness reconciliation, cohort-exposure
+  sensitivity, and portable persistence/seasonality evidence now govern whether
+  an insight may be described as current or action-ready.
+- **Audited Pearson correlation** — derived correlation findings can be
+  reconstructed from six independently verified sufficient statistics instead
+  of trusting an opaque model-produced value.
 
 ### Changed
 
 - **`RLMResult.inspect()`** now opens the full run inspector by default while
   keeping individual turns collapsed. The keyboard-scrollable timeline shows
   15 turn rows by default and supports a custom `visible_turns` viewport.
+- **SemanticModel metadata and DAX normalization** now return ordinary pandas
+  DataFrames with stable snake-case columns, preserving duplicate, empty, and
+  colliding result schemas. Pandas is declared in the `analytics` extra for
+  equivalent behavior outside the Fabric runtime.
+
+### Fixed
+
+- Nested DAX `ROW(...)` expressions, declared measure lineage, filter
+  references, and measures hidden behind `VAR` declarations are validated
+  without accepting partial-name or incidental-filter matches.
+- One unsupported derived-metric insight can be deterministically rejected
+  after targeted repair without discarding independently valid insights.
+- Terminal verifier rejection is reported distinctly from exhausting the
+  configured turn budget.
+- Leap years, ISO weeks, partial periods, stale extracts, and mismatched source
+  watermarks now abstain rather than producing inconsistent current-change
+  claims.
 
 ## 0.4.2 — 2026-08-29 — secure Lakehouse analysis and verified insights
 
