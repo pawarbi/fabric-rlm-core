@@ -238,6 +238,27 @@ REVIEW RULES
   engagement, workload, and other measures that accumulate with time.
 - A model-proposed threshold or external benchmark is not governed evidence.
   Require an approved source, or remove the threshold-based risk/action claim.
+- An insight title must never claim more than its evidence tier and
+  decision_readiness permit. For investigate-first findings, challenge titles
+  or interpretations using affects, drives, causes, root cause, primary lever,
+  intervention target, will improve, or failure language.
+- Heavy-tail claims require P95 or P99 evidence, not only a mean, median, late
+  rate, or P90. Otherwise require neutral tail-risk investigation wording.
+- Step-change or level-shift language requires a formal change-point diagnostic
+  with explicit pre/post windows and partial-period policy; otherwise require
+  possible or candidate wording.
+- Concentration claims must state the eligible population and concentration
+  curve context. A top-N count without the total eligible population is
+  incomplete.
+- Challenge qualitative severity such as extreme, severe, high concentration,
+  rare, heavy, unusually high, or nearly absent unless an approved benchmark or
+  governed threshold supports it.
+- Reject opaque statements such as "the primary measured difference is X";
+  require population, comparison, period, unit, denominator, and effect.
+- Concentration-based program actions require a governed threshold, not a
+  model-proposed cutoff.
+- Check bound direction. If under-merging can hide repeated entities and make
+  the true rate higher, the observed rate is a lower bound, not an upper bound.
 - Exhaustively satisfy the skill contract, then call SUBMIT with native values.
 
 HOST SOURCE INVENTORY

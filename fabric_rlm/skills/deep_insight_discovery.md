@@ -56,11 +56,18 @@ When this skill is active, submit:
 
 Each insight must contain:
 
-- **title: str** - concise and distinct from every other title.
+- **title: str** - concise and distinct from every other title. It must not
+  claim more than `evidence_tier` and `decision_readiness` permit.
+  Investigate-first titles use calibrated terms such as `associated`,
+  `observed`, `possible`, `signal`, or `warrants investigation`, never
+  `affects`, `drives`, `causes`, `root cause`, `primary lever`, or `failure`.
 - **statement: str** - exactly one primary measured fact with population,
   period, comparison, unit, and effect size; no unsupported causal language.
+  Opaque forms such as `the primary measured difference is X` are invalid.
 - **interpretation: str** - why the measured fact matters, separated from the
-  fact itself and containing no additional quantitative claims.
+  fact itself and containing no additional quantitative claims. It must not
+  convert an investigate-first observation into a planning baseline, dominant
+  business driver, or counterfactual operational conclusion.
 - **competing_explanations: list[str]** - plausible alternative mechanisms when
   causality is not established.
 - **diagnostic_measurability: str | omitted** - typed-contract marker:
@@ -164,6 +171,18 @@ measured zero.
 def verify(payload):
     import math
     import re
+
+    def collect_strings(value):
+        strings = []
+        if isinstance(value, str):
+            strings.append(value)
+        elif isinstance(value, dict):
+            for child in value.values():
+                strings.extend(collect_strings(child))
+        elif isinstance(value, list):
+            for child in value:
+                strings.extend(collect_strings(child))
+        return strings
 
     def strip_comments(text):
         text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
@@ -1161,6 +1180,126 @@ def verify(payload):
                     f"insight {index} supporting claim {claim_index}",
                 )
 
+        readiness = (
+            insight["diagnostic_assessment"].get("decision_readiness")
+            if has_diagnostic_assessment
+            else None
+        )
+        if readiness == "investigate_first":
+            assert not re.search(
+                r"\baffects?\b"
+                r"|(?<!usb )(?<!hard )(?<!disk )(?<!flash )"
+                r"\bdrives?\b(?![- ]time\b)"
+                r"|\bcauses?\b(?!\s+(?:for|analysis|investigation)\b)"
+                r"|\bcaused\b|\bfailure tail\b|\broot cause\b",
+                title,
+                flags=re.I,
+            ), f"insight {index} title overclaims investigate-first evidence"
+            assert not re.search(
+                r"primary lever|intervention target|will improve|failure tail"
+                r"|planning baseline|economics (?:are|is) dominated"
+                r"|\b(?:is|are) dominated by\b|\bwould (?:over|under)shoot\b"
+                r"|\banchor(?:s|ed|ing)? capacity planning\b"
+                r"|\bmost associated\b"
+                r"|\b(?:revenue|growth|outcomes?|performance|retention|conversion"
+                r"|sales|demand|profitability|economics?) depends on\b"
+                r"|\bbehaves as (?:a )?one[- ]shot\b"
+                r"|\bacquisition economics dominate\b"
+                r"|\bconcentrat(?:e|es) leverage\b",
+                interpretation,
+                flags=re.I,
+            ), f"insight {index} interpretation overclaims investigate-first evidence"
+
+        assert not re.fullmatch(
+            r"\s*the primary measured (?:difference|count|rate|share|value)"
+            r" is [-+]?\d[\d,]*(?:\.\d+)?%?\.?\s*",
+            statement,
+            flags=re.I,
+        ), f"insight {index} statement lacks decision context"
+
+        if re.search(r"\b(?:step[- ]change|level shift)\b", title, flags=re.I):
+            assert re.search(
+                r"\b(?:possible|potential|candidate|signal|suggests?|may)\b",
+                title,
+                flags=re.I,
+            ), (
+                f"insight {index} unverified level shift title must say "
+                "possible or candidate"
+            )
+
+        supporting_text = " ".join(collect_strings(supporting_claims))
+        if re.search(
+            r"heav(?:y|ily) (?:right[- ]skewed|tail)|long (?:failure )?tail",
+            f"{title} {interpretation}",
+            flags=re.I,
+        ):
+            assert re.search(
+                r"\bp(?:95|99)\b|\b0\.(?:95|99)\b",
+                supporting_text,
+                flags=re.I,
+            ), f"insight {index} heavy-tail language requires P95 or P99 evidence"
+
+        governed_basis = bool(re.search(
+            r"\b(?:approved|governed|policy[- ]owned|contractual|sla)\b"
+            r".{0,40}\b(?:benchmark|target|threshold)\b"
+            r"|\b(?:benchmark|target|threshold)\b.{0,40}"
+            r"\b(?:approved|governed|policy[- ]owned|contractual|sla)\b",
+            supporting_text,
+            flags=re.I,
+        ))
+
+        if re.search(
+            r"\b(?:extreme|severe|unusually|exceptionally|nearly absent|rare"
+            r"|heav(?:y|ily))\b",
+            title,
+            flags=re.I,
+        ) or re.search(r"\bhigh\b.{0,30}\bconcentrat", title, flags=re.I):
+            assert governed_basis, (
+                f"insight {index} qualitative severity requires a governed benchmark"
+            )
+
+        if re.search(r"\bconcentrat", title, flags=re.I):
+            assert re.search(
+                r"\b(?:distinct|total|active|eligible)\s+\w*\s*"
+                r"(?:seller|customer|account|product|supplier|franchise)s?\b",
+                supporting_text,
+                flags=re.I,
+            ) and re.search(
+                r"\b\d[\d,]*(?:\.\d+)?\s+(?:of|out of)\s+"
+                r"\d[\d,]*(?:\.\d+)?\b",
+                title,
+                flags=re.I,
+            ), (
+                f"insight {index} concentration requires its eligible population "
+                "in its title"
+            )
+            if insight["action"]["kind"] == "program":
+                assert governed_basis, (
+                    f"insight {index} concentration program requires a governed threshold"
+                )
+
+        assessment_text = " ".join(
+            collect_strings(insight.get("diagnostic_assessment", {}))
+        )
+        if re.search(
+            r"\bunder[- ]?merg(?:e|es|ed|ing)\b.{0,100}"
+            r"\btrue\b.{0,30}\b(?:higher|larger|greater)\b",
+            assessment_text,
+            flags=re.I,
+        ):
+            assert not re.search(r"\bupper bound\b", interpretation, flags=re.I), (
+                f"insight {index} has reversed bound direction"
+            )
+        if re.search(
+            r"\bover[- ]?merg(?:e|es|ed|ing)\b.{0,100}"
+            r"\btrue\b.{0,30}\b(?:lower|smaller|less)\b",
+            assessment_text,
+            flags=re.I,
+        ):
+            assert not re.search(r"\blower bound\b", interpretation, flags=re.I), (
+                f"insight {index} has reversed bound direction"
+            )
+
         discovery = insight["discovery"]
         assert isinstance(discovery, dict), (
             f"insight {index} discovery must be structured"
@@ -1569,6 +1708,21 @@ skew. Test censoring, selection effects, obvious confounders, and comparable
 populations. Normalize accumulating lifecycle or activity measures by exposure;
 when these checks are unavailable or materially unresolved, use
 `investigate_first` with a diagnostic action or reject the candidate.
+
+Calibrate every title and interpretation to readiness. Investigate-first
+language must remain observational. A concentration title states its total
+eligible population; a heavy-tail claim includes P95 or P99; and a level-shift
+or step-change title says `possible` or `candidate` unless a formal change-point
+diagnostic, explicit windows, and partial-period policy are verified.
+Qualitative severity such as `extreme`, `severe`, `unusually high`,
+`nearly absent`, `rare`, `high concentration`, or `heavy` requires an approved
+benchmark or governed threshold. Statements must retain decision context and
+must not collapse into opaque forms such as `the primary measured difference
+is X`.
+Concentration-based program actions require a governed threshold, and the title
+states the selected count out of the total eligible population. Bound wording
+must follow the competing explanation: under-merging that can hide repeat
+entities makes the observed rate a lower bound, not an upper bound.
 
 ### 7. Synthesize
 

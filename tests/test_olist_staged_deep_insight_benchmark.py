@@ -191,6 +191,11 @@ def test_scaffold_and_insight_prompts_embed_deterministic_inputs_and_contract_ru
     assert "median and distribution tails" in insight_lowered
     assert "exposure-normalized" in insight_lowered
     assert "investigate_first" in insight_prompt
+    assert "title must not claim more" in insight_lowered
+    assert "affects, drives, causes" in insight_lowered
+    assert "p95 or p99" in insight_lowered
+    assert "possible or candidate" in insight_lowered
+    assert "eligible population" in insight_lowered
     for identity, path in sources.items():
         assert f"{identity}: {path}" in scaffold_prompt
         assert f"{identity}: {path}" in insight_prompt
@@ -725,6 +730,30 @@ def test_mechanical_normalizer_corrects_cached_statement_unit_mismatch() -> None
     assert changes == ("$.insights[0].statement",)
 
 
+def test_mechanical_normalizer_preserves_context_when_simplifying_statement() -> None:
+    bench = load_module()
+    payload = {
+        "insights": [
+            {
+                "statement": "The top sellers hold 20%, and the rest hold 80%.",
+                "discovery": {"population": "all sellers with order items"},
+                "metric_spec": {
+                    "type": "share",
+                    "expected_value": 0.2,
+                    "components": [],
+                },
+            }
+        ]
+    }
+
+    normalized, changes = bench.normalize_mechanical_contract(payload, [])
+
+    assert normalized["insights"][0]["statement"] == (
+        "Within all sellers with order items, the measured share was 20%."
+    )
+    assert changes == ("$.insights[0].statement",)
+
+
 def test_mechanical_normalizer_reconciles_supporting_claim_expected_value() -> None:
     bench = load_module()
     payload = {
@@ -1225,6 +1254,30 @@ def test_critic_closure_prompt_targets_only_gated_material_or_blocking_challenge
     assert "unresolvable" in prompt
     assert "explicit JOIN syntax" in prompt
     assert "SELECT metric_value FROM contrast" in prompt
+    assert "formal change-point" in prompt.lower()
+    assert "do not approximate" in prompt.lower()
+
+
+def test_critic_closure_repair_prompt_abstains_from_unportable_diagnostics(
+    tmp_path: Path,
+) -> None:
+    bench = load_module()
+
+    prompt = bench.build_critic_closure_repair_prompt(
+        {"facts": tmp_path / "facts.csv"},
+        _closure_ready_payload(),
+        _gated_critic(),
+        {"critic_closure_plans": []},
+        (
+            "verification must recompute metric_value with a source column or "
+            "one aggregate"
+        ),
+    )
+
+    lowered = " ".join(prompt.lower().split())
+    assert "formal change-point" in lowered
+    assert "mark the critic follow-up unresolvable" in lowered
+    assert "do not approximate" in lowered
 
 
 def test_critic_closure_targets_unresolved_material_revision_as_follow_up() -> None:
@@ -2786,6 +2839,492 @@ def test_portable_verifier_wraps_only_assertions_and_preserves_cause(
         bench.verify_portable_contract({"ok": True})
 
 
+def _semantic_calibration_payload(
+    title: str,
+    *,
+    statement: str = "The observed gap is 2.4 days across 500 closed cases.",
+    interpretation: str = "Observed diagnostic only.",
+    supporting_claims: list[dict] | None = None,
+) -> dict:
+    return {
+        "insights": [
+            {
+                "title": title,
+                "statement": statement,
+                "interpretation": interpretation,
+                "diagnostic_assessment": {
+                    "decision_readiness": "investigate_first",
+                },
+                "supporting_claims": supporting_claims or [],
+            }
+        ]
+    }
+
+
+def test_semantic_calibration_rejects_causal_title_for_investigation() -> None:
+    bench = load_module()
+
+    with pytest.raises(AssertionError, match="title overclaims"):
+        bench.verify_semantic_calibration(
+            _semantic_calibration_payload(
+                "Delivery punctuality affects review scores"
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "USB drive failure rate is observed at 2%",
+        "Drive-time delivery zones show an observed variance",
+        "Mean time to failure is observed at 47 hours",
+        "Cause for further investigation is an observed coverage gap",
+    ],
+)
+def test_semantic_calibration_allows_noncausal_drive_cause_and_failure_titles(
+    title: str,
+) -> None:
+    bench = load_module()
+
+    bench.verify_semantic_calibration(_semantic_calibration_payload(title))
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Calls drive opportunity progression",
+        "Transfers cause resolution delays",
+    ],
+)
+def test_semantic_calibration_still_rejects_causal_drive_and_cause_titles(
+    title: str,
+) -> None:
+    bench = load_module()
+
+    with pytest.raises(AssertionError, match="title overclaims"):
+        bench.verify_semantic_calibration(_semantic_calibration_payload(title))
+
+
+def test_semantic_calibration_rejects_program_language_in_interpretation() -> None:
+    bench = load_module()
+
+    for interpretation in (
+        "Punctuality is the primary lever for review outcomes.",
+        "The plateau is the planning baseline.",
+        "The observed plateau would anchor capacity planning.",
+        "Customer economics are dominated by acquisition rather than retention.",
+        "Delivery timing is the dimension most associated with review outcomes.",
+        "Revenue depends on a very small seller set.",
+        "The customer base behaves as one-shot acquisition.",
+        "Acquisition economics dominate the measured picture.",
+    ):
+        with pytest.raises(AssertionError, match="interpretation overclaims"):
+            bench.verify_semantic_calibration(
+                _semantic_calibration_payload(
+                    "Late delivery is associated with lower reviews",
+                    interpretation=interpretation,
+                )
+            )
+
+
+def test_semantic_calibration_allows_methodological_dependency_language() -> None:
+    bench = load_module()
+
+    bench.verify_semantic_calibration(
+        _semantic_calibration_payload(
+            "Observed metric sensitivity",
+            interpretation=(
+                "The measure depends on source resolution and observation coverage."
+            ),
+        )
+    )
+
+
+def test_semantic_calibration_requires_caution_for_unverified_level_shift() -> None:
+    bench = load_module()
+
+    with pytest.raises(AssertionError, match="possible or candidate"):
+        bench.verify_semantic_calibration(
+            _semantic_calibration_payload(
+                "November 2017 demand step-change followed by a plateau"
+            )
+        )
+
+    bench.verify_semantic_calibration(
+        _semantic_calibration_payload(
+            "Order volume shows a possible November 2017 level shift"
+        )
+    )
+
+
+def test_semantic_calibration_requires_p95_for_heavy_tail_language() -> None:
+    bench = load_module()
+    p90 = {
+        "claim": "P90 delivery duration is 23 days",
+        "expected_value": 23,
+        "verification": {"expression": "SELECT quantile_cont(days, 0.9) FROM facts"},
+    }
+    p95 = {
+        "claim": "P95 delivery duration is 31 days",
+        "expected_value": 31,
+        "verification": {"expression": "SELECT quantile_cont(days, 0.95) FROM facts"},
+    }
+
+    with pytest.raises(AssertionError, match="P95 or P99"):
+        bench.verify_semantic_calibration(
+            _semantic_calibration_payload(
+                "Delivery duration is heavily right-skewed",
+                supporting_claims=[p90],
+            )
+        )
+
+    with pytest.raises(AssertionError, match="qualitative severity"):
+        bench.verify_semantic_calibration(
+            _semantic_calibration_payload(
+                "Delivery duration is heavily right-skewed",
+                supporting_claims=[p90, p95],
+            )
+        )
+
+    bench.verify_semantic_calibration(
+        _semantic_calibration_payload(
+            "Delivery duration is right-skewed and warrants tail-risk investigation",
+            supporting_claims=[p90, p95],
+        )
+    )
+
+
+def test_semantic_calibration_requires_population_for_concentration_title() -> None:
+    bench = load_module()
+    population_claim = {
+        "claim": "3,095 distinct active sellers generated order items",
+        "expected_value": 3095,
+    }
+
+    with pytest.raises(AssertionError, match="eligible population in its title"):
+        bench.verify_semantic_calibration(
+            _semantic_calibration_payload(
+                "Seller GMV concentration: 18 sellers produce 20% of GMV",
+                supporting_claims=[population_claim],
+            )
+        )
+
+    bench.verify_semantic_calibration(
+        _semantic_calibration_payload(
+            "Seller GMV concentration: 18 of 3,095 sellers produce 20% of GMV",
+            supporting_claims=[population_claim],
+        )
+    )
+
+
+def test_semantic_calibration_requires_a_governed_basis_for_extreme_language() -> None:
+    bench = load_module()
+
+    with pytest.raises(AssertionError, match="qualitative severity"):
+        bench.verify_semantic_calibration(
+            _semantic_calibration_payload(
+                "Extreme seller concentration: 18 of 3,095 sellers produce 20% of GMV",
+                supporting_claims=[
+                    {
+                        "claim": "3,095 distinct active sellers generated order items",
+                        "expected_value": 3095,
+                    }
+                ],
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "High seller concentration: 18 of 3,095 sellers produce 20% of GMV",
+        "Repeat purchasing is rare: 3.1% of customers order more than once",
+    ],
+)
+def test_semantic_calibration_rejects_unbenchmarked_magnitude_labels(
+    title: str,
+) -> None:
+    bench = load_module()
+
+    with pytest.raises(AssertionError, match="qualitative severity"):
+        bench.verify_semantic_calibration(
+            _semantic_calibration_payload(
+                title,
+                supporting_claims=[
+                    {
+                        "claim": "3,095 distinct active sellers generated order items",
+                        "expected_value": 3095,
+                    }
+                ],
+            )
+        )
+
+
+def test_semantic_calibration_rejects_opaque_primary_metric_statement() -> None:
+    bench = load_module()
+
+    with pytest.raises(AssertionError, match="statement lacks decision context"):
+        bench.verify_semantic_calibration(
+            _semantic_calibration_payload(
+                "Observed delivery difference",
+                statement="The primary measured difference is -5.798180948049151.",
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("metric_spec", "discovery", "expected"),
+    [
+        (
+            {
+                "type": "count",
+                "expected_value": 2997,
+                "components": [
+                    {
+                        "name": "repeat_customers",
+                        "role": "value",
+                        "expected_value": 2997,
+                    }
+                ],
+            },
+            {"population": "unique customers 2016-09 to 2018-08"},
+            "Within the measured customer population, 2,997 repeat customers were observed.",
+        ),
+        (
+            {
+                "type": "delta",
+                "expected_value": 2811,
+                "components": [
+                    {
+                        "name": "nov_2017_delivered_orders",
+                        "role": "current",
+                        "expected_value": 7289,
+                    },
+                    {
+                        "name": "oct_2017_delivered_orders",
+                        "role": "comparison",
+                        "expected_value": 4478,
+                    },
+                ],
+            },
+            {"population": "delivered orders"},
+            (
+                "Delivered-order volume was 2,811 orders higher in the current "
+                "period than the comparison period."
+            ),
+        ),
+        (
+            {
+                "type": "rate",
+                "expected_value": 0.08112366538820359,
+                "components": [
+                    {
+                        "name": "late_delivered_orders",
+                        "role": "numerator",
+                        "expected_value": 7826,
+                    },
+                    {
+                        "name": "delivered_orders_with_date",
+                        "role": "denominator",
+                        "expected_value": 96470,
+                    },
+                ],
+            },
+            {"population": "delivered orders with a delivery date"},
+            (
+                "Within delivered orders with a delivery date, 8.11% arrived "
+                "after the estimated delivery date."
+            ),
+        ),
+        (
+            {
+                "type": "count",
+                "expected_value": 12,
+                "components": [
+                    {
+                        "name": "eligible_entities",
+                        "role": "value",
+                        "expected_value": 12,
+                    }
+                ],
+            },
+            {"population": "unique customers 2016-09 to 2018-08"},
+            "Within unique customers, the measured count was 12.",
+        ),
+    ],
+)
+def test_contextual_statement_renderer_uses_audited_metric_metadata(
+    metric_spec: dict,
+    discovery: dict,
+    expected: str,
+) -> None:
+    bench = load_module()
+
+    assert (
+        bench.render_contextual_metric_statement(
+            {"metric_spec": metric_spec, "discovery": discovery}
+        )
+        == expected
+    )
+
+
+def test_semantic_language_calibration_preserves_closed_evidence() -> None:
+    bench = load_module()
+    verification = {
+        "method": "sql",
+        "expression": "SELECT count(*) AS metric_value FROM facts",
+        "sources": {"facts": "facts"},
+    }
+    payload = {
+        "candidates": [
+            {
+                "candidate_id": "c1",
+                "disposition": "promoted",
+                "promoted_as": (
+                    "High seller concentration: 18 of 3,095 sellers produce 20% of GMV"
+                ),
+            },
+            {
+                "candidate_id": "c2",
+                "disposition": "rejected",
+                "rejection_reason": "redundant",
+                "duplicate_of": (
+                    "High seller concentration: 18 of 3,095 sellers produce 20% of GMV"
+                ),
+            }
+        ],
+        "insights": [
+            {
+                "title": "High seller concentration: 18 of 3,095 sellers produce 20% of GMV",
+                "statement": "The primary measured share is 20%.",
+                "interpretation": "Revenue depends on a very small seller set.",
+                "metric_spec": {
+                    "type": "share",
+                    "expected_value": 0.2,
+                    "components": [
+                        {
+                            "name": "top_seller_gmv",
+                            "role": "numerator",
+                            "expected_value": 20,
+                            "verification": verification,
+                        },
+                        {
+                            "name": "total_gmv",
+                            "role": "denominator",
+                            "expected_value": 100,
+                            "verification": verification,
+                        },
+                    ],
+                },
+                "discovery": {"population": "all 3,095 active sellers"},
+                "supporting_claims": [
+                    {
+                        "claim": "3,095 distinct active sellers generated sales",
+                        "expected_value": 3095,
+                        "verification": verification,
+                    }
+                ],
+                "diagnostic_assessment": {
+                    "decision_readiness": "investigate_first",
+                    "explanations": [
+                        {
+                            "explanation": "Seller tenure may explain concentration.",
+                            "explanation_id": "seller-tenure",
+                            "measurable": True,
+                            "disposition": "weakened",
+                            "closure_status": "weakened",
+                            "expected_value": 24,
+                            "verification": verification,
+                            "required_check": "Normalize by active months.",
+                        }
+                    ],
+                },
+                "action": {"kind": "diagnostic"},
+            }
+        ]
+    }
+
+    calibrated, changes = bench.calibrate_semantic_language(payload)
+    insight = calibrated["insights"][0]
+
+    assert insight["title"] == (
+        "Seller concentration: 18 of 3,095 sellers produce 20% of GMV"
+    )
+    assert insight["statement"] == (
+        "Within all active sellers, the measured share was 20%."
+    )
+    assert insight["interpretation"] == (
+        "This audited result is a finding for further investigation. It does not "
+        "establish causation or authorize a program action. Unresolved competing "
+        "explanations and stated limitations must be closed before decision use."
+    )
+    assert insight["supporting_claims"] == payload["insights"][0]["supporting_claims"]
+    assert (
+        insight["diagnostic_assessment"]
+        == payload["insights"][0]["diagnostic_assessment"]
+    )
+    assert changes == (
+        "$.insights[0].title",
+        "$.insights[0].statement",
+        "$.insights[0].interpretation",
+        "$.candidates[0].promoted_as",
+        "$.candidates[1].duplicate_of",
+    )
+    assert calibrated["candidates"][0]["promoted_as"] == insight["title"]
+    assert calibrated["candidates"][1]["duplicate_of"] == insight["title"]
+    assert payload["insights"][0]["title"].startswith("High ")
+
+
+def test_semantic_calibration_rejects_reversed_bound_direction() -> None:
+    bench = load_module()
+    payload = _semantic_calibration_payload(
+        "Observed repeat purchasing is 3.1%",
+        interpretation=(
+            "Identity resolution may under-merge repeat buyers, so the measured "
+            "share is an upper bound."
+        ),
+    )
+    payload["insights"][0]["diagnostic_assessment"]["explanations"] = [
+        {
+            "explanation": (
+                "customer_unique_id under-merges repeat buyers, so the true repeat "
+                "rate is higher"
+            )
+        }
+    ]
+
+    with pytest.raises(AssertionError, match="bound direction"):
+        bench.verify_semantic_calibration(payload)
+
+
+def test_semantic_calibration_requires_governed_threshold_for_concentration_program() -> None:
+    bench = load_module()
+    payload = {
+        "insights": [
+            {
+                "title": (
+                    "Seller GMV concentration: 18 of 3,095 sellers produce 20% of GMV"
+                ),
+                "interpretation": "The measured share is descriptive.",
+                "diagnostic_assessment": {"decision_readiness": "act_ready"},
+                "supporting_claims": [
+                    {
+                        "claim": "3,095 distinct active sellers generated order items",
+                        "expected_value": 3095,
+                    }
+                ],
+                "action": {
+                    "kind": "program",
+                    "decision": "Create dependency-mitigation plans for top sellers.",
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(AssertionError, match="governed threshold"):
+        bench.verify_semantic_calibration(payload)
+
+
 def test_portable_verifier_treats_double_quoted_sql_columns_as_source_data() -> None:
     bench = load_module()
     loader_type = bench._load_skill_loader()
@@ -3211,11 +3750,11 @@ def test_targeted_statement_repair_prompt_requests_only_the_failing_field() -> N
     }
     error = "insight 3 statement must contain one primary measured claim"
 
-    prompt = bench.build_targeted_statement_repair_prompt(insight, error)
+    prompt = bench.build_targeted_statement_repair_prompt(insight, error, attempt=3)
     lowered = " ".join(prompt.lower().split())
 
     assert error in prompt
-    assert insight["statement"] not in prompt
+    assert insight["statement"] in prompt
     assert insight["title"] in prompt
     assert '"expected_value":0.198' in prompt
     assert '"type":"share"' in prompt
@@ -3226,6 +3765,12 @@ def test_targeted_statement_repair_prompt_requests_only_the_failing_field() -> N
     assert "exactly one numeric literal" in lowered
     assert "component values" in lowered
     assert "do not repeat" in lowered
+    assert "named business entity or population" in lowered
+    assert "never use the phrase" in lowered
+    assert "primary measured difference" in lowered
+    assert "among [population]" in lowered
+    assert "repair attempt 3" in lowered
+    assert "do not repeat the rejected statement" in lowered
     assert len(prompt) < 6000
 
 
@@ -3233,6 +3778,7 @@ def test_targeted_statement_repair_prompt_requests_only_the_failing_field() -> N
     "error",
     [
         "insight 3 statement must contain one primary measured claim",
+        "insight 2 statement lacks decision context",
     ],
 )
 def test_statement_errors_route_to_field_only_repair(error: str) -> None:

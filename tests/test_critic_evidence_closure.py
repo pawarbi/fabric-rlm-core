@@ -45,3 +45,28 @@ def test_resolve_closure_audit_serializes_executed_audit() -> None:
     )
 
     assert resolved == serialized
+
+
+def test_summarize_audit_checks_reports_evidence_categories() -> None:
+    closure = load_module()
+    audit = {
+        "checks": [
+            {"path": "insights[0].metric_spec.components[0]"},
+            {"path": "insights[0].metric_spec.components[1]"},
+            {"path": "insights[0].supporting_claims[0]"},
+            {
+                "path": (
+                    "insights[0].diagnostic_assessment.explanations[0]"
+                )
+            },
+            {"path": "analysis_plan.search_space"},
+        ]
+    }
+
+    assert closure.summarize_audit_checks(audit) == {
+        "numeric_components": 2,
+        "supporting_claims": 1,
+        "competing_explanations": 1,
+        "other": 1,
+        "total": 5,
+    }

@@ -391,6 +391,14 @@ def test_prompt_is_source_agnostic_exhaustive_and_contains_safe_attestation() ->
     assert "exposure-normalized" in lowered
     assert "model-proposed threshold" in lowered
     assert "averages-only" in lowered
+    assert "title must never claim more" in lowered
+    assert "affects, drives, causes" in lowered
+    assert "p95 or p99" in lowered
+    assert "formal change-point" in lowered
+    assert "eligible population" in lowered
+    assert "qualitative severity" in lowered
+    assert "governed threshold" in lowered
+    assert "bound direction" in lowered
     assert '"path":"insights[0].metric_spec.value"' in prompt
     assert "olist" not in lowered
     assert "api_key" not in lowered

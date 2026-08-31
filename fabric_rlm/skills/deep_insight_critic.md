@@ -100,6 +100,23 @@ them. A zero count does not prove that a requested comparator period exists;
 missing periods, fields, denominators, and populations remain unresolvable and
 cannot support synthesis.
 
+Titles and interpretations are evidence claims, not presentation-only text.
+For investigate-first findings, challenge `affects`, `drives`, `causes`,
+`root cause`, `primary lever`, intervention, and failure language as semantic
+overclaim. Heavy-tail language requires P95 or P99 evidence. Step-change or
+level-shift language requires a formal change-point diagnostic with explicit
+windows and partial-period handling, or calibrated `possible`/`candidate`
+wording. Concentration findings must state the total eligible population and
+must not rely on a top-N statistic alone. Qualitative severity such as
+`extreme`, `severe`, `high concentration`, `rare`, `heavy`, `unusually high`,
+or `nearly absent` requires an approved benchmark or governed threshold.
+Opaque statements such as `the primary measured difference is X` are invalid;
+population, comparison, period, unit, denominator, and effect must remain
+visible. Concentration-based program actions require a governed threshold, not
+a model-proposed cutoff. Bound direction must agree with the competing
+explanation: under-merging that hides repeated entities makes the observed rate
+a lower bound, not an upper bound.
+
 - `portfolio_challenges`: cross-insight challenges with the same challenge
   fields plus `affected_insight_titles`. It additionally permits
   `coverage_gap` and `cross_insight_tension`. At least one is required for two

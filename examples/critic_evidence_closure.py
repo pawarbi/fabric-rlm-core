@@ -39,6 +39,31 @@ def resolve_closure_audit(
     return _STAGED.audit_to_dict(closure_audit)
 
 
+def summarize_audit_checks(audit: dict[str, Any]) -> dict[str, int]:
+    """Count persisted checks by the evidence surface they attest."""
+
+    categories = {
+        "numeric_components": 0,
+        "supporting_claims": 0,
+        "competing_explanations": 0,
+        "other": 0,
+    }
+    checks = audit.get("checks")
+    if not isinstance(checks, list):
+        raise ValueError("audit checks must be a list")
+    for check in checks:
+        path = str(check.get("path") or "") if isinstance(check, dict) else ""
+        if ".metric_spec.components[" in path:
+            categories["numeric_components"] += 1
+        elif ".supporting_claims[" in path:
+            categories["supporting_claims"] += 1
+        elif ".diagnostic_assessment.explanations[" in path:
+            categories["competing_explanations"] += 1
+        else:
+            categories["other"] += 1
+    return {**categories, "total": len(checks)}
+
+
 def run_critic_closure(
     manifest_path: str | Path,
     payload_path: str | Path,
@@ -108,6 +133,7 @@ def run_critic_closure(
     }
     _STAGED._atomic_json(paths["payload"], record["payload"])
     persisted_audit = resolve_closure_audit(record, audit)
+    audit_categories = summarize_audit_checks(persisted_audit)
     _STAGED._atomic_json(paths["audit"], persisted_audit)
     _STAGED._atomic_json(
         paths["run"],
@@ -119,6 +145,7 @@ def run_critic_closure(
                 "insights": len(record["payload"]["insights"]),
                 "audit_checks": len(persisted_audit["checks"]),
             },
+            "audit_categories": audit_categories,
         },
     )
     return {"record": record, "paths": paths}
