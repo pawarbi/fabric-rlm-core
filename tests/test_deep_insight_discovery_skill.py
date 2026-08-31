@@ -1027,6 +1027,109 @@ def test_verifier_recomputes_supported_derived_metric_types(
     _verify({"insights": [insight]})
 
 
+def _correlation_metric_spec(expected_value: float = 1.0) -> dict:
+    variables = {
+        "x": "properties.base_price",
+        "y": "reviews.average_rating",
+    }
+    population = "Properties with a non-null price and average rating"
+    spec = _derived_metric_spec(
+        "correlation",
+        expected_value,
+        [
+            _metric_component("pair_count", "pair_count", 3),
+            _metric_component("sum_price", "sum_x", 6),
+            _metric_component("sum_rating", "sum_y", 12),
+            _metric_component("sum_price_squared", "sum_x_squared", 14),
+            _metric_component("sum_rating_squared", "sum_y_squared", 56),
+            _metric_component("sum_price_rating", "sum_xy", 28),
+        ],
+    )
+    for component in spec["components"]:
+        component["variables"] = variables
+        component["population"] = population
+        component["pairwise_missing_policy"] = "complete_cases"
+    spec["variables"] = variables
+    spec["population"] = population
+    spec["pairwise_missing_policy"] = "complete_cases"
+    return spec
+
+
+def test_verifier_recomputes_correlation_from_sufficient_statistics() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_model_supplied_correlation_value() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec(-0.00125)
+
+    with pytest.raises(AssertionError, match="does not reconcile"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_requires_correlation_population_and_missing_policy() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+    del insight["metric_spec"]["pairwise_missing_policy"]
+
+    with pytest.raises(AssertionError, match="complete-case"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_correlation_with_zero_variance() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+    for component in insight["metric_spec"]["components"]:
+        if component["role"] == "sum_x_squared":
+            component["expected_value"] = 12
+
+    with pytest.raises(AssertionError, match="positive variance"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_large_offset_correlation_statistics() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+    offset = 10**12
+    values = {
+        "pair_count": 3,
+        "sum_x": 3 * offset + 6,
+        "sum_y": 6 * offset + 12,
+        "sum_x_squared": 3 * offset**2 + 12 * offset + 14,
+        "sum_y_squared": 12 * offset**2 + 48 * offset + 56,
+        "sum_xy": 6 * offset**2 + 24 * offset + 28,
+    }
+    for component in insight["metric_spec"]["components"]:
+        component["expected_value"] = values[component["role"]]
+    insight["metric_spec"]["expected_value"] = 1.0
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_inconsistent_correlation_component_population() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+    insight["metric_spec"]["components"][0]["population"] = "All properties"
+
+    with pytest.raises(AssertionError, match="same population"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_inconsistent_correlation_component_variables() -> None:
+    insight = _strong_insight()
+    insight["metric_spec"] = _correlation_metric_spec()
+    insight["metric_spec"]["components"][-1]["variables"] = {
+        "x": "properties.base_price",
+        "y": "reviews.review_id",
+    }
+
+    with pytest.raises(AssertionError, match="same variables"):
+        _verify({"insights": [insight]})
+
+
 def test_verifier_rejects_zero_denominator_for_derived_metric() -> None:
     insight = _strong_insight()
     insight["metric_spec"] = _derived_metric_spec(
@@ -1582,6 +1685,115 @@ def test_verifier_rejects_unrelated_non_sql_lineage(
         "expression": expression,
         "sources": {"customer_cohorts": "analytics.customer_cohorts"},
     }
+    with pytest.raises(AssertionError, match="declared source"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_nested_dax_metric_from_declared_measure() -> None:
+    insight = _strong_insight()
+    insight["verification"] = {
+        "method": "dax",
+        "expression": """
+EVALUATE
+ROW(
+    "metric_value",
+    DIVIDE(
+        CALCULATE(
+            AVERAGEX(VALUES('Period'[MonthNumber]), [ARR $]),
+            'Period'[Year] = 2030
+        ),
+        CALCULATE(
+            AVERAGEX(VALUES('Period'[MonthNumber]), [ARR $]),
+            'Period'[Year] = 2026
+        )
+    )
+)
+""",
+        "sources": {
+            "arr": "[ARR $]",
+            "period": "Period",
+        },
+    }
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_nested_dax_metric_from_undeclared_measure() -> None:
+    insight = _strong_insight()
+    insight["verification"] = {
+        "method": "dax",
+        "expression": """
+EVALUATE
+ROW(
+    "metric_value",
+    DIVIDE(
+        CALCULATE([Unrelated Amount], 'Unrelated'[Year] = 2024),
+        CALCULATE([Unrelated Count], 'Unrelated'[Year] = 2024)
+    )
+)
+""",
+        "sources": {
+            "arr": "[ARR $]",
+            "active_customers": "[Active Customers #]",
+            "period": "Period",
+        },
+    }
+
+    with pytest.raises(AssertionError, match="declared source"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_partial_dax_measure_name_match() -> None:
+    insight = _strong_insight()
+    insight["verification"] = {
+        "method": "dax",
+        "expression": 'EVALUATE ROW("metric_value", [ARR Growth])',
+        "sources": {"arr": "[ARR $]"},
+    }
+
+    with pytest.raises(AssertionError, match="declared source"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_declared_dax_filter_with_unrelated_metric() -> None:
+    insight = _strong_insight()
+    insight["verification"] = {
+        "method": "dax",
+        "expression": """
+EVALUATE
+ROW(
+    "metric_value",
+    CALCULATE([Unrelated Amount], 'Period'[Year] = 2024)
+)
+""",
+        "sources": {
+            "period_year": "Period[Year]",
+            "arr": "[ARR $]",
+        },
+    }
+
+    with pytest.raises(AssertionError, match="declared source"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_undeclared_dax_measure_hidden_behind_var() -> None:
+    insight = _strong_insight()
+    insight["verification"] = {
+        "method": "dax",
+        "expression": """
+VAR hidden = [Unrelated Amount]
+EVALUATE
+ROW(
+    "metric_value",
+    CALCULATE(hidden, 'Period'[Year] = 2024)
+)
+""",
+        "sources": {
+            "period_year": "Period[Year]",
+            "arr": "[ARR $]",
+        },
+    }
+
     with pytest.raises(AssertionError, match="declared source"):
         _verify({"insights": [insight]})
 

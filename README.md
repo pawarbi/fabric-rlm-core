@@ -494,11 +494,15 @@ RLM.task(
 ).run()
 ```
 
-Inside the run, `arr.schema()` returns tables, measures with their DAX
-expressions and descriptions, and relationships in one call. `arr.dax("EVALUATE
-...")` returns a DataFrame, and `arr.measure(name, groupby=[...],
-filters={...})` evaluates a model measure without authoring DAX. Pass
-`workspace=` for a model outside the attached workspace.
+Inside the run, `arr.schema()` returns formatted schema text. For programmatic
+inspection, `arr.metadata()` returns ordinary pandas DataFrames with stable
+snake-case columns for tables, columns, measures, and relationships.
+`arr.dax("EVALUATE ...", normalize_columns=True)` returns an ordinary pandas
+DataFrame with predictable names such as `period_year` and `arr`, avoiding
+SemPy's bracketed result-column conventions. The raw metadata methods and raw
+`arr.dax("EVALUATE ...")` behavior remain available. `arr.measure(name,
+groupby=[...], filters={...})` evaluates a model measure without authoring DAX.
+Pass `workspace=` for a model outside the attached workspace.
 
 Bind several at once and the model routes between them:
 

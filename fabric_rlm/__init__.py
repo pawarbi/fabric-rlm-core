@@ -2,7 +2,7 @@
 
 from .artifacts import File, FileDestination, LocalArtifactStore
 from .lakehouse import LakehouseSource
-from .semantic_model import SemanticModel, sempy_available
+from .semantic_model import SemanticModel, SemanticModelMetadata, sempy_available
 from .excel_artifacts import (
     ExcelCellValue,
     ExcelTargetRange,
@@ -69,6 +69,7 @@ __all__ = [
     "RLMResult",
     "RunInspector",
     "SemanticModel",
+    "SemanticModelMetadata",
     "replay_trajectory",
     "Skill",
     "SkillLoader",

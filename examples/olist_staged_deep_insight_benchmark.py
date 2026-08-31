@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 from copy import deepcopy
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 import hashlib
 import importlib.util
 import json
@@ -1277,6 +1277,119 @@ def extract_insight_index(error: str, insight_count: int) -> int | None:
     return index if 0 <= index < insight_count else None
 
 
+def demote_irreparable_derived_insight(
+    scaffold: Mapping[str, Any],
+    insights: Mapping[str, Any],
+    verifier_error: str,
+) -> tuple[dict[str, Any], dict[str, Any], int] | None:
+    """Reject one unsupported derived metric without discarding valid insights."""
+
+    error = str(verifier_error).casefold()
+    if (
+        "metric component" not in error
+        or "source column or one aggregate" not in error
+        or "verify derived metrics as components" not in error
+    ):
+        return None
+
+    current_insights = insights.get("insights")
+    if not isinstance(current_insights, list) or len(current_insights) <= 1:
+        return None
+    insight_index = extract_insight_index(verifier_error, len(current_insights))
+    if insight_index is None:
+        return None
+    title = current_insights[insight_index].get("title")
+    if not isinstance(title, str) or not title.strip():
+        return None
+    metric_spec = current_insights[insight_index].get("metric_spec")
+    if not isinstance(metric_spec, Mapping):
+        return None
+    components = metric_spec.get("components")
+    component_match = re.search(
+        r"metric component ['\"]([^'\"]+)['\"]",
+        str(verifier_error),
+        flags=re.IGNORECASE,
+    )
+    if not isinstance(components, list) or component_match is None:
+        return None
+    failed_name = component_match.group(1)
+    failed_components = [
+        component
+        for component in components
+        if isinstance(component, Mapping)
+        and component.get("name") == failed_name
+    ]
+    if len(failed_components) != 1:
+        return None
+    verification = failed_components[0].get("verification")
+    expression = (
+        str(verification.get("expression", ""))
+        if isinstance(verification, Mapping)
+        else ""
+    )
+    derived_type = metric_spec.get("type") in {
+        "rate",
+        "share",
+        "delta",
+        "rate_of_change",
+        "decomposition",
+        "correlation",
+    }
+    opaque_derived_expression = bool(
+        re.search(
+            r"\b(?:corr|covar(?:iance)?|regr_\w+|percentile_\w+)\s*\(",
+            expression,
+            flags=re.IGNORECASE,
+        )
+        or re.search(
+            r"\b(?:sum|avg|count|min|max)\s*\([^)]*\)\s*[/+*-]\s*"
+            r"(?:sum|avg|count|min|max)\s*\(",
+            expression,
+            flags=re.IGNORECASE,
+        )
+    )
+    if not derived_type and not opaque_derived_expression:
+        return None
+
+    updated_scaffold = deepcopy(dict(scaffold))
+    candidates = updated_scaffold.get("candidates")
+    if not isinstance(candidates, list):
+        return None
+    matches = [
+        index
+        for index, candidate in enumerate(candidates)
+        if isinstance(candidate, dict)
+        and candidate.get("disposition") == "promoted"
+        and candidate.get("promoted_as") == title
+    ]
+    if len(matches) != 1:
+        return None
+
+    candidate = deepcopy(candidates[matches[0]])
+    candidate["disposition"] = "rejected"
+    candidate["reason"] = (
+        "Rejected after portable verification because the derived metric could "
+        "not be decomposed into independently verified source aggregates."
+    )
+    candidate["promoted_as"] = ""
+    candidate["rejection_type"] = "not_computable"
+    candidate["missing_fields"] = [
+        "independently verified primitive components for the derived metric"
+    ]
+    candidate.pop("rejection_evidence", None)
+    candidate.pop("duplicate_of", None)
+    candidates[matches[0]] = candidate
+
+    updated_insights = {
+        "insights": [
+            deepcopy(insight)
+            for index, insight in enumerate(current_insights)
+            if index != insight_index
+        ]
+    }
+    return updated_scaffold, updated_insights, insight_index
+
+
 _AUDIT_NUMBER = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
 _AUDIT_PATH = (
     r"[A-Za-z_]\w*(?:\[\d+\])?"
@@ -1569,11 +1682,12 @@ def _derived_metric_value(metric_spec: Mapping[str, Any]) -> float | None:
     metric_type = metric_spec.get("type")
     components = metric_spec.get("components")
     if (
-        metric_type not in {"delta", "rate", "share", "rate_of_change"}
+        metric_type
+        not in {"delta", "rate", "share", "rate_of_change", "correlation"}
         or not isinstance(components, list)
     ):
         return None
-    role_values: dict[str, float] = {}
+    role_values: dict[str, int | float] = {}
     for component in components:
         if not isinstance(component, Mapping):
             return None
@@ -1586,7 +1700,7 @@ def _derived_metric_value(metric_spec: Mapping[str, Any]) -> float | None:
             or role in role_values
         ):
             return None
-        role_values[role] = float(expected_value)
+        role_values[role] = expected_value
     if metric_type == "delta" and set(role_values) == {"current", "comparison"}:
         return role_values["current"] - role_values["comparison"]
     if (
@@ -1603,6 +1717,39 @@ def _derived_metric_value(metric_spec: Mapping[str, Any]) -> float | None:
         return (
             role_values["current"] - role_values["comparison"]
         ) / abs(role_values["comparison"])
+    if metric_type == "correlation" and set(role_values) == {
+        "pair_count",
+        "sum_x",
+        "sum_y",
+        "sum_x_squared",
+        "sum_y_squared",
+        "sum_xy",
+    }:
+        with localcontext() as context:
+            context.prec = 50
+            pair_count = Decimal(str(role_values["pair_count"]))
+            sum_x = Decimal(str(role_values["sum_x"]))
+            sum_y = Decimal(str(role_values["sum_y"]))
+            x_variance_term = (
+                pair_count * Decimal(str(role_values["sum_x_squared"]))
+                - sum_x * sum_x
+            )
+            y_variance_term = (
+                pair_count * Decimal(str(role_values["sum_y_squared"]))
+                - sum_y * sum_y
+            )
+            covariance_term = (
+                pair_count * Decimal(str(role_values["sum_xy"]))
+                - sum_x * sum_y
+            )
+        if pair_count < 2 or x_variance_term <= 0 or y_variance_term <= 0:
+            return None
+        value = float(
+            covariance_term / (x_variance_term * y_variance_term).sqrt()
+        )
+        if value < -1.0 - 1e-9 or value > 1.0 + 1e-9:
+            return None
+        return min(1.0, max(-1.0, value))
     return None
 
 
@@ -2338,6 +2485,16 @@ METRIC COMPONENT REPAIR REQUIREMENTS
   ratios and other derived metrics through separately verified components.
 - Preserve every other valid metric component and metric_spec field.
 """
+        if "corr" in component_name.casefold():
+            metric_guidance += """\
+- For Pearson correlation, replace the atomic component with metric_spec type
+  correlation and independently verified pair_count, sum_x, sum_y,
+  sum_x_squared, sum_y_squared, and sum_xy components.
+- Declare variables.x, variables.y, population, and
+  pairwise_missing_policy=complete_cases.
+- Repeat the exact same variables, population, and pairwise_missing_policy on
+  every correlation component so all sufficient statistics use one sample.
+"""
     causal_guidance = ""
     if "causal language" in str(verifier_error).casefold():
         causal_guidance = """\
@@ -2457,6 +2614,7 @@ def render_contextual_metric_statement(insight: Mapping[str, Any]) -> str:
             "average",
             "rate_of_change",
             "decomposition",
+            "correlation",
         }
         or type(expected) not in {int, float}
         or not math.isfinite(expected)
@@ -2518,6 +2676,7 @@ def render_contextual_metric_statement(insight: Mapping[str, Any]) -> str:
         "delta": "difference",
         "rate_of_change": "rate of change",
         "decomposition": "total change",
+        "correlation": "correlation",
     }.get(str(metric_type), str(metric_type))
     return (
         f"Within {population}, the measured {label} was {rendered}."
@@ -3002,6 +3161,7 @@ def normalize_mechanical_contract(
                         "delta",
                         "rate_of_change",
                         "decomposition",
+                        "correlation",
                     }
                     and type(expected_value) in {int, float}
                     and math.isfinite(expected_value)
@@ -3023,6 +3183,7 @@ def normalize_mechanical_contract(
                         "delta": "difference",
                         "rate_of_change": "rate of change",
                         "decomposition": "total change",
+                        "correlation": "correlation",
                     }
                     rendered_value = Decimal(str(expected_value))
                     if metric_type in {"rate", "share", "rate_of_change"}:
@@ -3097,7 +3258,14 @@ def normalize_mechanical_contract(
             metric_type = value.get("type")
             components = value.get("components")
             if (
-                metric_type in {"delta", "rate", "share", "rate_of_change"}
+                metric_type
+                in {
+                    "delta",
+                    "rate",
+                    "share",
+                    "rate_of_change",
+                    "correlation",
+                }
                 and isinstance(components, list)
             ):
                 role_values: dict[str, float] = {}
@@ -3139,6 +3307,8 @@ def normalize_mechanical_contract(
                         derived_value = (
                             role_values["current"] - role_values["comparison"]
                         ) / abs(role_values["comparison"])
+                elif valid_components and metric_type == "correlation":
+                    derived_value = _derived_metric_value(value)
                 if derived_value is not None and math.isfinite(derived_value):
                     record_set(
                         value, "expected_value", derived_value, path
@@ -4286,6 +4456,7 @@ def run_staged_benchmark(
         )
     repairs: list[dict[str, Any]] = []
     repair_attempts = {"scaffold": 0, "insights": 0}
+    deterministic_demotion_used = False
     repair_limits = {
         "scaffold": max_scaffold_repairs,
         "insights": max_insight_repairs,
@@ -4297,6 +4468,56 @@ def run_staged_benchmark(
         except AssertionError as exc:
             target = classify_repair_target(str(exc))
             if repair_attempts[target] >= repair_limits[target]:
+                demoted = (
+                    demote_irreparable_derived_insight(
+                        scaffold,
+                        insights,
+                        str(exc),
+                    )
+                    if target == "insights" and not deterministic_demotion_used
+                    else None
+                )
+                if demoted is not None:
+                    deterministic_demotion_used = True
+                    scaffold, insights, insight_index = demoted
+                    payload = assemble_contract(
+                        scaffold,
+                        insights,
+                        contract_version=int(payload.get("contract_version", 2)),
+                    )
+                    payload, changes = normalize_mechanical_contract(
+                        payload,
+                        sources,
+                    )
+                    mechanical_changes.extend(changes)
+                    payload, semantic_changes = calibrate_semantic_language(
+                        payload
+                    )
+                    mechanical_changes.extend(semantic_changes)
+                    insights = {"insights": deepcopy(payload["insights"])}
+                    if scaffold_path is not None:
+                        _write_synthesis_checkpoint(
+                            scaffold_path,
+                            scaffold_fingerprint,
+                            scaffold,
+                        )
+                    insights_fingerprint = _input_fingerprint(research, scaffold)
+                    if insights_path is not None:
+                        _write_synthesis_checkpoint(
+                            insights_path,
+                            insights_fingerprint,
+                            insights,
+                        )
+                    repairs.append(
+                        {
+                            "target": target,
+                            "attempt": repair_attempts[target],
+                            "mode": "deterministic-demotion",
+                            "insight_index": insight_index + 1,
+                            "error": str(exc),
+                        }
+                    )
+                    continue
                 raise AssertionError(
                     "portable deep-insight verification failed after "
                     f"{target} target: {repair_attempts[target]} "

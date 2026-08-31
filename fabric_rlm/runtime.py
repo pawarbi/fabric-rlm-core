@@ -2001,8 +2001,21 @@ class RLM:
 
         if verifier_repair_history:
             trajectory.metadata["verifier_repair_history"] = verifier_repair_history
-        exhausted = not (trajectory.turns and trajectory.turns[-1].validation_errors)
-        if exhausted:
+        last_turn = trajectory.turns[-1] if trajectory.turns else None
+        last_verifier_turn = (
+            verifier_repair_history[-1].get("turn")
+            if verifier_repair_history
+            else None
+        )
+        validation_failed = bool(
+            last_turn
+            and last_turn.submitted
+            and (
+                last_turn.validation_errors
+                or last_verifier_turn == last_turn.turn
+            )
+        )
+        if not validation_failed:
             # Say so out loud. A truncated run returns a wrong-looking answer
             # that is indistinguishable from a wrong one, and the fix is a
             # config change the caller can only make if they know to. How many
@@ -2015,13 +2028,27 @@ class RLM:
                 turn_counter,
                 self.max_turns,
             )
+        else:
+            latest_assertion = (
+                verifier_repair_history[-1].get("assertion")
+                if last_verifier_turn == last_turn.turn
+                else "; ".join(last_turn.validation_errors)
+            )
+            logger.warning(
+                "RLM exhausted its %d-turn budget after the latest submitted "
+                "payload failed validation: %s",
+                self.max_turns,
+                latest_assertion,
+            )
         return RLMResult(
             submitted=False,
             payload=None,
             trajectory=trajectory,
             final_state=final_state,
             max_turns=self.max_turns,
-            failure_reason=("max_turns" if exhausted else "output_validation_failed"),
+            failure_reason=(
+                "output_validation_failed" if validation_failed else "max_turns"
+            ),
             **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
         )
 

@@ -43,6 +43,10 @@ class FakeFrame:
     def iterrows(self):
         return enumerate(self._rows)
 
+    def to_dict(self, orient="dict"):
+        assert orient == "records"
+        return [dict(row) for row in self._rows]
+
     def to_string(self):
         return f"{self._label} {self._rows}"
 
@@ -76,7 +80,15 @@ def fake_sempy(monkeypatch):
     fabric.list_columns = recorder("list_columns", COLUMNS, list(COLUMNS[0]))
     fabric.list_measures = recorder("list_measures", MEASURES, list(MEASURES[0]))
     fabric.list_relationships = recorder("list_relationships", RELS, list(RELS[0]))
-    fabric.evaluate_dax = recorder("evaluate_dax", [{"v": 1}], ["v"])
+    fabric.evaluate_dax = recorder(
+        "evaluate_dax",
+        [{
+            "Period[Year]": 2024,
+            "[ARR]": 100.0,
+            "[ActiveCustomers]": 5,
+        }],
+        ["Period[Year]", "[ARR]", "[ActiveCustomers]"],
+    )
     fabric.evaluate_measure = recorder("evaluate_measure", [{"v": 1}], ["v"])
     fabric.read_table = recorder("read_table", [{"v": 1}], ["v"])
 
@@ -196,6 +208,144 @@ def test_dax_passes_the_query_through(fake_sempy):
     name, args, _kw = fake_sempy[0]
     assert name == "evaluate_dax"
     assert args == ("D", 'EVALUATE ROW("v", 1)')
+
+
+def test_metadata_returns_stable_plain_dataframes(fake_sempy):
+    metadata = SemanticModel("D", validate=False).metadata()
+
+    assert metadata.tables.columns.tolist() == [
+        "table_name",
+        "description",
+    ]
+    assert metadata.columns.columns.tolist() == [
+        "table_name",
+        "column_name",
+        "description",
+    ]
+    assert metadata.measures.columns.tolist() == [
+        "table_name",
+        "measure_name",
+        "measure_expression",
+        "measure_description",
+        "measure_display_folder",
+    ]
+    assert metadata.relationships.columns.tolist() == [
+        "from_table",
+        "from_column",
+        "to_table",
+        "to_column",
+        "multiplicity",
+    ]
+    assert metadata.measures.iloc[0]["measure_name"] == "Total Sales"
+
+
+def test_dax_can_return_plain_dataframe_with_normalized_columns(fake_sempy):
+    result = SemanticModel("D", validate=False).dax(
+        'EVALUATE ROW("v", 1)',
+        normalize_columns=True,
+    )
+
+    assert result.columns.tolist() == [
+        "period_year",
+        "arr",
+        "active_customers",
+    ]
+    assert result.iloc[0].to_dict() == {
+        "period_year": 2024,
+        "arr": 100.0,
+        "active_customers": 5,
+    }
+
+
+def test_dax_normalization_disambiguates_colliding_columns(
+    fake_sempy, monkeypatch
+):
+    import sempy.fabric as fabric
+
+    monkeypatch.setattr(
+        fabric,
+        "evaluate_dax",
+        lambda *args, **kwargs: FakeFrame(
+            [{"[ARR]": 1, "ARR": 2}],
+            ["[ARR]", "ARR"],
+        ),
+    )
+
+    result = SemanticModel("D", validate=False).dax(
+        "EVALUATE 1",
+        normalize_columns=True,
+    )
+
+    assert result.columns.tolist() == ["arr", "arr_2"]
+
+
+def test_dax_normalization_avoids_suffix_name_collisions(
+    fake_sempy, monkeypatch
+):
+    import pandas as pd
+    import sempy.fabric as fabric
+
+    monkeypatch.setattr(
+        fabric,
+        "evaluate_dax",
+        lambda *args, **kwargs: pd.DataFrame(
+            [[1, 2, 3]],
+            columns=["ARR", "ARR_2", "[ARR]"],
+        ),
+    )
+
+    result = SemanticModel("D", validate=False).dax(
+        "EVALUATE 1",
+        normalize_columns=True,
+    )
+
+    assert result.columns.tolist() == ["arr", "arr_2", "arr_3"]
+    assert result.iloc[0].tolist() == [1, 2, 3]
+
+
+def test_dax_normalization_preserves_duplicate_source_columns(
+    fake_sempy, monkeypatch
+):
+    import pandas as pd
+    import sempy.fabric as fabric
+
+    monkeypatch.setattr(
+        fabric,
+        "evaluate_dax",
+        lambda *args, **kwargs: pd.DataFrame(
+            [[1, 2]],
+            columns=["[ARR]", "[ARR]"],
+        ),
+    )
+
+    result = SemanticModel("D", validate=False).dax(
+        "EVALUATE 1",
+        normalize_columns=True,
+    )
+
+    assert result.columns.tolist() == ["arr", "arr_2"]
+    assert result.iloc[0].tolist() == [1, 2]
+
+
+def test_dax_normalization_preserves_empty_result_schema(
+    fake_sempy, monkeypatch
+):
+    import pandas as pd
+    import sempy.fabric as fabric
+
+    monkeypatch.setattr(
+        fabric,
+        "evaluate_dax",
+        lambda *args, **kwargs: pd.DataFrame(columns=["[ARR]", "Period[Year]"]),
+    )
+
+    result = SemanticModel("D", validate=False).dax(
+        "EVALUATE 1",
+        normalize_columns=True,
+    )
+
+    assert result.empty
+    assert result.columns.tolist() == ["arr", "period_year"]
 
 
 def test_measure_maps_to_sempy_argument_names(fake_sempy):

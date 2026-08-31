@@ -22,6 +22,7 @@ Binding a handle costs one line in the input listing.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,6 +33,85 @@ _SEMPY_MISSING = (
     "authenticated. Note that `import fabric` is a different package (SSH "
     "automation) and is not what this needs."
 )
+
+
+@dataclass(frozen=True)
+class SemanticModelMetadata:
+    """Normalized semantic-model metadata with stable snake-case columns."""
+
+    tables: Any
+    columns: Any
+    measures: Any
+    relationships: Any
+
+
+_METADATA_COLUMNS = {
+    "tables": {
+        "Name": "table_name",
+        "Description": "description",
+        "Type": "table_type",
+    },
+    "columns": {
+        "Table Name": "table_name",
+        "Column Name": "column_name",
+        "Description": "description",
+        "Data Type": "data_type",
+    },
+    "measures": {
+        "Table Name": "table_name",
+        "Measure Name": "measure_name",
+        "Measure Expression": "measure_expression",
+        "Measure Description": "measure_description",
+        "Measure Display Folder": "measure_display_folder",
+    },
+    "relationships": {
+        "From Table": "from_table",
+        "From Column": "from_column",
+        "To Table": "to_table",
+        "To Column": "to_column",
+        "Multiplicity": "multiplicity",
+        "Cardinality": "cardinality",
+        "Relationship Name": "relationship_name",
+    },
+}
+
+
+def _normalized_column_name(value: Any) -> str:
+    text = str(value).strip().strip("[]")
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", text)
+    text = re.sub(r"[^A-Za-z0-9]+", "_", text)
+    return text.strip("_").lower() or "column"
+
+
+def _plain_frame(frame: Any, aliases: dict[str, str] | None = None) -> Any:
+    try:
+        import pandas as pd
+    except Exception as exc:  # pragma: no cover - sempy includes pandas in Fabric
+        raise RuntimeError(
+            "Normalized semantic-model results require pandas."
+        ) from exc
+
+    if isinstance(frame, pd.DataFrame):
+        result = pd.DataFrame(frame.copy())
+    else:
+        records = frame.to_dict(orient="records")
+        result = pd.DataFrame.from_records(records, columns=list(frame.columns))
+    aliases = aliases or {}
+    assigned: set[str] = set()
+    next_suffix: dict[str, int] = {}
+    normalized: list[str] = []
+    for column in result.columns:
+        base = aliases.get(str(column), _normalized_column_name(column))
+        candidate = base
+        suffix = next_suffix.get(base, 2)
+        while candidate in assigned:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        next_suffix[base] = suffix
+        assigned.add(candidate)
+        normalized.append(candidate)
+    result.columns = normalized
+    return result
 
 
 def sempy_available() -> bool:
@@ -116,6 +196,22 @@ class SemanticModel:
         """Relationships between tables, as a DataFrame."""
         return self._fabric.list_relationships(self.dataset, **self._kw)
 
+    def metadata(self) -> SemanticModelMetadata:
+        """Return ordinary pandas metadata frames with stable column names.
+
+        The raw metadata methods remain available when callers need SemPy's
+        complete provider-specific columns.
+        """
+        return SemanticModelMetadata(
+            tables=_plain_frame(self.tables(), _METADATA_COLUMNS["tables"]),
+            columns=_plain_frame(self.columns(), _METADATA_COLUMNS["columns"]),
+            measures=_plain_frame(self.measures(), _METADATA_COLUMNS["measures"]),
+            relationships=_plain_frame(
+                self.relationships(),
+                _METADATA_COLUMNS["relationships"],
+            ),
+        )
+
     def schema(self, max_chars: int = 4000) -> str:
         """One call that answers "what is in this model".
 
@@ -179,12 +275,15 @@ class SemanticModel:
 
     # -- querying ---------------------------------------------------------
 
-    def dax(self, query: str) -> Any:
+    def dax(self, query: str, *, normalize_columns: bool = False) -> Any:
         """Run a DAX query and return a DataFrame.
 
         Aggregate here rather than pulling rows out and aggregating in pandas.
+        Set ``normalize_columns`` to return an ordinary pandas DataFrame with
+        stable snake-case names instead of SemPy's bracketed result columns.
         """
-        return self._fabric.evaluate_dax(self.dataset, query, **self._kw)
+        result = self._fabric.evaluate_dax(self.dataset, query, **self._kw)
+        return _plain_frame(result) if normalize_columns else result
 
     def measure(
         self,
@@ -222,8 +321,8 @@ class SemanticModel:
         where = f" workspace={self.workspace!r}" if self.workspace else ""
         return (
             f"SemanticModel dataset={self.dataset!r}{where} - already connected. "
-            "Call .schema() for tables, measures with their DAX, and "
-            'relationships; .dax("EVALUATE ...") -> DataFrame; '
+            "Call .schema() for formatted text or .metadata() for normalized "
+            "DataFrames; .dax(\"EVALUATE ...\", normalize_columns=True); "
             ".measure(name, groupby=[...], filters={...}); "
             ".tables() .columns() .measures() .relationships()"
         )
