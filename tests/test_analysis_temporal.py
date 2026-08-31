@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from fabric_rlm.experimental import (
+    assess_cohort_exposure,
     classify_temporal_relevance,
     combine_time_coverage,
     profile_time_coverage,
@@ -623,4 +624,114 @@ def test_joined_coverage_rejects_invalid_sources(
             node_id="invalid",
             coverages=coverages,
             seed=1,
+        )
+
+
+def test_cohort_exposure_quantifies_right_censoring_sensitivity() -> None:
+    result = assess_cohort_exposure(
+        node_id="repeat-purchase-exposure",
+        cohorts={
+            "2024-H1": {
+                "customers": 100,
+                "repeat_customers": 5,
+                "exposure_days": 500,
+            },
+            "2024-H2": {
+                "customers": 100,
+                "repeat_customers": 5,
+                "exposure_days": 400,
+            },
+            "2025-H1": {
+                "customers": 800,
+                "repeat_customers": 16,
+                "exposure_days": 100,
+            },
+        },
+        seed=4,
+        minimum_exposure_days=365,
+        identity_key="customer_unique_id",
+        repeat_definition="More than one delivered order",
+        cohort_basis="First observed delivered order",
+        material_difference=0.01,
+    )
+
+    assert result.values["all_cohort_rate"] == pytest.approx(0.026)
+    assert result.values["mature_cohort_rate"] == pytest.approx(0.05)
+    assert result.values["censoring_sensitivity"] == pytest.approx(0.024)
+    assert result.values["sensitivity_status"] == "material"
+    assert result.values["mature_cohorts"] == ("2024-H1", "2024-H2")
+    assert result.values["immature_cohorts"] == ("2025-H1",)
+    assert result.values["denominators"] == {
+        "all_customers": 1000,
+        "mature_customers": 200,
+    }
+    assert result.diagnostics["identity_key"] == "customer_unique_id"
+
+
+def test_cohort_exposure_abstains_without_mature_cohorts() -> None:
+    result = assess_cohort_exposure(
+        node_id="repeat-purchase-exposure",
+        cohorts={
+            "2025-H1": {
+                "customers": 100,
+                "repeat_customers": 3,
+                "exposure_days": 90,
+            }
+        },
+        seed=4,
+        minimum_exposure_days=365,
+        identity_key="customer_unique_id",
+        repeat_definition="More than one delivered order",
+        cohort_basis="First observed delivered order",
+    )
+
+    assert result.status == "failed"
+    assert result.failure_code == "no_mature_cohorts"
+    assert "right-censoring" in result.failure_message
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"cohorts": {}}, "cohorts"),
+        (
+            {
+                "cohorts": {
+                    "2025": {
+                        "customers": 10,
+                        "repeat_customers": 11,
+                        "exposure_days": 400,
+                    }
+                }
+            },
+            "repeat_customers",
+        ),
+        ({"minimum_exposure_days": 0}, "minimum_exposure_days"),
+        ({"identity_key": ""}, "identity_key"),
+    ],
+)
+def test_cohort_exposure_rejects_invalid_denominator_contract(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    defaults = {
+        "cohorts": {
+            "2024": {
+                "customers": 10,
+                "repeat_customers": 1,
+                "exposure_days": 400,
+            }
+        },
+        "minimum_exposure_days": 365,
+        "identity_key": "customer_unique_id",
+        "repeat_definition": "More than one delivered order",
+        "cohort_basis": "First observed delivered order",
+    }
+    defaults.update(kwargs)
+
+    with pytest.raises(ValueError, match=match):
+        assess_cohort_exposure(
+            node_id="invalid",
+            seed=1,
+            **defaults,
         )

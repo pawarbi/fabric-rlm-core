@@ -465,6 +465,169 @@ def combine_time_coverage(
     )
 
 
+def assess_cohort_exposure(
+    *,
+    node_id: str,
+    cohorts: object,
+    seed: int,
+    minimum_exposure_days: int,
+    identity_key: str,
+    repeat_definition: str,
+    cohort_basis: str,
+    material_difference: float = 0.01,
+) -> OperatorResult:
+    """Measure cohort-rate sensitivity to explicitly defined maturity."""
+
+    if not isinstance(cohorts, Mapping) or not cohorts:
+        raise ValueError("cohorts must be a non-empty mapping")
+    if type(minimum_exposure_days) is not int or minimum_exposure_days <= 0:
+        raise ValueError("minimum_exposure_days must be a positive integer")
+    for field_name, value in (
+        ("identity_key", identity_key),
+        ("repeat_definition", repeat_definition),
+        ("cohort_basis", cohort_basis),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{field_name} must be non-empty text")
+    threshold = _finite_number(material_difference, "material_difference")
+    if threshold < 0:
+        raise ValueError("material_difference must be non-negative")
+
+    validated: dict[str, dict[str, int]] = {}
+    for cohort_name, payload in cohorts.items():
+        if not isinstance(cohort_name, str) or not cohort_name.strip():
+            raise ValueError("cohort names must be non-empty strings")
+        if not isinstance(payload, Mapping):
+            raise ValueError(f"cohorts.{cohort_name} must be an object")
+        required = {"customers", "repeat_customers", "exposure_days"}
+        missing = required - payload.keys()
+        if missing:
+            raise ValueError(
+                f"cohorts.{cohort_name} is missing {sorted(missing)[0]}"
+            )
+        unexpected = set(payload) - required
+        if unexpected:
+            raise ValueError(
+                f"cohorts.{cohort_name} contains unsupported field "
+                f"{sorted(unexpected)[0]}"
+            )
+        customers = payload["customers"]
+        repeat_customers = payload["repeat_customers"]
+        exposure_days = payload["exposure_days"]
+        if type(customers) is not int or customers <= 0:
+            raise ValueError(
+                f"cohorts.{cohort_name}.customers must be a positive integer"
+            )
+        if (
+            type(repeat_customers) is not int
+            or repeat_customers < 0
+            or repeat_customers > customers
+        ):
+            raise ValueError(
+                f"cohorts.{cohort_name}.repeat_customers must be between "
+                "zero and customers"
+            )
+        if type(exposure_days) is not int or exposure_days < 0:
+            raise ValueError(
+                f"cohorts.{cohort_name}.exposure_days must be a "
+                "non-negative integer"
+            )
+        validated[cohort_name.strip()] = {
+            "customers": customers,
+            "repeat_customers": repeat_customers,
+            "exposure_days": exposure_days,
+        }
+
+    ordered_names = tuple(sorted(validated))
+    mature_names = tuple(
+        name
+        for name in ordered_names
+        if validated[name]["exposure_days"] >= minimum_exposure_days
+    )
+    immature_names = tuple(
+        name for name in ordered_names if name not in set(mature_names)
+    )
+    diagnostics = {
+        "input_fingerprint": fingerprint(
+            {
+                "cohorts": validated,
+                "minimum_exposure_days": minimum_exposure_days,
+                "identity_key": identity_key.strip(),
+                "repeat_definition": repeat_definition.strip(),
+                "cohort_basis": cohort_basis.strip(),
+                "material_difference": threshold,
+            }
+        ),
+        "method": "cohort_exposure_sensitivity_v1",
+        "identity_key": identity_key.strip(),
+        "repeat_definition": repeat_definition.strip(),
+        "cohort_basis": cohort_basis.strip(),
+        "minimum_exposure_days": minimum_exposure_days,
+    }
+    if not mature_names:
+        return OperatorResult(
+            node_id=node_id,
+            operator="cohort_exposure_check.v1",
+            status="failed",
+            seed=seed,
+            sample_size=len(validated),
+            diagnostics=diagnostics,
+            limitations=(
+                "No cohort has enough observable exposure for a mature-rate "
+                "comparison.",
+            ),
+            failure_code="no_mature_cohorts",
+            failure_message=(
+                "All cohorts remain subject to right-censoring under the "
+                f"{minimum_exposure_days}-day maturity policy."
+            ),
+        )
+
+    all_customers = sum(item["customers"] for item in validated.values())
+    all_repeat = sum(
+        item["repeat_customers"] for item in validated.values()
+    )
+    mature_customers = sum(
+        validated[name]["customers"] for name in mature_names
+    )
+    mature_repeat = sum(
+        validated[name]["repeat_customers"] for name in mature_names
+    )
+    all_rate = all_repeat / all_customers
+    mature_rate = mature_repeat / mature_customers
+    sensitivity = mature_rate - all_rate
+    return OperatorResult(
+        node_id=node_id,
+        operator="cohort_exposure_check.v1",
+        status="completed",
+        seed=seed,
+        sample_size=len(validated),
+        values={
+            "all_cohort_rate": all_rate,
+            "mature_cohort_rate": mature_rate,
+            "censoring_sensitivity": sensitivity,
+            "sensitivity_status": (
+                "material" if abs(sensitivity) >= threshold else "stable"
+            ),
+            "mature_cohorts": mature_names,
+            "immature_cohorts": immature_names,
+            "denominators": {
+                "all_customers": all_customers,
+                "mature_customers": mature_customers,
+            },
+            "numerators": {
+                "all_repeat_customers": all_repeat,
+                "mature_repeat_customers": mature_repeat,
+            },
+        },
+        diagnostics=diagnostics,
+        limitations=(
+            "Cohort maturity reduces exposure bias but does not verify "
+            "customer-identity linkage quality.",
+        ),
+    )
+
+
 def select_latest_complete_window(
     *,
     node_id: str,

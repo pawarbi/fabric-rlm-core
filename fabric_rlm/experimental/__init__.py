@@ -30,6 +30,7 @@ from fabric_rlm.experimental.analysis_dag import (
 from fabric_rlm.experimental.analysis_evidence import EvidenceRegistry
 from fabric_rlm.experimental.analysis_operators import (
     additive_decomposition,
+    assess_cohort_exposure,
     combine_time_coverage,
     profile_time_coverage,
     rate_decomposition,
@@ -87,6 +88,7 @@ __all__ = [
     "AdaptiveResult",
     "AdaptiveRunner",
     "additive_decomposition",
+    "assess_cohort_exposure",
     "AnalysisBrief",
     "AnalysisDAG",
     "AttemptConfig",
