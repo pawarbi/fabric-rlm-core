@@ -1586,6 +1586,60 @@ def test_verifier_rejects_unrelated_non_sql_lineage(
         _verify({"insights": [insight]})
 
 
+def test_verifier_accepts_nested_dax_metric_from_declared_measure() -> None:
+    insight = _strong_insight()
+    insight["verification"] = {
+        "method": "dax",
+        "expression": """
+EVALUATE
+ROW(
+    "metric_value",
+    DIVIDE(
+        CALCULATE(
+            AVERAGEX(VALUES('Period'[MonthNumber]), [ARR $]),
+            'Period'[Year] = 2030
+        ),
+        CALCULATE(
+            AVERAGEX(VALUES('Period'[MonthNumber]), [ARR $]),
+            'Period'[Year] = 2026
+        )
+    )
+)
+""",
+        "sources": {
+            "arr": "[ARR $]",
+            "period": "Period",
+        },
+    }
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_nested_dax_metric_from_undeclared_measure() -> None:
+    insight = _strong_insight()
+    insight["verification"] = {
+        "method": "dax",
+        "expression": """
+EVALUATE
+ROW(
+    "metric_value",
+    DIVIDE(
+        CALCULATE([Unrelated Amount], 'Unrelated'[Year] = 2024),
+        CALCULATE([Unrelated Count], 'Unrelated'[Year] = 2024)
+    )
+)
+""",
+        "sources": {
+            "arr": "[ARR $]",
+            "active_customers": "[Active Customers #]",
+            "period": "Period",
+        },
+    }
+
+    with pytest.raises(AssertionError, match="declared source"):
+        _verify({"insights": [insight]})
+
+
 def test_verifier_rejects_unsupported_causal_language() -> None:
     insight = _strong_insight()
     insight["statement"] = "Poor onboarding caused enterprise retention to fall."

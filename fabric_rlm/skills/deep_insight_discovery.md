@@ -457,6 +457,44 @@ def verify(payload):
         text = re.sub(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"", " ", text)
         return set(re.findall(r"\b[a-z_]\w*\b", text.lower()))
 
+    def dax_row_metrics(expression):
+        text = strip_comments(expression)
+        metrics = []
+        pattern = re.compile(
+            r"\"(?:metric_value|current_value)\"\s*,",
+            flags=re.I,
+        )
+        for match in pattern.finditer(text):
+            start = match.end()
+            depth = 0
+            quote = None
+            index = start
+            while index < len(text):
+                char = text[index]
+                if quote is not None:
+                    if char == quote:
+                        if index + 1 < len(text) and text[index + 1] == quote:
+                            index += 2
+                            continue
+                        quote = None
+                    index += 1
+                    continue
+                if char in {"'", '"'}:
+                    quote = char
+                elif char == "(":
+                    depth += 1
+                elif char == ")":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif char == "," and depth == 0:
+                    break
+                index += 1
+            metric = text[start:index].strip()
+            if metric:
+                metrics.append(metric)
+        return metrics
+
     def validate_verification(verification, label):
         assert isinstance(verification, dict), f"{label} verification must be structured"
         method = str(verification.get("method", "")).strip().lower()
@@ -535,11 +573,7 @@ def verify(payload):
                 for _, relations in metric_blocks
             ), f"{label} verification does not reference a declared source"
         elif method == "dax":
-            row_metrics = re.findall(
-                r"\"(?:metric_value|current_value)\"\s*,\s*([^,)]+)",
-                strip_comments(expression),
-                flags=re.I,
-            )
+            row_metrics = dax_row_metrics(expression)
             assert row_metrics and all(
                 not constant_expression(item) for item in row_metrics
             ), f"{label} verification must recompute metric_value from source data"
