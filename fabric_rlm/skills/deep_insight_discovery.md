@@ -186,6 +186,8 @@ measured zero.
 
 ```python
 def verify(payload):
+    import hashlib
+    import json
     import math
     import re
     from datetime import date, datetime, timedelta
@@ -1121,6 +1123,65 @@ def verify(payload):
             r"[0-9a-f]{64}",
             str(window_fingerprint),
         ), f"{label} temporal_context window fingerprint is invalid"
+        fingerprint_payloads = context.get("evidence_fingerprint_payloads")
+        assert isinstance(fingerprint_payloads, dict), (
+            f"{label} temporal_context evidence_fingerprint_payloads are required"
+        )
+
+        def evidence_fingerprint(value):
+            canonical = json.dumps(
+                value,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            encoded = (
+                "fabric-rlm.analysis.fingerprint.v1\0" + canonical
+            ).encode("utf-8")
+            return hashlib.sha256(encoded).hexdigest()
+
+        assert evidence_fingerprint(
+            fingerprint_payloads.get("coverage")
+        ) == evidence_fingerprints["coverage"], (
+            f"{label} temporal_context coverage fingerprint does not match evidence"
+        )
+        coverage_payload = fingerprint_payloads.get("coverage")
+        assert isinstance(coverage_payload, dict), (
+            f"{label} temporal_context coverage evidence must be structured"
+        )
+        payload_requested_as_of = coverage_payload.get("requested_as_of")
+        if payload_requested_as_of is None:
+            payload_requested_as_of = (
+                coverage_payload.get("diagnostics", {})
+                .get("watermarks", {})
+                .get("requested_as_of")
+            )
+        assert payload_requested_as_of == context["requested_as_of"], (
+            f"{label} temporal_context coverage requested_as_of does not match"
+        )
+        window_payload = fingerprint_payloads.get("window")
+        assert (
+            window_fingerprint is None and window_payload is None
+        ) or (
+            window_fingerprint is not None
+            and evidence_fingerprint(window_payload) == window_fingerprint
+        ), f"{label} temporal_context window fingerprint does not match evidence"
+        if status == "current_change":
+            assert window_fingerprint is not None and isinstance(
+                window_payload,
+                dict,
+            ), (
+                f"{label} temporal_context current_change requires linked "
+                "window evidence"
+            )
+            assert (
+                window_payload.get("coverage_fingerprint")
+                == evidence_fingerprints["coverage"]
+            ), (
+                f"{label} temporal_context window evidence does not reference "
+                "coverage"
+            )
 
         def period_start(value, grain):
             if grain == "day":
@@ -1143,7 +1204,17 @@ def verify(payload):
             month_index = value.year * 12 + value.month - 1 + months
             return date(month_index // 12, month_index % 12 + 1, 1)
 
-        def validate_period(period, field):
+        def period_label(value, grain):
+            if grain == "day":
+                return value.isoformat()
+            if grain == "week":
+                iso_year, iso_week, _ = value.isocalendar()
+                return f"{iso_year}-W{iso_week:02d}"
+            if grain == "month":
+                return value.strftime("%Y-%m")
+            return f"{value.year}-Q{((value.month - 1) // 3) + 1}"
+
+        def validate_period(period, field, require_periods=False):
             assert isinstance(period, dict), (
                 f"{label} temporal_context {field} must be structured"
             )
@@ -1168,12 +1239,24 @@ def verify(payload):
                 f"{label} temporal_context {field} end is not grain-aligned"
             )
             periods = period.get("periods")
-            if periods is not None:
+            if require_periods:
                 assert (
                     isinstance(periods, list)
                     and periods
                     and all(isinstance(item, str) and item for item in periods)
                 ), f"{label} temporal_context {field} periods are invalid"
+                expected_periods = []
+                cursor = start
+                while cursor <= end:
+                    assert len(expected_periods) < 10000, (
+                        f"{label} temporal_context {field} period range is too large"
+                    )
+                    expected_periods.append(period_label(cursor, grain))
+                    cursor = next_period(cursor, grain)
+                assert periods == expected_periods, (
+                    f"{label} temporal_context {field} periods do not match "
+                    "the declared range"
+                )
             return start, end
 
         if status in current_statuses:
@@ -1204,9 +1287,33 @@ def verify(payload):
             assert isinstance(current_window, dict), (
                 f"{label} temporal_context current_change requires current_window"
             )
-            validate_period(current_window, "current_window")
+            current_start, current_end = validate_period(
+                current_window,
+                "current_window",
+                require_periods=True,
+            )
+            assert current_window["grain"] == latest_complete["grain"], (
+                f"{label} temporal_context current_window grain must match "
+                "latest_complete_period"
+            )
+            assert current_end == complete_end, (
+                f"{label} temporal_context current_window must end at "
+                "latest_complete_period"
+            )
             assert comparators, (
                 f"{label} temporal_context current_change requires a comparator"
+            )
+            assert window_payload.get("current_window") == current_window, (
+                f"{label} temporal_context current_window does not match "
+                "window evidence"
+            )
+            assert len(comparators) == 1, (
+                f"{label} temporal_context current_change requires exactly "
+                "one comparator"
+            )
+            assert window_payload.get("comparator") == comparators[0], (
+                f"{label} temporal_context comparator does not match "
+                "window evidence"
             )
             for comparator_index, comparator in enumerate(comparators, start=1):
                 assert isinstance(comparator, dict), (
@@ -1217,10 +1324,100 @@ def verify(payload):
                     f"{label} temporal_context comparator {comparator_index} "
                     "kind is required"
                 )
-                validate_period(
+                comparator_start, comparator_end = validate_period(
                     comparator,
                     f"comparator {comparator_index}",
+                    require_periods=True,
                 )
+                assert comparator["grain"] == current_window["grain"], (
+                    f"{label} temporal_context comparator {comparator_index} "
+                    "grain must match current_window"
+                )
+                kind = comparator["kind"]
+                assert kind in {
+                    "previous_window",
+                    "same_period_prior_year",
+                }, (
+                    f"{label} temporal_context comparator {comparator_index} "
+                    "kind is invalid"
+                )
+                assert len(comparator["periods"]) == len(
+                    current_window["periods"]
+                ), (
+                    f"{label} temporal_context comparator period count must "
+                    "match current_window"
+                )
+                if kind == "previous_window":
+                    assert comparator_end + timedelta(days=1) == current_start, (
+                        f"{label} temporal_context previous_window comparator "
+                        "must immediately precede current_window"
+                    )
+                else:
+                    if current_window["grain"] == "week":
+                        current_iso = current_start.isocalendar()
+                        comparator_iso = comparator_start.isocalendar()
+                        same_prior_period = (
+                            comparator_iso.year == current_iso.year - 1
+                            and comparator_iso.week == current_iso.week
+                        )
+                    else:
+                        same_prior_period = (
+                            comparator_start.month == current_start.month
+                            and comparator_start.day == current_start.day
+                            and comparator_start.year == current_start.year - 1
+                        )
+                    assert same_prior_period, (
+                        f"{label} temporal_context same_period_prior_year "
+                        "comparator is not calendar-aligned"
+                    )
+        complete_periods = context.get("complete_periods")
+        assert isinstance(complete_periods, list) and all(
+            isinstance(item, str) and item for item in complete_periods
+        ), f"{label} temporal_context complete_periods must be a list of text"
+        complete_set = set(complete_periods)
+        persistence_periods = context.get("persistence_periods")
+        seasonal_cycles = context.get("seasonal_cycles")
+        assert isinstance(persistence_periods, list), (
+            f"{label} temporal_context persistence_periods must be a list"
+        )
+        assert isinstance(seasonal_cycles, list), (
+            f"{label} temporal_context seasonal_cycles must be a list"
+        )
+        if status == "persistent":
+            assert (
+                len(persistence_periods) >= 3
+                and len(set(persistence_periods)) == len(persistence_periods)
+                and set(persistence_periods) <= complete_set
+            ), (
+                f"{label} temporal_context persistent status requires at "
+                "least three distinct complete persistence_periods"
+            )
+        if status == "recurring_seasonal":
+            assert len(seasonal_cycles) >= 2, (
+                f"{label} temporal_context recurring_seasonal status requires "
+                "at least two seasonal_cycles"
+            )
+            normalized_cycles = []
+            used_periods = set()
+            for cycle_index, cycle in enumerate(seasonal_cycles, start=1):
+                assert (
+                    isinstance(cycle, list)
+                    and cycle
+                    and len(set(cycle)) == len(cycle)
+                    and set(cycle) <= complete_set
+                ), (
+                    f"{label} temporal_context seasonal cycle {cycle_index} "
+                    "must contain distinct complete periods"
+                )
+                normalized = tuple(cycle)
+                assert normalized not in normalized_cycles, (
+                    f"{label} temporal_context seasonal_cycles must be distinct"
+                )
+                assert not (used_periods & set(cycle)), (
+                    f"{label} temporal_context seasonal_cycles must not overlap"
+                )
+                normalized_cycles.append(normalized)
+                used_periods.update(cycle)
         return status, supports_current_action
 
     sentinel = {"none", "n/a", "na", "unknown", "not applicable", "null"}

@@ -297,6 +297,9 @@ def profile_time_coverage(
             "missing_periods": tuple(
                 _period_label(value, grain) for value in missing_starts
             ),
+            "complete_periods": tuple(
+                _period_label(value, grain) for value in complete_starts
+            ),
             "latest_complete_period": latest_complete,
             "partial_final_period": partial_final,
             "freshness_lag_days": freshness_lag_days,
@@ -304,6 +307,7 @@ def profile_time_coverage(
         },
         diagnostics={
             "input_fingerprint": fingerprint(input_values),
+            "fingerprint_payload": input_values,
             "method": "calendar_coverage_v1",
             "watermarks": {
                 "requested_as_of": requested_local_date.isoformat(),
@@ -461,7 +465,10 @@ def combine_time_coverage(
     requested_date = date.fromisoformat(requested_as_of)
     freshness_lag_days = max(
         0,
-        (requested_date - common_watermark.date()).days,
+        (
+            requested_date
+            - common_watermark.astimezone(source_timezone).date()
+        ).days,
     )
     if trustworthy_spread > mismatch_tolerance_days:
         freshness_status = "mismatched"
@@ -502,6 +509,9 @@ def combine_time_coverage(
             "missing_periods": tuple(
                 _period_label(value, grain) for value in missing_starts
             ),
+            "complete_periods": tuple(
+                _period_label(value, grain) for value in complete_starts
+            ),
             "latest_complete_period": latest_complete,
             "partial_final_period": partial_final,
             "freshness_lag_days": freshness_lag_days,
@@ -509,6 +519,7 @@ def combine_time_coverage(
         },
         diagnostics={
             "input_fingerprint": fingerprint(input_values),
+            "fingerprint_payload": input_values,
             "method": "joined_trustworthy_coverage_v1",
             "source_watermarks": source_watermarks,
             "source_trustworthy_through": source_trustworthy,
@@ -714,6 +725,10 @@ def select_latest_complete_window(
         )
     if type(window_periods) is not int or window_periods <= 0:
         raise ValueError("window_periods must be a positive integer")
+    if window_periods > _MAX_PROFILE_PERIODS:
+        raise ValueError(
+            "window_periods exceeds the deterministic window limit"
+        )
     if comparator_kind not in {
         "none",
         "previous_window",
@@ -743,15 +758,15 @@ def select_latest_complete_window(
     missing_current = tuple(
         label for label in current_labels if label not in observed
     )
+    fingerprint_payload = {
+        "coverage": coverage.to_dict(),
+        "window_periods": window_periods,
+        "comparator_kind": comparator_kind,
+    }
     base_diagnostics = {
         "coverage_fingerprint": coverage.diagnostics.get("input_fingerprint"),
-        "input_fingerprint": fingerprint(
-            {
-                "coverage": coverage.to_dict(),
-                "window_periods": window_periods,
-                "comparator_kind": comparator_kind,
-            }
-        ),
+        "input_fingerprint": fingerprint(fingerprint_payload),
+        "fingerprint_payload": fingerprint_payload,
         "method": "latest_complete_window_v1",
     }
     if missing_current:
@@ -824,6 +839,30 @@ def select_latest_complete_window(
                         "the selected calendar window."
                     ),
                 )
+            if comparator_kind == "same_period_prior_year" and any(
+                _next_period(previous, grain) != current
+                for previous, current in zip(
+                    comparator_starts,
+                    comparator_starts[1:],
+                )
+            ):
+                return OperatorResult(
+                    node_id=node_id,
+                    operator="select_latest_complete_window.v1",
+                    status="failed",
+                    seed=seed,
+                    sample_size=len(current_labels),
+                    diagnostics=base_diagnostics,
+                    limitations=(
+                        "The selected calendar window has no contiguous "
+                        "same-period-prior-year comparator.",
+                    ),
+                    failure_code="non_comparable_calendar_period",
+                    failure_message=(
+                        "Same-period-prior-year comparison is undefined for "
+                        "the selected calendar window."
+                    ),
+                )
         comparator_labels = tuple(
             _period_label(value, grain) for value in comparator_starts
         )
@@ -859,21 +898,36 @@ def select_latest_complete_window(
             "periods": comparator_labels,
         }
 
+    result_values = {
+        "current_window": current_window,
+        "comparator": comparator,
+        "excluded_partial_period": coverage.values.get(
+            "partial_final_period"
+        ),
+        "freshness_status": coverage.values.get("freshness_status"),
+    }
+    completed_fingerprint_payload = {
+        "coverage_fingerprint": coverage.diagnostics.get(
+            "input_fingerprint"
+        ),
+        "window_periods": window_periods,
+        "comparator_kind": comparator_kind,
+        "current_window": current_window,
+        "comparator": comparator,
+    }
+    completed_diagnostics = {
+        **base_diagnostics,
+        "input_fingerprint": fingerprint(completed_fingerprint_payload),
+        "fingerprint_payload": completed_fingerprint_payload,
+    }
     return OperatorResult(
         node_id=node_id,
         operator="select_latest_complete_window.v1",
         status="completed",
         seed=seed,
         sample_size=window_periods,
-        values={
-            "current_window": current_window,
-            "comparator": comparator,
-            "excluded_partial_period": coverage.values.get(
-                "partial_final_period"
-            ),
-            "freshness_status": coverage.values.get("freshness_status"),
-        },
-        diagnostics=base_diagnostics,
+        values=result_values,
+        diagnostics=completed_diagnostics,
     )
 
 

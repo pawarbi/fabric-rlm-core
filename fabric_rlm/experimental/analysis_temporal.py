@@ -12,6 +12,7 @@ from fabric_rlm.experimental.analysis_contracts import (
     _freeze_json,
     _thaw_json,
 )
+from fabric_rlm.experimental.analysis_reproducibility import fingerprint
 
 
 TemporalStatus = Literal[
@@ -66,6 +67,56 @@ class TemporalAssessment:
             raise ValueError("reason must be non-empty text")
         if not isinstance(self.context, Mapping):
             raise ValueError("context must be a mapping")
+        context_status = self.context.get("recency_status")
+        context_support = self.context.get("supports_current_action")
+        if context_status != self.status:
+            raise ValueError("context recency_status must match status")
+        if context_support is not self.supports_current_action:
+            raise ValueError(
+                "context supports_current_action must match assessment"
+            )
+        if self.status in _CURRENT_ACTION_STATUSES:
+            for field_name in (
+                "time_basis",
+                "timezone",
+                "requested_as_of",
+                "data_as_of",
+                "trustworthy_through",
+                "latest_complete_period",
+                "evidence_fingerprints",
+                "evidence_fingerprint_payloads",
+            ):
+                if not self.context.get(field_name):
+                    raise ValueError(
+                        f"current temporal status requires context.{field_name}"
+                    )
+            fingerprints = self.context["evidence_fingerprints"]
+            payloads = self.context["evidence_fingerprint_payloads"]
+            if not isinstance(fingerprints, Mapping) or not isinstance(
+                payloads,
+                Mapping,
+            ):
+                raise ValueError(
+                    "current temporal status requires fingerprint mappings"
+                )
+            if fingerprint(payloads.get("coverage")) != fingerprints.get(
+                "coverage"
+            ):
+                raise ValueError("coverage fingerprint does not match payload")
+            window_fingerprint = fingerprints.get("window")
+            window_payload = payloads.get("window")
+            if (
+                window_fingerprint is None
+                and window_payload is not None
+            ) or (
+                window_fingerprint is not None
+                and fingerprint(window_payload) != window_fingerprint
+            ):
+                raise ValueError("window fingerprint does not match payload")
+            if self.status == "current_change" and window_fingerprint is None:
+                raise ValueError(
+                    "current_change requires linked window evidence"
+                )
         object.__setattr__(self, "reason", self.reason.strip())
         object.__setattr__(
             self,
@@ -126,6 +177,14 @@ def _seasonal_evidence(
         if not labels:
             raise ValueError(f"seasonal_cycles[{index}] must not be empty")
         cycles.append(labels)
+    if len(set(cycles)) != len(cycles):
+        raise ValueError("seasonal_cycles must be distinct")
+    used_labels: set[str] = set()
+    for cycle in cycles:
+        overlap = used_labels & set(cycle)
+        if overlap:
+            raise ValueError("seasonal_cycles must not overlap")
+        used_labels.update(cycle)
     return tuple(cycles)
 
 
@@ -175,21 +234,40 @@ def classify_temporal_relevance(
         raise ValueError(
             "window must be a select_latest_complete_window.v1 result"
         )
+    coverage_fingerprint = coverage.diagnostics.get("input_fingerprint")
+    if window is not None:
+        if (
+            window.diagnostics.get("coverage_fingerprint")
+            != coverage_fingerprint
+        ):
+            raise ValueError("window does not reference the supplied coverage")
+        if window.status == "completed":
+            current = window.values.get("current_window")
+            latest = coverage.values.get("latest_complete_period")
+            if (
+                not isinstance(current, Mapping)
+                or not isinstance(latest, Mapping)
+                or current.get("grain") != latest.get("grain")
+                or current.get("end") != latest.get("end")
+            ):
+                raise ValueError(
+                    "window does not end at the supplied latest complete period"
+                )
     if type(has_change_evidence) is not bool:
         raise ValueError("has_change_evidence must be boolean")
     if recency_policy not in {"strict", "allow_historical"}:
         raise ValueError("recency_policy must be strict or allow_historical")
     if type(latest_complete_period_only) is not bool:
         raise ValueError("latest_complete_period_only must be boolean")
-    observed_periods = set(coverage.values.get("observed_periods", ()))
+    complete_periods = set(coverage.values.get("complete_periods", ()))
     persistence_periods = _period_evidence(
         persistence_periods,
         "persistence_periods",
-        observed_periods,
+        complete_periods,
     )
     seasonal_cycles = _seasonal_evidence(
         seasonal_cycles,
-        observed_periods,
+        complete_periods,
     )
     if time_basis is not None and (
         not isinstance(time_basis, str) or not time_basis.strip()
@@ -197,6 +275,14 @@ def classify_temporal_relevance(
         raise ValueError("time_basis must be non-empty text or None")
 
     watermarks = coverage.diagnostics.get("watermarks", {})
+    if (
+        brief is not None
+        and brief.requested_as_of is not None
+        and brief.requested_as_of != watermarks.get("requested_as_of")
+    ):
+        raise ValueError(
+            "brief.requested_as_of must match coverage requested_as_of"
+        )
     current_window = (
         window.values.get("current_window")
         if window is not None and window.status == "completed"
@@ -216,39 +302,64 @@ def classify_temporal_relevance(
         "latest_complete_period": coverage.values.get(
             "latest_complete_period"
         ),
+        "complete_periods": coverage.values.get("complete_periods", ()),
         "current_window": current_window,
         "comparators": (comparator,) if isinstance(comparator, Mapping) else (),
         "partial_period_policy": "exclude",
         "completeness_basis": (
             "calendar_complete_and_source_marked_trustworthy"
         ),
-        "recency_status": coverage.values.get("freshness_status"),
+        "source_freshness_status": coverage.values.get("freshness_status"),
         "evidence_fingerprints": {
-            "coverage": coverage.diagnostics.get("input_fingerprint"),
+            "coverage": coverage_fingerprint,
             "window": (
                 window.diagnostics.get("input_fingerprint")
                 if window is not None
                 else None
             ),
         },
+        "evidence_fingerprint_payloads": {
+            "coverage": coverage.diagnostics.get("fingerprint_payload"),
+            "window": (
+                window.diagnostics.get("fingerprint_payload")
+                if window is not None
+                else None
+            ),
+        },
+        "persistence_periods": persistence_periods,
+        "seasonal_cycles": seasonal_cycles,
     }
 
-    if time_basis is None:
+    def assessment(
+        status: TemporalStatus,
+        supports_current_action: bool,
+        reason: str,
+    ) -> TemporalAssessment:
         return TemporalAssessment(
-            status="not_applicable",
-            supports_current_action=False,
-            reason="No event-time basis was declared for this finding.",
-            context=context,
+            status=status,
+            supports_current_action=supports_current_action,
+            reason=reason,
+            context={
+                **context,
+                "recency_status": status,
+                "supports_current_action": supports_current_action,
+            },
+        )
+
+    if time_basis is None:
+        return assessment(
+            "not_applicable",
+            False,
+            "No event-time basis was declared for this finding.",
         )
     if coverage.values.get("freshness_status") in {"stale", "mismatched"}:
-        return TemporalAssessment(
-            status="stale",
-            supports_current_action=False,
-            reason=(
+        return assessment(
+            "stale",
+            False,
+            (
                 "Source freshness is stale or inconsistent across required "
                 "inputs, so it cannot support a current claim."
             ),
-            context=context,
         )
     if (
         temporal_intent in {"current_state", "recent_change"}
@@ -257,38 +368,34 @@ def classify_temporal_relevance(
             or not latest_complete_period_only
         )
     ):
-        return TemporalAssessment(
-            status="historical",
-            supports_current_action=False,
-            reason=(
+        return assessment(
+            "historical",
+            False,
+            (
                 "The configured recency and complete-period policy does not "
                 "permit this evidence to be classified as current."
             ),
-            context=context,
         )
     if temporal_intent == "historical_context":
-        return TemporalAssessment(
-            status="historical",
-            supports_current_action=False,
-            reason=(
+        return assessment(
+            "historical",
+            False,
+            (
                 "The analysis intent permits historical context but does not "
                 "establish current operating conditions."
             ),
-            context=context,
         )
     if temporal_intent == "current_state":
         if coverage.values.get("latest_complete_period") is None:
-            return TemporalAssessment(
-                status="historical",
-                supports_current_action=False,
-                reason="No complete trustworthy period supports a current level.",
-                context=context,
+            return assessment(
+                "historical",
+                False,
+                "No complete trustworthy period supports a current level.",
             )
-        return TemporalAssessment(
-            status="current_level",
-            supports_current_action=True,
-            reason="A recent trustworthy complete period supports the level claim.",
-            context=context,
+        return assessment(
+            "current_level",
+            True,
+            "A recent trustworthy complete period supports the level claim.",
         )
     if temporal_intent == "recent_change":
         if (
@@ -297,50 +404,45 @@ def classify_temporal_relevance(
             or not isinstance(comparator, Mapping)
             or not has_change_evidence
         ):
-            return TemporalAssessment(
-                status="historical",
-                supports_current_action=False,
-                reason=(
+            return assessment(
+                "historical",
+                False,
+                (
                     "Recent change requires a complete current window, "
                     "comparable history, and measured change evidence."
                 ),
-                context=context,
             )
-        return TemporalAssessment(
-            status="current_change",
-            supports_current_action=True,
-            reason=(
+        return assessment(
+            "current_change",
+            True,
+            (
                 "Measured change reconciles a complete current window with "
                 "comparable history."
             ),
-            context=context,
         )
     if len(seasonal_cycles) >= 2:
-        return TemporalAssessment(
-            status="recurring_seasonal",
-            supports_current_action=False,
-            reason=(
+        return assessment(
+            "recurring_seasonal",
+            False,
+            (
                 "The pattern recurs across at least two comparable seasonal "
                 "cycles but does not by itself establish a current change."
             ),
-            context=context,
         )
     if len(persistence_periods) >= 3:
-        return TemporalAssessment(
-            status="persistent",
-            supports_current_action=True,
-            reason=(
+        return assessment(
+            "persistent",
+            True,
+            (
                 "The pattern persists across at least three trustworthy "
                 "complete periods."
             ),
-            context=context,
         )
-    return TemporalAssessment(
-        status="historical",
-        supports_current_action=False,
-        reason=(
+    return assessment(
+        "historical",
+        False,
+        (
             "The available history does not meet the deterministic persistence "
             "or recurrence threshold."
         ),
-        context=context,
     )

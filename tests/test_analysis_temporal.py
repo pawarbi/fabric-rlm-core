@@ -369,6 +369,34 @@ def test_daily_yoy_window_abstains_for_leap_day_without_exact_comparator() -> No
     assert result.failure_code == "non_comparable_calendar_period"
 
 
+def test_daily_yoy_window_abstains_when_comparator_spans_leap_day() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=(
+            "2024-02-28",
+            "2024-03-01",
+            "2025-02-28",
+            "2025-03-01",
+        ),
+        seed=1,
+        grain="day",
+        requested_as_of="2025-03-02",
+        source_watermark="2025-03-02T00:00:00Z",
+        trustworthy_through="2025-03-02T00:00:00Z",
+    )
+
+    result = select_latest_complete_window(
+        node_id="window",
+        coverage=coverage,
+        seed=2,
+        window_periods=2,
+        comparator_kind="same_period_prior_year",
+    )
+
+    assert result.status == "failed"
+    assert result.failure_code == "non_comparable_calendar_period"
+
+
 def test_weekly_yoy_comparator_preserves_iso_week_boundaries() -> None:
     coverage = profile_time_coverage(
         node_id="coverage",
@@ -431,6 +459,26 @@ def test_latest_complete_window_rejects_invalid_contracts(
             node_id="invalid",
             seed=2,
             **defaults,
+        )
+
+
+def test_latest_complete_window_bounds_requested_period_count() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=("2025-07-10",),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
+    )
+
+    with pytest.raises(ValueError, match="window limit"):
+        select_latest_complete_window(
+            node_id="window",
+            coverage=coverage,
+            seed=2,
+            window_periods=10_001,
         )
 
 
@@ -573,8 +621,18 @@ def test_structural_pattern_distinguishes_persistence_from_seasonality() -> None
 
     assert seasonal.status == "recurring_seasonal"
     assert seasonal.supports_current_action is False
+    assert seasonal.context["seasonal_cycles"] == (
+        ("2024-07",),
+        ("2025-07",),
+    )
     assert persistent.status == "persistent"
     assert persistent.supports_current_action is True
+    assert persistent.context["persistence_periods"] == (
+        "2025-04",
+        "2025-05",
+        "2025-06",
+        "2025-07",
+    )
 
 
 def test_missing_time_basis_is_explicitly_not_applicable() -> None:
@@ -656,6 +714,85 @@ def test_strict_recency_policy_does_not_treat_eight_day_lag_as_current() -> None
 
     assert assessment.status == "historical"
     assert assessment.supports_current_action is False
+
+
+def test_temporal_classification_rejects_mismatched_brief_and_window() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=("2025-07-10",),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
+    )
+    other_coverage = profile_time_coverage(
+        node_id="other",
+        timestamps=("2024-07-10",),
+        seed=2,
+        grain="month",
+        requested_as_of="2024-08-15",
+        source_watermark="2024-08-14T23:59:59Z",
+        trustworthy_through="2024-08-01T00:00:00Z",
+    )
+    other_window = select_latest_complete_window(
+        node_id="other-window",
+        coverage=other_coverage,
+        seed=3,
+        window_periods=1,
+    )
+    mismatched_brief = AnalysisBrief(
+        objective="Current level",
+        temporal_intent="current_state",
+        requested_as_of="2026-08-31",
+    )
+
+    with pytest.raises(ValueError, match="requested_as_of"):
+        classify_temporal_relevance(
+            brief=mismatched_brief,
+            coverage=coverage,
+            time_basis="order_created_at",
+        )
+    with pytest.raises(ValueError, match="supplied coverage"):
+        classify_temporal_relevance(
+            temporal_intent="recent_change",
+            coverage=coverage,
+            window=other_window,
+            time_basis="order_created_at",
+            has_change_evidence=True,
+        )
+
+
+def test_persistence_and_seasonality_require_complete_distinct_periods() -> None:
+    coverage = profile_time_coverage(
+        node_id="coverage",
+        timestamps=(
+            "2025-05-10",
+            "2025-06-10",
+            "2025-07-10",
+            "2025-08-10",
+        ),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-14T23:59:59Z",
+        trustworthy_through="2025-08-01T00:00:00Z",
+    )
+
+    with pytest.raises(ValueError, match="coverage evidence"):
+        classify_temporal_relevance(
+            temporal_intent="structural_pattern",
+            coverage=coverage,
+            time_basis="order_created_at",
+            persistence_periods=("2025-06", "2025-07", "2025-08"),
+        )
+    with pytest.raises(ValueError, match="distinct"):
+        classify_temporal_relevance(
+            temporal_intent="structural_pattern",
+            coverage=coverage,
+            time_basis="order_created_at",
+            seasonal_cycles=(("2025-06",), ("2025-06",)),
+        )
 
 
 @pytest.mark.parametrize(
@@ -766,6 +903,39 @@ def test_joined_freshness_mismatch_blocks_current_action() -> None:
     assert assessment.status == "stale"
     assert assessment.supports_current_action is False
     assert "freshness" in assessment.reason
+
+
+def test_joined_freshness_lag_uses_source_local_date() -> None:
+    first = profile_time_coverage(
+        node_id="first",
+        timestamps=("2025-07-10",),
+        seed=1,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-08T06:30:00Z",
+        trustworthy_through="2025-08-01T07:00:00Z",
+        timezone="America/Los_Angeles",
+    )
+    second = profile_time_coverage(
+        node_id="second",
+        timestamps=("2025-07-20",),
+        seed=2,
+        grain="month",
+        requested_as_of="2025-08-15",
+        source_watermark="2025-08-08T06:30:00Z",
+        trustworthy_through="2025-08-01T07:00:00Z",
+        timezone="America/Los_Angeles",
+    )
+
+    joined = combine_time_coverage(
+        node_id="joined",
+        coverages={"first": first, "second": second},
+        seed=3,
+    )
+
+    assert first.values["freshness_lag_days"] == 8
+    assert joined.values["freshness_lag_days"] == 8
+    assert joined.values["freshness_status"] == "recent"
 
 
 def test_joined_coverage_reports_common_period_gaps() -> None:
