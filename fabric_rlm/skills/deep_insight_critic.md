@@ -44,7 +44,14 @@ enforces completeness, provenance, and legal state transitions.
 3. **Challenge obviousness** relative to the decision baseline and ask whether
    cross-domain depth, actionability, or a materially different decision is
    present. Do not reward a well-audited inventory of univariate restatements.
-4. **Submit** the self-contained critic contract only after every source
+4. **Challenge statistical and operational fitness.** Reject averages-only
+   findings unless the denominator, sample size, median or distribution tail,
+   skew sensitivity, and relevant censoring are addressed or explicitly gated.
+   Test obvious confounders and population comparability. Require
+   exposure-normalized comparisons for measures that accumulate with lifecycle
+   age or time at risk. Treat model-proposed thresholds and external benchmarks
+   as ungoverned until an approved source is evidenced.
+5. **Submit** the self-contained critic contract only after every source
    insight and every taxonomy check has a disposition.
 
 ## Output contract: `critic_version: 1`
@@ -85,6 +92,13 @@ a challenge. Blocking challenges cannot be downgraded. A synthesis-eligible
 revision must resolve every material/blocking challenge or explicitly gate
 the unresolved work with an `investigate_first` required change. `gated`
 means investigate-first/diagnostic-only: it cannot preserve a program action.
+
+Material or blocking revisions must be executable as bounded follow-up
+analyses or explicitly identified as unavailable in the frozen source. Distinct
+challenges require distinct evidence unless the critic explicitly consolidates
+them. A zero count does not prove that a requested comparator period exists;
+missing periods, fields, denominators, and populations remain unresolvable and
+cannot support synthesis.
 
 - `portfolio_challenges`: cross-insight challenges with the same challenge
   fields plus `affected_insight_titles`. It additionally permits

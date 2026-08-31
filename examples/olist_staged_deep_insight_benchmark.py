@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 import hashlib
 import importlib.util
 import json
@@ -130,6 +131,10 @@ RESEARCH REQUIREMENTS
   measured coverage permits.
 - Include quantitative rejected candidates, diagnostic alternatives,
   metric-definition sensitivities, and the benchmark/target basis.
+- For group comparisons and averages, measure group sample sizes, denominator
+  integrity, median, distribution tails, and skew sensitivity.
+- Test censoring, selection effects, exposure normalization, and obvious
+  confounders before attributing differences to a process or segment.
 - Favor decision-relevant findings over descriptive counts.
 
 EVIDENCE RULES
@@ -245,6 +250,10 @@ SCAFFOLD CONTRACT
   dimensions_deferred, along with applicable populations and time grains.
 - Promote 3-5 high-quality findings and establish their exact promoted titles
   and dimensions_tested. Quality wins over count.
+- Do not promote averages-only findings. Require distribution and tail evidence
+  plus explicit group sizes and denominators.
+- Require censoring, selection, exposure, and confounder checks when they can
+  materially change the interpretation; otherwise reject or defer the candidate.
 - Use only source-derived research candidates from the embedded ledger.
 - Keep diagnostic alternatives and metric-definition sensitivities explicit.
 - Do not invent insights in this stage.
@@ -281,6 +290,12 @@ INSIGHT CONTRACT
   promoted titles and dimensions in the scaffold.
 - Follow contract v2 diagnostics and metric specs, including competing
   explanations, robustness checks, limitations, and metric components.
+- For every promoted average or group comparison, include verified group sample
+  sizes, denominator integrity, median and distribution tails.
+- Accumulating lifecycle and activity measures must be exposure-normalized.
+- If censoring, selection, confounding, or distribution evidence remains
+  material and unresolved, set decision_readiness to investigate_first and
+  keep the action diagnostic.
 - Every verification must use self-contained SQL and an exact alias->source
   identity mapping containing only authoritative identities listed above.
 - Do not reference worker-created tables or views.
@@ -354,6 +369,11 @@ CLOSURE PLAN CONTRACT
   weakened, or supported, finite numeric expected_value, and verification.
 - Verification must use one self-contained aggregate DuckDB SQL query and an
   exact alias-to-source identity mapping containing only identities above.
+- Use explicit JOIN syntax for every multi-relation query; comma joins are not
+  supported.
+- The metric_value projection must be one source column or one aggregate.
+  Do not divide or combine aggregates; express rates with one aggregate such
+  as AVG(CASE WHEN ... THEN 1.0 ELSE 0.0 END).
 - Test only the declared explanation. Do not add candidates, explanations,
   findings, actions, or source identities.
 - Include aggregate evidence only: no raw records.
@@ -365,6 +385,43 @@ CLOSURE PLAN CONTRACT
 """
 
 
+def build_evidence_closure_repair_prompt(
+    sources: Mapping[str, Path],
+    payload: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    error: str,
+) -> str:
+    """Build a bounded repair task for an invalid closure plan."""
+
+    return f"""\
+Repair only the invalid evidence-closure plan below.
+Return exactly closure_plans: list with one plan per pending target.
+
+AUTHORITATIVE SOURCE IDENTITIES
+{_source_lines(sources)}
+
+EXACT PENDING TARGETS
+{_compact_json({"targets": _pending_evidence_closure_targets(payload)})}
+
+CURRENT INVALID CLOSURE PLAN
+{_compact_json(plan)}
+
+EXACT VALIDATION ERROR
+{error}
+
+REPAIR RULES
+- Make only the minimum correction required by the exact error.
+- Preserve explanation_id values and exact target coverage.
+- Each plan must contain only explanation_id, required_check, disposition,
+  expected_value, and verification.
+- Use only authoritative source identities listed above.
+- Verification metric_value must be one source column or one aggregate; do
+  not divide or combine aggregates.
+- Do not invent evidence, targets, findings, actions, or source identities.
+- Call SUBMIT immediately.
+"""
+
+
 def validate_evidence_closure_plan(
     payload: Mapping[str, Any],
     plan: Mapping[str, Any],
@@ -373,14 +430,24 @@ def validate_evidence_closure_plan(
     """Validate exact target coverage and source authority for a closure plan."""
 
     _validate_partial(plan, EVIDENCE_CLOSURE_OUTPUTS, "evidence closure plan")
+    validated = deepcopy(dict(plan))
     targets = _pending_evidence_closure_targets(payload)
     expected_ids = [target["explanation_id"] for target in targets]
-    plans = plan["closure_plans"]
+    plans = validated["closure_plans"]
     if len(plans) != len(expected_ids):
         raise ValueError(
             "evidence closure plan must contain exactly one plan per pending target"
         )
     authorized = frozenset(sources)
+    source_reference_candidates: dict[str, set[str]] = {}
+    for identity, path in sources.items():
+        for reference in (identity, str(path), path.name):
+            source_reference_candidates.setdefault(reference, set()).add(identity)
+    source_references = {
+        reference: next(iter(identities))
+        for reference, identities in source_reference_candidates.items()
+        if len(identities) == 1
+    }
     seen: set[str] = set()
     for index, item in enumerate(plans):
         label = f"closure_plans[{index}]"
@@ -430,15 +497,21 @@ def validate_evidence_closure_plan(
                 or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", alias) is None
             ):
                 raise ValueError(f"{label} source alias is invalid")
-            if identity not in authorized:
+            normalized_identity = (
+                source_references.get(identity)
+                if isinstance(identity, str)
+                else None
+            )
+            if normalized_identity not in authorized:
                 raise ValueError(
                     f"{label} must use an authoritative source identity"
                 )
+            declared_sources[alias] = normalized_identity
     if seen != set(expected_ids):
         raise ValueError(
             "evidence closure plan must contain exactly one plan per pending target"
         )
-    return deepcopy(dict(plan))
+    return validated
 
 
 def merge_evidence_closure_plan(
@@ -555,20 +628,59 @@ def _critic_closure_targets(
             if not isinstance(challenge, Mapping):
                 continue
             resolution = resolution_by_index.get(challenge_index)
+            required_changes = review.get("required_changes")
+            has_investigation_gate = (
+                isinstance(required_changes, list)
+                and any(
+                    isinstance(change, Mapping)
+                    and change.get("gate") == "investigate_first"
+                    for change in required_changes
+                )
+            )
+            unresolved_revision = (
+                resolution is None
+                and (
+                    review.get("verdict") == "revise"
+                    or has_investigation_gate
+                )
+            )
+            gated_resolution = (
+                isinstance(resolution, Mapping)
+                and resolution.get("status") == "gated"
+            )
             if (
-                not isinstance(resolution, Mapping)
-                or resolution.get("status") != "gated"
-                or challenge.get("severity") not in {"material", "blocking"}
+                challenge.get("severity") not in {"material", "blocking"}
+                or not (gated_resolution or unresolved_revision)
             ):
                 continue
+            follow_up_parts = [str(challenge.get("assessment") or "").strip()]
+            if isinstance(required_changes, list):
+                follow_up_parts.extend(
+                    str(change.get("change") or "").strip()
+                    for change in required_changes
+                    if isinstance(change, Mapping)
+                    and str(change.get("change") or "").strip()
+                )
+            follow_up = {
+                "explanation": " ".join(
+                    part for part in follow_up_parts if part
+                ),
+                "explanation_id": (
+                    f"critic-follow-up-{insight_index + 1}-"
+                    f"{challenge_index + 1}"
+                ),
+                "measurable": True,
+                "disposition": "untested",
+                "target_kind": "critic_follow_up",
+            }
             targets.append(
                 {
                     "assessment": challenge.get("assessment"),
                     "challenge_id": challenge.get("id"),
                     "challenge_type": challenge.get("type"),
-                    "explanations": explanation_inventory,
+                    "explanations": [*explanation_inventory, follow_up],
                     "insight_title": review.get("title"),
-                    "required_changes": review.get("required_changes"),
+                    "required_changes": required_changes,
                 }
             )
     return targets
@@ -596,17 +708,85 @@ AUTHORITATIVE DISCOVERY PAYLOAD
 {_compact_json(payload)}
 
 CRITIC CLOSURE CONTRACT
-- Preserve challenge_id exactly and select exactly one existing explanation_id
-  from the same insight. Do not add or rewrite explanations.
-- Supply a substantive required_check, final disposition of ruled_out,
-  weakened, or supported, finite numeric expected_value, and verification.
+- Preserve challenge_id exactly and select exactly one authorized explanation_id
+  from the same insight. A critic-follow-up target is an authorized new analysis;
+  existing explanations must not be added to or rewritten.
+- Supply a substantive required_check. For an executable check, the disposition
+  must be exactly ruled_out, weakened, or supported and the plan must include a
+  finite numeric expected_value plus verification.
+- If the frozen sources do not contain the required field, period, denominator,
+  or comparator, use disposition unresolvable with a substantive limitation and
+  omit expected_value and verification. Never interpret an unavailable period
+  or empty population as a measured zero.
+- Except for that explicit abstention, disposition must be exactly ruled_out,
+  weakened, or supported.
+  investigate_first is not a disposition, and untested is target metadata that
+  must not be copied into the plan.
+- Distinct critic challenges must use distinct verification SQL. A query must
+  directly test the challenge and every material qualifier in required_changes.
+- Never use an expected zero count to prove that a requested comparator period
+  or population exists. Use an evidence-bearing scalar contrast; if the
+  comparator is unavailable, mark the follow-up unresolvable.
+- Comparative checks must return a scalar contrast such as a difference, ratio,
+  or normalized effect, not one group's mean followed by an unsupported prose
+  claim about the other group. Compute components in CTEs, compute the derived
+  value in a final contrast CTE, then use exactly
+  SELECT metric_value FROM contrast so the verifier sees one source column.
 - Verification must use one self-contained aggregate DuckDB SQL query and an
   exact alias-to-source identity mapping containing only identities above.
+- Use explicit JOIN syntax for every multi-relation query; comma joins are not
+  supported.
 - Do not weaken, remove, rename, or resolve a critic challenge by assertion.
   The later critic rerun decides whether executed evidence resolves it.
 - Include aggregate evidence only: no raw records, personal identifiers,
   contact details, free-text messages, transcripts, subjects, or descriptions.
 - Call SUBMIT immediately after constructing the bounded native partial.
+"""
+
+
+def build_critic_closure_repair_prompt(
+    sources: Mapping[str, Path],
+    payload: Mapping[str, Any],
+    critic: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    error: str,
+) -> str:
+    """Build a bounded correction task for an invalid critic closure plan."""
+
+    return f"""\
+Repair only the invalid critic evidence-closure plan below.
+Return exactly critic_closure_plans: list with one plan per exact target.
+
+AUTHORITATIVE SOURCE IDENTITIES
+{_source_lines(sources)}
+
+EXACT CRITIC CLOSURE TARGETS
+{_compact_json({"targets": _critic_closure_targets(payload, critic)})}
+
+CURRENT INVALID CRITIC CLOSURE PLAN
+{_compact_json(plan)}
+
+EXACT VALIDATION ERROR
+{error}
+
+REPAIR RULES
+- Make only the minimum correction required by the exact error.
+- Preserve every challenge_id and explanation_id and exact target coverage.
+- Set each executable disposition to exactly ruled_out, weakened, or supported.
+  investigate_first and untested are never valid dispositions. If the frozen
+  source cannot execute the requested check, use unresolvable with limitation
+  and omit expected_value and verification.
+- Distinct challenges require distinct SQL that directly tests each challenge.
+- Replace zero-valued count evidence with a scalar contrast or unresolvable
+  abstention. Comparative prose requires a comparative scalar, not one mean.
+- For derived contrasts, compute components in CTEs, create a contrast CTE with
+  one metric_value column, then end with SELECT metric_value FROM contrast.
+- Use explicit JOIN syntax only; never use comma joins.
+- Verification metric_value must be one source column or one aggregate; do
+  not divide or combine aggregates.
+- Use only authoritative source identities listed above.
+- Do not add findings, challenges, explanations, or source identities.
+- Call SUBMIT immediately.
 """
 
 
@@ -632,6 +812,7 @@ def merge_critic_closure_plan(
         )
     authorized = frozenset(sources)
     planned_by_challenge: dict[str, dict[str, Any]] = {}
+    verification_owners: dict[str, str] = {}
     for index, item in enumerate(plans):
         label = f"critic_closure_plans[{index}]"
         if not isinstance(item, dict):
@@ -645,18 +826,47 @@ def merge_critic_closure_plan(
             for explanation in target["explanations"]
         }
         if item.get("explanation_id") not in explanation_ids:
-            raise ValueError(f"{label} must reference an existing explanation")
-        if item.get("disposition") not in {
-            "ruled_out",
-            "weakened",
-            "supported",
-        }:
-            raise ValueError(f"{label} disposition is invalid")
+            raise ValueError(
+                f"{label} must reference an existing explanation or "
+                "authorized critic follow-up"
+            )
+        target_explanation = next(
+            explanation
+            for explanation in target["explanations"]
+            if explanation["explanation_id"] == item.get("explanation_id")
+        )
         if (
             not isinstance(item.get("required_check"), str)
             or not item["required_check"].strip()
         ):
             raise ValueError(f"{label} required_check must be non-empty")
+        disposition = item.get("disposition")
+        if disposition == "unresolvable":
+            if target_explanation.get("target_kind") != "critic_follow_up":
+                raise ValueError(
+                    f"{label} may mark only a critic follow-up as unresolvable"
+                )
+            if (
+                not isinstance(item.get("limitation"), str)
+                or not item["limitation"].strip()
+            ):
+                raise ValueError(
+                    f"{label} unresolvable follow-up requires a limitation"
+                )
+            if "expected_value" in item or "verification" in item:
+                raise ValueError(
+                    f"{label} unresolvable follow-up must not invent verification"
+                )
+            planned_by_challenge[challenge_id] = item
+            continue
+        if disposition not in {
+            "ruled_out",
+            "weakened",
+            "supported",
+        }:
+            raise ValueError(
+                f"{label} disposition {disposition!r} is invalid"
+            )
         expected_value = item.get("expected_value")
         if (
             type(expected_value) not in {int, float}
@@ -671,11 +881,52 @@ def merge_critic_closure_plan(
             or not verification["expression"].strip()
         ):
             raise ValueError(f"{label} verification must be executable SQL")
+        if (
+            float(expected_value) == 0.0
+            and re.search(
+                r"\bcount\s*\(",
+                verification["expression"],
+                flags=re.IGNORECASE,
+            )
+        ):
+            raise ValueError(
+                f"{label} zero-valued count cannot establish comparator "
+                "availability; use an evidence-bearing contrast or mark the "
+                "critic follow-up unresolvable"
+            )
+        if re.search(
+            r"\b(?:versus|compared|difference|ratio|shorter than|longer than)\b",
+            item["required_check"],
+            flags=re.IGNORECASE,
+        ):
+            sql_without_literals = _without_sql_literals_and_comments(
+                verification["expression"]
+            )
+            if not re.search(
+                r"[A-Za-z0-9_)]\s*[-/]\s*[A-Za-z_(]",
+                sql_without_literals,
+            ):
+                raise ValueError(
+                    f"{label} comparative claim requires a scalar contrast, "
+                    "not a one-group aggregate"
+                )
         declared_sources = verification.get("sources")
         if not isinstance(declared_sources, dict) or not declared_sources:
             raise ValueError(f"{label} verification sources are required")
         if any(identity not in authorized for identity in declared_sources.values()):
             raise ValueError(f"{label} must use an authoritative source identity")
+        normalized_sql = re.sub(
+            r"\s+",
+            " ",
+            verification["expression"],
+        ).strip().casefold()
+        prior_challenge = verification_owners.get(normalized_sql)
+        if prior_challenge is not None:
+            raise ValueError(
+                f"{label} must use distinct verification SQL from "
+                f"challenge {prior_challenge!r}"
+            )
+        verification_owners[normalized_sql] = str(challenge_id)
         planned_by_challenge[challenge_id] = item
 
     merged = deepcopy(dict(payload))
@@ -700,7 +951,43 @@ def merge_critic_closure_plan(
             if explanation_id == target_id:
                 selected = explanation
         if selected is None:
-            raise ValueError("critic closure target explanation disappeared")
+            target_explanation = next(
+                (
+                    explanation
+                    for explanation in target["explanations"]
+                    if explanation.get("explanation_id") == target_id
+                    and explanation.get("target_kind") == "critic_follow_up"
+                ),
+                None,
+            )
+            if target_explanation is None:
+                raise ValueError("critic closure target explanation disappeared")
+            selected = {
+                "explanation": target_explanation["explanation"],
+                "explanation_id": target_id,
+                "follow_up_source": "critic",
+            }
+            explanations.append(selected)
+            competing = insight.get("competing_explanations")
+            if not isinstance(competing, list):
+                competing = []
+                insight["competing_explanations"] = competing
+            if selected["explanation"] not in competing:
+                competing.append(selected["explanation"])
+        if item["disposition"] == "unresolvable":
+            selected.pop("expected_value", None)
+            selected.pop("verification", None)
+            selected.update(
+                {
+                    "closure_status": "unresolvable",
+                    "critic_challenge_id": challenge_id,
+                    "disposition": "not_measurable",
+                    "limitation": item["limitation"],
+                    "measurable": False,
+                    "required_check": item["required_check"],
+                }
+            )
+            continue
         selected.pop("limitation", None)
         selected.update(
             {
@@ -1052,19 +1339,246 @@ def _without_audit_immutables(value: Any) -> Any:
     return deepcopy(value)
 
 
-def _numeric_text_variants(number: float) -> tuple[str, ...]:
-    number = float(number)
-    variants = {format(number, "g"), format(number, ",g")}
-    if number.is_integer():
-        variants.add(f"{int(number):,}")
-    percentage = number * 100
-    variants.add(f"{percentage:g}%")
-    variants.add(f"{percentage:,g}%")
-    return tuple(sorted(variants, key=len, reverse=True))
+def _contains_exact_numeric_value(text: str, number: float) -> bool:
+    expected = Decimal(str(number))
+    for match in _EXACT_NUMBER.finditer(text):
+        parsed = _parse_numeric_token(match.group(0))
+        if parsed == expected:
+            return True
+    return False
 
 
-def _contains_numeric_value(text: str, number: float) -> bool:
-    return any(variant in text for variant in _numeric_text_variants(number))
+_EXACT_NUMBER = re.compile(
+    r"(?<![\w.,%+-])[+-]?"
+    r"(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)"
+    r"(?:[eE][+-]?\d+)?%?(?![\w,%+-]|\.(?:\d|\.))"
+)
+
+
+def _parse_numeric_token(token: str) -> Decimal | None:
+    is_percentage = token.endswith("%")
+    try:
+        parsed = Decimal(token.rstrip("%").replace(",", ""))
+    except InvalidOperation:
+        return None
+    return parsed / Decimal(100) if is_percentage else parsed
+
+
+def _decimal_text(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
+def _replace_exact_numeric_value(
+    text: str,
+    expected: float,
+    actual: float,
+) -> str:
+    expected_decimal = Decimal(str(expected))
+    actual_decimal = Decimal(str(actual))
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        is_percentage = token.endswith("%")
+        if _parse_numeric_token(token) != expected_decimal:
+            return token
+        rendered = _decimal_text(
+            actual_decimal * Decimal(100) if is_percentage else actual_decimal
+        )
+        if "," in token:
+            whole, separator, fraction = rendered.partition(".")
+            rendered = f"{int(whole):,}"
+            if separator:
+                rendered += f".{fraction}"
+        return f"{rendered}%" if is_percentage else rendered
+
+    return _EXACT_NUMBER.sub(replace, text)
+
+
+def _reconcile_numeric_prose(value: Any, expected: float, actual: float) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _reconcile_numeric_prose(child, expected, actual)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _reconcile_numeric_prose(child, expected, actual)
+            for child in value
+        ]
+    if isinstance(value, str):
+        return _replace_exact_numeric_value(value, expected, actual)
+    return deepcopy(value)
+
+
+def _validate_numeric_repair_proposal(
+    old: Any,
+    proposed: Any,
+    expected: float,
+    actual: float,
+    path: str = "",
+) -> None:
+    if isinstance(old, Mapping) and isinstance(proposed, Mapping):
+        for key, proposed_child in proposed.items():
+            child_path = f"{path}.{key}" if path else key
+            if key in _AUDIT_IMMUTABLE_KEYS:
+                if key not in old or proposed_child != old[key]:
+                    raise ValueError(
+                        "host audit repair attempted to alter immutable "
+                        f"SQL/source/expression field at {child_path}"
+                    )
+            elif key in old:
+                _validate_numeric_repair_proposal(
+                    old[key], proposed_child, expected, actual, child_path
+                )
+        return
+    if isinstance(old, list) and isinstance(proposed, list):
+        for index, (old_child, proposed_child) in enumerate(zip(old, proposed)):
+            _validate_numeric_repair_proposal(
+                old_child,
+                proposed_child,
+                expected,
+                actual,
+                f"{path}[{index}]",
+            )
+        return
+    if isinstance(old, str) and _contains_exact_numeric_value(old, expected):
+        deterministic = _replace_exact_numeric_value(old, expected, actual)
+        if proposed != deterministic:
+            raise ValueError(
+                "host audit repair did not update numeric explanatory prose at "
+                f"{path}"
+            )
+
+
+def _validate_audit_immutables(old: Any, proposed: Any, path: str = "") -> None:
+    if isinstance(old, Mapping) and isinstance(proposed, Mapping):
+        for key, proposed_child in proposed.items():
+            child_path = f"{path}.{key}" if path else key
+            if key in _AUDIT_IMMUTABLE_KEYS:
+                if key not in old or proposed_child != old[key]:
+                    raise ValueError(
+                        "host audit repair attempted to alter immutable "
+                        f"SQL/source/expression field at {child_path}"
+                    )
+            elif key in old:
+                _validate_audit_immutables(old[key], proposed_child, child_path)
+    elif isinstance(old, list) and isinstance(proposed, list):
+        for index, (old_child, proposed_child) in enumerate(zip(old, proposed)):
+            _validate_audit_immutables(
+                old_child, proposed_child, f"{path}[{index}]"
+            )
+
+
+def _validate_numeric_repair_path(
+    old: Any,
+    proposed: Any,
+    tokens: tuple[str | int, ...],
+    expected: float,
+    actual: float,
+) -> None:
+    if not tokens:
+        _validate_numeric_repair_proposal(old, proposed, expected, actual)
+        return
+    if isinstance(old, Mapping) and isinstance(proposed, Mapping):
+        old_expected = old.get("expected_value")
+        if (
+            type(old_expected) in {int, float}
+            and math.isclose(
+                float(old_expected), expected, rel_tol=1e-12, abs_tol=1e-12
+            )
+        ):
+            for key, old_child in old.items():
+                if isinstance(old_child, str) and key in proposed:
+                    _validate_numeric_repair_proposal(
+                        old_child, proposed[key], expected, actual, key
+                    )
+        token = tokens[0]
+        if token in old and token in proposed:
+            _validate_numeric_repair_path(
+                old[token], proposed[token], tokens[1:], expected, actual
+            )
+    elif isinstance(old, list) and isinstance(proposed, list):
+        token = tokens[0]
+        if isinstance(token, int) and 0 <= token < len(old) and token < len(proposed):
+            _validate_numeric_repair_path(
+                old[token], proposed[token], tokens[1:], expected, actual
+            )
+
+
+def _reconcile_numeric_repair_path(
+    old: Any,
+    tokens: tuple[str | int, ...],
+    expected: float,
+    actual: float,
+) -> Any:
+    if not tokens:
+        return _reconcile_numeric_prose(old, expected, actual)
+    merged = deepcopy(old)
+    if isinstance(old, Mapping) and isinstance(merged, dict):
+        old_expected = old.get("expected_value")
+        if (
+            type(old_expected) in {int, float}
+            and math.isclose(
+                float(old_expected), expected, rel_tol=1e-12, abs_tol=1e-12
+            )
+        ):
+            for key, child in old.items():
+                if isinstance(child, str):
+                    merged[key] = _replace_exact_numeric_value(
+                        child, expected, actual
+                    )
+        token = tokens[0]
+        if token in old:
+            merged[token] = _reconcile_numeric_repair_path(
+                old[token], tokens[1:], expected, actual
+            )
+    elif isinstance(old, list) and isinstance(merged, list):
+        token = tokens[0]
+        if isinstance(token, int) and 0 <= token < len(old):
+            merged[token] = _reconcile_numeric_repair_path(
+                old[token], tokens[1:], expected, actual
+            )
+    return merged
+
+
+def _derived_metric_value(metric_spec: Mapping[str, Any]) -> float | None:
+    metric_type = metric_spec.get("type")
+    components = metric_spec.get("components")
+    if (
+        metric_type not in {"delta", "rate", "share", "rate_of_change"}
+        or not isinstance(components, list)
+    ):
+        return None
+    role_values: dict[str, float] = {}
+    for component in components:
+        if not isinstance(component, Mapping):
+            return None
+        role = component.get("role")
+        expected_value = component.get("expected_value")
+        if (
+            not isinstance(role, str)
+            or type(expected_value) not in {int, float}
+            or not math.isfinite(expected_value)
+            or role in role_values
+        ):
+            return None
+        role_values[role] = float(expected_value)
+    if metric_type == "delta" and set(role_values) == {"current", "comparison"}:
+        return role_values["current"] - role_values["comparison"]
+    if (
+        metric_type in {"rate", "share"}
+        and set(role_values) == {"numerator", "denominator"}
+        and role_values["denominator"] != 0
+    ):
+        return role_values["numerator"] / role_values["denominator"]
+    if (
+        metric_type == "rate_of_change"
+        and set(role_values) == {"current", "comparison"}
+        and role_values["comparison"] != 0
+    ):
+        return (
+            role_values["current"] - role_values["comparison"]
+        ) / abs(role_values["comparison"])
+    return None
 
 
 def _audit_target(
@@ -1102,7 +1616,7 @@ def _audit_target(
         statement = insight_list[insight_index].get("statement")
         if (
             isinstance(statement, str)
-            and _contains_numeric_value(statement, mismatch.expected)
+            and _contains_exact_numeric_value(statement, mismatch.expected)
         ):
             return (
                 insight_index,
@@ -1310,29 +1824,6 @@ def _verification_values(value: Any, path: str = "") -> dict[str, Any]:
     return values
 
 
-def _overlay_preserving_audit_immutables(
-    old: Mapping[str, Any], proposed: Mapping[str, Any], path: str = ""
-) -> dict[str, Any]:
-    merged = deepcopy(dict(old))
-    for key, value in proposed.items():
-        key_path = f"{path}.{key}" if path else key
-        if key in _AUDIT_IMMUTABLE_KEYS:
-            if key not in old or value != old[key]:
-                raise ValueError(
-                    "host audit repair attempted to alter immutable "
-                    f"SQL/source/expression field at {key_path}"
-                )
-            continue
-        old_value = old.get(key)
-        if isinstance(old_value, Mapping) and isinstance(value, Mapping):
-            merged[key] = _overlay_preserving_audit_immutables(
-                old_value, value, key_path
-            )
-        else:
-            merged[key] = deepcopy(value)
-    return merged
-
-
 def _validate_updated_numeric_prose(
     old: Any,
     repaired: Any,
@@ -1357,11 +1848,11 @@ def _validate_updated_numeric_prose(
             )
     elif (
         isinstance(old, str)
-        and _contains_numeric_value(old, mismatch.expected)
+        and _contains_exact_numeric_value(old, mismatch.expected)
         and (
             not isinstance(repaired, str)
-            or _contains_numeric_value(repaired, mismatch.expected)
-            or not _contains_numeric_value(repaired, mismatch.actual)
+            or _contains_exact_numeric_value(repaired, mismatch.expected)
+            or not _contains_exact_numeric_value(repaired, mismatch.actual)
         )
     ):
         raise ValueError(
@@ -1388,6 +1879,9 @@ def merge_host_candidate_audit_repair(
     proposed = repair["rejection_component"]
     if not isinstance(proposed, Mapping):
         raise ValueError("host audit repair rejection_component must be dict")
+    _validate_numeric_repair_proposal(
+        old_component, proposed, mismatch.expected, mismatch.actual
+    )
     old_expected = _expected_values(old_component)
     if not any(
         math.isclose(value, mismatch.expected, rel_tol=1e-12, abs_tol=1e-12)
@@ -1396,7 +1890,10 @@ def merge_host_candidate_audit_repair(
         raise ValueError(
             f"host audit expected value is absent from target: {mismatch.path}"
         )
-    component = _overlay_preserving_audit_immutables(old_component, proposed)
+    component = _reconcile_numeric_prose(
+        old_component, mismatch.expected, mismatch.actual
+    )
+    component["expected_value"] = mismatch.actual
     repaired_expected = _expected_values(component)
     if not repaired_expected or any(
         not math.isclose(value, mismatch.actual, rel_tol=1e-12, abs_tol=1e-12)
@@ -1452,6 +1949,26 @@ def merge_host_audit_repair(
     candidate = repair[output_name]
     if not isinstance(candidate, Mapping):
         raise ValueError(f"host audit repair {output_name} must be dict")
+    relative_tokens = _path_tokens(
+        re.sub(r"^insights\[\d+\]", "insights[0]", mismatch.path)
+    )[2:]
+    if relative_tokens[: len(target_tokens)] != target_tokens:
+        raise ValueError(f"host audit target is inconsistent: {mismatch.path}")
+    audited_tokens = relative_tokens[len(target_tokens):]
+    try:
+        _validate_audit_immutables(old_leaf, candidate)
+        _validate_numeric_repair_path(
+            old_leaf,
+            candidate,
+            audited_tokens,
+            mismatch.expected,
+            mismatch.actual,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "host audit repair did not reconcile every expected_value with "
+            f"authoritative actual {mismatch.actual:g}"
+        ) from exc
     old_expected = _expected_values(old_leaf)
     if not any(
         math.isclose(value, mismatch.expected, rel_tol=1e-12, abs_tol=1e-12)
@@ -1460,12 +1977,40 @@ def merge_host_audit_repair(
         raise ValueError(
             f"host audit expected value is absent from target: {mismatch.path}"
         )
-    candidate_expected = _expected_values(candidate)
-    if not candidate_expected or any(
+    candidate = _reconcile_numeric_repair_path(
+        old_leaf, audited_tokens, mismatch.expected, mismatch.actual
+    )
+    audited_leaf = (
+        _resolve_path(candidate, audited_tokens)
+        if audited_tokens
+        else candidate
+    )
+    if not isinstance(audited_leaf, dict) or "expected_value" not in audited_leaf:
+        raise ValueError(
+            f"host audit target has no expected_value: {mismatch.path}"
+        )
+    audited_leaf["expected_value"] = mismatch.actual
+    for depth in range(len(audited_tokens)):
+        ancestor = _resolve_path(candidate, audited_tokens[:depth])
+        old_ancestor = _resolve_path(old_leaf, audited_tokens[:depth])
+        if (
+            isinstance(ancestor, dict)
+            and isinstance(old_ancestor, Mapping)
+            and type(old_ancestor.get("expected_value")) in {int, float}
+            and math.isclose(
+                float(old_ancestor["expected_value"]),
+                mismatch.expected,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+        ):
+            ancestor["expected_value"] = mismatch.actual
+    audited_expected = _expected_values(audited_leaf)
+    if not audited_expected or any(
         not math.isclose(
             value, mismatch.actual, rel_tol=1e-12, abs_tol=1e-12
         )
-        for value in candidate_expected
+        for value in audited_expected
     ):
         raise ValueError(
             "host audit repair did not reconcile every expected_value with "
@@ -1475,7 +2020,49 @@ def merge_host_audit_repair(
     candidate_verifications = _verification_values(candidate)
     if candidate_verifications and candidate_verifications != old_verifications:
         raise ValueError("host audit repair attempted to modify verification or SQL")
-    candidate = deepcopy(candidate)
+    try:
+        _validate_numeric_repair_path(
+            old_leaf,
+            candidate,
+            audited_tokens,
+            mismatch.expected,
+            mismatch.actual,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "host audit repair did not reconcile every expected_value with "
+            f"authoritative actual {mismatch.actual:g}"
+        ) from exc
+    candidate_metric = (
+        candidate
+        if target_tokens == ("metric_spec",)
+        else candidate.get("metric_spec")
+    )
+    old_metric = (
+        old_leaf
+        if target_tokens == ("metric_spec",)
+        else old_leaf.get("metric_spec")
+        if isinstance(old_leaf, Mapping)
+        else None
+    )
+    if isinstance(candidate_metric, dict) and isinstance(old_metric, Mapping):
+        derived_value = _derived_metric_value(candidate_metric)
+        old_derived_value = old_metric.get("expected_value")
+        if (
+            derived_value is not None
+            and type(old_derived_value) in {int, float}
+        ):
+            candidate_metric["expected_value"] = derived_value
+            if "expected_value" in candidate:
+                candidate["expected_value"] = derived_value
+            for prose_key in ("claim", "statement"):
+                prose = candidate.get(prose_key)
+                if isinstance(prose, str):
+                    candidate[prose_key] = _replace_exact_numeric_value(
+                        prose,
+                        float(old_derived_value),
+                        derived_value,
+                    )
     if (
         len(target_tokens) >= 3
         and target_tokens[0] == "diagnostic_assessment"
@@ -1517,11 +2104,32 @@ def merge_host_audit_repair(
         if not isinstance(statement, str):
             raise ValueError("host audit repair statement must be str")
         old_statement = current_insight.get("statement")
+        if isinstance(old_statement, str):
+            deterministic_statement = _replace_exact_numeric_value(
+                old_statement, mismatch.expected, mismatch.actual
+            )
+            if statement != deterministic_statement and not any(
+                _contains_exact_numeric_value(
+                    statement,
+                    round(mismatch.actual, digits),
+                )
+                for digits in range(7)
+            ):
+                raise ValueError(
+                    "host audit repair statement did not replace the old primary "
+                    "value with the authoritative actual"
+                )
+            statement = _replace_exact_numeric_value(
+                old_statement, mismatch.expected, mismatch.actual
+            )
         if (
             not isinstance(old_statement, str)
-            or not _contains_numeric_value(old_statement, mismatch.expected)
-            or _contains_numeric_value(statement, mismatch.expected)
-            or not _contains_numeric_value(statement, mismatch.actual)
+            or not _contains_exact_numeric_value(
+                old_statement,
+                mismatch.expected,
+            )
+            or _contains_exact_numeric_value(statement, mismatch.expected)
+            or not _contains_exact_numeric_value(statement, mismatch.actual)
         ):
             raise ValueError(
                 "host audit repair statement did not replace the old primary "
@@ -1593,6 +2201,45 @@ def merge_targeted_insight_repair(
         current_explanations[index] = deepcopy(repaired_explanations[index])
         return merged
 
+    component_match = re.search(
+        r"\bmetric component ['\"]([^'\"]+)['\"]",
+        str(verifier_error),
+        flags=re.IGNORECASE,
+    )
+    if component_match is not None:
+        component_name = component_match.group(1)
+        current_metric = merged.get("metric_spec")
+        repaired_metric = repaired_insight.get("metric_spec")
+        current_components = (
+            current_metric.get("components")
+            if isinstance(current_metric, dict)
+            else None
+        )
+        repaired_components = (
+            repaired_metric.get("components")
+            if isinstance(repaired_metric, Mapping)
+            else None
+        )
+        current_matches = [
+            index
+            for index, component in enumerate(current_components or ())
+            if isinstance(component, Mapping)
+            and component.get("name") == component_name
+        ]
+        repaired_matches = [
+            component
+            for component in repaired_components or ()
+            if isinstance(component, Mapping)
+            and component.get("name") == component_name
+        ]
+        if len(current_matches) != 1 or len(repaired_matches) != 1:
+            raise ValueError(
+                "targeted insight repair did not return the addressed "
+                f"metric component {component_name!r}"
+            )
+        current_components[current_matches[0]] = deepcopy(repaired_matches[0])
+        return merged
+
     if re.search(r"\bmetric_spec\b", str(verifier_error), flags=re.IGNORECASE):
         metric_spec = repaired_insight.get("metric_spec")
         if not isinstance(metric_spec, Mapping):
@@ -1632,6 +2279,52 @@ def build_targeted_insight_repair_prompt(
     source_identities = json.dumps(
         list(sources), separators=(",", ":"), ensure_ascii=False
     )
+    interaction_guidance = ""
+    if re.search(r"\binteraction\b", str(verifier_error), flags=re.IGNORECASE):
+        interaction_guidance = """\
+
+INTERACTION REPAIR REQUIREMENTS
+- If pattern_type remains interaction, discovery.interaction_evidence must be
+  an object containing cells, heterogeneity, and baseline_effect.
+- cells must contain at least two objects. Each cell requires a non-empty cell
+  label, a numeric effect measured on the same scale, and a positive integer
+  sample_size. At least two cell effects must differ.
+- heterogeneity must explain the measured difference between cell effects.
+- baseline_effect must be the numeric reference effect used for comparison.
+- Use only verified values already present or measured from the authoritative
+  sources. If valid heterogeneity evidence is unavailable, change pattern_type
+  to the closest accurate non-interaction type and remove interaction claims.
+"""
+    metric_guidance = ""
+    component_match = re.search(
+        r"\bmetric component ['\"]([^'\"]+)['\"]",
+        str(verifier_error),
+        flags=re.IGNORECASE,
+    )
+    if component_match is not None:
+        component_name = component_match.group(1)
+        metric_guidance = f"""\
+
+METRIC COMPONENT REPAIR REQUIREMENTS
+- Repair the metric_spec component named {component_name!r}.
+- Its verification expression must recompute metric_value from a declared
+  source rather than returning the literal expected value.
+- Project metric_value from one source column or one aggregate. Represent
+  ratios and other derived metrics through separately verified components.
+- Preserve every other valid metric component and metric_spec field.
+"""
+    causal_guidance = ""
+    if "causal language" in str(verifier_error).casefold():
+        causal_guidance = """\
+
+CAUSAL LANGUAGE REPAIR REQUIREMENTS
+- Remove unsupported causal language from the title, statement, and
+  interpretation while preserving the measured association.
+- Prefer "is associated with", "is consistent with", or "may reflect".
+- State obvious exposure or selection confounders as limitations.
+- Do not add causal_evidence or promote the evidence tier without an actual
+  causal design already present in the authoritative evidence.
+"""
     return f"""\
 Repair one deep_insight_discovery contract v2 insight. Return exactly one
 native insight: dict and SUBMIT immediately.
@@ -1647,6 +2340,9 @@ CURRENT INSIGHT
 
 EXACT PORTABLE VERIFIER ERROR
 {verifier_error}
+{interaction_guidance}
+{metric_guidance}
+{causal_guidance}
 
 RULES
 - Make only the minimum correction required by the exact error.
@@ -1772,6 +2468,8 @@ def classify_repair_target(error: str) -> str:
         "kpi_map",
         "dimensions_available",
         "dimensions_deferred",
+        "deferred dimension",
+        "unsearched dimension",
     )
     if any(marker in lowered for marker in scaffold_markers):
         return "scaffold"
@@ -1848,6 +2546,11 @@ _SQL_RELATION = re.compile(
     r"([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)",
     flags=re.IGNORECASE,
 )
+_SQL_CSV_RELATION = re.compile(
+    r"\bread_csv_auto\s*\(\s*'((?:''|[^'])*)'\s*\)",
+    flags=re.IGNORECASE,
+)
+_CLOSURE_EXPLANATION_ID = re.compile(r"[a-z][a-z0-9_-]{2,63}")
 _SQL_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[(),]")
 
 
@@ -1959,14 +2662,20 @@ def normalize_mechanical_contract(
 
     if isinstance(source_names, (str, bytes)):
         raise ValueError("source_names must be a finite collection of identifiers")
-    source_paths: dict[str, str | None] = {}
+    source_path_candidates: dict[str, set[str]] = {}
     if isinstance(source_names, Mapping):
         for identity, raw_path in source_names.items():
             if isinstance(raw_path, (str, Path)):
-                path_text = str(raw_path)
-                source_paths[path_text] = (
-                    identity if path_text not in source_paths else None
-                )
+                path = Path(raw_path)
+                for reference in (str(raw_path), path.name):
+                    source_path_candidates.setdefault(reference, set()).add(
+                        identity
+                    )
+    source_paths = {
+        reference: next(iter(identities))
+        for reference, identities in source_path_candidates.items()
+        if len(identities) == 1
+    }
     try:
         supplied_names = tuple(source_names)
     except TypeError as exc:
@@ -1981,6 +2690,7 @@ def normalize_mechanical_contract(
     authorized = frozenset(supplied_names)
     normalized = deepcopy(payload)
     changes: list[str] = []
+    used_explanation_ids: set[str] = set()
 
     def record_set(mapping: dict[str, Any], key: str, value: Any, path: str) -> None:
         if mapping.get(key) != value:
@@ -2010,6 +2720,34 @@ def normalize_mechanical_contract(
                         changes.append(
                             f"{_safe_path(path, 'sources')}.{alias}"
                         )
+                def replace_csv_relation(match: re.Match[str]) -> str:
+                    source_path = match.group(1).replace("''", "'")
+                    return source_paths.get(source_path, match.group(0))
+
+                normalized_expression = _SQL_CSV_RELATION.sub(
+                    replace_csv_relation, expression
+                )
+                if normalized_expression != expression:
+                    record_set(
+                        value,
+                        "expression",
+                        normalized_expression,
+                        path,
+                    )
+                    expression = normalized_expression
+                distinct_metric = re.fullmatch(
+                    r"\s*SELECT\s+DISTINCT\s+"
+                    r"([A-Za-z_][A-Za-z0-9_.]*)\s+AS\s+metric_value\s+"
+                    r"FROM\s+([A-Za-z_][A-Za-z0-9_]*)\s*;?\s*",
+                    expression,
+                    flags=re.IGNORECASE,
+                )
+                if distinct_metric is not None:
+                    expression = (
+                        f"SELECT min({distinct_metric.group(1)}) AS metric_value "
+                        f"FROM {distinct_metric.group(2)}"
+                    )
+                    record_set(value, "expression", expression, path)
                 sanitized = _without_sql_literals_and_comments(expression)
                 ctes = _cte_names(sanitized)
                 relations: list[str] = []
@@ -2029,6 +2767,153 @@ def normalize_mechanical_contract(
 
             for key, child in tuple(value.items()):
                 visit(child, _safe_path(path, key))
+
+            assessment = value.get("diagnostic_assessment")
+            explanations = (
+                assessment.get("explanations")
+                if isinstance(assessment, dict)
+                else None
+            )
+            closure_shaped = isinstance(explanations, list) and any(
+                isinstance(explanation, dict)
+                and (
+                    "closure_status" in explanation
+                    or "explanation_id" in explanation
+                )
+                for explanation in explanations
+            )
+            complete_preclosure = (
+                isinstance(explanations, list)
+                and bool(explanations)
+                and all(
+                    isinstance(explanation, dict)
+                    and isinstance(explanation.get("explanation"), str)
+                    and isinstance(explanation.get("measurable"), bool)
+                    and isinstance(explanation.get("disposition"), str)
+                    and (
+                        (
+                            explanation["measurable"]
+                            and isinstance(explanation.get("required_check"), str)
+                        )
+                        or (
+                            not explanation["measurable"]
+                            and isinstance(explanation.get("limitation"), str)
+                        )
+                    )
+                    for explanation in explanations
+                )
+            )
+            if closure_shaped or complete_preclosure:
+                for index, explanation in enumerate(explanations, start=1):
+                    if not isinstance(explanation, dict):
+                        continue
+                    explanation_id = explanation.get("explanation_id")
+                    if (
+                        isinstance(explanation_id, str)
+                        and _CLOSURE_EXPLANATION_ID.fullmatch(explanation_id)
+                        and explanation_id not in used_explanation_ids
+                    ):
+                        used_explanation_ids.add(explanation_id)
+                        continue
+                    candidate_id = f"explanation-{index}"
+                    suffix = index
+                    while candidate_id in used_explanation_ids:
+                        suffix += 1
+                        candidate_id = f"explanation-{suffix}"
+                    record_set(
+                        explanation,
+                        "explanation_id",
+                        candidate_id,
+                        (
+                            f"{path}.diagnostic_assessment"
+                            f".explanations[{index - 1}]"
+                        ),
+                    )
+                    used_explanation_ids.add(candidate_id)
+
+            claim = value.get("claim")
+            claim_metric_spec = value.get("metric_spec")
+            if isinstance(claim, str) and isinstance(claim_metric_spec, Mapping):
+                claim_expected = claim_metric_spec.get("expected_value")
+                if (
+                    type(claim_expected) in {int, float}
+                    and math.isfinite(claim_expected)
+                ):
+                    record_set(
+                        value,
+                        "expected_value",
+                        claim_expected,
+                        path,
+                    )
+
+            statement = value.get("statement")
+            metric_spec = value.get("metric_spec")
+            if isinstance(statement, str) and isinstance(metric_spec, Mapping):
+                metric_type = metric_spec.get("type")
+                expected_value = metric_spec.get("expected_value")
+                numeric_tokens = tuple(_EXACT_NUMBER.finditer(statement))
+                packed_claim = re.search(
+                    r"(?:\d|%|\$).{0,160}"
+                    r"\b(?:while|whereas|versus|and|or|as|with|alongside)\b"
+                    r".{0,160}(?:\d|%|\$)",
+                    statement,
+                    flags=re.IGNORECASE,
+                )
+                unit_mismatch = (
+                    metric_type
+                    not in {"rate", "share", "rate_of_change"}
+                    and statement.startswith("The primary measured ")
+                    and "%" in statement
+                )
+                if (
+                    metric_type
+                    in {
+                        "value",
+                        "count",
+                        "amount",
+                        "average",
+                        "rate",
+                        "share",
+                        "delta",
+                        "rate_of_change",
+                        "decomposition",
+                    }
+                    and type(expected_value) in {int, float}
+                    and math.isfinite(expected_value)
+                    and (
+                        len(numeric_tokens) > 1
+                        or packed_claim is not None
+                        or unit_mismatch
+                        or ";" in statement
+                        or len(re.findall(r"[.!?](?:\s|$)", statement)) > 1
+                    )
+                ):
+                    labels = {
+                        "value": "value",
+                        "count": "count",
+                        "amount": "amount",
+                        "average": "average",
+                        "rate": "rate",
+                        "share": "share",
+                        "delta": "difference",
+                        "rate_of_change": "rate of change",
+                        "decomposition": "total change",
+                    }
+                    rendered_value = Decimal(str(expected_value))
+                    if metric_type in {"rate", "share", "rate_of_change"}:
+                        rendered_value *= Decimal(100)
+                        rendered = f"{_decimal_text(rendered_value)}%"
+                    else:
+                        rendered = _decimal_text(rendered_value)
+                    record_set(
+                        value,
+                        "statement",
+                        (
+                            f"The primary measured {labels[metric_type]} "
+                            f"is {rendered}."
+                        ),
+                        path,
+                    )
 
             interpretation = value.get("interpretation")
             if isinstance(interpretation, str):
@@ -2250,15 +3135,42 @@ def normalize_mechanical_contract(
     return normalized, tuple(changes)
 
 
+def _insights_contract_version(insights: Mapping[str, Any]) -> int:
+    for insight in insights.get("insights", ()):
+        if not isinstance(insight, Mapping):
+            continue
+        assessment = insight.get("diagnostic_assessment")
+        explanations = (
+            assessment.get("explanations")
+            if isinstance(assessment, Mapping)
+            else ()
+        )
+        for explanation in explanations:
+            if (
+                isinstance(explanation, Mapping)
+                and (
+                    "closure_status" in explanation
+                    or explanation.get("disposition") == "supported"
+                )
+            ):
+                return 3
+    return 2
+
+
 def assemble_contract(
-    scaffold: Mapping[str, Any], insights: Mapping[str, Any]
+    scaffold: Mapping[str, Any],
+    insights: Mapping[str, Any],
+    *,
+    contract_version: int = 2,
 ) -> dict[str, Any]:
-    """Assemble detached, strictly shaped partial outputs into contract v2."""
+    """Assemble detached, strictly shaped partial outputs into a contract."""
 
     _validate_partial(scaffold, SCAFFOLD_OUTPUTS, "contract scaffold")
     _validate_partial(insights, INSIGHT_OUTPUTS, "insights partial")
+    if type(contract_version) is not int or contract_version not in {2, 3}:
+        raise ValueError("contract_version must be 2 or 3")
     return {
-        "contract_version": 2,
+        "contract_version": contract_version,
         "analysis_plan": deepcopy(scaffold["analysis_plan"]),
         "candidates": deepcopy(scaffold["candidates"]),
         "insights": deepcopy(insights["insights"]),
@@ -2346,6 +3258,8 @@ def run_evidence_closure(
     max_turns: int,
     timeout: float,
     checkpoint_path: str | Path | None = None,
+    deferred_audit_error_type: type[Exception] | None = None,
+    max_plan_repairs: int = 3,
 ) -> dict[str, Any]:
     """Plan, verify, execute, and persist one bounded evidence-closure pass."""
 
@@ -2362,6 +3276,10 @@ def run_evidence_closure(
         }
     if type(max_turns) is not int or max_turns <= 0:
         raise ValueError("evidence closure max_turns must be a positive integer")
+    if type(max_plan_repairs) is not int or max_plan_repairs < 0:
+        raise ValueError(
+            "evidence closure max_plan_repairs must be a non-negative integer"
+        )
     if (
         not isinstance(timeout, (int, float))
         or not math.isfinite(timeout)
@@ -2411,14 +3329,68 @@ def run_evidence_closure(
     else:
         summary = {"cached": True, "submitted": True, "turns": 0}
 
-    validated = validate_evidence_closure_plan(payload, plan, sources)
-    closed_payload = merge_evidence_closure_plan(payload, validated, sources)
-    closed_payload, _ = normalize_mechanical_contract(closed_payload, sources)
-    verify_function(closed_payload)
+    plan_repairs = 0
+    while True:
+        try:
+            validated = validate_evidence_closure_plan(payload, plan, sources)
+            closed_payload = merge_evidence_closure_plan(
+                payload,
+                validated,
+                sources,
+            )
+            closed_payload, _ = normalize_mechanical_contract(
+                closed_payload,
+                sources,
+            )
+            verify_function(closed_payload)
+            break
+        except (AssertionError, ValueError) as exc:
+            if plan_repairs >= max_plan_repairs:
+                raise ValueError(
+                    "evidence closure plan remained invalid after "
+                    f"{plan_repairs} repair attempts: {exc}"
+                ) from exc
+            plan_repairs += 1
+            repair_rlm = rlm_type.from_task(
+                task=build_evidence_closure_repair_prompt(
+                    sources,
+                    payload,
+                    plan,
+                    str(exc),
+                ),
+                outputs=EVIDENCE_CLOSURE_OUTPUTS,
+                lm=lm,
+                skills=list(SYNTHESIS_SKILLS),
+                enable_verifier=False,
+                block_network=True,
+                engine="default",
+                max_turns=max_turns,
+                reserve_finalize_turns=min(3, max_turns),
+                timeout=timeout,
+                verbose=False,
+            )
+            repair_result = repair_rlm.run()
+            plan = _extract_partial(
+                repair_result,
+                EVIDENCE_CLOSURE_OUTPUTS,
+                "evidence closure repair",
+            )
+    if plan_repairs:
+        summary["plan_repairs"] = plan_repairs
+    audit = None
     with executor_type(sources) as executor:
-        audit = audit_function(closed_payload, executor)
-    if checkpoint is not None and not cached:
-        _write_synthesis_checkpoint(checkpoint, fingerprint, validated)
+        try:
+            audit = audit_function(closed_payload, executor)
+        except Exception as exc:
+            if (
+                deferred_audit_error_type is None
+                or not isinstance(exc, deferred_audit_error_type)
+                or parse_host_audit_mismatch(str(exc)) is None
+            ):
+                raise
+    if checkpoint is not None and (not cached or plan_repairs):
+        if audit is not None:
+            _write_synthesis_checkpoint(checkpoint, fingerprint, validated)
     return {
         "payload": closed_payload,
         "audit": audit,
@@ -2510,14 +3482,63 @@ def run_critic_evidence_closure(
     else:
         summary = {"cached": True, "submitted": True, "turns": 0}
 
-    closed_payload = merge_critic_closure_plan(
-        payload,
-        critic,
-        plan,
-        sources,
-    )
-    closed_payload, _ = normalize_mechanical_contract(closed_payload, sources)
-    verify_function(closed_payload)
+    plan_repairs = 0
+    while True:
+        try:
+            closed_payload = merge_critic_closure_plan(
+                payload,
+                critic,
+                plan,
+                sources,
+            )
+            closed_payload, _ = normalize_mechanical_contract(
+                closed_payload, sources
+            )
+            verify_function(closed_payload)
+            break
+        except (AssertionError, ValueError) as exc:
+            repair_error = str(exc)
+            repair_context: Mapping[str, Any] = plan
+            while True:
+                if plan_repairs >= 3:
+                    raise ValueError(
+                        "critic evidence closure plan remained invalid after "
+                        f"{plan_repairs} repair attempts: {repair_error}"
+                    ) from exc
+                plan_repairs += 1
+                repair_rlm = rlm_type.from_task(
+                    task=build_critic_closure_repair_prompt(
+                        sources,
+                        payload,
+                        critic,
+                        repair_context,
+                        repair_error,
+                    ),
+                    outputs=CRITIC_CLOSURE_OUTPUTS,
+                    lm=lm,
+                    skills=list(SYNTHESIS_SKILLS),
+                    enable_verifier=False,
+                    block_network=True,
+                    engine="default",
+                    max_turns=max_turns,
+                    reserve_finalize_turns=min(3, max_turns),
+                    timeout=timeout,
+                    verbose=False,
+                )
+                repair_result = repair_rlm.run()
+                try:
+                    plan = _extract_partial(
+                        repair_result,
+                        CRITIC_CLOSURE_OUTPUTS,
+                        "critic evidence closure repair",
+                    )
+                    break
+                except (AssertionError, ValueError) as repair_exc:
+                    repair_error = str(repair_exc)
+                    repair_context = {
+                        "unparseable repair response": repair_error,
+                    }
+    summary["plan_repairs"] = plan_repairs
     with executor_type(sources) as executor:
         audit = audit_function(closed_payload, executor)
     if checkpoint is not None and not cached:
@@ -2543,9 +3564,31 @@ def run_action_synthesis(
 ) -> dict[str, Any]:
     """Create and verify bounded program actions for exact eligible findings."""
 
-    if not _action_synthesis_targets(payload, critic):
+    sanitized_payload = deepcopy(dict(payload))
+    manifest = critic.get("synthesis_manifest")
+    program_titles = (
+        manifest.get("program_action_titles")
+        if isinstance(manifest, Mapping)
+        else ()
+    )
+    allowed_program_titles = {
+        title for title in program_titles if isinstance(title, str)
+    }
+    for insight in sanitized_payload.get("insights", ()):
+        if not isinstance(insight, dict):
+            continue
+        action = insight.get("action")
+        if (
+            isinstance(action, dict)
+            and action.get("kind") == "program"
+            and insight.get("title") not in allowed_program_titles
+        ):
+            action["kind"] = "diagnostic"
+
+    if not _action_synthesis_targets(sanitized_payload, critic):
+        verify_function(sanitized_payload)
         return {
-            "payload": deepcopy(dict(payload)),
+            "payload": sanitized_payload,
             "summary": {
                 "cached": True,
                 "submitted": True,
@@ -2563,7 +3606,7 @@ def run_action_synthesis(
         raise ValueError("action synthesis timeout must be finite and positive")
 
     checkpoint = Path(checkpoint_path) if checkpoint_path is not None else None
-    fingerprint = _input_fingerprint(payload, critic)
+    fingerprint = _input_fingerprint(sanitized_payload, critic)
     updates = (
         _load_synthesis_checkpoint(
             checkpoint,
@@ -2577,7 +3620,7 @@ def run_action_synthesis(
     cached = updates is not None
     if updates is None:
         rlm = rlm_type.from_task(
-            task=build_action_synthesis_prompt(payload, critic),
+            task=build_action_synthesis_prompt(sanitized_payload, critic),
             outputs=ACTION_SYNTHESIS_OUTPUTS,
             lm=lm,
             skills=list(SYNTHESIS_SKILLS),
@@ -2601,7 +3644,9 @@ def run_action_synthesis(
     else:
         summary = {"cached": True, "submitted": True, "turns": 0}
 
-    updated_payload = merge_action_synthesis(payload, critic, updates)
+    updated_payload = merge_action_synthesis(
+        sanitized_payload, critic, updates
+    )
     verify_function(updated_payload)
     if checkpoint is not None and not cached:
         _write_synthesis_checkpoint(checkpoint, fingerprint, updates)
@@ -2794,7 +3839,11 @@ def run_staged_benchmark(
         insight_result = insight_rlm.run()
         insights = _extract_partial(insight_result, INSIGHT_OUTPUTS, "insights")
         insights_summary = summarize_trajectory(insight_result.trajectory)
-    payload = assemble_contract(scaffold, insights)
+    payload = assemble_contract(
+        scaffold,
+        insights,
+        contract_version=_insights_contract_version(insights),
+    )
     payload, initial_changes = normalize_mechanical_contract(payload, sources)
     mechanical_changes.extend(initial_changes)
     normalized_insights = {"insights": deepcopy(payload["insights"])}
@@ -2903,15 +3952,34 @@ def run_staged_benchmark(
                             TARGETED_INSIGHT_OUTPUTS,
                             "targeted insight repair",
                         )
-                        updated_insights[insight_index] = (
-                            merge_targeted_insight_repair(
-                                updated_insights[insight_index],
-                                targeted["insight"],
-                                str(exc),
+                        try:
+                            updated_insights[insight_index] = (
+                                merge_targeted_insight_repair(
+                                    updated_insights[insight_index],
+                                    targeted["insight"],
+                                    str(exc),
+                                )
                             )
-                        )
+                        except ValueError as repair_exc:
+                            repairs.append(
+                                {
+                                    "target": target,
+                                    "attempt": attempt,
+                                    "mode": "targeted-invalid",
+                                    "insight_index": insight_index + 1,
+                                    "error": str(repair_exc),
+                                    "insights": summarize_trajectory(
+                                        repair_result.trajectory
+                                    ),
+                                }
+                            )
+                            continue
                     insights = {"insights": updated_insights}
-                    payload = assemble_contract(scaffold, insights)
+                    payload = assemble_contract(
+                        scaffold,
+                        insights,
+                        contract_version=int(payload.get("contract_version", 2)),
+                    )
                     payload, changes = normalize_mechanical_contract(
                         payload, sources
                     )
@@ -2963,7 +4031,11 @@ def run_staged_benchmark(
                 insights = _extract_partial(
                     repair_result, INSIGHT_OUTPUTS, "insight repair"
                 )
-                payload = assemble_contract(scaffold, insights)
+                payload = assemble_contract(
+                    scaffold,
+                    insights,
+                    contract_version=int(payload.get("contract_version", 2)),
+                )
                 payload, changes = normalize_mechanical_contract(payload, sources)
                 mechanical_changes.extend(changes)
                 insights = {"insights": deepcopy(payload["insights"])}
@@ -3003,11 +4075,25 @@ def run_staged_benchmark(
                 verbose=False,
             )
             scaffold_repair_result = scaffold_repair_rlm.run()
-            scaffold = _extract_partial(
-                scaffold_repair_result,
-                SCAFFOLD_OUTPUTS,
-                "contract scaffold repair",
-            )
+            try:
+                scaffold = _extract_partial(
+                    scaffold_repair_result,
+                    SCAFFOLD_OUTPUTS,
+                    "contract scaffold repair",
+                )
+            except ValueError as repair_exc:
+                repairs.append(
+                    {
+                        "target": target,
+                        "attempt": attempt,
+                        "mode": "scaffold-invalid",
+                        "error": str(repair_exc),
+                        "scaffold": summarize_trajectory(
+                            scaffold_repair_result.trajectory
+                        ),
+                    }
+                )
+                continue
             scaffold, changes = normalize_mechanical_contract(scaffold, sources)
             mechanical_changes.extend(changes)
             if scaffold_path is not None:
@@ -3035,7 +4121,11 @@ def run_staged_benchmark(
                 INSIGHT_OUTPUTS,
                 "dependent insight regeneration",
             )
-            payload = assemble_contract(scaffold, insights)
+            payload = assemble_contract(
+                scaffold,
+                insights,
+                contract_version=int(payload.get("contract_version", 2)),
+            )
             payload, changes = normalize_mechanical_contract(payload, sources)
             mechanical_changes.extend(changes)
             insights = {"insights": deepcopy(payload["insights"])}
@@ -3077,6 +4167,7 @@ def run_staged_benchmark(
             max_turns=closure_turns,
             timeout=timeout,
             checkpoint_path=closure_cache_path,
+            deferred_audit_error_type=DeepInsightAuditError,
         )
         payload = closure_record["payload"]
         insights = {"insights": deepcopy(payload["insights"])}
@@ -3160,7 +4251,9 @@ def run_staged_benchmark(
                 )
                 candidate_insights = {"insights": updated_insights}
             candidate_payload = assemble_contract(
-                candidate_scaffold, candidate_insights
+                candidate_scaffold,
+                candidate_insights,
+                contract_version=int(payload.get("contract_version", 2)),
             )
             candidate_payload, changes = normalize_mechanical_contract(
                 candidate_payload, sources

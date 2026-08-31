@@ -229,6 +229,15 @@ REVIEW RULES
   invent SQL, files, notebook cells, recomputations, or unsupported evidence.
 - Treat the audit as a prior successful numeric attestation only. Do not rerun
   SQL or claim that the worker independently accessed source data.
+- Reject averages-only findings unless sample size, denominator, median or
+  distribution tail, and sensitivity to skew are addressed or explicitly
+  gated as investigate-first.
+- Test censoring, selection effects, obvious confounders, and population
+  comparability before treating subgroup differences as decision-ready.
+- Require exposure-normalized comparisons for lifecycle-stage activity,
+  engagement, workload, and other measures that accumulate with time.
+- A model-proposed threshold or external benchmark is not governed evidence.
+  Require an approved source, or remove the threshold-based risk/action claim.
 - Exhaustively satisfy the skill contract, then call SUBMIT with native values.
 
 HOST SOURCE INVENTORY
@@ -290,6 +299,42 @@ def normalize_critic_partial(
                     changes.append(
                         "$.reviewed_insights"
                         f"[{insight_index}].challenges[{challenge_index}].severity"
+                    )
+            if (
+                isinstance(insight, dict)
+                and insight.get("verdict") == "revise"
+                and insight.get("synthesis_eligible") is True
+            ):
+                resolutions = insight.get("resolutions")
+                resolution_by_index = {
+                    resolution.get("challenge_index"): resolution.get("status")
+                    for resolution in (
+                        resolutions if isinstance(resolutions, list) else ()
+                    )
+                    if isinstance(resolution, dict)
+                }
+                required_changes = insight.get("required_changes")
+                has_investigation_gate = any(
+                    isinstance(change, dict)
+                    and change.get("gate") == "investigate_first"
+                    for change in (
+                        required_changes
+                        if isinstance(required_changes, list)
+                        else ()
+                    )
+                )
+                unresolved_material = any(
+                    isinstance(challenge, dict)
+                    and challenge.get("severity") in {"material", "blocking"}
+                    and resolution_by_index.get(challenge_index)
+                    not in {"resolved", "gated"}
+                    for challenge_index, challenge in enumerate(challenges)
+                )
+                if unresolved_material and not has_investigation_gate:
+                    insight["synthesis_eligible"] = False
+                    changes.append(
+                        "$.reviewed_insights"
+                        f"[{insight_index}].synthesis_eligible"
                     )
     portfolio = normalized.get("portfolio_challenges")
     if isinstance(portfolio, list):
