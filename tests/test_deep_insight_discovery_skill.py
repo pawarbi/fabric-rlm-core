@@ -1798,6 +1798,80 @@ ROW(
         _verify({"insights": [insight]})
 
 
+def _temporal_context(status: str = "current_change") -> dict:
+    return {
+        "time_basis": "customer_cohorts.cohort_quarter",
+        "timezone": "UTC",
+        "requested_as_of": "2026-08-31",
+        "data_as_of": "2026-08-15T23:59:59Z",
+        "trustworthy_through": "2026-06-30T23:59:59Z",
+        "latest_complete_period": {
+            "grain": "quarter",
+            "start": "2026-04-01",
+            "end": "2026-06-30",
+        },
+        "current_window": {
+            "grain": "quarter",
+            "start": "2026-04-01",
+            "end": "2026-06-30",
+            "periods": ["2026-Q2"],
+        },
+        "comparators": [
+            {
+                "kind": "same_period_prior_year",
+                "start": "2025-04-01",
+                "end": "2025-06-30",
+                "periods": ["2025-Q2"],
+            }
+        ],
+        "partial_period_policy": "exclude",
+        "completeness_basis": (
+            "calendar_complete_and_source_marked_trustworthy"
+        ),
+        "recency_status": status,
+        "supports_current_action": status in {
+            "current_change",
+            "current_level",
+            "persistent",
+        },
+    }
+
+
+def test_verifier_requires_temporal_context_for_current_claim_title() -> None:
+    insight = _strong_insight()
+    insight["title"] = "Current enterprise retention is declining"
+
+    with pytest.raises(AssertionError, match="temporal_context"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_accepts_current_change_with_comparable_temporal_context() -> None:
+    insight = _strong_insight()
+    insight["title"] = "Recent enterprise retention decline"
+    insight["temporal_context"] = _temporal_context()
+
+    _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_stale_temporal_context_for_program_action() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context("stale")
+    insight["temporal_context"]["supports_current_action"] = False
+    insight["action"]["kind"] = "program"
+
+    with pytest.raises(AssertionError, match="stale.*program action"):
+        _verify({"insights": [insight]})
+
+
+def test_verifier_rejects_current_change_without_comparator() -> None:
+    insight = _strong_insight()
+    insight["temporal_context"] = _temporal_context()
+    insight["temporal_context"]["comparators"] = []
+
+    with pytest.raises(AssertionError, match="current_change.*comparator"):
+        _verify({"insights": [insight]})
+
+
 def test_verifier_rejects_unsupported_causal_language() -> None:
     insight = _strong_insight()
     insight["statement"] = "Poor onboarding caused enterprise retention to fall."

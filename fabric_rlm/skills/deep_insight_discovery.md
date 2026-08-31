@@ -98,6 +98,16 @@ Each insight must contain:
 - **evidence_tier: str** - `descriptive`, `associational`, or `causal`.
   Causal language and causal tier both require structured causal evidence.
 - **limitations: list[str]** - what the data cannot establish.
+- **temporal_context: dict | omitted** - required for titles framed as current,
+  latest, recent, today, or this period. It declares `time_basis`, `timezone`,
+  `requested_as_of`, `data_as_of`, `trustworthy_through`,
+  `latest_complete_period`, `current_window`, `comparators`,
+  `partial_period_policy`, `completeness_basis`, `recency_status`, and boolean
+  `supports_current_action`. Status is `current_change`, `current_level`,
+  `persistent`, `recurring_seasonal`, `historical`, `stale`, or
+  `not_applicable`. A current change requires a complete current window and at
+  least one comparator. Only current-change, current-level, and persistent
+  evidence may support a current program action.
 - **verification: dict | omitted** - legacy simple-metric form containing
   `method`, source-derived `expression`, and non-empty alias-to-source
   `sources`. Omit it when `metric_spec` supplies independently verified
@@ -1021,6 +1031,62 @@ def verify(payload):
                 f"{label} investigate_first requires a diagnostic action"
             )
 
+    def validate_temporal_context(context, label):
+        assert isinstance(context, dict), (
+            f"{label} temporal_context must be structured"
+        )
+        for field in (
+            "time_basis",
+            "timezone",
+            "requested_as_of",
+            "data_as_of",
+            "trustworthy_through",
+            "partial_period_policy",
+            "completeness_basis",
+            "recency_status",
+        ):
+            assert isinstance(context.get(field), str) and context[field].strip(), (
+                f"{label} temporal_context {field} is required"
+            )
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", context["requested_as_of"]), (
+            f"{label} temporal_context requested_as_of must be an ISO date"
+        )
+        assert context["partial_period_policy"] in {"exclude", "include_flagged"}, (
+            f"{label} temporal_context partial_period_policy is invalid"
+        )
+        status = context["recency_status"]
+        current_statuses = {"current_change", "current_level", "persistent"}
+        assert status in current_statuses | {
+            "recurring_seasonal",
+            "historical",
+            "stale",
+            "not_applicable",
+        }, f"{label} temporal_context recency_status is invalid"
+        supports_current_action = context.get("supports_current_action")
+        assert isinstance(supports_current_action, bool), (
+            f"{label} temporal_context supports_current_action must be boolean"
+        )
+        assert supports_current_action == (status in current_statuses), (
+            f"{label} temporal_context action support contradicts recency_status"
+        )
+        if status in current_statuses:
+            assert isinstance(context.get("latest_complete_period"), dict), (
+                f"{label} temporal_context current status requires "
+                "latest_complete_period"
+            )
+        comparators = context.get("comparators")
+        assert isinstance(comparators, list), (
+            f"{label} temporal_context comparators must be a list"
+        )
+        if status == "current_change":
+            assert isinstance(context.get("current_window"), dict), (
+                f"{label} temporal_context current_change requires current_window"
+            )
+            assert comparators, (
+                f"{label} temporal_context current_change requires a comparator"
+            )
+        return status, supports_current_action
+
     sentinel = {"none", "n/a", "na", "unknown", "not applicable", "null"}
     contract_version = payload.get("contract_version", 1)
     assert (
@@ -1168,6 +1234,33 @@ def verify(payload):
         assert title_fingerprint not in seen, f"duplicate insight title: {title}"
         assert statement_fingerprint not in seen, f"duplicate insight statement: {title}"
         seen.update((title_fingerprint, statement_fingerprint))
+        current_claim = re.search(
+            r"\b(current|currently|latest|recent|today|"
+            r"this\s+(?:day|week|month|quarter|year))\b",
+            title,
+            flags=re.I,
+        )
+        temporal_context = insight.get("temporal_context")
+        if current_claim:
+            assert temporal_context is not None, (
+                f"insight {index} current claim requires temporal_context"
+            )
+        temporal_status = None
+        supports_current_action = None
+        if temporal_context is not None:
+            temporal_status, supports_current_action = validate_temporal_context(
+                temporal_context,
+                f"insight {index}",
+            )
+            if current_claim:
+                assert temporal_status in {
+                    "current_change",
+                    "current_level",
+                    "persistent",
+                }, (
+                    f"insight {index} current claim is not supported by its "
+                    "temporal status"
+                )
 
         competing = insight["competing_explanations"]
         assert (
@@ -1238,6 +1331,15 @@ def verify(payload):
         for field in ("owner", "segment", "decision", "target", "time_horizon"):
             assert isinstance(action.get(field), str) and action[field].strip(), (
                 f"insight {index} action missing {field}"
+            )
+        if (
+            temporal_context is not None
+            and action.get("kind") == "program"
+            and not supports_current_action
+        ):
+            raise AssertionError(
+                f"insight {index} {temporal_status} temporal evidence "
+                "cannot support a program action"
             )
 
         priority = insight["priority"]
