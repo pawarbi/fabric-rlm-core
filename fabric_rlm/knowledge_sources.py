@@ -27,13 +27,24 @@ from fabric_rlm.knowledge import (
     _logical_identifier,
     canonical_json,
 )
-from fabric_rlm.knowledge_store import _is_forbidden_field
 
 
 _ROLES = frozenset(_SOURCE_ROLES)
 _TABULAR_ROLES = frozenset(_ROLES)
 _OPAQUE_ROLES = frozenset({"context_only", "template", "excluded"})
 _SAFE_FIELD = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
+_SENSITIVE_FIELD_TOKENS = frozenset(
+    {
+        "authorization",
+        "credential",
+        "credentials",
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "token",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -68,8 +79,21 @@ class _Snapshot:
     exact: bool
 
 
+@dataclass(frozen=True)
+class _SourceIdentity:
+    device: int
+    inode: int
+    size_bytes: int
+    modified_ns: int
+
+
 @runtime_checkable
 class KnowledgeSourceAdapter(Protocol):
+    """Profiles one source family.
+
+    ``matches()`` must be a pure descriptor check and must not perform I/O.
+    """
+
     family: str
     allowed_roles: frozenset[str]
     default_role: SourceRole
@@ -184,6 +208,38 @@ def _snapshot(path: Path, size_bytes: int, limits: ProfileLimits) -> _Snapshot:
     )
 
 
+def _source_identity(file_stat: object) -> _SourceIdentity:
+    return _SourceIdentity(
+        device=int(getattr(file_stat, "st_dev")),
+        inode=int(getattr(file_stat, "st_ino")),
+        size_bytes=int(getattr(file_stat, "st_size")),
+        modified_ns=int(getattr(file_stat, "st_mtime_ns")),
+    )
+
+
+def _verify_source_identity(
+    path: Path,
+    source_id: str,
+    expected: _SourceIdentity,
+    *,
+    cause: BaseException | None = None,
+) -> None:
+    try:
+        observed_stat = path.stat()
+    except OSError as error:
+        raise ValueError(
+            f"source alias {source_id} changed or was replaced during profiling"
+        ) from (cause or error)
+    observed = _source_identity(observed_stat)
+    if (
+        observed != expected
+        or not stat.S_ISREG(observed_stat.st_mode)
+    ):
+        raise ValueError(
+            f"source alias {source_id} changed or was replaced during profiling"
+        ) from cause
+
+
 def _base_diagnostics(
     format_code: str,
     snapshot: _Snapshot,
@@ -221,11 +277,29 @@ def _complete_lines(data: bytes, *, truncated: bool) -> bytes:
 
 
 def _is_safe_field(name: object) -> bool:
-    return (
-        isinstance(name, str)
-        and bool(_SAFE_FIELD.fullmatch(name))
-        and not _is_forbidden_field(name)
+    return isinstance(name, str) and bool(_SAFE_FIELD.fullmatch(name))
+
+
+def _normalized_field_tokens(name: str) -> tuple[str, ...]:
+    with_word_boundaries = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
+    return tuple(
+        token
+        for token in re.split(r"[^A-Za-z0-9]+", with_word_boundaries.casefold())
+        if token
     )
+
+
+def _sensitive_columns(names: Sequence[str]) -> tuple[str, ...]:
+    def is_sensitive(name: str) -> bool:
+        tokens = _normalized_field_tokens(name)
+        token_set = set(tokens)
+        return bool(
+            _SENSITIVE_FIELD_TOKENS.intersection(token_set)
+            or {"api", "key"} <= token_set
+            or {"private", "key"} <= token_set
+        )
+
+    return tuple(sorted(name for name in names if is_sensitive(name)))
 
 
 def _scalar_type(value: object) -> str:
@@ -251,7 +325,19 @@ def _reject_json_constant(value: str) -> object:
 
 
 def _load_json(text: str) -> object:
-    return json.loads(text, parse_constant=_reject_json_constant)
+    def reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        value: dict[str, object] = {}
+        for name, item in pairs:
+            if name in value:
+                raise ValueError("duplicate JSON object key")
+            value[name] = item
+        return value
+
+    return json.loads(
+        text,
+        parse_constant=_reject_json_constant,
+        object_pairs_hook=reject_duplicates,
+    )
 
 
 def _csv_type(value: str) -> str:
@@ -314,6 +400,7 @@ def _tabular_profile(
         ),
         schema=schema,
         diagnostics=diagnostics,
+        sensitive_columns=_sensitive_columns(tuple(schema)),
         role=role,
     )
 
@@ -449,6 +536,13 @@ def _profile_json_records(
 
 
 class _JsonAdapter:
+    """Bounded JSON profiling.
+
+    ``max_records`` limits inspected and emitted record structure. The standard
+    library decoder may allocate for the complete document, whose size is
+    independently bounded by ``max_input_bytes`` before parsing.
+    """
+
     family = "json"
     allowed_roles = _TABULAR_ROLES
     default_role: SourceRole = "numeric_evidence"
@@ -518,6 +612,10 @@ class _JsonLinesAdapter:
             truncated=input_truncated,
         )
         text = _decode_utf8(data, format_name="JSONL", truncated=input_truncated)
+        if input_truncated and not text.strip():
+            raise ValueError(
+                "JSONL input truncation left no complete nonblank record"
+            )
         records: list[object] = []
         has_extra_record = False
         for line in text.splitlines():
@@ -608,6 +706,25 @@ class _ParquetAdapter:
         limits: ProfileLimits,
         snapshot: _Snapshot,
     ) -> SourceProfile:
+        if snapshot.size_bytes < 12:
+            raise ValueError("Parquet magic or footer is malformed")
+        leading_magic = _read_region(
+            path, offset=0, length=4, chunk_bytes=limits.read_chunk_bytes
+        )
+        trailer = _read_region(
+            path,
+            offset=snapshot.size_bytes - 8,
+            length=8,
+            chunk_bytes=limits.read_chunk_bytes,
+        )
+        if leading_magic != b"PAR1" or len(trailer) != 8 or trailer[4:] != b"PAR1":
+            raise ValueError("Parquet magic or footer is malformed")
+        footer_length = int.from_bytes(trailer[:4], "little")
+        if footer_length > limits.max_input_bytes:
+            raise ValueError("Parquet footer metadata exceeds max_input_bytes")
+        if footer_length > snapshot.size_bytes - 12:
+            raise ValueError("Parquet magic or footer is malformed")
+
         try:
             import duckdb
         except ModuleNotFoundError as error:
@@ -617,10 +734,12 @@ class _ParquetAdapter:
 
         connection = duckdb.connect(database=":memory:")
         try:
+            connection.execute("SET memory_limit = '64MB'")
+            connection.execute("SET threads = 1")
             columns = connection.execute(
                 "DESCRIBE SELECT * FROM read_parquet(?)",
                 [str(path)],
-            ).fetchall()
+            ).fetchmany(limits.max_fields + 1)
             metadata = connection.execute(
                 """
                 SELECT num_rows, num_row_groups
@@ -764,6 +883,12 @@ def profile_sources(
     profiles: list[SourceProfile] = []
     for source_id, source in normalized_sources:
         path = _path_for_source(source).expanduser()
+        adapter = active_registry.resolve(path)
+        role = validated_roles.get(source_id, adapter.default_role)
+        if role not in adapter.allowed_roles:
+            raise ValueError(
+                f"role {role} is not supported by the {adapter.family} adapter"
+            )
         try:
             file_stat = path.stat()
         except FileNotFoundError as error:
@@ -772,16 +897,26 @@ def profile_sources(
             ) from error
         if not stat.S_ISREG(file_stat.st_mode):
             raise ValueError(f"source alias {source_id} must reference a regular file")
-        adapter = active_registry.resolve(path)
-        role = validated_roles.get(source_id, adapter.default_role)
-        if role not in adapter.allowed_roles:
-            raise ValueError(
-                f"role {role} is not supported by the {adapter.family} adapter"
+        identity = _source_identity(file_stat)
+        try:
+            snapshot = _snapshot(path, file_stat.st_size, active_limits)
+            profile = adapter.profile(
+                source_id, path, role, active_limits, snapshot
             )
-        snapshot = _snapshot(path, file_stat.st_size, active_limits)
-        profile = adapter.profile(
-            source_id, path, role, active_limits, snapshot
+        except Exception as error:
+            _verify_source_identity(path, source_id, identity, cause=error)
+            raise
+        _verify_source_identity(path, source_id, identity)
+        verification_snapshot = _snapshot(
+            path,
+            identity.size_bytes,
+            active_limits,
         )
+        _verify_source_identity(path, source_id, identity)
+        if verification_snapshot.fingerprint != snapshot.fingerprint:
+            raise ValueError(
+                f"source alias {source_id} changed or was replaced during profiling"
+            )
         encoded_size = len(canonical_json(profile.to_dict()).encode("utf-8"))
         if encoded_size > active_limits.max_diagnostic_bytes:
             raise ValueError(

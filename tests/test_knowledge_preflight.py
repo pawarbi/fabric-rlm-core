@@ -11,7 +11,17 @@ from fabric_rlm.knowledge import (
     Relationship,
 )
 from fabric_rlm.knowledge_preflight import preflight_knowledge
-from fabric_rlm.knowledge_sources import profile_sources
+from fabric_rlm.knowledge_sources import (
+    ProfileLimits,
+    SourceAdapterRegistry,
+    profile_sources,
+)
+from fabric_rlm.knowledge_store import (
+    SourceBinding,
+    SourceBindingDescriptor,
+    load_knowledge_package,
+    save_knowledge_package,
+)
 
 
 def _write_sources(tmp_path: Path) -> dict[str, Path]:
@@ -94,6 +104,30 @@ def test_preflight_requires_exact_aliases_before_profiling(tmp_path: Path) -> No
         preflight_knowledge(package, {**sources, "extra": tmp_path / "missing.csv"})
 
 
+@pytest.mark.parametrize(
+    "roles",
+    [
+        {"orders": "numeric_evidence", "customers": "lookup"},
+        {
+            "orders": "numeric_evidence",
+            "customers": "lookup",
+            "inventory": "numeric_evidence",
+            "extra": "lookup",
+        },
+    ],
+)
+def test_preflight_rejects_missing_or_extra_role_aliases_before_file_io(
+    tmp_path: Path, roles: dict[str, str]
+) -> None:
+    sources = _write_sources(tmp_path)
+    package = _learned_package(sources)
+    for path in sources.values():
+        path.unlink()
+
+    with pytest.raises(ValueError, match="exact source aliases"):
+        preflight_knowledge(package, sources, roles=roles)
+
+
 def test_preflight_rejects_role_changes_before_file_io(tmp_path: Path) -> None:
     sources = _write_sources(tmp_path)
     package = _learned_package(sources)
@@ -127,6 +161,88 @@ def test_unchanged_sources_return_current_without_mutating_package(
     assert first.drift == {}
     with pytest.raises(TypeError):
         first.current_profiles["orders"] = package.sources[0]
+
+
+def test_unchanged_large_inexact_snapshot_never_returns_current(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "large.csv"
+    path.write_text("id,note\n" + "1,x\n" * 500, encoding="utf-8")
+    limits = ProfileLimits(max_input_bytes=64, read_chunk_bytes=8)
+    learned = replace(
+        profile_sources(
+            {"large": path},
+            roles={"large": "numeric_evidence"},
+            limits=limits,
+        )[0],
+        status="active",
+    )
+    relationship = Relationship(
+        relationship_id="large_self",
+        left_source="large",
+        right_source="large",
+        key="id",
+        cardinality="one_to_one",
+        left_coverage=1.0,
+        left_key_unique=True,
+        right_key_unique=True,
+        max_right_rows_per_key=1,
+        status="active",
+    )
+    operation = RegisteredOperation(
+        operation_id="large_total",
+        operation="aggregate",
+        required_sources=("large",),
+        required_relationships=("large_self",),
+        output_schema={"count": "integer"},
+        grain="all",
+        host_implementation_id="aggregate_v1",
+        status="active",
+    )
+    package = KnowledgePackage(
+        package_id="large",
+        sources=(learned,),
+        relationships=(relationship,),
+        operations=(operation,),
+    )
+
+    result = preflight_knowledge(package, {"large": path}, limits=limits)
+
+    assert result.is_current is False
+    assert result.drift == {"large": "inexact"}
+    assert result.package.sources[0].status == "stale"
+    assert result.package.relationships[0].status == "stale"
+    assert result.package.relationships[0].reason_code == "source_snapshot_inexact"
+    assert result.package.operations[0].status == "stale"
+    assert result.package.operations[0].reason_code == "source_snapshot_inexact"
+    assert result.package.events[0].reason_code == "source_snapshot_inexact"
+
+
+def test_same_size_middle_only_large_file_mutation_is_inexact_not_current(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "large.bin"
+    original = b"A" * 64 + b"B" * 128 + b"C" * 64
+    path.write_bytes(original)
+    limits = ProfileLimits(max_input_bytes=64, read_chunk_bytes=8)
+    learned = replace(
+        profile_sources(
+            {"large": path},
+            roles={"large": "context_only"},
+            limits=limits,
+        )[0],
+        status="active",
+    )
+    package = KnowledgePackage(package_id="large", sources=(learned,))
+    path.write_bytes(b"A" * 64 + b"D" * 128 + b"C" * 64)
+
+    result = preflight_knowledge(package, {"large": path}, limits=limits)
+
+    assert result.current_profiles["large"].snapshot_fingerprint == (
+        learned.snapshot_fingerprint
+    )
+    assert result.drift == {"large": "inexact"}
+    assert result.is_current is False
 
 
 def test_snapshot_drift_marks_only_dependent_knowledge_stale(
@@ -195,6 +311,179 @@ def test_schema_drift_is_distinguished_and_events_are_deduplicated(
         "relationship",
         "operation",
     ]
+
+
+def test_terminal_lifecycle_and_reason_are_preserved_while_drift_propagates(
+    tmp_path: Path,
+) -> None:
+    sources = _write_sources(tmp_path)
+    package = _learned_package(sources)
+    relationship = replace(
+        package.relationships[0],
+        status="quarantined",
+        reason_code="quality_hold",
+    )
+    orders_operation = package.operations[0]
+    retired_operation = replace(
+        orders_operation,
+        operation_id="retired_orders_total",
+        status="retired",
+        reason_code="superseded",
+    )
+    package = replace(
+        package,
+        relationships=(relationship,),
+        operations=(orders_operation, retired_operation, package.operations[1]),
+    )
+    sources["customers"].write_text(
+        "customer_id,territory\n10,west\n",
+        encoding="utf-8",
+    )
+
+    result = preflight_knowledge(package, sources)
+    operations = {item.operation_id: item for item in result.package.operations}
+
+    assert result.package.relationships[0].status == "quarantined"
+    assert result.package.relationships[0].reason_code == "quality_hold"
+    assert operations["orders_total"].status == "stale"
+    assert operations["orders_total"].reason_code == "source_schema_drift"
+    assert operations["retired_orders_total"].status == "retired"
+    assert operations["retired_orders_total"].reason_code == "superseded"
+
+
+@pytest.mark.parametrize("terminal_status", ["quarantined", "retired"])
+@pytest.mark.parametrize("subject_type", ["source", "relationship", "operation"])
+def test_terminal_subjects_preserve_reason_without_new_stale_event(
+    tmp_path: Path,
+    terminal_status: str,
+    subject_type: str,
+) -> None:
+    sources = _write_sources(tmp_path)
+    package = _learned_package(sources)
+    terminal_reason = "terminal_hold"
+    terminal_id = ""
+
+    if subject_type == "source":
+        terminal_id = "customers"
+        package = replace(
+            package,
+            sources=tuple(
+                replace(
+                    source,
+                    status=terminal_status,
+                )
+                if source.source_id == terminal_id
+                else source
+                for source in package.sources
+            ),
+        )
+    elif subject_type == "relationship":
+        terminal_id = package.relationships[0].relationship_id
+        package = replace(
+            package,
+            relationships=(
+                replace(
+                    package.relationships[0],
+                    status=terminal_status,
+                    reason_code=terminal_reason,
+                ),
+            ),
+        )
+    else:
+        terminal_id = "orders_total"
+        package = replace(
+            package,
+            operations=tuple(
+                replace(
+                    operation,
+                    status=terminal_status,
+                    reason_code=terminal_reason,
+                )
+                if operation.operation_id == terminal_id
+                else operation
+                for operation in package.operations
+            ),
+        )
+
+    sources["customers"].write_text(
+        "customer_id,territory\n10,west\n",
+        encoding="utf-8",
+    )
+    result = preflight_knowledge(package, sources)
+    records = {
+        "source": {item.source_id: item for item in result.package.sources},
+        "relationship": {
+            item.relationship_id: item
+            for item in result.package.relationships
+        },
+        "operation": {
+            item.operation_id: item
+            for item in result.package.operations
+        },
+    }
+    terminal = records[subject_type][terminal_id]
+
+    assert terminal.status == terminal_status
+    if subject_type != "source":
+        assert terminal.reason_code == terminal_reason
+    assert not any(
+        event.subject_type == subject_type and event.subject_id == terminal_id
+        for event in result.package.events
+    )
+
+
+def test_preflight_propagates_source_mutation_failure(tmp_path: Path) -> None:
+    sources = _write_sources(tmp_path)
+    package = _learned_package(sources)
+    class MutatingCsvAdapter:
+        family = "csv"
+        allowed_roles = frozenset({"numeric_evidence", "lookup"})
+        default_role = "numeric_evidence"
+
+        def matches(self, path: Path) -> bool:
+            return path.suffix.lower() == ".csv"
+
+        def profile(self, source_id, path, role, limits, snapshot):
+            path.write_text(path.read_text(encoding="utf-8") + "2,20,8\n")
+            return next(
+                profile
+                for profile in package.sources
+                if profile.source_id == source_id
+            )
+
+    registry = SourceAdapterRegistry((MutatingCsvAdapter(),))
+
+    with pytest.raises(ValueError, match="orders.*changed.*profil"):
+        preflight_knowledge(package, sources, registry=registry)
+
+
+def test_preflight_stale_package_round_trips_lifecycle_and_events(
+    tmp_path: Path,
+) -> None:
+    sources = _write_sources(tmp_path)
+    package = _learned_package(sources)
+    sources["orders"].write_text(
+        "order_id,customer_id,total\n1,10,9\n",
+        encoding="utf-8",
+    )
+    result = preflight_knowledge(package, sources)
+    destination = tmp_path / "stale-knowledge.json"
+
+    save_knowledge_package(destination, result.package)
+    bindings = {
+        source.source_id: SourceBinding(
+            SourceBindingDescriptor(source.source_id, source.locator),
+            sources[source.source_id],
+        )
+        for source in result.package.sources
+    }
+    loaded = load_knowledge_package(destination, bindings=bindings).package
+
+    assert loaded == result.package
+    assert loaded.sources[0].status in {"active", "stale"}
+    assert any(source.status == "stale" for source in loaded.sources)
+    assert loaded.relationships[0].reason_code == "source_snapshot_drift"
+    assert loaded.events == result.package.events
 
 
 @pytest.mark.parametrize("replacement", ["missing", "directory"])

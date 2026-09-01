@@ -25,7 +25,7 @@ from fabric_rlm.knowledge_sources import (
 )
 
 
-DriftKind = Literal["snapshot", "schema"]
+DriftKind = Literal["snapshot", "schema", "inexact"]
 
 
 @dataclass(frozen=True)
@@ -103,6 +103,8 @@ def _reason_code(
 ) -> str:
     if any(drift[source_id] == "schema" for source_id in source_ids):
         return "source_schema_drift"
+    if any(drift[source_id] == "inexact" for source_id in source_ids):
+        return "source_snapshot_inexact"
     return "source_snapshot_drift"
 
 
@@ -162,7 +164,9 @@ def preflight_knowledge(
     for source_id in sorted(learned_by_id):
         learned = learned_by_id[source_id]
         observed = current_by_id[source_id]
-        if learned.schema_fingerprint != observed.schema_fingerprint:
+        if observed.diagnostics.get("snapshot_exact") is not True:
+            drift[source_id] = "inexact"
+        elif learned.schema_fingerprint != observed.schema_fingerprint:
             drift[source_id] = "schema"
         elif learned.snapshot_fingerprint != observed.snapshot_fingerprint:
             drift[source_id] = "snapshot"
@@ -210,10 +214,14 @@ def preflight_knowledge(
             relationships_out.append(relationship)
             continue
         reason_code = _reason_code(dependencies, drift)
-        updated = replace(
-            relationship,
-            status=_stale_status(relationship.status),
-            reason_code=reason_code,
+        updated = (
+            relationship
+            if relationship.status in {"quarantined", "retired"}
+            else replace(
+                relationship,
+                status="stale",
+                reason_code=reason_code,
+            )
         )
         relationships_out.append(updated)
         stale_relationship_ids.add(relationship.relationship_id)
@@ -243,10 +251,14 @@ def preflight_knowledge(
                     & changed_ids
                 )
         reason_code = _reason_code(related_sources, drift)
-        updated = replace(
-            operation,
-            status=_stale_status(operation.status),
-            reason_code=reason_code,
+        updated = (
+            operation
+            if operation.status in {"quarantined", "retired"}
+            else replace(
+                operation,
+                status="stale",
+                reason_code=reason_code,
+            )
         )
         operations_out.append(updated)
         if updated.status == "stale":
