@@ -494,11 +494,18 @@ class LakehouseSourceAdapter:
 
 
 def fabric_source_registry() -> SourceAdapterRegistry:
-    """Return an opt-in registry with Fabric adapters before default adapters."""
+    """Return an opt-in registry with all Fabric and local adapters."""
+
+    from fabric_rlm.knowledge_semantic_model import semantic_model_adapter
 
     defaults = SourceAdapterRegistry.default().adapters
     return SourceAdapterRegistry(
-        (LakehouseSourceAdapter(), DeltaDirectoryAdapter(), *defaults)
+        (
+            semantic_model_adapter(),
+            LakehouseSourceAdapter(),
+            DeltaDirectoryAdapter(),
+            *defaults,
+        )
     )
 
 

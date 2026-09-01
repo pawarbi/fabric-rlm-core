@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import sys
 import traceback
+from types import ModuleType
 
 import pytest
 
@@ -143,6 +145,77 @@ def test_profiles_only_public_metadata_methods_and_rechecks_them():
         "columns",
         "measures",
         "relationships",
+    ]
+
+
+def test_real_semantic_model_wrapper_calls_only_stubbed_sempy_metadata_apis(
+    monkeypatch,
+):
+    calls = []
+    frames = {
+        "list_tables": FakeFrame(
+            [{"Name": "Sales", "Description": "", "Type": "Table"}]
+        ),
+        "list_columns": FakeFrame(
+            [
+                {
+                    "Table Name": "Sales",
+                    "Column Name": "Amount",
+                    "Data Type": "Double",
+                }
+            ]
+        ),
+        "list_measures": FakeFrame(
+            [
+                {
+                    "Table Name": "Sales",
+                    "Measure Name": "Revenue",
+                    "Measure Expression": "SUM(Sales[Amount])",
+                }
+            ]
+        ),
+        "list_relationships": FakeFrame([]),
+    }
+    fabric = ModuleType("sempy.fabric")
+
+    for name, frame in frames.items():
+        def metadata(dataset, *, workspace=None, _name=name, _frame=frame):
+            calls.append((_name, dataset, workspace))
+            return _frame
+
+        setattr(fabric, name, metadata)
+
+    for forbidden in ("evaluate_dax", "read_table", "execute_tmsl"):
+        setattr(
+            fabric,
+            forbidden,
+            lambda *args, _name=forbidden, **kwargs: pytest.fail(
+                f"{_name} must not be called"
+            ),
+        )
+
+    sempy = ModuleType("sempy")
+    sempy.fabric = fabric
+    monkeypatch.setitem(sys.modules, "sempy", sempy)
+    monkeypatch.setitem(sys.modules, "sempy.fabric", fabric)
+    model = SemanticModel(
+        "Sales Model",
+        workspace="Analytics Workspace",
+        validate=False,
+    )
+
+    profile = _profile(model)
+
+    assert profile.family == "semantic_model"
+    assert calls == [
+        (name, "Sales Model", "Analytics Workspace")
+        for _ in range(2)
+        for name in (
+            "list_tables",
+            "list_columns",
+            "list_measures",
+            "list_relationships",
+        )
     ]
 
 
@@ -442,3 +515,12 @@ def test_factory_is_explicit_and_does_not_change_the_default_registry():
     assert isinstance(adapter, SemanticModelKnowledgeAdapter)
     assert registry.adapters == (adapter,)
     assert adapter.matches(FakeSemanticModel())
+
+
+def test_fabric_registry_composes_semantic_model_and_local_adapters():
+    from fabric_rlm.knowledge_lakehouse_sources import fabric_source_registry
+
+    registry = fabric_source_registry()
+
+    assert registry.resolve(FakeSemanticModel()).family == "semantic_model"
+    assert registry.resolve("orders.csv").family == "csv"
