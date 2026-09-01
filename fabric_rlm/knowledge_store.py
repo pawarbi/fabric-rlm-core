@@ -548,3 +548,21 @@ def load_knowledge_package(
     data = _read_bounded(Path(source))
     package = _parse_envelope(data)
     return _bind_package(package, bindings)
+
+
+def read_knowledge_package(
+    source: str | os.PathLike[str],
+) -> KnowledgePackage:
+    """Read and validate a package without attaching runtime bindings."""
+
+    return _parse_envelope(_read_bounded(Path(source)))
+
+
+def bind_knowledge_package(
+    package: KnowledgePackage,
+    *,
+    bindings: Mapping[str, SourceBinding],
+) -> BoundKnowledgePackage:
+    """Attach exact, explicit runtime bindings to a validated package."""
+
+    return _bind_package(package, bindings)

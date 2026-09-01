@@ -26,6 +26,7 @@ from .interpreter import (
     WorkerTimeout,
 )
 from .inspector import RunInspector
+from .knowledge_api import Knowledge, load_knowledge
 from .lm import AnthropicLM, FabricLM, OpenAILM, register_backend, resolve_lm
 from .metrics import ValidationCheck, ValidationReport
 from .replay_lm import (
@@ -59,6 +60,7 @@ __all__ = [
     "File",
     "FileDestination",
     "Interpreter",
+    "Knowledge",
     "LocalArtifactStore",
     "LakehouseSource",
     "OpenAILM",
@@ -94,6 +96,7 @@ __all__ = [
     "compose_skills",
     "iter_target_cells",
     "list_skills",
+    "load_knowledge",
     "load_skill",
     "parse_target_ranges",
     "register_backend",

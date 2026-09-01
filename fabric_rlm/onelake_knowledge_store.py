@@ -696,3 +696,16 @@ def load_onelake_knowledge_package(
     data, _ = _read_stable(transport, location._target)
     package = _parse_envelope(data)
     return _bind_package(package, bindings)
+
+
+def read_onelake_knowledge_package(
+    location: OneLakeKnowledgeLocation,
+    *,
+    transport: OneLakeKnowledgeTransport,
+) -> KnowledgePackage:
+    """Read and validate a OneLake package without attaching runtime bindings."""
+
+    if not isinstance(location, OneLakeKnowledgeLocation):
+        raise ValueError("location must be a OneLakeKnowledgeLocation")
+    data, _ = _read_stable(transport, location._target)
+    return _parse_envelope(data)

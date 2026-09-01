@@ -122,6 +122,43 @@ tabular engine, Delta reads honor the transaction log, file processing runs in
 Python, and generated artifacts can be written back to `Files/` without giving
 the isolated worker OneLake credentials.
 
+Learn a reusable, source-bound package when the same approved sources support
+multiple tasks:
+
+```python
+from fabric_rlm import FabricLM, File, RLM, load_knowledge
+
+knowledge = RLM.learn(
+    sources={
+        "orders": File("/lakehouse/default/Files/orders.parquet"),
+    },
+    store="/lakehouse/default/Files/knowledge/sales.json",
+)
+
+result = RLM.task(
+    "Revenue by region for the latest complete month",
+    knowledge=knowledge,
+    outputs=["answer"],
+    lm=FabricLM("gpt-5.1"),
+).run()
+
+knowledge = load_knowledge(
+    "/lakehouse/default/Files/knowledge/sales.json",
+    sources={
+        "orders": File("/lakehouse/default/Files/orders.parquet"),
+    },
+)
+```
+
+`RLM.learn(...)` deterministically profiles bounded source metadata, keeps
+runtime paths and authorization handles outside the persisted package, and can
+save locally or to a canonical OneLake `abfss://.../Files/...` path. Loading
+requires fresh, exact source aliases and rejects source drift before binding.
+Every knowledge-enabled task preflights the current sources before the model is
+called. This release exposes those validated handles through the normal RLM
+worker path; registered learned operations are not executed yet, and the
+trajectory labels that path explicitly.
+
 ```python
 from fabric_rlm import FabricLM, FileDestination, LakehouseSource, RLM
 

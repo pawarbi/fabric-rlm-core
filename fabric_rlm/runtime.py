@@ -21,6 +21,9 @@ from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
 
 if TYPE_CHECKING:
     from .inspector import RunInspector
+    from .knowledge_api import Knowledge, KnowledgeStore
+    from .knowledge_sources import ProfileLimits, SourceAdapterRegistry
+    from .onelake_knowledge_store import OneLakeKnowledgeTransport
 
 
 # ---------------------------------------------------------------------------
@@ -880,6 +883,7 @@ class RLM:
         tools: Iterable[Callable[..., Any]] | None = None,
         security: SecurityPolicy | None = None,
         max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
+        knowledge: Knowledge | None = None,
     ):
         # ---- engine validation (early, before any heavy resolution) ---------
         # Resolve aliases ('default' -> 'v6-custom', 'dspy' -> 'v7-dspy')
@@ -910,6 +914,12 @@ class RLM:
         # Snapshot the iterable now so generators/etc. are exhausted exactly
         # once at construction time and downstream code sees a stable list.
         tool_list: list[Callable[..., Any]] = list(tools) if tools is not None else []
+        if knowledge is not None:
+            from .knowledge_api import Knowledge as KnowledgeType
+
+            if not isinstance(knowledge, KnowledgeType):
+                raise TypeError("knowledge must be a Knowledge instance")
+        self._knowledge = knowledge
         # ---- engine="auto" capability router (Phase 2) ---------------------
         # Resolve the pseudo-engine to a canonical name based on what the
         # caller actually needs. Decision is made AFTER tool_list is
@@ -1053,6 +1063,7 @@ class RLM:
                 stuck_loop_threshold=stuck_loop_threshold,
                 security=self._security,
                 max_submit_bytes=self.max_submit_bytes,
+                knowledge=None,
             )
             return
 
@@ -1107,18 +1118,104 @@ class RLM:
         self._inline_inputs: dict[str, Any] = {}
 
     @classmethod
+    def learn(
+        cls,
+        *,
+        sources: Mapping[str, object],
+        store: KnowledgeStore | None = None,
+        roles: Mapping[str, object] | None = None,
+        package_id: str | None = None,
+        limits: ProfileLimits | None = None,
+        registry: SourceAdapterRegistry | None = None,
+        transport: OneLakeKnowledgeTransport | None = None,
+        overwrite: bool = False,
+    ) -> Knowledge:
+        """Learn a deterministic package from explicitly approved sources."""
+
+        from .knowledge_api import learn as learn_knowledge
+
+        return learn_knowledge(
+            sources=sources,
+            store=store,
+            roles=roles,
+            package_id=package_id,
+            limits=limits,
+            registry=registry,
+            transport=transport,
+            overwrite=overwrite,
+        )
+
+    def _bind_knowledge_inputs(
+        self,
+        explicit_inputs: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        if self._knowledge is None:
+            return dict(explicit_inputs), {}
+        from .knowledge_preflight import preflight_knowledge
+
+        conflicts = sorted(set(explicit_inputs) & set(self._knowledge.bindings))
+        if conflicts:
+            raise ValueError(
+                "task inputs conflict with knowledge source aliases: "
+                + ", ".join(conflicts)
+            )
+        blocked = [
+            source.source_id
+            for source in self._knowledge.package.sources
+            if source.status not in {"candidate", "active"}
+        ]
+        if blocked:
+            raise ValueError(
+                "knowledge source is not reusable: " + ", ".join(sorted(blocked))
+            )
+        preflight = preflight_knowledge(
+            self._knowledge.package,
+            self._knowledge.bindings,
+            limits=self._knowledge._limits,
+            registry=self._knowledge._registry,
+        )
+        if preflight.drift:
+            raise ValueError(
+                "stale knowledge sources detected: "
+                + ", ".join(sorted(preflight.drift))
+            )
+        bound = dict(explicit_inputs)
+        bound.update(self._knowledge.bindings)
+        mode = (
+            "registered_operations_unavailable"
+            if self._knowledge.package.operations
+            else "fallback_no_registered_operations"
+        )
+        return bound, {
+            "knowledge_fingerprint": self._knowledge.package.fingerprint,
+            "knowledge_mode": mode,
+        }
+
+    @staticmethod
+    def _attach_knowledge_metadata(
+        result: RLMResult,
+        metadata: Mapping[str, str],
+    ) -> RLMResult:
+        if metadata:
+            result.trajectory.metadata.update(metadata)
+        return result
+
+    @classmethod
     def _from_task_impl(
         cls,
         task: str,
         inputs: dict[str, Any] | None = None,
         outputs: list[str] | Mapping[str, type] | None = None,
         *,
+        knowledge: Knowledge | None = None,
         deprecation_stacklevel: int,
         **kwargs: Any,
     ) -> "RLM":
         # Don't pass `None` positionally — callers may supply `signature=...`
         # via kwargs (v6.5+) and we'd otherwise hit "multiple values for 'signature'".
         kwargs.setdefault("signature", None)
+        if knowledge is not None:
+            kwargs["knowledge"] = knowledge
         # Phase 5 deprecation: emit at the from_task call site stacklevel
         # (warn -> helper -> from_task -> user = 3). Suppress only the
         # inner re-emission of OUR engine-deprecation warning during the
@@ -1170,6 +1267,8 @@ class RLM:
         task: str,
         inputs: dict[str, Any] | None = None,
         outputs: list[str] | Mapping[str, type] | None = None,
+        *,
+        knowledge: Knowledge | None = None,
         **kwargs: Any,
     ) -> "RLM":
         """Construct an RLM from task text and named inputs and outputs.
@@ -1182,6 +1281,7 @@ class RLM:
             task,
             inputs=inputs,
             outputs=outputs,
+            knowledge=knowledge,
             deprecation_stacklevel=4,
             **kwargs,
         )
@@ -1192,6 +1292,8 @@ class RLM:
         task: str,
         inputs: dict[str, Any] | None = None,
         outputs: list[str] | Mapping[str, type] | None = None,
+        *,
+        knowledge: Knowledge | None = None,
         **kwargs: Any,
     ) -> "RLM":
         """Construct an RLM using the same contract as :meth:`from_task`."""
@@ -1199,6 +1301,7 @@ class RLM:
             task,
             inputs=inputs,
             outputs=outputs,
+            knowledge=knowledge,
             deprecation_stacklevel=4,
             **kwargs,
         )
@@ -1432,15 +1535,22 @@ class RLM:
         bound_inputs = dict(self._inline_inputs)
         if inputs:
             bound_inputs.update(inputs)
+        bound_inputs, knowledge_metadata = self._bind_knowledge_inputs(bound_inputs)
         bound_inputs = resolve_lakehouse_inputs(bound_inputs)
 
         if self.engine == "adaptive":
-            return self._run_adaptive(bound_inputs)
+            return self._attach_knowledge_metadata(
+                self._run_adaptive(bound_inputs),
+                knowledge_metadata,
+            )
 
         required_output_fields = _required_output_fields(self.signature, self._inline_task, self._inline_outputs)
 
         if self.engine == "v7-dspy":
-            return self._run_via_dspy(bound_inputs, required_output_fields)
+            return self._attach_knowledge_metadata(
+                self._run_via_dspy(bound_inputs, required_output_fields),
+                knowledge_metadata,
+            )
 
         trajectory = Trajectory(
             metadata={
@@ -1448,6 +1558,7 @@ class RLM:
                 "skills": list(self.skills),
                 "skill_autoloading": self.enable_skill_autoloading,
                 "router_enabled": self.enable_router,
+                **knowledge_metadata,
             }
         )
 
