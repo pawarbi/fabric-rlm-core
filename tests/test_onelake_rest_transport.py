@@ -3,12 +3,18 @@ from __future__ import annotations
 from email.message import Message
 from io import BytesIO
 from urllib.error import HTTPError
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 
+from fabric_rlm.knowledge import KnowledgePackage, SourceProfile
+from fabric_rlm.knowledge_store import SourceBinding, SourceBindingDescriptor
 from fabric_rlm.onelake_knowledge_store import (
     ConcurrentWriteError,
+    OneLakeKnowledgeLocation,
     OneLakeRestTransport,
+    load_onelake_knowledge_package,
+    save_onelake_knowledge_package,
 )
 
 
@@ -43,6 +49,9 @@ class _Response:
     def read(self, limit: int = -1) -> bytes:
         return self._data if limit < 0 else self._data[:limit]
 
+    def close(self) -> None:
+        pass
+
 
 class _Opener:
     def __init__(self, responses: list[object]) -> None:
@@ -55,6 +64,98 @@ class _Opener:
         if isinstance(response, Exception):
             raise response
         return response
+
+
+class _MemoryOneLakeOpener:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.versions: dict[str, int] = {}
+
+    def __call__(self, request, *, timeout):
+        assert timeout == 60
+        parsed = urlsplit(request.full_url)
+        path = unquote(parsed.path)
+        query = parse_qs(parsed.query)
+        method = request.method
+        if method == "HEAD":
+            self._require(path)
+            return self._response(path)
+        if method == "GET":
+            self._require(path)
+            return self._response(path, data=self.objects[path])
+        if method == "DELETE":
+            if path not in self.objects:
+                raise _http_error(404)
+            self.objects.pop(path)
+            self.versions.pop(path)
+            return _Response(status=200)
+        if method == "PUT" and request.get_header("X-ms-rename-source"):
+            source = unquote(request.get_header("X-ms-rename-source"))
+            self._require(source)
+            if request.get_header("X-ms-source-if-match") != self._etag(source):
+                raise _http_error(412)
+            self._check_destination_condition(request, path)
+            self.objects[path] = self.objects.pop(source)
+            self.versions[path] = self.versions.pop(source) + 1
+            return self._response(path, status=201)
+        if method == "PUT" and query.get("resource") == ["directory"]:
+            if path in self.objects:
+                raise _http_error(409)
+            self.objects[path] = b""
+            self.versions[path] = 1
+            return self._response(path, status=201)
+        if method == "PUT" and query.get("resource") == ["file"]:
+            self._check_destination_condition(request, path)
+            self.objects[path] = b""
+            self.versions[path] = self.versions.get(path, 0) + 1
+            return self._response(path, status=201)
+        if method == "PATCH" and query.get("action") == ["append"]:
+            self._require(path)
+            position = int(query["position"][0])
+            if position != len(self.objects[path]):
+                raise _http_error(400)
+            self.objects[path] += request.data or b""
+            self.versions[path] += 1
+            return self._response(path, status=202)
+        if method == "PATCH" and query.get("action") == ["flush"]:
+            self._require(path)
+            if int(query["position"][0]) != len(self.objects[path]):
+                raise _http_error(400)
+            self.versions[path] += 1
+            return self._response(path, status=200)
+        raise AssertionError(f"unexpected request: {method} {request.full_url}")
+
+    def _check_destination_condition(self, request, path: str) -> None:
+        if request.get_header("If-none-match") == "*" and path in self.objects:
+            raise _http_error(412)
+        expected = request.get_header("If-match")
+        if expected is not None and (
+            path not in self.objects or expected != self._etag(path)
+        ):
+            raise _http_error(412)
+
+    def _require(self, path: str) -> None:
+        if path not in self.objects:
+            raise _http_error(404)
+
+    def _etag(self, path: str) -> str:
+        return f'"v{self.versions[path]}"'
+
+    def _response(
+        self,
+        path: str,
+        *,
+        status: int = 200,
+        data: bytes = b"",
+    ) -> _Response:
+        return _Response(
+            status=status,
+            data=data,
+            headers={
+                "Content-Length": str(len(self.objects[path])),
+                "ETag": self._etag(path),
+            },
+        )
 
 
 def _http_error(status: int) -> HTTPError:
@@ -189,3 +290,52 @@ def test_rest_read_is_bounded_by_range_and_response_limit() -> None:
     assert request.method == "GET"
     assert request.get_header("Range") == "bytes=0-4"
     assert result == b"12345"
+
+
+def test_abfss_save_and_load_round_trip_through_rest_transport() -> None:
+    opener = _MemoryOneLakeOpener()
+    transport = _transport(opener)
+    location = OneLakeKnowledgeLocation(
+        root=ROOT,
+        locator="knowledge/package.json",
+    )
+    package = KnowledgePackage(
+        package_id="sales.knowledge.v1",
+        sources=(
+            SourceProfile(
+                source_id="orders",
+                family="delta",
+                locator="delta/v1/orders",
+                snapshot_fingerprint="snapshot",
+                schema_fingerprint="schema",
+                schema={"order_id": {"type": "integer"}},
+            ),
+        ),
+    )
+    runtime_handle = object()
+
+    save_onelake_knowledge_package(
+        location,
+        package,
+        transport=transport,
+    )
+    loaded = load_onelake_knowledge_package(
+        location,
+        transport=transport,
+        bindings={
+            "orders": SourceBinding(
+                SourceBindingDescriptor(
+                    source_id="orders",
+                    locator="delta/v1/orders",
+                ),
+                runtime_handle,
+            )
+        },
+    )
+
+    target = (
+        "/workspace-id/lakehouse-id/Files/knowledge/package.json"
+    )
+    assert package.fingerprint == loaded.package.fingerprint
+    assert loaded.bindings["orders"] is runtime_handle
+    assert ROOT.encode() not in opener.objects[target]

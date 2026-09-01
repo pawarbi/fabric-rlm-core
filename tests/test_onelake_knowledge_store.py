@@ -78,6 +78,7 @@ class FakeOneLakeTransport:
         self.fail_restore = False
         self.change_destination_before_publication = False
         self.change_destination_before_restore = False
+        self.fail_delete = False
 
     def stat(self, path: str) -> OneLakeObjectStat | None:
         self.calls.append(("stat", path))
@@ -187,6 +188,8 @@ class FakeOneLakeTransport:
 
     def delete(self, path: str) -> None:
         self.calls.append(("delete", path))
+        if self.fail_delete:
+            raise RuntimeError(f"delete failed at {path}?sig=secret")
         self.files.pop(path, None)
         self.versions.pop(path, None)
 
@@ -322,6 +325,26 @@ def test_overwrite_publishes_new_bytes_and_cleans_backup_and_temp() -> None:
     )
 
     assert transport.files == {_target(): _envelope_bytes(package)}
+
+
+def test_successful_overwrite_reports_backup_cleanup_failure() -> None:
+    old = _envelope_bytes(_package(package_id="old.package"))
+    package = _package()
+    transport = FakeOneLakeTransport({_target(): old})
+    transport.fail_delete = True
+
+    with pytest.raises(KnowledgePersistenceError, match="cleanup failed") as captured:
+        save_onelake_knowledge_package(
+            _location(),
+            package,
+            transport=transport,
+            overwrite=True,
+        )
+
+    assert ROOT not in str(captured.value)
+    assert "secret" not in str(captured.value)
+    assert transport.files[_target()] == _envelope_bytes(package)
+    assert any(".backup-" in path for path in transport.files)
 
 
 def test_failed_overwrite_restores_original_and_cleans_temporary_objects() -> None:

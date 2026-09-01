@@ -18,6 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 import hashlib
 import hmac
+import sys
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -545,16 +546,17 @@ def _temporary_path(target: str, kind: str) -> str:
     return f"{parent}/.{name}.{kind}-{uuid.uuid4().hex}"
 
 
-def _delete_quietly(
+def _delete_safely(
     transport: OneLakeKnowledgeTransport,
     path: str | None,
-) -> None:
+) -> bool:
     if path is None:
-        return
+        return True
     try:
         transport.delete(path)
     except Exception:
-        pass
+        return False
+    return True
 
 
 def save_onelake_knowledge_package(
@@ -668,9 +670,17 @@ def save_onelake_knowledge_package(
                     "OneLake package publication failed"
                 ) from None
     finally:
-        _delete_quietly(transport, temporary or None)
+        cleanup_failed = not _delete_safely(transport, temporary or None)
         if not retain_backup:
-            _delete_quietly(transport, backup)
+            cleanup_failed |= not _delete_safely(transport, backup)
+        if cleanup_failed:
+            active_error = sys.exc_info()[1]
+            if active_error is not None:
+                active_error.add_note("OneLake temporary cleanup failed")
+            else:
+                raise KnowledgePersistenceError(
+                    "OneLake temporary cleanup failed"
+                )
 
 
 def load_onelake_knowledge_package(
