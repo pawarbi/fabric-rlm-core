@@ -155,9 +155,14 @@ runtime paths and authorization handles outside the persisted package, and can
 save locally or to a canonical OneLake `abfss://.../Files/...` path. Loading
 requires fresh, exact source aliases and rejects source drift before binding.
 Every knowledge-enabled task preflights the current sources before the model is
-called. This release exposes those validated handles through the normal RLM
-worker path; registered learned operations are not executed yet, and the
-trajectory labels that path explicitly.
+called. For a `SemanticModel`, learning also registers one bounded
+`semantic_model.measure.v1` capability from visible measures and columns. The
+RLM may select that operation through a strict scalar JSON plan; the host
+validates the allowlisted measure, group-by, and up to two filters, executes
+`SemanticModel.measure(...)`, audits row/column/byte bounds, and gives the model
+only the compact fingerprinted result packet for synthesis. The model never
+supplies arbitrary DAX. Other source families continue through the explicitly
+labelled normal fallback path until their host executors are implemented.
 
 ```python
 from fabric_rlm import FabricLM, FileDestination, LakehouseSource, RLM
