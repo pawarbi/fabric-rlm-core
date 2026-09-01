@@ -826,7 +826,75 @@ def execute_lakehouse_query(
         con.close()
 
 
+def _delta_rs_path(path: str) -> str:
+    parsed = urlsplit(path)
+    if (
+        parsed.scheme.casefold() != "abfss"
+        or parsed.hostname != "onelake.dfs.fabric.microsoft.com"
+    ):
+        return path
+    segments = parsed.path.lstrip("/").split("/")
+    if segments and not segments[0].casefold().endswith(".lakehouse"):
+        segments[0] = f"{segments[0]}.Lakehouse"
+    return f"{parsed.scheme}://{parsed.netloc}/{'/'.join(segments)}"
+
+
+def _active_spark_session() -> Any | None:
+    try:
+        from pyspark.sql import SparkSession
+    except ImportError:
+        return None
+    return SparkSession.getActiveSession()
+
+
+def _read_spark_delta_metadata(spark: Any, path: str) -> dict[str, Any]:
+    escaped_path = path.replace("`", "``")
+    schema = spark.read.format("delta").load(path).schema
+    detail = spark.sql(
+        f"DESCRIBE DETAIL delta.`{escaped_path}`"
+    ).select("id").first()
+    history = spark.sql(
+        f"DESCRIBE HISTORY delta.`{escaped_path}` LIMIT 1"
+    ).select("version").first()
+    if detail is None or history is None:
+        raise LakehouseDiscoveryError(
+            "Delta transaction metadata is incomplete."
+        )
+    table_id = str(detail.id)
+    version = int(history.version)
+    return {
+        "columns": [
+            [
+                field.name,
+                str(field.dataType.simpleString()),
+            ]
+            for field in schema.fields
+        ],
+        "table_id": table_id,
+        "version": version,
+    }
+
+
 def _read_delta_metadata(path: str) -> dict[str, Any]:
+    parsed = urlsplit(path)
+    if (
+        parsed.scheme.casefold() == "abfss"
+        and parsed.hostname == "onelake.dfs.fabric.microsoft.com"
+    ):
+        spark = _active_spark_session()
+        if spark is not None:
+            try:
+                metadata = _read_spark_delta_metadata(spark, path)
+            except Exception:
+                raise LakehouseDiscoveryError(
+                    "Delta transaction metadata could not be read."
+                ) from None
+            if not metadata["table_id"]:
+                raise LakehouseDiscoveryError(
+                    "Delta transaction metadata has no stable table identity."
+                )
+            return metadata
+
     try:
         from deltalake import DeltaTable
     except ImportError as exc:
@@ -843,7 +911,7 @@ def _read_delta_metadata(path: str) -> dict[str, Any]:
         }
     try:
         table = DeltaTable(
-            path,
+            _delta_rs_path(path),
             storage_options=options,
             without_files=True,
         )

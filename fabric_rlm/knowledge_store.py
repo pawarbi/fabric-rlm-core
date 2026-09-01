@@ -65,6 +65,7 @@ _SCHEMA_STRING_FIELDS = {
     "element_delta_type",
     "key_delta_type",
     "value_delta_type",
+    "lakehouse_type",
     "logical_type",
     "physical_type",
     "format",

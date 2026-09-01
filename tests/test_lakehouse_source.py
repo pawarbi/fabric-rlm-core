@@ -94,6 +94,133 @@ def test_delta_schema_discovery_supports_arrow_conversion(
     ]
 
 
+def test_delta_schema_discovery_adds_lakehouse_suffix_for_onelake_ids(
+    monkeypatch,
+) -> None:
+    fields = [SimpleNamespace(name="order_id", type="Int64")]
+    source = (
+        "abfss://workspace-id@onelake.dfs.fabric.microsoft.com/"
+        "lakehouse-id/Tables/dbo/orders"
+    )
+
+    class Schema:
+        def to_pyarrow(self):
+            return fields
+
+    class DeltaTable:
+        def __init__(self, path, storage_options=None, without_files=False):
+            assert path == (
+                "abfss://workspace-id@onelake.dfs.fabric.microsoft.com/"
+                "lakehouse-id.Lakehouse/Tables/dbo/orders"
+            )
+            assert storage_options == {
+                "bearer_token": "storage-token",
+                "use_fabric_endpoint": "true",
+            }
+            assert without_files is True
+
+        def schema(self):
+            return Schema()
+
+        def version(self):
+            return 4
+
+        def metadata(self):
+            return SimpleNamespace(id="orders-table-id")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "deltalake",
+        SimpleNamespace(DeltaTable=DeltaTable),
+    )
+    monkeypatch.setattr(
+        lakehouse_module,
+        "_storage_token",
+        lambda: "storage-token",
+    )
+
+    assert lakehouse_module._read_delta_metadata(source) == {
+        "columns": [["order_id", "Int64"]],
+        "table_id": "orders-table-id",
+        "version": 4,
+    }
+
+
+def test_onelake_delta_metadata_prefers_active_fabric_spark(
+    monkeypatch,
+) -> None:
+    source = (
+        "abfss://workspace-id@onelake.dfs.fabric.microsoft.com/"
+        "lakehouse-id/Tables/dbo/orders"
+    )
+    class DataType:
+        def __init__(self, value):
+            self.value = value
+
+        def simpleString(self):
+            return self.value
+
+    schema = SimpleNamespace(
+        fields=[
+            SimpleNamespace(name="order_id", dataType=DataType("bigint")),
+            SimpleNamespace(name="amount", dataType=DataType("double")),
+        ]
+    )
+
+    class Result:
+        def __init__(self, row):
+            self._row = row
+
+        def select(self, *_columns):
+            return self
+
+        def first(self):
+            return self._row
+
+    class Reader:
+        def format(self, value):
+            assert value == "delta"
+            return self
+
+        def load(self, path):
+            assert path == source
+            return SimpleNamespace(schema=schema)
+
+    class Spark:
+        read = Reader()
+
+        def sql(self, statement):
+            if statement.startswith("DESCRIBE DETAIL"):
+                return Result(SimpleNamespace(id="orders-table-id"))
+            if statement.startswith("DESCRIBE HISTORY"):
+                return Result(SimpleNamespace(version=9))
+            raise AssertionError(f"unexpected metadata statement: {statement}")
+
+    class DeltaTable:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("Fabric Spark metadata should be preferred")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "deltalake",
+        SimpleNamespace(DeltaTable=DeltaTable),
+    )
+    monkeypatch.setattr(
+        lakehouse_module,
+        "_active_spark_session",
+        lambda: Spark(),
+    )
+
+    assert lakehouse_module._read_delta_metadata(source) == {
+        "columns": [
+            ["order_id", "bigint"],
+            ["amount", "double"],
+        ],
+        "table_id": "orders-table-id",
+        "version": 9,
+    }
+
+
 def test_lakehouse_source_is_public_and_normalizes_scopes() -> None:
     source = LakehouseSource(
         "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse.Lakehouse/",

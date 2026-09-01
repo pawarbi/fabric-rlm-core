@@ -412,6 +412,35 @@ def test_lakehouse_adapter_resolves_metadata_without_querying(
     assert profile.locator.startswith("lakehouse/v1/")
 
 
+def test_lakehouse_profile_can_be_persisted_as_knowledge(tmp_path: Path) -> None:
+    source = _lakehouse(
+        catalog=[
+            {
+                "kind": "delta",
+                "name": "dbo.orders",
+                "path": "abfss://private/Tables/dbo/orders",
+                "columns": [["order_id", "BIGINT"], ["amount", "DOUBLE"]],
+                "version": 3,
+                "table_id": "orders-table-id",
+            }
+        ]
+    )
+    profile = profile_sources(
+        {"lakehouse": source},
+        registry=_module().fabric_source_registry(),
+    )[0]
+
+    save_knowledge_package(
+        tmp_path / "knowledge.json",
+        KnowledgePackage(
+            package_id="lakehouse.persistence.v1",
+            sources=(profile,),
+        ),
+    )
+
+    assert (tmp_path / "knowledge.json").is_file()
+
+
 def test_lakehouse_files_make_snapshot_inexact() -> None:
     source = _lakehouse(
         catalog=[
