@@ -24,12 +24,19 @@ def test_delta_schema_discovery_uses_current_pyarrow_conversion(
             return fields
 
     class DeltaTable:
-        def __init__(self, path, storage_options=None):
+        def __init__(self, path, storage_options=None, without_files=False):
             assert path == "local-delta-table"
             assert storage_options is None
+            assert without_files is True
 
         def schema(self):
             return Schema()
+
+        def version(self):
+            return 7
+
+        def metadata(self):
+            return SimpleNamespace(id="table-id")
 
     monkeypatch.setitem(
         sys.modules,
@@ -41,6 +48,11 @@ def test_delta_schema_discovery_uses_current_pyarrow_conversion(
         ["company_id", "Int64"],
         ["region", "Utf8"],
     ]
+    assert lakehouse_module._read_delta_metadata("local-delta-table") == {
+        "columns": [["company_id", "Int64"], ["region", "Utf8"]],
+        "table_id": "table-id",
+        "version": 7,
+    }
 
 
 def test_delta_schema_discovery_supports_arrow_conversion(
@@ -53,11 +65,23 @@ def test_delta_schema_discovery_supports_arrow_conversion(
             return fields
 
     class DeltaTable:
-        def __init__(self, _path, storage_options=None):
+        def __init__(
+            self,
+            _path,
+            storage_options=None,
+            without_files=False,
+        ):
             assert storage_options is None
+            assert without_files is True
 
         def schema(self):
             return Schema()
+
+        def version(self):
+            return 2
+
+        def metadata(self):
+            return SimpleNamespace(id="invoice-table-id")
 
     monkeypatch.setitem(
         sys.modules,
@@ -479,8 +503,12 @@ def test_auto_discovery_builds_delta_and_files_catalog(monkeypatch) -> None:
     )
     monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
     monkeypatch.setattr(
-        "fabric_rlm.lakehouse._read_delta_columns",
-        lambda path: [["id", "BIGINT"], ["source", path]],
+        "fabric_rlm.lakehouse._read_delta_metadata",
+        lambda path: {
+            "columns": [["id", "BIGINT"], ["source", path]],
+            "table_id": f"id:{path}",
+            "version": 4,
+        },
     )
 
     resolved = LakehouseSource(root, files="Files/data").resolve()
@@ -494,6 +522,8 @@ def test_auto_discovery_builds_delta_and_files_catalog(monkeypatch) -> None:
     ]
     assert resolved.catalog[0]["kind"] == "delta"
     assert resolved.catalog[0]["columns"][0] == ["id", "BIGINT"]
+    assert resolved.catalog[0]["version"] == 4
+    assert resolved.catalog[0]["table_id"].startswith("id:")
     csv_entry = next(entry for entry in resolved.catalog if entry["kind"] == "csv")
     assert csv_entry["columns"] == [
         ["order_id", "UNKNOWN"],
@@ -511,8 +541,12 @@ def test_specific_delta_table_scope_resolves_without_sibling_discovery(
     fs = _FakeFS({table: [_Item(f"{table}/_delta_log", is_dir=True)]})
     monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
     monkeypatch.setattr(
-        "fabric_rlm.lakehouse._read_delta_columns",
-        lambda _path: [["order_id", "BIGINT"]],
+        "fabric_rlm.lakehouse._read_delta_metadata",
+        lambda _path: {
+            "columns": [["order_id", "BIGINT"]],
+            "table_id": "orders-id",
+            "version": 9,
+        },
     )
 
     resolved = LakehouseSource(table).resolve()
@@ -523,6 +557,8 @@ def test_specific_delta_table_scope_resolves_without_sibling_discovery(
             "name": "dbo.orders",
             "path": table,
             "columns": [["order_id", "BIGINT"]],
+            "table_id": "orders-id",
+            "version": 9,
         },
     )
 
@@ -554,8 +590,12 @@ def test_auto_discovery_fails_instead_of_truncating_catalog(monkeypatch) -> None
     )
     monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
     monkeypatch.setattr(
-        "fabric_rlm.lakehouse._read_delta_columns",
-        lambda _path: [],
+        "fabric_rlm.lakehouse._read_delta_metadata",
+        lambda path: {
+            "columns": [],
+            "table_id": f"id:{path}",
+            "version": 1,
+        },
     )
 
     with pytest.raises(LakehouseDiscoveryError, match="max_sources=1"):
@@ -580,7 +620,14 @@ def test_auto_discovery_stops_when_source_limit_is_exceeded(monkeypatch) -> None
         }
     )
     monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
-    monkeypatch.setattr("fabric_rlm.lakehouse._read_delta_columns", lambda _path: [])
+    monkeypatch.setattr(
+        "fabric_rlm.lakehouse._read_delta_metadata",
+        lambda path: {
+            "columns": [],
+            "table_id": f"id:{path}",
+            "version": 1,
+        },
+    )
 
     with pytest.raises(LakehouseDiscoveryError, match="max_sources=1"):
         LakehouseSource(root, max_sources=1).resolve()

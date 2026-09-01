@@ -826,7 +826,7 @@ def execute_lakehouse_query(
         con.close()
 
 
-def _read_delta_columns(path: str) -> list[list[str]]:
+def _read_delta_metadata(path: str) -> dict[str, Any]:
     try:
         from deltalake import DeltaTable
     except ImportError as exc:
@@ -842,17 +842,35 @@ def _read_delta_columns(path: str) -> list[list[str]]:
             "use_fabric_endpoint": "true",
         }
     try:
-        delta_schema = DeltaTable(path, storage_options=options).schema()
+        table = DeltaTable(
+            path,
+            storage_options=options,
+            without_files=True,
+        )
+        delta_schema = table.schema()
         convert = getattr(delta_schema, "to_pyarrow", None)
         if convert is None:
             convert = delta_schema.to_arrow
         schema = convert()
-    except Exception as exc:
+        version = int(table.version())
+        table_id = str(table.metadata().id)
+    except Exception:
         raise LakehouseDiscoveryError(
-            f"Delta metadata at {path!r} could not be read: "
-            f"{type(exc).__name__}: {exc}"
-        ) from exc
-    return [[field.name, str(field.type)] for field in schema]
+            "Delta transaction metadata could not be read."
+        ) from None
+    if not table_id:
+        raise LakehouseDiscoveryError(
+            "Delta transaction metadata has no stable table identity."
+        )
+    return {
+        "columns": [[field.name, str(field.type)] for field in schema],
+        "table_id": table_id,
+        "version": version,
+    }
+
+
+def _read_delta_columns(path: str) -> list[list[str]]:
+    return _read_delta_metadata(path)["columns"]
 
 
 def _list(fs: Any, path: str) -> list[Any]:
@@ -888,7 +906,7 @@ def _discover_delta_entries(fs: Any, scope: str) -> Iterator[dict[str, Any]]:
                 "kind": "delta",
                 "name": _delta_name(current),
                 "path": current,
-                "columns": _read_delta_columns(current),
+                **_read_delta_metadata(current),
             }
             continue
         if depth >= 3:
