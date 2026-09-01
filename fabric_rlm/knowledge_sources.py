@@ -1,4 +1,4 @@
-"""Internal, dependency-minimal profiling for explicitly named local sources.
+"""Internal, dependency-minimal profiling for explicitly named sources.
 
 Large-file snapshot fingerprints cover only bounded head/tail observations.
 Consequently, a mutation confined to an unobserved middle region can remain
@@ -98,15 +98,14 @@ class KnowledgeSourceAdapter(Protocol):
     allowed_roles: frozenset[str]
     default_role: SourceRole
 
-    def matches(self, path: Path) -> bool: ...
+    def matches(self, value: object) -> bool: ...
 
     def profile(
         self,
         source_id: str,
-        path: Path,
+        value: object,
         role: SourceRole,
         limits: ProfileLimits,
-        snapshot: _Snapshot,
     ) -> SourceProfile: ...
 
 
@@ -125,11 +124,11 @@ class SourceAdapterRegistry:
     def adapters(self) -> tuple[KnowledgeSourceAdapter, ...]:
         return self._adapters
 
-    def resolve(self, path: Path) -> KnowledgeSourceAdapter:
+    def resolve(self, value: object) -> KnowledgeSourceAdapter:
         for adapter in self._adapters:
-            if adapter.matches(path):
+            if adapter.matches(value):
                 return adapter
-        raise ValueError("no source adapter matched the regular file")
+        raise ValueError("no source adapter matched the source descriptor")
 
     @classmethod
     def default(cls) -> SourceAdapterRegistry:
@@ -142,6 +141,68 @@ class SourceAdapterRegistry:
                 _OpaqueAdapter(),
             )
         )
+
+
+class _LocalFileAdapter:
+    """Owns bounded snapshots and race checks for local-file adapters."""
+
+    def matches(self, value: object) -> bool:
+        path = _local_path_descriptor(value)
+        return path is not None and self._matches_path(path)
+
+    def _matches_path(self, path: Path) -> bool:
+        raise NotImplementedError
+
+    def profile(
+        self,
+        source_id: str,
+        value: object,
+        role: SourceRole,
+        limits: ProfileLimits,
+    ) -> SourceProfile:
+        path = _local_path_descriptor(value)
+        if path is None:
+            raise TypeError(
+                "local sources must be str, Path, or fabric_rlm.artifacts.File"
+            )
+        path = path.expanduser()
+        try:
+            file_stat = path.stat()
+        except FileNotFoundError as error:
+            raise FileNotFoundError(
+                f"source alias {source_id} does not exist"
+            ) from error
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise ValueError(
+                f"source alias {source_id} must reference a regular file"
+            )
+        identity = _source_identity(file_stat)
+        try:
+            snapshot = _snapshot(path, file_stat.st_size, limits)
+            profile = self._profile_file(
+                source_id, path, role, limits, snapshot
+            )
+        except Exception as error:
+            _verify_source_identity(path, source_id, identity, cause=error)
+            raise
+        _verify_source_identity(path, source_id, identity)
+        verification_snapshot = _snapshot(path, identity.size_bytes, limits)
+        _verify_source_identity(path, source_id, identity)
+        if verification_snapshot.fingerprint != snapshot.fingerprint:
+            raise ValueError(
+                f"source alias {source_id} changed or was replaced during profiling"
+            )
+        return profile
+
+    def _profile_file(
+        self,
+        source_id: str,
+        path: Path,
+        role: SourceRole,
+        limits: ProfileLimits,
+        snapshot: _Snapshot,
+    ) -> SourceProfile:
+        raise NotImplementedError
 
 
 def _read_prefix(path: Path, limit: int, chunk_bytes: int) -> bytes:
@@ -405,15 +466,15 @@ def _tabular_profile(
     )
 
 
-class _CsvAdapter:
+class _CsvAdapter(_LocalFileAdapter):
     family = "csv"
     allowed_roles = _TABULAR_ROLES
     default_role: SourceRole = "numeric_evidence"
 
-    def matches(self, path: Path) -> bool:
+    def _matches_path(self, path: Path) -> bool:
         return path.suffix.lower() == ".csv"
 
-    def profile(
+    def _profile_file(
         self,
         source_id: str,
         path: Path,
@@ -535,7 +596,7 @@ def _profile_json_records(
     return _schema_from_states(states), inspected, len(records) > inspected
 
 
-class _JsonAdapter:
+class _JsonAdapter(_LocalFileAdapter):
     """Bounded JSON profiling.
 
     ``max_records`` limits inspected and emitted record structure. The standard
@@ -547,10 +608,10 @@ class _JsonAdapter:
     allowed_roles = _TABULAR_ROLES
     default_role: SourceRole = "numeric_evidence"
 
-    def matches(self, path: Path) -> bool:
+    def _matches_path(self, path: Path) -> bool:
         return path.suffix.lower() == ".json"
 
-    def profile(
+    def _profile_file(
         self,
         source_id: str,
         path: Path,
@@ -590,15 +651,15 @@ class _JsonAdapter:
         )
 
 
-class _JsonLinesAdapter:
+class _JsonLinesAdapter(_LocalFileAdapter):
     family = "jsonl"
     allowed_roles = _TABULAR_ROLES
     default_role: SourceRole = "numeric_evidence"
 
-    def matches(self, path: Path) -> bool:
+    def _matches_path(self, path: Path) -> bool:
         return path.suffix.lower() == ".jsonl"
 
-    def profile(
+    def _profile_file(
         self,
         source_id: str,
         path: Path,
@@ -690,15 +751,15 @@ def _parquet_type(type_name: str) -> tuple[str, str]:
     return "string", normalized.split("(", 1)[0]
 
 
-class _ParquetAdapter:
+class _ParquetAdapter(_LocalFileAdapter):
     family = "parquet"
     allowed_roles = _TABULAR_ROLES
     default_role: SourceRole = "numeric_evidence"
 
-    def matches(self, path: Path) -> bool:
+    def _matches_path(self, path: Path) -> bool:
         return path.suffix.lower() == ".parquet"
 
-    def profile(
+    def _profile_file(
         self,
         source_id: str,
         path: Path,
@@ -789,15 +850,15 @@ class _ParquetAdapter:
         )
 
 
-class _OpaqueAdapter:
+class _OpaqueAdapter(_LocalFileAdapter):
     family = "opaque"
     allowed_roles = _OPAQUE_ROLES
     default_role: SourceRole = "context_only"
 
-    def matches(self, path: Path) -> bool:
+    def _matches_path(self, path: Path) -> bool:
         return True
 
-    def profile(
+    def _profile_file(
         self,
         source_id: str,
         path: Path,
@@ -828,12 +889,12 @@ class _OpaqueAdapter:
         )
 
 
-def _path_for_source(value: object) -> Path:
+def _local_path_descriptor(value: object) -> Path | None:
     if isinstance(value, File):
         return Path(value.path)
     if isinstance(value, (str, Path)):
         return Path(value)
-    raise TypeError("local sources must be str, Path, or fabric_rlm.artifacts.File")
+    return None
 
 
 def _validated_roles(
@@ -862,10 +923,10 @@ def profile_sources(
     limits: ProfileLimits | None = None,
     registry: SourceAdapterRegistry | None = None,
 ) -> tuple[SourceProfile, ...]:
-    """Profile explicitly aliased local files without importing optional readers."""
+    """Profile explicitly aliased sources without importing optional readers."""
 
     if not isinstance(sources, Mapping):
-        raise TypeError("sources must be a mapping from source alias to local file")
+        raise TypeError("sources must be a mapping from source alias to source")
     normalized_sources: list[tuple[str, object]] = []
     for source_id, source in sources.items():
         normalized_sources.append(
@@ -882,41 +943,13 @@ def profile_sources(
 
     profiles: list[SourceProfile] = []
     for source_id, source in normalized_sources:
-        path = _path_for_source(source).expanduser()
-        adapter = active_registry.resolve(path)
+        adapter = active_registry.resolve(source)
         role = validated_roles.get(source_id, adapter.default_role)
         if role not in adapter.allowed_roles:
             raise ValueError(
                 f"role {role} is not supported by the {adapter.family} adapter"
             )
-        try:
-            file_stat = path.stat()
-        except FileNotFoundError as error:
-            raise FileNotFoundError(
-                f"source alias {source_id} does not exist"
-            ) from error
-        if not stat.S_ISREG(file_stat.st_mode):
-            raise ValueError(f"source alias {source_id} must reference a regular file")
-        identity = _source_identity(file_stat)
-        try:
-            snapshot = _snapshot(path, file_stat.st_size, active_limits)
-            profile = adapter.profile(
-                source_id, path, role, active_limits, snapshot
-            )
-        except Exception as error:
-            _verify_source_identity(path, source_id, identity, cause=error)
-            raise
-        _verify_source_identity(path, source_id, identity)
-        verification_snapshot = _snapshot(
-            path,
-            identity.size_bytes,
-            active_limits,
-        )
-        _verify_source_identity(path, source_id, identity)
-        if verification_snapshot.fingerprint != snapshot.fingerprint:
-            raise ValueError(
-                f"source alias {source_id} changed or was replaced during profiling"
-            )
+        profile = adapter.profile(source_id, source, role, active_limits)
         encoded_size = len(canonical_json(profile.to_dict()).encode("utf-8"))
         if encoded_size > active_limits.max_diagnostic_bytes:
             raise ValueError(

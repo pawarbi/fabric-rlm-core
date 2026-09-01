@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+from dataclasses import dataclass
 import importlib
 import os
 from pathlib import Path
@@ -449,15 +450,15 @@ def test_registry_is_ordered_explicit_and_customizable(tmp_path: Path) -> None:
     path = tmp_path / "orders.csv"
     path.write_text("id\n1\n", encoding="utf-8")
 
-    class FirstAdapter:
+    class FirstAdapter(module._LocalFileAdapter):
         family = "custom"
         allowed_roles = frozenset({"context_only"})
         default_role = "context_only"
 
-        def matches(self, candidate: Path) -> bool:
+        def _matches_path(self, candidate: Path) -> bool:
             return True
 
-        def profile(self, source_id, candidate, role, limits, snapshot):
+        def _profile_file(self, source_id, candidate, role, limits, snapshot):
             return module.SourceProfile(
                 source_id=source_id,
                 family=self.family,
@@ -474,6 +475,108 @@ def test_registry_is_ordered_explicit_and_customizable(tmp_path: Path) -> None:
     assert profile.family == "custom"
 
 
+def test_custom_object_adapter_routes_and_profiles_deterministically() -> None:
+    module = _module()
+
+    @dataclass(frozen=True)
+    class FakeHandle:
+        item_id: str
+        version: int
+
+    class FakeAdapter:
+        family = "fake"
+        allowed_roles = frozenset({"context_only"})
+        default_role = "context_only"
+
+        def matches(self, value: object) -> bool:
+            return isinstance(value, FakeHandle)
+
+        def profile(self, source_id, value, role, limits):
+            return module.SourceProfile(
+                source_id=source_id,
+                family=self.family,
+                locator=f"fake/{value.item_id}",
+                snapshot_fingerprint=f"fake-snapshot-{value.version}",
+                schema_fingerprint="fake-schema",
+                diagnostics={"snapshot_exact": True},
+                role=role,
+            )
+
+    handle = FakeHandle("sales-model", 7)
+    registry = module.SourceAdapterRegistry((FakeAdapter(),))
+
+    first = _profile(handle, registry=registry)
+    second = _profile(handle, registry=registry)
+
+    assert first == second
+    assert first.locator == "fake/sales-model"
+    assert first.snapshot_fingerprint == "fake-snapshot-7"
+
+
+def test_custom_object_role_is_rejected_before_adapter_profile() -> None:
+    module = _module()
+
+    class FakeHandle:
+        pass
+
+    class FakeAdapter:
+        family = "fake"
+        allowed_roles = frozenset({"context_only"})
+        default_role = "context_only"
+        profile_called = False
+
+        def matches(self, value: object) -> bool:
+            return isinstance(value, FakeHandle)
+
+        def profile(self, source_id, value, role, limits):
+            self.profile_called = True
+            raise AssertionError("profile must not be called")
+
+    adapter = FakeAdapter()
+    registry = module.SourceAdapterRegistry((adapter,))
+
+    with pytest.raises(ValueError, match="role.*fake|fake.*role"):
+        _profile(
+            FakeHandle(),
+            registry=registry,
+            roles={"sales": "numeric_evidence"},
+        )
+
+    assert adapter.profile_called is False
+
+
+def test_directory_values_reach_registry_matching(tmp_path: Path) -> None:
+    module = _module()
+    delta_directory = tmp_path / "sales.delta"
+    delta_directory.mkdir()
+
+    class FutureDeltaAdapter:
+        family = "delta"
+        allowed_roles = frozenset({"numeric_evidence"})
+        default_role = "numeric_evidence"
+
+        def matches(self, value: object) -> bool:
+            return isinstance(value, Path) and value.suffix == ".delta"
+
+        def profile(self, source_id, value, role, limits):
+            return module.SourceProfile(
+                source_id=source_id,
+                family=self.family,
+                locator=f"delta/{source_id}",
+                snapshot_fingerprint="delta-snapshot",
+                schema_fingerprint="delta-schema",
+                diagnostics={"snapshot_exact": True},
+                role=role,
+            )
+
+    profile = _profile(
+        delta_directory,
+        registry=module.SourceAdapterRegistry((FutureDeltaAdapter(),)),
+    )
+
+    assert profile.family == "delta"
+
+
 def test_source_replacement_during_adapter_profile_fails_closed(
     tmp_path: Path,
 ) -> None:
@@ -483,15 +586,15 @@ def test_source_replacement_during_adapter_profile_fails_closed(
     path.write_text("id\n1\n", encoding="utf-8")
     replacement.write_text("id\n2\n", encoding="utf-8")
 
-    class ReplacingAdapter:
+    class ReplacingAdapter(module._LocalFileAdapter):
         family = "custom"
         allowed_roles = frozenset({"numeric_evidence"})
         default_role = "numeric_evidence"
 
-        def matches(self, candidate: Path) -> bool:
+        def _matches_path(self, candidate: Path) -> bool:
             return candidate.suffix.lower() == ".csv"
 
-        def profile(self, source_id, candidate, role, limits, snapshot):
+        def _profile_file(self, source_id, candidate, role, limits, snapshot):
             candidate.unlink()
             replacement.replace(candidate)
             return module.SourceProfile(
@@ -515,15 +618,15 @@ def test_same_size_in_place_mutation_with_restored_mtime_fails_closed(
     path.write_text("id\n1\n", encoding="utf-8")
     original_stat = path.stat()
 
-    class MutatingAdapter:
+    class MutatingAdapter(module._LocalFileAdapter):
         family = "custom"
         allowed_roles = frozenset({"numeric_evidence"})
         default_role = "numeric_evidence"
 
-        def matches(self, candidate: Path) -> bool:
+        def _matches_path(self, candidate: Path) -> bool:
             return candidate.suffix.lower() == ".csv"
 
-        def profile(self, source_id, candidate, role, limits, snapshot):
+        def _profile_file(self, source_id, candidate, role, limits, snapshot):
             candidate.write_text("id\n2\n", encoding="utf-8")
             os.utime(
                 candidate,
@@ -547,7 +650,15 @@ def test_same_size_in_place_mutation_with_restored_mtime_fails_closed(
 def test_import_and_registry_construction_do_not_import_optional_readers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    optional_roots = {"pandas", "polars", "duckdb", "deltalake", "fitz", "openpyxl"}
+    optional_roots = {
+        "pandas",
+        "polars",
+        "duckdb",
+        "deltalake",
+        "fitz",
+        "openpyxl",
+        "sempy",
+    }
     real_import = builtins.__import__
 
     def guarded_import(name, *args, **kwargs):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -9,6 +9,7 @@ from fabric_rlm.knowledge import (
     KnowledgePackage,
     RegisteredOperation,
     Relationship,
+    SourceProfile,
 )
 from fabric_rlm.knowledge_preflight import preflight_knowledge
 from fabric_rlm.knowledge_sources import (
@@ -144,6 +145,105 @@ def test_preflight_rejects_role_changes_before_file_io(tmp_path: Path) -> None:
                 "inventory": "numeric_evidence",
             },
         )
+
+
+def test_preflight_detects_snapshot_drift_for_non_path_handle() -> None:
+    @dataclass(frozen=True)
+    class FakeHandle:
+        version: int
+
+    class FakeAdapter:
+        family = "fake"
+        allowed_roles = frozenset({"context_only"})
+        default_role = "context_only"
+
+        def matches(self, value: object) -> bool:
+            return isinstance(value, FakeHandle)
+
+        def profile(self, source_id, value, role, limits):
+            return SourceProfile(
+                source_id=source_id,
+                family=self.family,
+                locator=f"fake/{source_id}",
+                snapshot_fingerprint=f"snapshot-{value.version}",
+                schema_fingerprint="schema-stable",
+                diagnostics={"snapshot_exact": True},
+                role=role,
+            )
+
+    registry = SourceAdapterRegistry((FakeAdapter(),))
+    learned = replace(
+        profile_sources(
+            {"model": FakeHandle(1)},
+            registry=registry,
+        )[0],
+        status="active",
+    )
+    package = KnowledgePackage(package_id="handles", sources=(learned,))
+
+    result = preflight_knowledge(
+        package,
+        {"model": FakeHandle(2)},
+        registry=registry,
+    )
+
+    assert result.drift == {"model": "snapshot"}
+    assert result.current_profiles["model"].snapshot_fingerprint == "snapshot-2"
+    assert result.package.sources[0].status == "stale"
+
+
+def test_preflight_rejects_persisted_handle_role_before_adapter_profile() -> None:
+    class FakeHandle:
+        pass
+
+    class FakeAdapter:
+        family = "fake"
+        allowed_roles = frozenset({"context_only"})
+        default_role = "context_only"
+        profile_called = False
+
+        def matches(self, value: object) -> bool:
+            return isinstance(value, FakeHandle)
+
+        def profile(self, source_id, value, role, limits):
+            self.profile_called = True
+            return SourceProfile(
+                source_id=source_id,
+                family=self.family,
+                locator=f"fake/{source_id}",
+                snapshot_fingerprint="snapshot",
+                schema_fingerprint="schema",
+                diagnostics={"snapshot_exact": True},
+                role=role,
+            )
+
+    adapter = FakeAdapter()
+    registry = SourceAdapterRegistry((adapter,))
+    package = KnowledgePackage(
+        package_id="handles",
+        sources=(
+            SourceProfile(
+                source_id="model",
+                family="fake",
+                locator="fake/model",
+                snapshot_fingerprint="snapshot",
+                schema_fingerprint="schema",
+                diagnostics={"snapshot_exact": True},
+                role="context_only",
+                status="active",
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="role mismatch"):
+        preflight_knowledge(
+            package,
+            {"model": FakeHandle()},
+            roles={"model": "numeric_evidence"},
+            registry=registry,
+        )
+
+    assert adapter.profile_called is False
 
 
 def test_unchanged_sources_return_current_without_mutating_package(
@@ -435,15 +535,17 @@ def test_terminal_subjects_preserve_reason_without_new_stale_event(
 def test_preflight_propagates_source_mutation_failure(tmp_path: Path) -> None:
     sources = _write_sources(tmp_path)
     package = _learned_package(sources)
-    class MutatingCsvAdapter:
+    import fabric_rlm.knowledge_sources as knowledge_sources
+
+    class MutatingCsvAdapter(knowledge_sources._LocalFileAdapter):
         family = "csv"
         allowed_roles = frozenset({"numeric_evidence", "lookup"})
         default_role = "numeric_evidence"
 
-        def matches(self, path: Path) -> bool:
+        def _matches_path(self, path: Path) -> bool:
             return path.suffix.lower() == ".csv"
 
-        def profile(self, source_id, path, role, limits, snapshot):
+        def _profile_file(self, source_id, path, role, limits, snapshot):
             path.write_text(path.read_text(encoding="utf-8") + "2,20,8\n")
             return next(
                 profile
