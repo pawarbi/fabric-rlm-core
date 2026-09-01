@@ -1,0 +1,404 @@
+from __future__ import annotations
+
+import builtins
+import importlib
+import os
+from pathlib import Path
+import sys
+
+import pytest
+
+from fabric_rlm.artifacts import File
+from fabric_rlm.knowledge import KnowledgePackage, canonical_json
+from fabric_rlm.knowledge_store import save_knowledge_package
+
+
+def _module():
+    import fabric_rlm.knowledge_sources as knowledge_sources
+
+    return knowledge_sources
+
+
+def _profile(path: object, **kwargs: object):
+    return _module().profile_sources({"sales": path}, **kwargs)[0]
+
+
+@pytest.mark.parametrize("field", [
+    "max_input_bytes",
+    "max_records",
+    "max_fields",
+    "max_nesting_depth",
+    "max_diagnostic_bytes",
+    "read_chunk_bytes",
+])
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "1"])
+def test_profile_limits_require_positive_integers(field: str, value: object) -> None:
+    ProfileLimits = _module().ProfileLimits
+    values = {
+        "max_input_bytes": 1,
+        "max_records": 1,
+        "max_fields": 1,
+        "max_nesting_depth": 1,
+        "max_diagnostic_bytes": 1,
+        "read_chunk_bytes": 1,
+    }
+    values[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        ProfileLimits(**values)
+
+
+def test_profile_limits_are_immutable_and_have_conservative_defaults() -> None:
+    limits = _module().ProfileLimits()
+
+    assert limits.max_input_bytes == 1024 * 1024
+    assert limits.max_records == 1000
+    assert limits.max_fields == 256
+    assert limits.max_nesting_depth == 8
+    assert limits.max_diagnostic_bytes == 64 * 1024
+    assert limits.read_chunk_bytes == 64 * 1024
+    with pytest.raises(Exception):
+        limits.max_records = 2
+
+
+def test_str_path_and_file_inputs_produce_equivalent_profiles(tmp_path: Path) -> None:
+    path = tmp_path / "orders.csv"
+    path.write_text("id,total\n1,2.5\n", encoding="utf-8")
+
+    profiles = [
+        _profile(str(path)),
+        _profile(path),
+        _profile(File(path)),
+    ]
+
+    assert profiles[0] == profiles[1] == profiles[2]
+    assert profiles[0].locator == "local/sales"
+
+
+def test_suffix_routing_is_case_insensitive(tmp_path: Path) -> None:
+    path = tmp_path / "ORDERS.CsV"
+    path.write_text("id\n1\n", encoding="utf-8")
+
+    assert _profile(path).family == "csv"
+
+
+@pytest.mark.parametrize(
+    ("name", "contents"),
+    [
+        ("bad.csv", 'id,name\n1,"unterminated\n'),
+        ("bad.json", '{"id":'),
+        ("bad.jsonl", '{"id": 1}\nnot-json\n'),
+    ],
+)
+def test_recognized_parser_errors_never_downgrade_to_opaque(
+    tmp_path: Path, name: str, contents: str
+) -> None:
+    path = tmp_path / name
+    path.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=name.rsplit(".", 1)[1].upper()):
+        _profile(path)
+
+
+def test_json_rejects_nonstandard_numeric_constants(tmp_path: Path) -> None:
+    path = tmp_path / "bad.json"
+    path.write_text('{"amount": NaN}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="JSON"):
+        _profile(path)
+
+
+def test_missing_path_and_directory_fail_clearly(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="sales"):
+        _profile(tmp_path / "missing.csv")
+    with pytest.raises(ValueError, match="regular file"):
+        _profile(tmp_path)
+
+
+def test_non_regular_file_fails_clearly(tmp_path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFOs are unavailable on this platform")
+    path = tmp_path / "pipe"
+    os.mkfifo(path)
+
+    with pytest.raises(ValueError, match="regular file"):
+        _profile(path)
+
+
+def test_csv_profile_is_deterministic_structural_and_value_free(tmp_path: Path) -> None:
+    path = tmp_path / "orders.csv"
+    path.write_text(
+        "id,total,active,note\n1,2.5,true,alpha\n2,,false,beta\n",
+        encoding="utf-8",
+    )
+
+    first = _profile(path)
+    second = _profile(path)
+    encoded = canonical_json(first.to_dict())
+
+    assert first == second
+    assert first.schema == {
+        "active": {"nullable": False, "type": "boolean"},
+        "id": {"nullable": False, "type": "integer"},
+        "note": {"nullable": False, "type": "string"},
+        "total": {"nullable": True, "type": "number"},
+    }
+    for value in ("alpha", "beta", "2.5"):
+        assert value not in encoded
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "id,id\n1,2\n",
+        "safe,unsafe header\n1,2\n",
+        ",name\n1,a\n",
+        "id,proxy_authorization\n1,a\n",
+    ],
+)
+def test_csv_rejects_duplicate_or_unsafe_headers(
+    tmp_path: Path, header: str
+) -> None:
+    path = tmp_path / "bad.csv"
+    path.write_text(header, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="header"):
+        _profile(path)
+
+
+def test_csv_honors_record_field_and_byte_bounds(tmp_path: Path) -> None:
+    path = tmp_path / "bounded.csv"
+    path.write_text("id,name\n1,a\n2,b\n3,c\n", encoding="utf-8")
+    limits = _module().ProfileLimits(
+        max_input_bytes=18,
+        max_records=1,
+        max_fields=2,
+        max_nesting_depth=2,
+        max_diagnostic_bytes=4096,
+        read_chunk_bytes=3,
+    )
+
+    profile = _profile(path, limits=limits)
+
+    assert profile.diagnostics["records_inspected"] == 1
+    assert profile.diagnostics["records_truncated"] is True
+    assert profile.diagnostics["input_truncated"] is True
+    assert profile.diagnostics["snapshot_exact"] is False
+
+
+def test_small_file_value_and_schema_changes_affect_the_right_fingerprints(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "orders.csv"
+    path.write_text("id\n1\n", encoding="utf-8")
+    original = _profile(path)
+    path.write_text("id\n2\n", encoding="utf-8")
+    value_change = _profile(path)
+    path.write_text("order_id\n2\n", encoding="utf-8")
+    schema_change = _profile(path)
+
+    assert original.snapshot_fingerprint != value_change.snapshot_fingerprint
+    assert original.schema_fingerprint == value_change.schema_fingerprint
+    assert value_change.schema_fingerprint != schema_change.schema_fingerprint
+
+
+def test_mtime_changes_do_not_affect_profile_identity(tmp_path: Path) -> None:
+    path = tmp_path / "orders.csv"
+    path.write_text("id\n1\n", encoding="utf-8")
+    original = _profile(path)
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    assert _profile(path) == original
+
+
+def test_profiling_never_uses_path_read_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "orders.csv"
+    path.write_text("id\n1\n", encoding="utf-8")
+
+    def forbidden_read_bytes(self: Path) -> bytes:
+        raise AssertionError("whole-file read_bytes must not be used")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden_read_bytes)
+
+    assert _profile(path).family == "csv"
+
+
+def test_json_supports_object_and_array_without_retaining_values(
+    tmp_path: Path,
+) -> None:
+    object_path = tmp_path / "one.json"
+    object_path.write_text('{"id": 1, "name": "private-value"}', encoding="utf-8")
+    array_path = tmp_path / "many.json"
+    array_path.write_text(
+        '[{"id": 1}, {"id": 2, "active": true}]', encoding="utf-8"
+    )
+
+    one = _profile(object_path)
+    many = _profile(array_path)
+
+    assert one.family == "json"
+    assert one.diagnostics["records_inspected"] == 1
+    assert many.schema["active"]["nullable"] is True
+    assert "private-value" not in canonical_json(one.to_dict())
+
+
+def test_json_rejects_non_object_records_and_excessive_nesting(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "bad.json"
+    path.write_text('[{"id": 1}, 2]', encoding="utf-8")
+    with pytest.raises(ValueError, match="object"):
+        _profile(path)
+
+    path.write_text('{"a": {"b": {"c": 1}}}', encoding="utf-8")
+    limits = _module().ProfileLimits(max_nesting_depth=2)
+    with pytest.raises(ValueError, match="nesting"):
+        _profile(path, limits=limits)
+
+
+def test_jsonl_uses_bounded_deterministic_field_union_and_no_values(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        '{"id": 1, "name": "first-private"}\n'
+        '{"id": 2, "active": true, "name": "second-private"}\n',
+        encoding="utf-8",
+    )
+    limits = _module().ProfileLimits(max_records=1)
+
+    profile = _profile(path, limits=limits)
+    encoded = canonical_json(profile.to_dict())
+
+    assert set(profile.schema) == {"id", "name"}
+    assert profile.diagnostics["records_truncated"] is True
+    assert "private" not in encoded
+
+
+def test_opaque_profile_does_not_decode_content(tmp_path: Path) -> None:
+    path = tmp_path / "payload.bin"
+    path.write_bytes(b"\xff\xfeprivate\x00bytes")
+
+    profile = _profile(path)
+    encoded = canonical_json(profile.to_dict())
+
+    assert profile.family == "opaque"
+    assert profile.role == "context_only"
+    assert profile.schema == {}
+    assert "private" not in encoded
+
+
+@pytest.mark.parametrize("role", ["numeric_evidence", "lookup"])
+def test_opaque_rejects_tabular_roles(tmp_path: Path, role: str) -> None:
+    path = tmp_path / "payload.bin"
+    path.write_bytes(b"data")
+
+    with pytest.raises(ValueError, match="role"):
+        _profile(path, roles={"sales": role})
+
+
+def test_unknown_role_alias_is_rejected_before_any_file_io(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.csv"
+
+    with pytest.raises(ValueError, match="unknown source alias"):
+        _module().profile_sources(
+            {"sales": missing}, roles={"unknown": "context_only"}
+        )
+
+
+def test_invalid_role_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "orders.csv"
+    path.write_text("id\n1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="role"):
+        _profile(path, roles={"sales": "arbitrary"})
+
+
+def test_registry_is_ordered_explicit_and_customizable(tmp_path: Path) -> None:
+    module = _module()
+    path = tmp_path / "orders.csv"
+    path.write_text("id\n1\n", encoding="utf-8")
+
+    class FirstAdapter:
+        family = "custom"
+        allowed_roles = frozenset({"context_only"})
+        default_role = "context_only"
+
+        def matches(self, candidate: Path) -> bool:
+            return True
+
+        def profile(self, source_id, candidate, role, limits, snapshot):
+            return module.SourceProfile(
+                source_id=source_id,
+                family=self.family,
+                locator=f"local/{source_id}",
+                snapshot_fingerprint=snapshot.fingerprint,
+                schema_fingerprint="custom-schema",
+                diagnostics={"format_code": "custom"},
+                role=role,
+            )
+
+    registry = module.SourceAdapterRegistry((FirstAdapter(),))
+    profile = _profile(path, registry=registry, roles={"sales": "context_only"})
+
+    assert profile.family == "custom"
+
+
+def test_import_and_registry_construction_do_not_import_optional_readers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    optional_roots = {"pandas", "polars", "duckdb", "deltalake", "fitz", "openpyxl"}
+    real_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name.split(".", 1)[0] in optional_roots:
+            raise AssertionError(f"optional import attempted: {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    sys.modules.pop("fabric_rlm.knowledge_sources", None)
+    module = importlib.import_module("fabric_rlm.knowledge_sources")
+
+    module.SourceAdapterRegistry.default()
+
+
+def test_profiles_are_compatible_with_knowledge_persistence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "orders.csv"
+    path.write_text("id,total\n1,2.5\n", encoding="utf-8")
+    profile = _profile(path)
+
+    destination = tmp_path / "knowledge.json"
+    save_knowledge_package(
+        destination,
+        KnowledgePackage(package_id="local.package", sources=(profile,)),
+    )
+
+    assert destination.is_file()
+
+
+def test_emitted_profile_respects_canonical_output_size_bound(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "wide.csv"
+    path.write_text(
+        ",".join(f"field_{index:03d}" for index in range(40))
+        + "\n"
+        + ",".join("1" for _ in range(40))
+        + "\n",
+        encoding="utf-8",
+    )
+    limits = _module().ProfileLimits(max_diagnostic_bytes=500)
+
+    with pytest.raises(ValueError, match="max_diagnostic_bytes"):
+        _profile(path, limits=limits)
+
+
+def test_profile_sources_is_not_exported_from_package_root() -> None:
+    import fabric_rlm
+
+    assert not hasattr(fabric_rlm, "profile_sources")
