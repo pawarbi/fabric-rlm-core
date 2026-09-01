@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 import re
 import stat
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
 from fabric_rlm.artifacts import File
 from fabric_rlm.knowledge import (
@@ -114,6 +114,7 @@ class SourceAdapterRegistry:
                 _CsvAdapter(),
                 _JsonAdapter(),
                 _JsonLinesAdapter(),
+                _ParquetAdapter(),
                 _OpaqueAdapter(),
             )
         )
@@ -554,6 +555,121 @@ class _JsonLinesAdapter:
         )
 
 
+def _parquet_type(type_name: str) -> tuple[str, str]:
+    normalized = type_name.casefold()
+    if normalized == "boolean":
+        return "boolean", "boolean"
+    if any(
+        normalized.startswith(prefix)
+        for prefix in (
+            "tinyint",
+            "smallint",
+            "integer",
+            "bigint",
+            "utinyint",
+            "usmallint",
+            "uinteger",
+            "ubigint",
+            "hugeint",
+        )
+    ):
+        return "integer", normalized
+    if any(
+        normalized.startswith(prefix)
+        for prefix in ("decimal", "float", "double", "real")
+    ):
+        return "number", normalized.split("(", 1)[0]
+    if normalized.endswith("[]"):
+        return "array", "array"
+    if normalized.startswith(("struct", "map", "union")):
+        return "object", normalized.split("(", 1)[0]
+    if normalized.startswith("timestamp"):
+        return "string", "timestamp"
+    if normalized.startswith(("date", "time", "interval")):
+        return "string", normalized.split("(", 1)[0]
+    if normalized.startswith(("blob", "bit", "varint")):
+        return "string", "binary"
+    return "string", normalized.split("(", 1)[0]
+
+
+class _ParquetAdapter:
+    family = "parquet"
+    allowed_roles = _TABULAR_ROLES
+    default_role: SourceRole = "numeric_evidence"
+
+    def matches(self, path: Path) -> bool:
+        return path.suffix.lower() == ".parquet"
+
+    def profile(
+        self,
+        source_id: str,
+        path: Path,
+        role: SourceRole,
+        limits: ProfileLimits,
+        snapshot: _Snapshot,
+    ) -> SourceProfile:
+        try:
+            import duckdb
+        except ModuleNotFoundError as error:
+            raise ValueError(
+                "Parquet profiling requires fabric-rlm[analytics]"
+            ) from error
+
+        connection = duckdb.connect(database=":memory:")
+        try:
+            columns = connection.execute(
+                "DESCRIBE SELECT * FROM read_parquet(?)",
+                [str(path)],
+            ).fetchall()
+            metadata = connection.execute(
+                """
+                SELECT num_rows, num_row_groups
+                FROM parquet_file_metadata(?)
+                """,
+                [str(path)],
+            ).fetchone()
+        except Exception as error:
+            raise ValueError(
+                f"Parquet metadata is malformed for source alias {source_id}"
+            ) from error
+        finally:
+            connection.close()
+
+        if len(columns) > limits.max_fields:
+            raise ValueError("Parquet schema exceeds max_fields")
+        schema: dict[str, object] = {}
+        for column_name, type_name, nullable, *_ in columns:
+            if not _is_safe_field(column_name):
+                raise ValueError("Parquet schema contains an unsafe field name")
+            field_type, logical_type = _parquet_type(str(type_name))
+            schema[str(column_name)] = {
+                "type": field_type,
+                "logical_type": logical_type,
+                "nullable": str(nullable).casefold() == "yes",
+            }
+
+        diagnostics = _base_diagnostics(
+            "parquet",
+            snapshot,
+            input_truncated=snapshot.size_bytes > limits.max_input_bytes,
+        )
+        diagnostics.update(
+            {
+                "fields_inspected": len(schema),
+                "row_count": int(metadata[0]) if metadata else 0,
+                "row_group_count": int(metadata[1]) if metadata else 0,
+            }
+        )
+        return _tabular_profile(
+            source_id=source_id,
+            family=self.family,
+            role=role,
+            snapshot=snapshot,
+            schema=schema,
+            diagnostics=diagnostics,
+        )
+
+
 class _OpaqueAdapter:
     family = "opaque"
     allowed_roles = _OPAQUE_ROLES
@@ -617,7 +733,7 @@ def _validated_roles(
     for source_id, role in roles.items():
         if not isinstance(role, str) or role not in _ROLES:
             raise ValueError(f"role for {source_id} is not supported")
-        validated[source_id] = role  # type: ignore[assignment]
+        validated[source_id] = cast(SourceRole, role)
     return validated
 
 

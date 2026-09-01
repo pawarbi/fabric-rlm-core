@@ -402,3 +402,84 @@ def test_profile_sources_is_not_exported_from_package_root() -> None:
     import fabric_rlm
 
     assert not hasattr(fabric_rlm, "profile_sources")
+
+
+def test_parquet_adapter_uses_metadata_without_retaining_values(
+    tmp_path: Path,
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+    path = tmp_path / "orders.parquet"
+    connection = duckdb.connect(database=":memory:")
+    try:
+        connection.execute(
+            """
+            COPY (
+                SELECT 1::INTEGER AS id, 'private-sentinel'::VARCHAR AS note
+                UNION ALL
+                SELECT 2::INTEGER, 'another-private-value'::VARCHAR
+            ) TO ? (FORMAT PARQUET)
+            """,
+            [str(path)],
+        )
+    finally:
+        connection.close()
+
+    profile = _profile(path)
+    encoded = canonical_json(profile.to_dict())
+
+    assert profile.family == "parquet"
+    assert profile.schema == {
+        "id": {"logical_type": "integer", "nullable": True, "type": "integer"},
+        "note": {"logical_type": "varchar", "nullable": True, "type": "string"},
+    }
+    assert profile.diagnostics["row_count"] == 2
+    assert profile.diagnostics["row_group_count"] == 1
+    assert "private-sentinel" not in encoded
+    assert str(path.resolve()) not in encoded
+
+
+def test_parquet_value_and_schema_changes_affect_expected_fingerprints(
+    tmp_path: Path,
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+    path = tmp_path / "orders.parquet"
+
+    def write(query: str) -> None:
+        connection = duckdb.connect(database=":memory:")
+        try:
+            connection.execute(
+                f"COPY ({query}) TO ? (FORMAT PARQUET)",
+                [str(path)],
+            )
+        finally:
+            connection.close()
+
+    write("SELECT 1::INTEGER AS id")
+    original = _profile(path)
+    write("SELECT 2::INTEGER AS id")
+    value_change = _profile(path)
+    write("SELECT 2::BIGINT AS order_id")
+    schema_change = _profile(path)
+
+    assert original.snapshot_fingerprint != value_change.snapshot_fingerprint
+    assert original.schema_fingerprint == value_change.schema_fingerprint
+    assert value_change.schema_fingerprint != schema_change.schema_fingerprint
+
+
+def test_missing_parquet_dependency_is_actionable_and_never_opaque(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "orders.parquet"
+    path.write_bytes(b"PAR1not-a-real-parquet-file")
+    real_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name.split(".", 1)[0] == "duckdb":
+            raise ModuleNotFoundError("No module named 'duckdb'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+    with pytest.raises(ValueError, match=r"fabric-rlm\[analytics\]"):
+        _profile(path)
