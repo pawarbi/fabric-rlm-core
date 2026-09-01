@@ -61,6 +61,10 @@ _SAFE_STRING_METADATA_FIELD = re.compile(
 )
 _SCHEMA_STRING_FIELDS = {
     "type",
+    "delta_type",
+    "element_delta_type",
+    "key_delta_type",
+    "value_delta_type",
     "logical_type",
     "physical_type",
     "format",

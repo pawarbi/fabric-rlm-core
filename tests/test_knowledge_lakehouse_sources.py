@@ -13,6 +13,7 @@ from fabric_rlm.artifacts import File
 from fabric_rlm.knowledge import KnowledgePackage, canonical_json
 from fabric_rlm.knowledge_preflight import preflight_knowledge
 from fabric_rlm.knowledge_sources import ProfileLimits, profile_sources
+from fabric_rlm.knowledge_store import save_knowledge_package
 from fabric_rlm.lakehouse import LakehouseSource
 
 
@@ -201,6 +202,28 @@ def test_delta_profile_uses_structural_schema_and_exact_table_version(
     assert profile.diagnostics["partition_column_count"] == 1
     assert profile.diagnostics["table_identity_fingerprint"]
     assert "orders" not in canonical_json(profile.to_dict())
+
+
+def test_delta_profile_can_be_persisted_as_knowledge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _delta_directory(tmp_path)
+    _install_delta(
+        monkeypatch,
+        [(11, "table-a", _Schema()), (11, "table-a", _Schema())],
+    )
+    profile = profile_sources(
+        {"sales": path},
+        registry=_module().fabric_source_registry(),
+    )[0]
+
+    save_knowledge_package(
+        tmp_path / "knowledge.json",
+        KnowledgePackage(package_id="delta.persistence.v1", sources=(profile,)),
+    )
+
+    assert (tmp_path / "knowledge.json").is_file()
 
 
 def test_delta_locator_changes_with_stable_table_identity(
