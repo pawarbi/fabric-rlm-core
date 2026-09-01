@@ -6,18 +6,86 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+import json
 import math
+import re
 import time
 
 from fabric_rlm.knowledge import (
     RegisteredOperation,
     _domain_fingerprint,
+    canonical_json,
 )
 from fabric_rlm.knowledge_api import Knowledge
 from fabric_rlm.knowledge_preflight import preflight_knowledge
 
 
 _MAX_PARAMETER_TEXT_LENGTH = 512
+_MAX_PLAN_REASON_LENGTH = 256
+_MAX_RESULT_BYTES = 256 * 1024
+_OPERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+class OperationPlanError(ValueError):
+    """A model-produced plan is incompatible with the registered contract."""
+
+
+@dataclass(frozen=True)
+class OperationPlan:
+    operation_id: str
+    parameters: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class OperationPlanFallback:
+    reason: str
+
+
+def parse_operation_plan(text: str) -> OperationPlan | OperationPlanFallback:
+    """Parse the planner's strict JSON response without accepting executable text."""
+
+    if not isinstance(text, str):
+        raise ValueError("operation plan response must be text")
+    stripped = text.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) < 3 or lines[0] not in {"```", "```json"}:
+            raise ValueError("operation plan must be a JSON object")
+        stripped = "\n".join(lines[1:-1]).strip()
+    try:
+        payload = json.loads(stripped)
+    except Exception as exc:
+        raise ValueError("operation plan must be valid JSON") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError("operation plan must be a JSON object")
+    if payload.get("fallback") is True:
+        unknown = sorted(set(payload) - {"fallback", "reason"})
+        if unknown:
+            raise ValueError(f"operation fallback contains unknown field: {unknown[0]}")
+        reason = payload.get("reason", "")
+        if not isinstance(reason, str) or len(reason) > _MAX_PLAN_REASON_LENGTH:
+            raise ValueError("operation fallback reason is invalid")
+        if any(ord(character) < 32 for character in reason):
+            raise ValueError("operation fallback reason is invalid")
+        return OperationPlanFallback(reason=reason)
+    if set(payload) != {"operation_id", "parameters"}:
+        raise ValueError(
+            "operation plan must contain exactly operation_id and parameters"
+        )
+    operation_id = payload["operation_id"]
+    parameters = payload["parameters"]
+    if (
+        not isinstance(operation_id, str)
+        or not _OPERATION_ID.fullmatch(operation_id)
+        or ".." in operation_id
+    ):
+        raise ValueError("operation_id must be a safe logical identifier")
+    if not isinstance(parameters, Mapping):
+        raise ValueError("operation parameters must be an object")
+    return OperationPlan(
+        operation_id=operation_id,
+        parameters=dict(parameters),
+    )
 
 
 def _operation(
@@ -30,15 +98,17 @@ def _operation(
         if operation.operation_id == operation_id
     ]
     if not matches:
-        raise ValueError(f"operation is not registered: {operation_id}")
+        raise OperationPlanError(f"operation is not registered: {operation_id}")
     operation = matches[0]
     if operation.status != "active":
-        raise ValueError(f"operation is not active: {operation_id}")
+        raise OperationPlanError(f"operation is not active: {operation_id}")
     if (
         operation.operation != "semantic_model.measure"
         or operation.host_implementation_id != "semantic_model.measure.v1"
     ):
-        raise ValueError(f"operation host implementation is unavailable: {operation_id}")
+        raise OperationPlanError(
+            f"operation host implementation is unavailable: {operation_id}"
+        )
     return operation
 
 
@@ -49,25 +119,25 @@ def _parameter_value(
 ) -> object:
     expected_type = descriptor["type"]
     if expected_type == "string" and type(value) is not str:
-        raise ValueError(f"{name} must match parameter type string")
+        raise OperationPlanError(f"{name} must match parameter type string")
     if expected_type == "integer" and type(value) is not int:
-        raise ValueError(f"{name} must match parameter type integer")
+        raise OperationPlanError(f"{name} must match parameter type integer")
     if expected_type == "number" and type(value) not in {int, float}:
-        raise ValueError(f"{name} must match parameter type number")
+        raise OperationPlanError(f"{name} must match parameter type number")
     if expected_type == "boolean" and type(value) is not bool:
-        raise ValueError(f"{name} must match parameter type boolean")
+        raise OperationPlanError(f"{name} must match parameter type boolean")
     if expected_type == "null" and value is not None:
-        raise ValueError(f"{name} must match parameter type null")
+        raise OperationPlanError(f"{name} must match parameter type null")
     if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError(f"{name} must be finite")
+        raise OperationPlanError(f"{name} must be finite")
     if isinstance(value, str):
         if len(value) > _MAX_PARAMETER_TEXT_LENGTH:
-            raise ValueError(f"{name} is too long")
+            raise OperationPlanError(f"{name} is too long")
         if any(ord(character) < 32 for character in value):
-            raise ValueError(f"{name} contains control characters")
+            raise OperationPlanError(f"{name} contains control characters")
     allowed = descriptor.get("enum")
     if allowed is not None and value not in allowed:
-        raise ValueError(f"{name} is not an allowed value")
+        raise OperationPlanError(f"{name} is not an allowed value")
     return value
 
 
@@ -77,12 +147,12 @@ def _parameters(
 ) -> dict[str, object]:
     unknown = sorted(set(supplied) - set(operation.parameter_schema))
     if unknown:
-        raise ValueError(f"unknown parameter: {unknown[0]}")
+        raise OperationPlanError(f"unknown parameter: {unknown[0]}")
     values = dict(operation.parameter_defaults)
     values.update(supplied)
     missing = sorted(set(operation.parameter_schema) - set(values))
     if missing:
-        raise ValueError(f"missing required parameter: {missing[0]}")
+        raise OperationPlanError(f"missing required parameter: {missing[0]}")
     normalized = {
         name: _parameter_value(name, values[name], descriptor)
         for name, descriptor in operation.parameter_schema.items()
@@ -90,7 +160,7 @@ def _parameters(
     has_filter_column = bool(normalized["filter_column"])
     has_filter_value = bool(normalized["filter_value"])
     if has_filter_column != has_filter_value:
-        raise ValueError(
+        raise OperationPlanError(
             "filter_column and filter_value must both be provided or both omitted"
         )
     return normalized
@@ -145,7 +215,10 @@ def _result_rows(
                 for name, value in record.items()
             }
         )
-    return tuple(normalized)
+    rows = tuple(normalized)
+    if len(canonical_json(rows).encode("utf-8")) > _MAX_RESULT_BYTES:
+        raise ValueError("operation result exceeds byte bound")
+    return rows
 
 
 @dataclass(frozen=True)
@@ -252,4 +325,11 @@ def execute_registered_operation(
     )
 
 
-__all__ = ["OperationExecutionResult", "execute_registered_operation"]
+__all__ = [
+    "OperationExecutionResult",
+    "OperationPlan",
+    "OperationPlanError",
+    "OperationPlanFallback",
+    "execute_registered_operation",
+    "parse_operation_plan",
+]

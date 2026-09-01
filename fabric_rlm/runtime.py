@@ -139,6 +139,14 @@ CORE_FINAL_OUTPUT_FIELDS = frozenset({"output", "answer", "result", "report"})
 _ACTIVATE_MARKER = "[FABRIC_RLM_ACTIVATE]"
 
 
+def _is_supported_knowledge_operation(operation: Any) -> bool:
+    return (
+        operation.status == "active"
+        and operation.operation == "semantic_model.measure"
+        and operation.host_implementation_id == "semantic_model.measure.v1"
+    )
+
+
 def _estimate_tokens(text: str) -> int:
     """Cheap token-count proxy used for budget heuristics."""
     if not text:
@@ -1148,7 +1156,7 @@ class RLM:
     def _bind_knowledge_inputs(
         self,
         explicit_inputs: Mapping[str, Any],
-    ) -> tuple[dict[str, Any], dict[str, str]]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         if self._knowledge is None:
             return dict(explicit_inputs), {}
         from .knowledge_preflight import preflight_knowledge
@@ -1158,6 +1166,16 @@ class RLM:
             raise ValueError(
                 "task inputs conflict with knowledge source aliases: "
                 + ", ".join(conflicts)
+            )
+        if (
+            "knowledge_result" in explicit_inputs
+            and any(
+                _is_supported_knowledge_operation(operation)
+                for operation in self._knowledge.package.operations
+            )
+        ):
+            raise ValueError(
+                "task input alias knowledge_result is reserved for registered operations"
             )
         blocked = [
             source.source_id
@@ -1181,23 +1199,190 @@ class RLM:
             )
         bound = dict(explicit_inputs)
         bound.update(self._knowledge.bindings)
-        mode = (
-            "registered_operations_unavailable"
-            if self._knowledge.package.operations
-            else "fallback_no_registered_operations"
+        supported = any(
+            _is_supported_knowledge_operation(operation)
+            for operation in self._knowledge.package.operations
         )
+        if supported:
+            mode = "registered_operations_available"
+        elif self._knowledge.package.operations:
+            mode = "registered_operations_unavailable"
+        else:
+            mode = "fallback_no_registered_operations"
         return bound, {
             "knowledge_fingerprint": self._knowledge.package.fingerprint,
             "knowledge_mode": mode,
         }
 
+    def _prepare_registered_operation(
+        self,
+        bound_inputs: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if (
+            self._knowledge is None
+            or metadata.get("knowledge_mode") != "registered_operations_available"
+        ):
+            return bound_inputs, metadata
+
+        from .knowledge import canonical_json
+        from .knowledge_execution import (
+            OperationPlanError,
+            OperationPlanFallback,
+            execute_registered_operation,
+            parse_operation_plan,
+        )
+
+        operations = [
+            {
+                "operation_id": operation.operation_id,
+                "operation": operation.operation,
+                "parameter_schema": operation.to_dict()["parameter_schema"],
+                "parameter_defaults": operation.to_dict()["parameter_defaults"],
+                "grain": operation.grain,
+                "max_output_rows": operation.max_output_rows,
+            }
+            for operation in self._knowledge.package.operations
+            if _is_supported_knowledge_operation(operation)
+        ]
+        task_description, _ = _task_and_outputs(
+            self.signature,
+            self._inline_task,
+            self._inline_outputs,
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Select one registered host operation for the task. "
+                    "Return JSON only, with exactly "
+                    '{"operation_id":"...","parameters":{...}}. '
+                    "Use only operation IDs and parameter values allowed by the "
+                    "provided contracts. Never write DAX, SQL, Python, or another "
+                    "executable language. If no operation is compatible, return "
+                    '{"fallback":true,"reason":"short reason"}.'
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Task:\n{task_description}\n\n"
+                    f"Registered operations:\n{canonical_json(operations)}"
+                ),
+            },
+        ]
+        response_text, raw_response, selection_seconds = _call_lm_with_meta(
+            self.outer_lm,
+            messages,
+        )
+        usage = _extract_usage(raw_response)
+        metadata = {
+            **metadata,
+            "operation_selection_lm_calls": 1,
+            "operation_selection_lm_seconds": selection_seconds,
+        }
+        for metadata_name, usage_name in (
+            ("operation_selection_prompt_tokens", "prompt_tokens"),
+            ("operation_selection_completion_tokens", "completion_tokens"),
+        ):
+            value = _usage_field(usage, usage_name)
+            if value is not None:
+                metadata[metadata_name] = value
+        for metadata_name, block_name, usage_name in (
+            (
+                "operation_selection_cached_tokens",
+                "prompt_tokens_details",
+                "cached_tokens",
+            ),
+            (
+                "operation_selection_reasoning_tokens",
+                "completion_tokens_details",
+                "reasoning_tokens",
+            ),
+        ):
+            value = _usage_nested_field(usage, block_name, usage_name)
+            if value is not None:
+                metadata[metadata_name] = value
+        try:
+            plan = parse_operation_plan(response_text)
+        except ValueError:
+            logger.warning(
+                "Registered operation plan was rejected: invalid planner response"
+            )
+            metadata["operation_fallback_reason"] = "operation_plan_parse_invalid"
+            metadata["knowledge_mode"] = "fallback_operation_plan_rejected"
+            return bound_inputs, metadata
+        if isinstance(plan, OperationPlanFallback):
+            logger.info(
+                "Registered operation planner declined the available operations"
+            )
+            metadata["operation_fallback_reason"] = "no_compatible_operation"
+            metadata["knowledge_mode"] = "fallback_no_compatible_operation"
+            return bound_inputs, metadata
+        try:
+            execution = execute_registered_operation(
+                self._knowledge,
+                operation_id=plan.operation_id,
+                parameters=plan.parameters,
+            )
+        except OperationPlanError:
+            logger.warning(
+                "Registered operation plan was rejected by the host contract"
+            )
+            metadata["operation_fallback_reason"] = (
+                "operation_plan_contract_rejected"
+            )
+            metadata["knowledge_mode"] = "fallback_operation_plan_rejected"
+            return bound_inputs, metadata
+
+        packet = execution.to_packet()
+        metadata.update(
+            {
+                "knowledge_mode": "registered_operation",
+                "operation_id": execution.operation_id,
+                "operation_version": execution.operation_version,
+                "operation_fingerprint": execution.operation_fingerprint,
+                "operation_result_fingerprint": execution.result_fingerprint,
+                "operation_source_fingerprints": dict(
+                    execution.source_fingerprints
+                ),
+                "operation_audit_status": execution.audit_status,
+                "operation_host_seconds": execution.elapsed_seconds,
+            }
+        )
+        synthesis_inputs = {
+            name: value
+            for name, value in bound_inputs.items()
+            if name not in self._knowledge.bindings
+        }
+        synthesis_inputs["knowledge_result"] = packet
+        return synthesis_inputs, metadata
+
     @staticmethod
     def _attach_knowledge_metadata(
         result: RLMResult,
-        metadata: Mapping[str, str],
+        metadata: Mapping[str, Any],
     ) -> RLMResult:
         if metadata:
             result.trajectory.metadata.update(metadata)
+        for result_field, metadata_field in (
+            ("total_prompt_tokens", "operation_selection_prompt_tokens"),
+            ("total_completion_tokens", "operation_selection_completion_tokens"),
+            ("total_cached_tokens", "operation_selection_cached_tokens"),
+            ("total_reasoning_tokens", "operation_selection_reasoning_tokens"),
+        ):
+            extra = metadata.get(metadata_field)
+            if isinstance(extra, int):
+                current = getattr(result, result_field)
+                setattr(result, result_field, extra if current is None else current + extra)
+        selection_seconds = metadata.get("operation_selection_lm_seconds")
+        if isinstance(selection_seconds, (int, float)):
+            current_seconds = result.total_lm_seconds
+            result.total_lm_seconds = (
+                float(selection_seconds)
+                if current_seconds is None
+                else current_seconds + float(selection_seconds)
+            )
         return result
 
     @classmethod
@@ -1536,6 +1721,10 @@ class RLM:
         if inputs:
             bound_inputs.update(inputs)
         bound_inputs, knowledge_metadata = self._bind_knowledge_inputs(bound_inputs)
+        bound_inputs, knowledge_metadata = self._prepare_registered_operation(
+            bound_inputs,
+            knowledge_metadata,
+        )
         bound_inputs = resolve_lakehouse_inputs(bound_inputs)
 
         if self.engine == "adaptive":
@@ -1674,6 +1863,26 @@ class RLM:
             # LM calls that never became a turn (truncated / no code block).
             # Retried rather than executed, but still billed.
             unbilled_calls: list[dict[str, Any]] = []
+            if knowledge_metadata.get("operation_selection_lm_calls") == 1:
+                unbilled_calls.append(
+                    {
+                        "prompt_tokens": knowledge_metadata.get(
+                            "operation_selection_prompt_tokens"
+                        ),
+                        "completion_tokens": knowledge_metadata.get(
+                            "operation_selection_completion_tokens"
+                        ),
+                        "cached_tokens": knowledge_metadata.get(
+                            "operation_selection_cached_tokens"
+                        ),
+                        "reasoning_tokens": knowledge_metadata.get(
+                            "operation_selection_reasoning_tokens"
+                        ),
+                        "lm_call_seconds": knowledge_metadata.get(
+                            "operation_selection_lm_seconds"
+                        ),
+                    }
+                )
             next_turn_type = "normal"
             reached_max = False
             verifier_repair_history: list[dict[str, Any]] = []

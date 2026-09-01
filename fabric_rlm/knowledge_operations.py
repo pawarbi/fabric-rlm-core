@@ -39,6 +39,20 @@ def _metadata_name(value: object, field_name: str) -> str:
     return name
 
 
+def _is_visible(record: Mapping[str, object]) -> bool:
+    hidden = next(
+        (
+            record[name]
+            for name in ("Is Hidden", "IsHidden", "Hidden")
+            if name in record
+        ),
+        False,
+    )
+    if isinstance(hidden, str):
+        return hidden.strip().lower() not in {"1", "true", "yes"}
+    return hidden is not True and hidden != 1
+
+
 def _semantic_measure_operation(
     source_id: str,
     model: object,
@@ -47,6 +61,7 @@ def _semantic_measure_operation(
         {
             _metadata_name(record.get("Measure Name"), "measure name")
             for record in _records(model.measures(), "measure")
+            if _is_visible(record)
         }
     )
     columns = sorted(
@@ -56,6 +71,7 @@ def _semantic_measure_operation(
                 f"[{_metadata_name(record.get('Column Name'), 'column name')}]"
             )
             for record in _records(model.columns(), "column")
+            if _is_visible(record)
         }
     )
     if not measures:
