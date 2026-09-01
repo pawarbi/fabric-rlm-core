@@ -917,6 +917,41 @@ def _validated_roles(
     return validated
 
 
+def _validated_limits(limits: object | None) -> ProfileLimits:
+    if limits is None:
+        return ProfileLimits()
+    for name in (
+        "max_input_bytes",
+        "max_records",
+        "max_fields",
+        "max_nesting_depth",
+        "max_diagnostic_bytes",
+        "read_chunk_bytes",
+    ):
+        value = getattr(limits, name, None)
+        if type(value) is not int or value < 1:
+            raise TypeError("limits must be ProfileLimits")
+    return cast(ProfileLimits, limits)
+
+
+def _validated_registry(
+    registry: object | None,
+) -> SourceAdapterRegistry:
+    if registry is None:
+        return SourceAdapterRegistry.default()
+    if not callable(getattr(registry, "resolve", None)):
+        raise TypeError("registry must be SourceAdapterRegistry")
+    adapters = getattr(registry, "adapters", None)
+    if (
+        not isinstance(adapters, Sequence)
+        or isinstance(adapters, (str, bytes))
+        or not adapters
+        or any(not isinstance(adapter, KnowledgeSourceAdapter) for adapter in adapters)
+    ):
+        raise TypeError("registry must be SourceAdapterRegistry")
+    return cast(SourceAdapterRegistry, registry)
+
+
 def profile_sources(
     sources: Mapping[str, object],
     roles: Mapping[str, object] | None = None,
@@ -934,12 +969,8 @@ def profile_sources(
         )
     source_ids = {source_id for source_id, _ in normalized_sources}
     validated_roles = _validated_roles(source_ids, roles)
-    active_limits = limits or ProfileLimits()
-    if not isinstance(active_limits, ProfileLimits):
-        raise TypeError("limits must be ProfileLimits")
-    active_registry = registry or SourceAdapterRegistry.default()
-    if not isinstance(active_registry, SourceAdapterRegistry):
-        raise TypeError("registry must be SourceAdapterRegistry")
+    active_limits = _validated_limits(limits)
+    active_registry = _validated_registry(registry)
 
     profiles: list[SourceProfile] = []
     for source_id, source in normalized_sources:

@@ -457,8 +457,6 @@ class SemanticModelKnowledgeAdapter:
             )
         if not isinstance(value, SemanticModel):
             raise TypeError("semantic model adapter requires SemanticModel")
-        if not isinstance(limits, ProfileLimits):
-            raise TypeError("limits must be ProfileLimits")
 
         model = cast(SemanticModel, value)
         locator = _locator(model)
@@ -514,6 +512,8 @@ def semantic_model_adapter() -> SemanticModelKnowledgeAdapter:
 
 def semantic_model_registry() -> SourceAdapterRegistry:
     """Return an explicit registry containing only the semantic-model adapter."""
+
+    from fabric_rlm.knowledge_sources import SourceAdapterRegistry
 
     return SourceAdapterRegistry((semantic_model_adapter(),))
 

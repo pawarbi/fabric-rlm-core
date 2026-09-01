@@ -673,6 +673,25 @@ def test_import_and_registry_construction_do_not_import_optional_readers(
     module.SourceAdapterRegistry.default()
 
 
+def test_registry_and_limits_remain_usable_across_module_reload(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    registry = module.SourceAdapterRegistry.default()
+    limits = module.ProfileLimits()
+    reloaded = importlib.reload(module)
+    path = tmp_path / "orders.csv"
+    path.write_text("id,total\n1,2.5\n", encoding="utf-8")
+
+    profile = reloaded.profile_sources(
+        {"orders": path},
+        registry=registry,
+        limits=limits,
+    )[0]
+
+    assert profile.family == "csv"
+
+
 def test_profiles_are_compatible_with_knowledge_persistence(
     tmp_path: Path,
 ) -> None:

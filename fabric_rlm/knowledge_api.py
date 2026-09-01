@@ -57,11 +57,10 @@ class Knowledge(BoundKnowledgePackage):
 def _active_registry(
     registry: SourceAdapterRegistry | None,
 ) -> SourceAdapterRegistry:
-    if registry is None:
-        return fabric_source_registry()
-    if not isinstance(registry, SourceAdapterRegistry):
-        raise TypeError("registry must be SourceAdapterRegistry")
-    return registry
+    from fabric_rlm.knowledge_sources import _validated_registry
+
+    candidate = fabric_source_registry() if registry is None else registry
+    return _validated_registry(candidate)
 
 
 def _package_id(

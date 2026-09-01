@@ -497,6 +497,7 @@ def fabric_source_registry() -> SourceAdapterRegistry:
     """Return an opt-in registry with all Fabric and local adapters."""
 
     from fabric_rlm.knowledge_semantic_model import semantic_model_adapter
+    from fabric_rlm.knowledge_sources import SourceAdapterRegistry
 
     defaults = SourceAdapterRegistry.default().adapters
     return SourceAdapterRegistry(

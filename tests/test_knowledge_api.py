@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import importlib
 from pathlib import Path
 
 import pytest
@@ -442,3 +443,19 @@ def test_load_knowledge_requires_exact_source_aliases(tmp_path: Path) -> None:
             destination,
             sources={"other": source},
         )
+
+
+def test_public_learn_remains_usable_after_source_module_reload(
+    tmp_path: Path,
+) -> None:
+    import fabric_rlm.knowledge_sources as knowledge_sources
+
+    importlib.reload(knowledge_sources)
+    source = _csv(tmp_path)
+
+    knowledge = RLM.learn(
+        sources={"orders": source},
+        registry=knowledge_sources.SourceAdapterRegistry.default(),
+    )
+
+    assert knowledge.package.sources[0].family == "csv"
