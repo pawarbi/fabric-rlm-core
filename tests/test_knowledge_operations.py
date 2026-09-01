@@ -31,6 +31,7 @@ class FakeSemanticModel(SemanticModel):
         self.measure_calls = []
         self.column_rows = [
             {"Table Name": "Sales", "Column Name": "Month"},
+            {"Table Name": "ARR Data", "Column Name": "IS_QUARTER"},
             {"Table Name": "Geography", "Column Name": "Region"},
         ]
         self.measure_metadata_rows = [
@@ -97,11 +98,19 @@ def test_learn_registers_bounded_semantic_model_measure_operation() -> None:
     )
     assert operation.parameter_schema["groupby"]["enum"] == (
         "",
+        "ARR Data[IS_QUARTER]",
         "Geography[Region]",
         "Sales[Month]",
     )
     assert operation.parameter_schema["filter_column"]["enum"] == (
         "",
+        "ARR Data[IS_QUARTER]",
+        "Geography[Region]",
+        "Sales[Month]",
+    )
+    assert operation.parameter_schema["filter_column_2"]["enum"] == (
+        "",
+        "ARR Data[IS_QUARTER]",
         "Geography[Region]",
         "Sales[Month]",
     )
@@ -179,6 +188,8 @@ def test_executes_registered_measure_with_validated_scalar_parameters() -> None:
             "groupby": "Geography[Region]",
             "filter_column": "Sales[Month]",
             "filter_value": "2025-06",
+            "filter_column_2": "ARR Data[IS_QUARTER]",
+            "filter_value_2": "1",
         },
     )
 
@@ -186,7 +197,10 @@ def test_executes_registered_measure_with_validated_scalar_parameters() -> None:
         {
             "measure": "Net Revenue",
             "groupby": ["Geography[Region]"],
-            "filters": {"Sales[Month]": ["2025-06"]},
+            "filters": {
+                "Sales[Month]": ["2025-06"],
+                "ARR Data[IS_QUARTER]": ["1"],
+            },
         }
     ]
     packet = result.to_packet()
@@ -222,6 +236,23 @@ def test_executes_registered_measure_with_validated_scalar_parameters() -> None:
                 "filter_column": "Sales[Month]",
             },
             "filter_column and filter_value",
+        ),
+        (
+            {
+                "measure": "Net Revenue",
+                "filter_column_2": "Sales[Month]",
+            },
+            "filter_column_2 and filter_value_2",
+        ),
+        (
+            {
+                "measure": "Net Revenue",
+                "filter_column": "Sales[Month]",
+                "filter_value": "2025-06",
+                "filter_column_2": "Sales[Month]",
+                "filter_value_2": "2025-07",
+            },
+            "filter columns must not contain duplicates",
         ),
         (
             {
@@ -327,7 +358,9 @@ def test_task_selects_executes_and_synthesizes_registered_measure() -> None:
                 '"parameters":{"measure":"Net Revenue",'
                 '"groupby":"Geography[Region]",'
                 '"filter_column":"Sales[Month]",'
-                '"filter_value":"2025-06"}}'
+                '"filter_value":"2025-06",'
+                '"filter_column_2":"ARR Data[IS_QUARTER]",'
+                '"filter_value_2":"1"}}'
             ),
             (
                 "```python\n"
@@ -352,7 +385,10 @@ def test_task_selects_executes_and_synthesizes_registered_measure() -> None:
     assert model.measure_calls[-1] == {
         "measure": "Net Revenue",
         "groupby": ["Geography[Region]"],
-        "filters": {"Sales[Month]": ["2025-06"]},
+        "filters": {
+            "Sales[Month]": ["2025-06"],
+            "ARR Data[IS_QUARTER]": ["1"],
+        },
     }
     metadata = result.trajectory.metadata
     assert metadata["knowledge_mode"] == "registered_operation"

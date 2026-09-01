@@ -88,11 +88,15 @@ def _semantic_measure_operation(
             "groupby": {"type": "string", "enum": allowed_columns},
             "filter_column": {"type": "string", "enum": allowed_columns},
             "filter_value": {"type": "string"},
+            "filter_column_2": {"type": "string", "enum": allowed_columns},
+            "filter_value_2": {"type": "string"},
         },
         parameter_defaults={
             "groupby": "",
             "filter_column": "",
             "filter_value": "",
+            "filter_column_2": "",
+            "filter_value_2": "",
         },
         output_schema={
             "result_fingerprint": "string",

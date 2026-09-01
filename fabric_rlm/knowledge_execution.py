@@ -157,12 +157,20 @@ def _parameters(
         name: _parameter_value(name, values[name], descriptor)
         for name, descriptor in operation.parameter_schema.items()
     }
-    has_filter_column = bool(normalized["filter_column"])
-    has_filter_value = bool(normalized["filter_value"])
-    if has_filter_column != has_filter_value:
-        raise OperationPlanError(
-            "filter_column and filter_value must both be provided or both omitted"
-        )
+    filter_columns: list[str] = []
+    for suffix in ("", "_2"):
+        column_name = f"filter_column{suffix}"
+        value_name = f"filter_value{suffix}"
+        has_filter_column = bool(normalized[column_name])
+        has_filter_value = bool(normalized[value_name])
+        if has_filter_column != has_filter_value:
+            raise OperationPlanError(
+                f"{column_name} and {value_name} must both be provided or both omitted"
+            )
+        if has_filter_column:
+            filter_columns.append(str(normalized[column_name]))
+    if len(set(filter_columns)) != len(filter_columns):
+        raise OperationPlanError("filter columns must not contain duplicates")
     return normalized
 
 
@@ -283,14 +291,20 @@ def execute_registered_operation(
     if not callable(measure):
         raise TypeError("registered semantic model source cannot evaluate measures")
     groupby_value = str(normalized["groupby"])
-    filter_column = str(normalized["filter_column"])
-    filter_value = str(normalized["filter_value"])
+    filters = {
+        str(normalized[column_name]): [str(normalized[value_name])]
+        for column_name, value_name in (
+            ("filter_column", "filter_value"),
+            ("filter_column_2", "filter_value_2"),
+        )
+        if normalized[column_name]
+    }
 
     started = time.perf_counter()
     raw_result = measure(
         str(normalized["measure"]),
         groupby=[groupby_value] if groupby_value else None,
-        filters={filter_column: [filter_value]} if filter_column else None,
+        filters=filters or None,
     )
     elapsed_seconds = time.perf_counter() - started
     rows = _result_rows(raw_result, operation)
