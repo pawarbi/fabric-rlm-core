@@ -1843,8 +1843,13 @@ class RLM:
                                 interpreter.configure_lm(self.sub_lm_spec)
                             if bound_inputs:
                                 interpreter.set_inputs(bound_inputs)
-                        except Exception:      # restart failed: fall through
-                            pass
+                            interpreter.warmup()
+                        except Exception as restart_error:
+                            trajectory.turns[-1].error = (
+                                f"{trajectory.turns[-1].error}; worker restart "
+                                f"failed: {type(restart_error).__name__}: "
+                                f"{restart_error}"
+                            )
                         else:
                             if worker_died:
                                 what_happened = (

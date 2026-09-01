@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from fabric_rlm import RLM
+from fabric_rlm import ExecResult, RLM, WorkerTimeout
+import fabric_rlm.runtime as runtime_module
 
 
 class ScriptedLM:
@@ -29,6 +30,58 @@ class ScriptedLM:
         turn = self.turns[self.i]
         self.i += 1
         return [turn]
+
+
+class WarmupTrackingInterpreter:
+    def __init__(
+        self,
+        *,
+        timeout_on_first_execute: bool = True,
+        fail_warmup: bool = False,
+    ) -> None:
+        self.timeout_on_first_execute = timeout_on_first_execute
+        self.fail_warmup = fail_warmup
+        self.events: list[str] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def kill(self):
+        self.events.append("kill")
+
+    def start(self):
+        self.events.append("start")
+        return self
+
+    def configure_lm(self, _spec):
+        self.events.append("configure_lm")
+        return {}
+
+    def set_inputs(self, _inputs):
+        self.events.append("set_inputs")
+        return {}
+
+    def warmup(self):
+        self.events.append("warmup")
+        if self.fail_warmup:
+            raise WorkerTimeout("replacement warmup timed out")
+
+    def execute(self, _code):
+        self.events.append("execute")
+        if self.timeout_on_first_execute:
+            self.timeout_on_first_execute = False
+            raise WorkerTimeout("Worker timed out after 2s")
+        return ExecResult(
+            ok=True,
+            submitted=True,
+            stdout="",
+            stderr="",
+            state={},
+            submit_payload={"answer": "recovered"},
+        )
 
 
 SLOW = "```python\nimport time\ntime.sleep(30)\n```"
@@ -105,6 +158,90 @@ def test_inputs_survive_the_restart():
                       recover_worker_timeouts=1).run()
     assert result.submitted is True
     assert result.payload["answer"] == "42", "input was not re-bound"
+
+
+def test_recovery_warms_replacement_before_the_next_model_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    interpreter = WarmupTrackingInterpreter()
+    monkeypatch.setattr(
+        runtime_module,
+        "Interpreter",
+        lambda **_kwargs: interpreter,
+    )
+    lm = ScriptedLM([SLOW, FAST])
+
+    result = RLM.task(
+        task="t",
+        inputs={"value": 21},
+        outputs=["answer"],
+        lm=lm,
+        sub_lm="openai/gpt-4o-mini",
+        max_turns=4,
+        timeout=2,
+        recover_worker_timeouts=1,
+    ).run()
+
+    assert result.submitted is True
+    assert result.payload == {"answer": "recovered"}
+    assert interpreter.events == [
+        "configure_lm",
+        "set_inputs",
+        "execute",
+        "kill",
+        "start",
+        "configure_lm",
+        "set_inputs",
+        "warmup",
+        "execute",
+    ]
+
+
+def test_normal_run_does_not_warm_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    interpreter = WarmupTrackingInterpreter(timeout_on_first_execute=False)
+    monkeypatch.setattr(
+        runtime_module,
+        "Interpreter",
+        lambda **_kwargs: interpreter,
+    )
+
+    result = RLM.task(
+        task="t",
+        outputs=["answer"],
+        lm=ScriptedLM([FAST]),
+        max_turns=1,
+    ).run()
+
+    assert result.submitted is True
+    assert "warmup" not in interpreter.events
+
+
+def test_warmup_failure_is_recorded_in_trajectory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    interpreter = WarmupTrackingInterpreter(fail_warmup=True)
+    monkeypatch.setattr(
+        runtime_module,
+        "Interpreter",
+        lambda **_kwargs: interpreter,
+    )
+
+    result = RLM.task(
+        task="t",
+        outputs=["answer"],
+        lm=ScriptedLM([SLOW]),
+        max_turns=1,
+        timeout=2,
+        recover_worker_timeouts=1,
+    ).run()
+
+    assert result.submitted is False
+    assert "worker restart failed" in (result.trajectory.turns[-1].error or "")
+    assert "replacement warmup timed out" in (
+        result.trajectory.turns[-1].error or ""
+    )
 
 
 @pytest.mark.parametrize("budget", [0, 1, 3])
