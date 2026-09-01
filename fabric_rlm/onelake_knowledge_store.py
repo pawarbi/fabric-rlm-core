@@ -14,11 +14,14 @@ https://learn.microsoft.com/en-us/rest/api/storageservices/datalakestoragegen2/p
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 import hashlib
 import hmac
-from typing import Protocol
+from typing import Any, Protocol
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 import uuid
 
 from fabric_rlm.artifacts import (
@@ -26,6 +29,7 @@ from fabric_rlm.artifacts import (
     _safe_relative_path,
 )
 from fabric_rlm.knowledge import KnowledgePackage, _logical_locator
+from fabric_rlm.lakehouse import _storage_token
 from fabric_rlm.knowledge_store import (
     MAX_PACKAGE_BYTES,
     BoundKnowledgePackage,
@@ -44,6 +48,12 @@ class AtomicRenameUnsupported(Exception):
 
 class ConcurrentWriteError(Exception):
     """A conditional OneLake operation rejected a concurrent change."""
+
+
+class _OneLakeHttpError(Exception):
+    def __init__(self, status: int) -> None:
+        self.status = status
+        super().__init__(f"OneLake request failed with HTTP {status}")
 
 
 @dataclass(frozen=True)
@@ -98,6 +108,333 @@ class OneLakeKnowledgeTransport(Protocol):
     ) -> None: ...
 
     def delete(self, path: str) -> None: ...
+
+
+class OneLakeRestTransport:
+    """Parent-authorized OneLake transport using the ADLS Gen2 REST API.
+
+    The caller supplies or inherits a Fabric storage-token provider. Tokens are
+    used only in request headers and are never retained in package metadata.
+    """
+
+    _API_VERSION = "2023-08-03"
+    _TIMEOUT_SECONDS = 60
+    _UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
+
+    def __init__(
+        self,
+        *,
+        token_provider: Callable[[], str] = _storage_token,
+        opener: Callable[..., Any] = urlopen,
+    ) -> None:
+        if not callable(token_provider):
+            raise TypeError("token_provider must be callable")
+        if not callable(opener):
+            raise TypeError("opener must be callable")
+        self._token_provider = token_provider
+        self._opener = opener
+
+    def stat(self, path: str) -> OneLakeObjectStat | None:
+        request = Request(
+            self._url(path),
+            headers=self._headers(),
+            method="HEAD",
+        )
+        try:
+            with self._open(request, expected_statuses={200}) as response:
+                size_value = response.headers.get("Content-Length")
+                etag = response.headers.get("ETag")
+        except _OneLakeHttpError as error:
+            if error.status == 404:
+                return None
+            raise KnowledgePersistenceError(
+                "OneLake package metadata read failed"
+            ) from None
+        try:
+            size = int(size_value)
+        except (TypeError, ValueError):
+            raise KnowledgePersistenceError(
+                "OneLake package metadata is malformed"
+            ) from None
+        return OneLakeObjectStat(size=size, etag=etag)
+
+    def read(self, path: str, max_bytes: int) -> bytes:
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int):
+            raise TypeError("max_bytes must be an integer")
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be greater than zero")
+        request = Request(
+            self._url(path),
+            headers={
+                **self._headers(),
+                "Range": f"bytes=0-{max_bytes - 1}",
+            },
+            method="GET",
+        )
+        try:
+            with self._open(request, expected_statuses={200, 206}) as response:
+                data = response.read(max_bytes)
+        except _OneLakeHttpError:
+            raise KnowledgePersistenceError("OneLake package read failed") from None
+        if not isinstance(data, bytes):
+            raise KnowledgePersistenceError(
+                "OneLake package read returned invalid bytes"
+            )
+        return data
+
+    def mkdirs(self, path: str) -> None:
+        workspace, parts = self._path_parts(path)
+        try:
+            files_index = parts.index("Files")
+        except ValueError:
+            raise ValueError(
+                "OneLake directory must be beneath a canonical Files root"
+            ) from None
+        if files_index == 0:
+            raise ValueError(
+                "OneLake directory must include an item before Files"
+            )
+        for end in range(files_index + 2, len(parts) + 1):
+            directory = self._abfss_path(workspace, parts[:end])
+            request = Request(
+                f"{self._url(directory)}?resource=directory",
+                data=b"",
+                headers={
+                    **self._headers(),
+                    "Content-Length": "0",
+                    "If-None-Match": "*",
+                },
+                method="PUT",
+            )
+            try:
+                with self._open(request, expected_statuses={201}):
+                    pass
+            except _OneLakeHttpError as error:
+                if error.status == 409 and self.stat(directory) is not None:
+                    continue
+                raise KnowledgePersistenceError(
+                    "OneLake package parent creation failed"
+                ) from None
+
+    def upload(self, path: str, data: bytes) -> None:
+        if not isinstance(data, bytes):
+            raise TypeError("data must be bytes")
+        url = self._url(path)
+        create = Request(
+            f"{url}?resource=file",
+            data=b"",
+            headers={
+                **self._headers(),
+                "Content-Length": "0",
+                "If-None-Match": "*",
+            },
+            method="PUT",
+        )
+        try:
+            with self._open(create, expected_statuses={201}):
+                pass
+            position = 0
+            while position < len(data):
+                chunk = data[
+                    position : position + self._UPLOAD_CHUNK_BYTES
+                ]
+                append = Request(
+                    f"{url}?action=append&position={position}",
+                    data=chunk,
+                    headers={
+                        **self._headers(),
+                        "Content-Length": str(len(chunk)),
+                        "Content-Type": "application/octet-stream",
+                    },
+                    method="PATCH",
+                )
+                with self._open(append, expected_statuses={202}):
+                    pass
+                position += len(chunk)
+            flush = Request(
+                f"{url}?action=flush&position={len(data)}",
+                data=b"",
+                headers={
+                    **self._headers(),
+                    "Content-Length": "0",
+                },
+                method="PATCH",
+            )
+            with self._open(flush, expected_statuses={200}):
+                pass
+        except _OneLakeHttpError:
+            raise KnowledgePersistenceError(
+                "OneLake temporary upload failed"
+            ) from None
+
+    def rename_no_clobber(
+        self,
+        source: str,
+        destination: str,
+        *,
+        source_etag: str | None,
+    ) -> None:
+        try:
+            self._rename(
+                source,
+                destination,
+                source_etag=source_etag,
+                destination_etag=None,
+            )
+        except ConcurrentWriteError:
+            raise FileExistsError from None
+
+    def rename_overwrite(
+        self,
+        source: str,
+        destination: str,
+        *,
+        source_etag: str | None,
+        destination_etag: str | None,
+    ) -> None:
+        self._rename(
+            source,
+            destination,
+            source_etag=source_etag,
+            destination_etag=destination_etag,
+        )
+
+    def delete(self, path: str) -> None:
+        request = Request(
+            self._url(path),
+            headers=self._headers(),
+            method="DELETE",
+        )
+        try:
+            with self._open(request, expected_statuses={200}):
+                pass
+        except _OneLakeHttpError as error:
+            if error.status == 404:
+                return
+            raise KnowledgePersistenceError(
+                "OneLake temporary cleanup failed"
+            ) from None
+
+    def _rename(
+        self,
+        source: str,
+        destination: str,
+        *,
+        source_etag: str | None,
+        destination_etag: str | None,
+    ) -> None:
+        if not source_etag:
+            raise ValueError("source_etag is required for atomic rename")
+        source_workspace, source_parts = self._path_parts(source)
+        destination_workspace, _ = self._path_parts(destination)
+        if source_workspace != destination_workspace:
+            raise ValueError("OneLake rename must stay within one workspace")
+        headers = {
+            **self._headers(),
+            "Content-Length": "0",
+            "x-ms-rename-source": quote(
+                f"/{source_workspace}/{'/'.join(source_parts)}",
+                safe="/",
+            ),
+            "x-ms-source-if-match": source_etag,
+        }
+        if destination_etag is None:
+            headers["If-None-Match"] = "*"
+        else:
+            headers["If-Match"] = destination_etag
+        request = Request(
+            self._url(destination),
+            data=b"",
+            headers=headers,
+            method="PUT",
+        )
+        try:
+            with self._open(request, expected_statuses={201}):
+                pass
+        except _OneLakeHttpError as error:
+            if error.status in {409, 412}:
+                raise ConcurrentWriteError from None
+            raise KnowledgePersistenceError(
+                "OneLake package rename failed"
+            ) from None
+
+    def _headers(self) -> dict[str, str]:
+        try:
+            token = self._token_provider()
+        except Exception:
+            raise KnowledgePersistenceError(
+                "Fabric storage authorization failed"
+            ) from None
+        if (
+            not isinstance(token, str)
+            or not token
+            or "\r" in token
+            or "\n" in token
+        ):
+            raise KnowledgePersistenceError(
+                "Fabric storage authorization returned an invalid token"
+            )
+        return {
+            "Authorization": f"Bearer {token}",
+            "x-ms-version": self._API_VERSION,
+        }
+
+    def _open(
+        self,
+        request: Request,
+        *,
+        expected_statuses: set[int],
+    ) -> Any:
+        try:
+            response = self._opener(
+                request,
+                timeout=self._TIMEOUT_SECONDS,
+            )
+        except HTTPError as error:
+            raise _OneLakeHttpError(error.code) from None
+        except (OSError, URLError):
+            raise KnowledgePersistenceError("OneLake request failed") from None
+        status = getattr(response, "status", None)
+        if status not in expected_statuses:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+            raise _OneLakeHttpError(int(status or 0))
+        return response
+
+    @staticmethod
+    def _path_parts(path: str) -> tuple[str, tuple[str, ...]]:
+        prefix = "abfss://"
+        suffix = "@onelake.dfs.fabric.microsoft.com/"
+        remainder = path[len(prefix) :] if path.startswith(prefix) else ""
+        workspace, separator, object_path = remainder.partition(suffix)
+        parts = tuple(object_path.split("/")) if object_path else ()
+        if (
+            not separator
+            or not workspace
+            or not parts
+            or "\\" in path
+            or any(ord(character) < 32 for character in path)
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
+            raise ValueError("OneLake path must be a canonical ABFSS path")
+        return workspace, parts
+
+    @classmethod
+    def _url(cls, path: str) -> str:
+        workspace, parts = cls._path_parts(path)
+        return (
+            "https://onelake.dfs.fabric.microsoft.com/"
+            f"{quote(workspace, safe='')}/"
+            f"{quote('/'.join(parts), safe='/')}"
+        )
+
+    @staticmethod
+    def _abfss_path(workspace: str, parts: tuple[str, ...]) -> str:
+        return (
+            f"abfss://{workspace}@onelake.dfs.fabric.microsoft.com/"
+            f"{'/'.join(parts)}"
+        )
 
 
 @dataclass(frozen=True)
