@@ -87,8 +87,8 @@ def test_learn_registers_bounded_semantic_model_measure_operation() -> None:
         "Geography[Region]",
         "Sales[Month]",
     )
-    assert operation.max_output_rows == 1_000
-    assert operation.max_output_columns == 100
+    assert operation.max_output_rows == 100
+    assert operation.max_output_columns == 20
 
 
 def test_semantic_measure_operation_survives_save_and_rebind(
@@ -221,7 +221,7 @@ def test_rejects_unknown_or_non_active_operations() -> None:
 def test_rejects_measure_results_that_exceed_registered_bounds() -> None:
     model = FakeSemanticModel()
     model.measure_rows = [
-        {f"column_{column}": column for column in range(101)}
+        {f"column_{column}": column for column in range(21)}
     ]
     knowledge = RLM.learn(sources={"sales": model})
 
