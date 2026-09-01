@@ -1,4 +1,5 @@
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -20,6 +21,22 @@ def test_interpreter_persists_state() -> None:
     assert second.ok
     assert second.stdout.strip() == "15"
     assert second.state["x"] == 15
+
+
+def test_set_inputs_has_a_control_plane_timeout_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    interp = Interpreter(timeout=0.01)
+    monkeypatch.setattr(interp, "_send", lambda _message: None)
+    response = threading.Timer(
+        0.05,
+        lambda: interp._stdout_queue.put('{"ok": true}'),
+    )
+    response.start()
+    try:
+        assert interp.set_inputs({}) == {"ok": True}
+    finally:
+        response.join()
 
 
 def test_interpreter_survives_syntax_and_runtime_errors() -> None:

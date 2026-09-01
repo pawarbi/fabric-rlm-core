@@ -37,6 +37,9 @@ class WorkerTimeout(TimeoutError):
     """Raised when the worker does not respond within the configured timeout."""
 
 
+_CONTROL_PLANE_TIMEOUT_FLOOR_SECONDS = 5.0
+
+
 _CONCURRENCY_MARKERS = ("ThreadPoolExecutor", "ProcessPoolExecutor",
                         "import threading", "threading.Thread",
                         "import multiprocessing", "multiprocessing.",
@@ -443,7 +446,9 @@ class Interpreter:
 
     def _request(self, message: dict[str, Any]) -> dict[str, Any]:
         self._send(message)
-        return self._recv()
+        return self._recv(
+            timeout=max(self.timeout, _CONTROL_PLANE_TIMEOUT_FLOOR_SECONDS)
+        )
 
     def _send(self, message: dict[str, Any]) -> None:
         if not self.is_running or self.proc is None or self.proc.stdin is None:
@@ -454,12 +459,15 @@ class Interpreter:
         except BrokenPipeError as exc:
             raise WorkerProtocolError(self._format_worker_exit("Worker pipe closed")) from exc
 
-    def _recv(self) -> dict[str, Any]:
+    def _recv(self, *, timeout: float | None = None) -> dict[str, Any]:
+        active_timeout = self.timeout if timeout is None else timeout
         try:
-            line = self._stdout_queue.get(timeout=self.timeout)
+            line = self._stdout_queue.get(timeout=active_timeout)
         except queue.Empty as exc:
             self.kill()
-            raise WorkerTimeout(f"Worker timed out after {self.timeout}s") from exc
+            raise WorkerTimeout(
+                f"Worker timed out after {active_timeout}s"
+            ) from exc
 
         if line is None:
             raise WorkerProtocolError(
