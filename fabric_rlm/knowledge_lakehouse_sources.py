@@ -306,7 +306,9 @@ class DeltaDirectoryAdapter:
         return SourceProfile(
             source_id=source_id,
             family=self.family,
-            locator=_portable_locator("delta", source_id, source_id),
+            locator=_portable_locator(
+                "delta", source_id, identity_fingerprint
+            ),
             snapshot_fingerprint=snapshot,
             schema_fingerprint=_domain_fingerprint(
                 "delta-table-schema-v1", schema

@@ -17,6 +17,7 @@ from fabric_rlm.knowledge_store import (
 )
 from fabric_rlm.onelake_knowledge_store import (
     AtomicRenameUnsupported,
+    ConcurrentWriteError,
     OneLakeKnowledgeLocation,
     OneLakeObjectStat,
     load_onelake_knowledge_package,
@@ -75,6 +76,8 @@ class FakeOneLakeTransport:
         self.change_before_rename = False
         self.fail_publication = False
         self.fail_restore = False
+        self.change_destination_before_publication = False
+        self.change_destination_before_restore = False
 
     def stat(self, path: str) -> OneLakeObjectStat | None:
         self.calls.append(("stat", path))
@@ -125,9 +128,27 @@ class FakeOneLakeTransport:
         destination: str,
         *,
         source_etag: str | None,
+        destination_etag: str | None,
     ) -> None:
-        self.calls.append(("rename_overwrite", source, destination))
+        self.calls.append(
+            (
+                "rename_overwrite",
+                source,
+                destination,
+                source_etag,
+                destination_etag,
+            )
+        )
         self._check_source_etag(source, source_etag)
+        if self.change_destination_before_publication and ".tmp-" in source:
+            self.files[destination] = b"concurrent-publication"
+            self.versions[destination] = self.versions.get(destination, 0) + 1
+            self.change_destination_before_publication = False
+        if self.change_destination_before_restore and ".backup-" in source:
+            self.files[destination] = b"concurrent-restore"
+            self.versions[destination] = self.versions.get(destination, 0) + 1
+            self.change_destination_before_restore = False
+        self._check_destination_etag(destination, destination_etag)
         if self.fail_publication and ".tmp-" in source:
             self.files[destination] = b"partial"
             self.versions[destination] = self.versions.get(destination, 0) + 1
@@ -137,6 +158,21 @@ class FakeOneLakeTransport:
             raise RuntimeError(f"restore failed at {destination}?sig=secret")
         self.files[destination] = self.files.pop(source)
         self.versions[destination] = self.versions.pop(source) + 1
+
+    def _check_destination_etag(
+        self,
+        destination: str,
+        destination_etag: str | None,
+    ) -> None:
+        if destination_etag is None:
+            if destination in self.files:
+                raise ConcurrentWriteError
+            return
+        if (
+            destination not in self.files
+            or destination_etag != f'"v{self.versions[destination]}"'
+        ):
+            raise ConcurrentWriteError
 
     def _check_source_etag(self, source: str, source_etag: str | None) -> None:
         if self.change_before_rename:
@@ -188,6 +224,7 @@ def test_location_is_immutable_and_runtime_root_is_not_fingerprinted() -> None:
         first.locator = "other/package.json"
 
     assert first.locator == second.locator
+    assert first != second
     assert package.fingerprint == _package().fingerprint
     assert ROOT not in repr(first)
 
@@ -301,6 +338,48 @@ def test_failed_overwrite_restores_original_and_cleans_temporary_objects() -> No
         )
 
     assert transport.files == {_target(): original}
+
+
+def test_overwrite_rejects_concurrent_destination_change_and_preserves_it() -> None:
+    original = _envelope_bytes(_package(package_id="old.package"))
+    transport = FakeOneLakeTransport({_target(): original})
+    transport.change_destination_before_publication = True
+
+    with pytest.raises(KnowledgePersistenceError, match="concurrent change"):
+        save_onelake_knowledge_package(
+            _location(),
+            _package(),
+            transport=transport,
+            overwrite=True,
+        )
+
+    assert transport.files[_target()] == b"concurrent-publication"
+    backups = [path for path in transport.files if ".backup-" in path]
+    assert len(backups) == 1
+    assert transport.files[backups[0]] == original
+
+
+def test_restore_rejects_concurrent_destination_change_and_keeps_backup() -> None:
+    original = _envelope_bytes(_package(package_id="old.package"))
+    transport = FakeOneLakeTransport({_target(): original})
+    transport.fail_publication = True
+    transport.change_destination_before_restore = True
+
+    with pytest.raises(
+        KnowledgePersistenceError,
+        match="publication failed and restore also failed",
+    ):
+        save_onelake_knowledge_package(
+            _location(),
+            _package(),
+            transport=transport,
+            overwrite=True,
+        )
+
+    assert transport.files[_target()] == b"concurrent-restore"
+    backups = [path for path in transport.files if ".backup-" in path]
+    assert len(backups) == 1
+    assert transport.files[backups[0]] == original
 
 
 def test_failed_overwrite_restore_reports_uncertain_integrity_and_keeps_backup() -> None:

@@ -42,6 +42,10 @@ class AtomicRenameUnsupported(Exception):
     """The transport cannot conditionally rename without replacing a target."""
 
 
+class ConcurrentWriteError(Exception):
+    """A conditional OneLake operation rejected a concurrent change."""
+
+
 @dataclass(frozen=True)
 class OneLakeObjectStat:
     """Bounded metadata used to detect oversized or concurrently changed objects."""
@@ -90,6 +94,7 @@ class OneLakeKnowledgeTransport(Protocol):
         destination: str,
         *,
         source_etag: str | None,
+        destination_etag: str | None,
     ) -> None: ...
 
     def delete(self, path: str) -> None: ...
@@ -99,7 +104,7 @@ class OneLakeKnowledgeTransport(Protocol):
 class OneLakeKnowledgeLocation:
     """A safe logical package locator plus a runtime-only canonical Files root."""
 
-    root: str = field(repr=False, compare=False, hash=False)
+    root: str = field(repr=False)
     locator: str
 
     def __post_init__(self) -> None:
@@ -191,6 +196,10 @@ def _upload_and_verify(
     actual_digest = hashlib.sha256(uploaded).digest()
     if not hmac.compare_digest(expected_digest, actual_digest) or uploaded != data:
         raise KnowledgePersistenceError("OneLake temporary upload verification failed")
+    if not uploaded_stat.etag:
+        raise KnowledgePersistenceError(
+            "OneLake temporary upload did not return a usable ETag"
+        )
     return uploaded_stat
 
 
@@ -233,6 +242,7 @@ def save_onelake_knowledge_package(
     backup: str | None = None
     retain_backup = False
     had_original = False
+    destination_etag: str | None = None
     try:
         try:
             transport.mkdirs(location._parent)
@@ -245,7 +255,12 @@ def save_onelake_knowledge_package(
             existing = _safe_stat(transport, target)
             if existing is not None:
                 had_original = True
-                original, _ = _read_stable(transport, target)
+                original, original_stat = _read_stable(transport, target)
+                if not original_stat.etag:
+                    raise KnowledgePersistenceError(
+                        "OneLake destination did not return a usable ETag"
+                    )
+                destination_etag = original_stat.etag
                 backup = _temporary_path(target, "backup")
                 backup_stat = _upload_and_verify(transport, backup, original)
             else:
@@ -260,17 +275,29 @@ def save_onelake_knowledge_package(
                     temporary,
                     target,
                     source_etag=temporary_stat.etag,
+                    destination_etag=destination_etag,
                 )
                 temporary = ""
+            except ConcurrentWriteError:
+                retain_backup = backup is not None
+                raise KnowledgePersistenceError(
+                    "OneLake package publication rejected a concurrent change"
+                ) from None
             except Exception:
                 if backup is not None:
                     try:
+                        failed_target = _safe_stat(transport, target)
                         transport.rename_overwrite(
                             backup,
                             target,
                             source_etag=(
                                 backup_stat.etag
                                 if backup_stat is not None
+                                else None
+                            ),
+                            destination_etag=(
+                                failed_target.etag
+                                if failed_target is not None
                                 else None
                             ),
                         )

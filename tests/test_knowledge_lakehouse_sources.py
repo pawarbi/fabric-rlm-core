@@ -203,6 +203,34 @@ def test_delta_profile_uses_structural_schema_and_exact_table_version(
     assert "orders" not in canonical_json(profile.to_dict())
 
 
+def test_delta_locator_changes_with_stable_table_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_path = _delta_directory(tmp_path / "first")
+    second_path = _delta_directory(tmp_path / "second")
+    _install_delta(
+        monkeypatch,
+        [
+            (1, "table-a", _Schema()),
+            (1, "table-a", _Schema()),
+            (1, "table-b", _Schema()),
+            (1, "table-b", _Schema()),
+        ],
+    )
+
+    first = profile_sources(
+        {"sales": first_path},
+        registry=_module().fabric_source_registry(),
+    )[0]
+    second = profile_sources(
+        {"sales": second_path},
+        registry=_module().fabric_source_registry(),
+    )[0]
+
+    assert first.locator != second.locator
+
+
 def test_delta_profile_rejects_schema_over_profile_limits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
