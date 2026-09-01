@@ -13,6 +13,7 @@ from fabric_rlm.knowledge import (
     _domain_fingerprint,
 )
 from fabric_rlm.knowledge_lakehouse_sources import fabric_source_registry
+from fabric_rlm.knowledge_operations import discover_registered_operations
 from fabric_rlm.knowledge_sources import (
     ProfileLimits,
     SourceAdapterRegistry,
@@ -199,6 +200,7 @@ def learn(
     package = KnowledgePackage(
         package_id=_package_id(profiles, package_id),
         sources=profiles,
+        operations=discover_registered_operations(profiles, sources),
     )
     bindings = _bindings_from_profiles(profiles, sources)
     if store is not None:
