@@ -105,6 +105,11 @@ def _operation(
     supported = {
         ("semantic_model.measure", "semantic_model.measure.v1"),
         ("tabular.aggregate", "tabular.aggregate.v1"),
+        ("lakehouse.aggregate", "lakehouse.aggregate.v1"),
+        (
+            "lakehouse.preaggregate_join",
+            "lakehouse.preaggregate_join.v1",
+        ),
     }
     if (operation.operation, operation.host_implementation_id) not in supported:
         raise OperationPlanError(
@@ -162,6 +167,8 @@ def _parameters(
     for suffix in ("", "_2"):
         column_name = f"filter_column{suffix}"
         value_name = f"filter_value{suffix}"
+        if column_name not in normalized:
+            continue
         has_filter_column = bool(normalized[column_name])
         has_filter_value = bool(normalized[value_name])
         if has_filter_column != has_filter_value:
@@ -175,7 +182,7 @@ def _parameters(
     grouping_dimensions = [
         str(normalized[name])
         for name in ("groupby", "groupby_2")
-        if normalized[name]
+        if normalized.get(name)
     ]
     if len(set(grouping_dimensions)) != len(grouping_dimensions):
         raise OperationPlanError(
@@ -187,6 +194,11 @@ def _parameters(
         raise OperationPlanError(f"measure is required for {aggregate}")
     if aggregate == "count_rows" and measure:
         raise OperationPlanError("measure must be omitted for count_rows")
+    if (
+        normalized.get("join_key_2")
+        and normalized.get("join_key_2") == normalized.get("join_key")
+    ):
+        raise OperationPlanError("join keys must not contain duplicates")
     return normalized
 
 
@@ -216,10 +228,28 @@ def _result_rows(
     value: object,
     operation: RegisteredOperation,
 ) -> tuple[dict[str, object], ...]:
-    try:
-        records = value.to_dict(orient="records")
-    except Exception as exc:
-        raise ValueError("operation result must provide tabular records") from exc
+    if isinstance(value, Mapping):
+        columns = value.get("columns")
+        raw_rows = value.get("rows")
+        if (
+            not isinstance(columns, Sequence)
+            or isinstance(columns, (str, bytes))
+            or not isinstance(raw_rows, Sequence)
+            or isinstance(raw_rows, (str, bytes))
+        ):
+            raise ValueError("operation result must provide tabular records")
+        records = [
+            dict(zip(columns, row, strict=True))
+            for row in raw_rows
+            if isinstance(row, Sequence) and not isinstance(row, (str, bytes))
+        ]
+        if len(records) != len(raw_rows):
+            raise ValueError("operation result rows must be sequences")
+    else:
+        try:
+            records = value.to_dict(orient="records")
+        except Exception as exc:
+            raise ValueError("operation result must provide tabular records") from exc
     if not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
         raise ValueError("operation result must provide tabular records")
     if len(records) > operation.max_output_rows:
@@ -358,12 +388,136 @@ def _execute_tabular_aggregate(
         connection.close()
 
 
+def _sql_string_literal(value: str) -> str:
+    if "\x00" in value:
+        raise ValueError("filter values must not contain NUL")
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _execute_lakehouse_aggregate(
+    operation: RegisteredOperation,
+    source: object,
+    normalized: Mapping[str, object],
+) -> object:
+    query = getattr(source, "query", None)
+    if not callable(query):
+        raise TypeError("registered Lakehouse source cannot execute queries")
+    groupby = [
+        str(normalized[name])
+        for name in ("groupby", "groupby_2")
+        if normalized[name]
+    ]
+    aggregate = str(normalized["aggregate"])
+    if aggregate == "count_rows":
+        expression = "COUNT(*)"
+    else:
+        expression = (
+            f"{aggregate.upper()}({_quoted_identifier(str(normalized['measure']))})"
+        )
+    selected = [
+        *(_quoted_identifier(column) for column in groupby),
+        f"{expression} AS value",
+    ]
+    filters = [
+        (
+            str(normalized[column_name]),
+            str(normalized[value_name]),
+        )
+        for column_name, value_name in (
+            ("filter_column", "filter_value"),
+            ("filter_column_2", "filter_value_2"),
+        )
+        if normalized[column_name]
+    ]
+    sql = f"SELECT {', '.join(selected)} FROM data"
+    if filters:
+        sql += " WHERE " + " AND ".join(
+            f"CAST({_quoted_identifier(column)} AS VARCHAR) = "
+            f"{_sql_string_literal(value)}"
+            for column, value in filters
+        )
+    if groupby:
+        sql += " GROUP BY " + ", ".join(
+            _quoted_identifier(column) for column in groupby
+        )
+        sql += " ORDER BY " + ", ".join(
+            _quoted_identifier(column) for column in groupby
+        )
+    catalog_source = str(normalized["catalog_source"])
+    return query(
+        sql,
+        sources={"data": catalog_source},
+        max_rows=operation.max_output_rows + 1,
+    )
+
+
+def _execute_lakehouse_preaggregate_join(
+    operation: RegisteredOperation,
+    source: object,
+    normalized: Mapping[str, object],
+) -> object:
+    query = getattr(source, "query", None)
+    if not callable(query):
+        raise TypeError("registered Lakehouse source cannot execute queries")
+    join_keys = [
+        str(normalized["join_key"]),
+        *(
+            [str(normalized["join_key_2"])]
+            if normalized["join_key_2"]
+            else []
+        ),
+    ]
+    left_keys = ", ".join(_quoted_identifier(key) for key in join_keys)
+    right_keys = left_keys
+    join_predicate = " AND ".join(
+        f"left_agg.{_quoted_identifier(key)} = "
+        f"right_agg.{_quoted_identifier(key)}"
+        for key in join_keys
+    )
+    result_keys = ", ".join(
+        f"COALESCE(left_agg.{_quoted_identifier(key)}, "
+        f"right_agg.{_quoted_identifier(key)}) AS {_quoted_identifier(key)}"
+        for key in join_keys
+    )
+    order_keys = ", ".join(
+        f"{_quoted_identifier(key)} DESC" for key in join_keys
+    )
+    row_limit = 1 if normalized["scope"] == "latest" else (
+        operation.max_output_rows + 1
+    )
+    sql = (
+        "WITH left_agg AS ("
+        f"SELECT {left_keys}, "
+        f"SUM({_quoted_identifier(str(normalized['left_measure']))}) "
+        "AS left_value FROM left_data "
+        f"GROUP BY {left_keys}"
+        "), right_agg AS ("
+        f"SELECT {right_keys}, "
+        f"SUM({_quoted_identifier(str(normalized['right_measure']))}) "
+        "AS right_value FROM right_data "
+        f"GROUP BY {right_keys}"
+        ") "
+        f"SELECT {result_keys}, left_value, right_value "
+        "FROM left_agg FULL OUTER JOIN right_agg ON "
+        f"{join_predicate} ORDER BY {order_keys} LIMIT {row_limit}"
+    )
+    return query(
+        sql,
+        sources={
+            "left_data": str(normalized["left_catalog_source"]),
+            "right_data": str(normalized["right_catalog_source"]),
+        },
+        max_rows=operation.max_output_rows + 1,
+    )
+
+
 @dataclass(frozen=True)
 class OperationExecutionResult:
     operation_id: str
     operation_version: str | None
     operation_fingerprint: str
     source_fingerprints: Mapping[str, str]
+    parameters: Mapping[str, object]
     result_fingerprint: str
     rows: tuple[dict[str, object], ...]
     elapsed_seconds: float
@@ -375,6 +529,7 @@ class OperationExecutionResult:
             "operation_version": self.operation_version,
             "operation_fingerprint": self.operation_fingerprint,
             "source_fingerprints": dict(self.source_fingerprints),
+            "parameters": dict(self.parameters),
             "result_fingerprint": self.result_fingerprint,
             "audit_status": self.audit_status,
             "row_count": len(self.rows),
@@ -444,10 +599,22 @@ def execute_registered_operation(
             groupby=groupby or None,
             filters=filters or None,
         )
-    else:
+    elif operation.operation == "tabular.aggregate":
         raw_result = _execute_tabular_aggregate(
             operation,
             profile,
+            source,
+            normalized,
+        )
+    elif operation.operation == "lakehouse.aggregate":
+        raw_result = _execute_lakehouse_aggregate(
+            operation,
+            source,
+            normalized,
+        )
+    else:
+        raw_result = _execute_lakehouse_preaggregate_join(
+            operation,
             source,
             normalized,
         )
@@ -478,6 +645,7 @@ def execute_registered_operation(
         operation_version=operation.operation_version,
         operation_fingerprint=operation_fingerprint,
         source_fingerprints=source_fingerprints,
+        parameters=normalized,
         result_fingerprint=result_fingerprint,
         rows=rows,
         elapsed_seconds=elapsed_seconds,

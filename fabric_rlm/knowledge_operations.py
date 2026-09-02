@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import hashlib
+from itertools import combinations
 
 from fabric_rlm.knowledge import RegisteredOperation, SourceProfile
 
@@ -177,6 +179,207 @@ def _tabular_aggregate_operation(
     )
 
 
+def _lakehouse_aggregate_operations(
+    profile: SourceProfile,
+) -> tuple[RegisteredOperation, ...]:
+    if (
+        profile.family != "lakehouse"
+        or profile.diagnostics.get("snapshot_exact") is not True
+    ):
+        return ()
+    operations: list[RegisteredOperation] = []
+    for catalog_source, raw_entry in sorted(profile.schema.items()):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        raw_columns = raw_entry.get("columns")
+        if not isinstance(raw_columns, Mapping):
+            continue
+        safe_columns = sorted(
+            name
+            for name in raw_columns
+            if name not in set(profile.sensitive_columns)
+            and not _ANALYTICS_SENSITIVE_TOKENS.intersection(
+                name.casefold().replace("-", "_").split("_")
+            )
+        )
+        numeric_columns = sorted(
+            name
+            for name in safe_columns
+            if isinstance(raw_columns[name], Mapping)
+            and raw_columns[name].get("type") in {"integer", "number"}
+        )
+        if not safe_columns:
+            continue
+        source_key = hashlib.sha256(catalog_source.encode("utf-8")).hexdigest()[:12]
+        allowed_columns = ("", *safe_columns)
+        operations.append(
+            RegisteredOperation(
+                operation_id=(
+                    f"{profile.source_id}.lakehouse.aggregate.{source_key}.v1"
+                ),
+                operation="lakehouse.aggregate",
+                required_sources=(profile.source_id,),
+                parameter_schema={
+                    "catalog_source": {
+                        "type": "string",
+                        "enum": (catalog_source,),
+                    },
+                    "aggregate": {
+                        "type": "string",
+                        "enum": ("avg", "count_rows", "sum"),
+                    },
+                    "measure": {
+                        "type": "string",
+                        "enum": ("", *numeric_columns),
+                    },
+                    "groupby": {
+                        "type": "string",
+                        "enum": allowed_columns,
+                    },
+                    "groupby_2": {
+                        "type": "string",
+                        "enum": allowed_columns,
+                    },
+                    "filter_column": {
+                        "type": "string",
+                        "enum": allowed_columns,
+                    },
+                    "filter_value": {"type": "string"},
+                    "filter_column_2": {
+                        "type": "string",
+                        "enum": allowed_columns,
+                    },
+                    "filter_value_2": {"type": "string"},
+                },
+                parameter_defaults={
+                    "measure": "",
+                    "groupby": "",
+                    "groupby_2": "",
+                    "filter_column": "",
+                    "filter_value": "",
+                    "filter_column_2": "",
+                    "filter_value_2": "",
+                },
+                output_schema={
+                    "result_fingerprint": "string",
+                    "row_count": "integer",
+                },
+                max_output_rows=100,
+                max_output_columns=20,
+                grain="lakehouse_aggregate_result",
+                host_implementation_id="lakehouse.aggregate.v1",
+                operation_version="1",
+                status="active",
+            )
+        )
+    return tuple(operations)
+
+
+def _lakehouse_preaggregate_join_operations(
+    profile: SourceProfile,
+) -> tuple[RegisteredOperation, ...]:
+    if (
+        profile.family != "lakehouse"
+        or profile.diagnostics.get("snapshot_exact") is not True
+    ):
+        return ()
+    candidates: list[
+        tuple[str, tuple[str, ...], tuple[str, ...]]
+    ] = []
+    for catalog_source, raw_entry in sorted(profile.schema.items()):
+        if not isinstance(raw_entry, Mapping):
+            continue
+        raw_columns = raw_entry.get("columns")
+        if not isinstance(raw_columns, Mapping):
+            continue
+        safe_columns = tuple(
+            sorted(
+                name
+                for name in raw_columns
+                if name not in set(profile.sensitive_columns)
+                and not _ANALYTICS_SENSITIVE_TOKENS.intersection(
+                    name.casefold().replace("-", "_").split("_")
+                )
+            )
+        )
+        numeric_columns = tuple(
+            name
+            for name in safe_columns
+            if isinstance(raw_columns[name], Mapping)
+            and raw_columns[name].get("type") in {"integer", "number"}
+        )
+        if safe_columns and numeric_columns:
+            candidates.append((catalog_source, safe_columns, numeric_columns))
+
+    operations: list[RegisteredOperation] = []
+    for left, right in combinations(candidates, 2):
+        left_source, left_columns, left_numeric = left
+        right_source, right_columns, right_numeric = right
+        common_columns = tuple(sorted(set(left_columns) & set(right_columns)))
+        if not common_columns:
+            continue
+        pair_key = hashlib.sha256(
+            f"{left_source}\0{right_source}".encode("utf-8")
+        ).hexdigest()[:12]
+        operations.append(
+            RegisteredOperation(
+                operation_id=(
+                    f"{profile.source_id}.lakehouse.preaggregate_join."
+                    f"{pair_key}.v1"
+                ),
+                operation="lakehouse.preaggregate_join",
+                required_sources=(profile.source_id,),
+                parameter_schema={
+                    "left_catalog_source": {
+                        "type": "string",
+                        "enum": (left_source,),
+                    },
+                    "right_catalog_source": {
+                        "type": "string",
+                        "enum": (right_source,),
+                    },
+                    "left_measure": {
+                        "type": "string",
+                        "enum": left_numeric,
+                    },
+                    "right_measure": {
+                        "type": "string",
+                        "enum": right_numeric,
+                    },
+                    "join_key": {
+                        "type": "string",
+                        "enum": common_columns,
+                    },
+                    "join_key_2": {
+                        "type": "string",
+                        "enum": ("", *common_columns),
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ("all", "latest"),
+                    },
+                },
+                parameter_defaults={
+                    "join_key_2": "",
+                    "scope": "all",
+                },
+                output_schema={
+                    "result_fingerprint": "string",
+                    "row_count": "integer",
+                },
+                max_output_rows=100,
+                max_output_columns=20,
+                grain="one_row_per_shared_join_key",
+                host_implementation_id="lakehouse.preaggregate_join.v1",
+                operation_version="1",
+                status="active",
+            )
+        )
+        if len(operations) >= 20:
+            break
+    return tuple(operations)
+
+
 def discover_registered_operations(
     profiles: tuple[SourceProfile, ...],
     sources: Mapping[str, object],
@@ -185,6 +388,8 @@ def discover_registered_operations(
 
     operations: list[RegisteredOperation] = []
     for profile in profiles:
+        operations.extend(_lakehouse_aggregate_operations(profile))
+        operations.extend(_lakehouse_preaggregate_join_operations(profile))
         operation = _tabular_aggregate_operation(profile)
         if profile.family == "semantic_model":
             model = sources[profile.source_id]

@@ -143,6 +143,11 @@ def _is_supported_knowledge_operation(operation: Any) -> bool:
     supported = {
         ("semantic_model.measure", "semantic_model.measure.v1"),
         ("tabular.aggregate", "tabular.aggregate.v1"),
+        ("lakehouse.aggregate", "lakehouse.aggregate.v1"),
+        (
+            "lakehouse.preaggregate_join",
+            "lakehouse.preaggregate_join.v1",
+        ),
     }
     return (
         operation.status == "active"

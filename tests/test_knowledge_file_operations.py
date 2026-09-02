@@ -70,6 +70,7 @@ def test_executes_compiler_owned_csv_aggregate(tmp_path: Path) -> None:
     assert result.to_packet()["rows"] == [
         {"region": "West", "value": 30.0},
     ]
+    assert result.to_packet()["parameters"]["measure"] == "amount"
     assert result.audit_status == "passed"
 
 
