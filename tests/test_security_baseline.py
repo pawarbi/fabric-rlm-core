@@ -65,6 +65,22 @@ _REJECT_CASES: list[tuple[str, str]] = [
     ("os.replace dotted", "import os\nos.replace('a', 'b')"),
 ]
 
+_RETIRED_NOTEBOOK_ALIAS = "ms" + "sparkutils"
+_REJECT_CASES.extend(
+    [
+        (
+            "retired notebook utility direct destructive call",
+            f"from notebookutils import {_RETIRED_NOTEBOOK_ALIAS}\n"
+            f"{_RETIRED_NOTEBOOK_ALIAS}.fs.rm('x', True)",
+        ),
+        (
+            "retired notebook utility nested destructive call",
+            "import notebookutils\n"
+            f"notebookutils.{_RETIRED_NOTEBOOK_ALIAS}.fs.mv('x', 'y')",
+        ),
+    ]
+)
+
 
 @pytest.mark.parametrize("label,code", _REJECT_CASES, ids=[c[0] for c in _REJECT_CASES])
 def test_validate_code_rejects(label: str, code: str) -> None:

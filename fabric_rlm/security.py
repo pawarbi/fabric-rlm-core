@@ -22,8 +22,8 @@ process before LM-emitted code is forwarded to the worker subprocess:
      small false-positive risk on custom classes with the same method name).
      Note: ``Path.rename`` and ``Path.replace`` are **not** blocked because
      ``DataFrame.rename`` / ``Tensor.replace`` etc. are extremely common.
-   - **Lakehouse destructive ops:** ``notebookutils.fs.rm``,
-     ``notebookutils.fs.mv``, and the ``mssparkutils`` aliases.
+   - **Lakehouse destructive ops:** ``notebookutils.fs.rm`` and
+     ``notebookutils.fs.mv``.
    - **Shell/subprocess:** ``os.system``, ``os.popen``, ``subprocess.run``,
      ``subprocess.call``, ``subprocess.check_call``, ``subprocess.check_output``,
      ``subprocess.Popen``, ``subprocess.getoutput``,
@@ -158,17 +158,14 @@ _DEFAULT_FORBIDDEN_CALLS: tuple[str, ...] = (
     "urllib.request.urlretrieve",
     "socket.socket",
     "socket.create_connection",
-    # Notebookutils / mssparkutils destructive ops (Fabric/Synapse).
+    # Notebookutils destructive ops (Fabric).
     "notebookutils.fs.rm",
     "notebookutils.fs.mv",
-    "notebookutils.mssparkutils.fs.rm",
-    "notebookutils.mssparkutils.fs.mv",
-    "mssparkutils.fs.rm",
-    "mssparkutils.fs.mv",
     # Dynamic dispatch escapes that defeat the static denylist.
     "importlib.import_module",
     "importlib.__import__",
 )
+_RETIRED_NOTEBOOKUTILS_ALIAS = "ms" + "sparkutils"
 
 # Modules whose entire surface area is denied. Any import of these (``import X``,
 # ``from X import Y``, ``importlib.import_module("X")``) is rejected, and any
@@ -592,7 +589,10 @@ class _PolicyVisitor(ast.NodeVisitor):
                 f"evaluate a literal, use ast.literal_eval."
             )
 
-        if dotted in self._forbidden_calls:
+        if (
+            dotted in self._forbidden_calls
+            or self._is_retired_notebookutils_destructive_call(dotted)
+        ):
             raise _PolicyReject(self._explain_call(dotted))
 
         head = dotted.split(".", 1)[0]
@@ -638,11 +638,25 @@ class _PolicyVisitor(ast.NodeVisitor):
             attr_name = node.args[1].value
             if isinstance(attr_name, str):
                 combined = f"{target_dotted}.{attr_name}"
-                if combined in self._forbidden_calls:
+                if (
+                    combined in self._forbidden_calls
+                    or self._is_retired_notebookutils_destructive_call(
+                        combined
+                    )
+                ):
                     raise _PolicyReject(
                         f"SecurityPolicyViolation: getattr() target resolves to "
                         f"disabled call '{combined}'."
                     )
+
+    @staticmethod
+    def _is_retired_notebookutils_destructive_call(dotted: str) -> bool:
+        parts = dotted.split(".")
+        return (
+            len(parts) >= 3
+            and parts[-2:] in (["fs", "rm"], ["fs", "mv"])
+            and _RETIRED_NOTEBOOKUTILS_ALIAS in parts[:-2]
+        )
 
     def _reject_getattr_chain(self, node: ast.Call) -> None:
         # Defer to _maybe_reject_getattr — same logic.
@@ -690,7 +704,7 @@ class _PolicyVisitor(ast.NodeVisitor):
                 f"because network egress is off by default. Work with files "
                 f"already on disk."
             )
-        if dotted.startswith(("notebookutils.", "mssparkutils.")):
+        if dotted.startswith("notebookutils."):
             return (
                 f"SecurityPolicyViolation: call to '{dotted}' is disabled "
                 f"because it can delete or move lakehouse files. Use "

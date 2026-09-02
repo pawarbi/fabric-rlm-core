@@ -22,6 +22,32 @@ def test_interpreter_persists_state() -> None:
     assert second.state["x"] == 15
 
 
+def test_set_inputs_has_a_control_plane_timeout_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    interp = Interpreter(timeout=0.25)
+    observed_timeouts: list[float | None] = []
+    monkeypatch.setattr(interp, "_send", lambda _message: None)
+
+    def receive(*, timeout=None):
+        observed_timeouts.append(timeout)
+        return {
+            "ok": True,
+            "submitted": False,
+            "stdout": "",
+            "stderr": "",
+            "state": {},
+        }
+
+    monkeypatch.setattr(interp, "_recv", receive)
+
+    interp.set_inputs({})
+    interp.warmup()
+    interp.execute("")
+
+    assert observed_timeouts == [10.0, 10.0, 0.25]
+
+
 def test_interpreter_survives_syntax_and_runtime_errors() -> None:
     with Interpreter(timeout=5) as interp:
         syntax = interp.execute("if True print('bad')")

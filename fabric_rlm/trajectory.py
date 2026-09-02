@@ -84,8 +84,8 @@ class TurnRecord:
 # ---------------------------------------------------------------------------
 # Azure storage URI loading (Fabric / Synapse)
 #
-# The library is dependency-free. We import notebookutils / mssparkutils /
-# fsspec lazily so the only cost of supporting Lakehouse URIs is a try/except
+# The library is dependency-free. We import notebookutils / fsspec lazily so
+# the only cost of supporting Lakehouse URIs is a try/except
 # at call time. ``/lakehouse/default/Files/...`` paths are regular FUSE-
 # mounted files and need no special handling — they go through Path.read_text.
 # ---------------------------------------------------------------------------
@@ -117,29 +117,13 @@ def _redact_uri(uri: str) -> str:
 
 
 def _iter_fabric_fs_candidates() -> Iterator[Any]:
-    """Yield candidate Fabric/Synapse ``fs`` objects, in priority order.
+    """Yield the current Fabric ``fs`` object when available.
 
-    Tries (in order):
-    * ``notebookutils.fs`` (current Fabric)
-    * ``notebookutils.mssparkutils.fs`` (Synapse-compat shim some runtimes expose)
-    * ``mssparkutils.fs`` (older Synapse Spark)
-
-    Each candidate is yielded only if its ``fs`` attribute exists, so callers
-    can stop at the first one whose ``cp()`` succeeds.
+    The deprecated compatibility namespaces are intentionally unsupported.
     """
     nu = _try_import("notebookutils")
     if nu is not None:
         fs = getattr(nu, "fs", None)
-        if fs is not None:
-            yield fs
-        shim = getattr(nu, "mssparkutils", None)
-        if shim is not None:
-            fs = getattr(shim, "fs", None)
-            if fs is not None:
-                yield fs
-    ms = _try_import("mssparkutils")
-    if ms is not None:
-        fs = getattr(ms, "fs", None)
         if fs is not None:
             yield fs
 
@@ -202,7 +186,7 @@ def _read_azure_storage_text(uri: str) -> str:
             return text
     raise ImportError(
         f"To read {safe_uri!r} you must run inside Fabric/Synapse (so "
-        "``notebookutils`` or ``mssparkutils`` is importable) or install "
+        "``notebookutils`` is importable) or install "
         "``fsspec`` + ``adlfs``. Alternatively, read the bytes yourself and "
         "pass the text/iterable/dicts to Trajectory.from_jsonl/from_dicts."
     )
@@ -343,8 +327,8 @@ class Trajectory:
           pointing at the local machine are also accepted and converted
           back to a filesystem path.
         * An Azure storage URI (``abfss://``, ``abfs://``, ``wasbs://``,
-          ``wasb://``). These are read via Fabric's ``notebookutils.fs`` /
-          ``mssparkutils.fs`` (preferred) or ``fsspec`` if installed. Both
+          ``wasb://``). These are read via Fabric's ``notebookutils.fs``
+          (preferred) or ``fsspec`` if installed. Both
           are imported lazily so the library stays dependency-free.
         * A file-like object with ``.read()``, or any iterable of
           bytes/str lines.
@@ -611,4 +595,3 @@ def _detect_token_cliff(turns: Sequence[TurnRecord]) -> Iterator[Issue]:
                     f"({baseline:,.0f}). Likely pasted-back input."
                 ),
             )
-

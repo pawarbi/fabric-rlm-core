@@ -364,17 +364,12 @@ def _validated_staged_source(
 def _notebook_fs() -> Any:
     try:
         from notebookutils import fs
-
-        return fs
-    except ImportError:
-        try:
-            from notebookutils import mssparkutils
-        except ImportError as exc:
-            raise RuntimeError(
-                "Publishing to abfss:// requires the Microsoft Fabric "
-                "notebookutils runtime."
-            ) from exc
-        return mssparkutils.fs
+    except ImportError as exc:
+        raise RuntimeError(
+            "Publishing to abfss:// requires the Microsoft Fabric "
+            "notebookutils runtime."
+        ) from exc
+    return fs
 
 
 def publish_file(
@@ -721,11 +716,13 @@ def encode_for_worker(value: Any) -> Any:
             }
         }
     if isinstance(value, SemanticModel):
-        # Only the coordinates cross the wire. The worker rebuilds a live
-        # handle, and re-validating there would repeat a network call the
-        # parent already made.
+        # Only the coordinates cross the wire. Explicit notebook credentials
+        # belong to the parent runtime; the worker uses SemPy's established
+        # authentication path and does not revalidate the handle.
         return {"__fabric_rlm_semantic_model__": {
-            "dataset": value.dataset, "workspace": value.workspace}}
+            "dataset": value.dataset,
+            "workspace": value.workspace,
+        }}
     if isinstance(value, LakehouseSource):
         return {
             "__fabric_rlm_lakehouse_source__": {
@@ -774,6 +771,7 @@ def decode_from_worker_wire(value: Any) -> Any:
             return SemanticModel(
                 dataset=spec["dataset"],
                 workspace=spec.get("workspace"),
+                credential_provider=spec.get("credential_provider"),
                 validate=False,
             )
         if "__fabric_rlm_lakehouse_source__" in value:

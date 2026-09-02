@@ -37,6 +37,9 @@ class WorkerTimeout(TimeoutError):
     """Raised when the worker does not respond within the configured timeout."""
 
 
+_CONTROL_PLANE_TIMEOUT_FLOOR_SECONDS = 10.0
+
+
 _CONCURRENCY_MARKERS = ("ThreadPoolExecutor", "ProcessPoolExecutor",
                         "import threading", "threading.Thread",
                         "import multiprocessing", "multiprocessing.",
@@ -336,11 +339,27 @@ class Interpreter:
                     reached_worker=False,
                 )
         self._last_exec_code = code
+        return self._execute_code(code, timeout=self.timeout)
+
+    def warmup(self) -> None:
+        """Exercise the replacement worker's exec path before user code."""
+
+        result = self._execute_code(
+            "",
+            timeout=max(self.timeout, _CONTROL_PLANE_TIMEOUT_FLOOR_SECONDS),
+        )
+        if not result.ok:
+            raise WorkerProtocolError(
+                "replacement worker warmup failed: "
+                + (result.error or result.stderr or "unknown worker error")
+            )
+
+    def _execute_code(self, code: str, *, timeout: float) -> ExecResult:
         self._send(
             {"op": "exec", "code": code, "max_submit_bytes": self.max_submit_bytes}
         )
         while True:
-            raw = self._recv()
+            raw = self._recv(timeout=timeout)
             if raw.get("method") == "tool_call":
                 self._handle_internal_tool_call(raw)
                 continue
@@ -443,7 +462,9 @@ class Interpreter:
 
     def _request(self, message: dict[str, Any]) -> dict[str, Any]:
         self._send(message)
-        return self._recv()
+        return self._recv(
+            timeout=max(self.timeout, _CONTROL_PLANE_TIMEOUT_FLOOR_SECONDS)
+        )
 
     def _send(self, message: dict[str, Any]) -> None:
         if not self.is_running or self.proc is None or self.proc.stdin is None:
@@ -454,12 +475,15 @@ class Interpreter:
         except BrokenPipeError as exc:
             raise WorkerProtocolError(self._format_worker_exit("Worker pipe closed")) from exc
 
-    def _recv(self) -> dict[str, Any]:
+    def _recv(self, *, timeout: float | None = None) -> dict[str, Any]:
+        active_timeout = self.timeout if timeout is None else timeout
         try:
-            line = self._stdout_queue.get(timeout=self.timeout)
+            line = self._stdout_queue.get(timeout=active_timeout)
         except queue.Empty as exc:
             self.kill()
-            raise WorkerTimeout(f"Worker timed out after {self.timeout}s") from exc
+            raise WorkerTimeout(
+                f"Worker timed out after {active_timeout}s"
+            ) from exc
 
         if line is None:
             raise WorkerProtocolError(

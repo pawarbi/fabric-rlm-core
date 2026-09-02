@@ -122,6 +122,74 @@ tabular engine, Delta reads honor the transaction log, file processing runs in
 Python, and generated artifacts can be written back to `Files/` without giving
 the isolated worker OneLake credentials.
 
+In Fabric Jupyter runtimes where SemPy's automatic token service is
+unavailable, opt into refreshable user-identity authentication without moving
+the token into the worker payload:
+
+```python
+model = SemanticModel(
+    "<semantic-model-id>",
+    workspace="<workspace-id>",
+    credential_provider="notebookutils",
+)
+```
+
+This calls `notebookutils.credentials.getToken("pbi")` in the process that
+uses the model. The token itself is never serialized.
+
+Learn a reusable, source-bound package when the same approved sources support
+multiple tasks:
+
+```python
+from fabric_rlm import FabricLM, File, RLM, load_knowledge
+
+knowledge = RLM.learn(
+    sources={
+        "orders": File("/lakehouse/default/Files/orders.parquet"),
+    },
+    store="/lakehouse/default/Files/knowledge/sales.json",
+)
+
+result = RLM.task(
+    "Revenue by region for the latest complete month",
+    knowledge=knowledge,
+    outputs=["answer"],
+    lm=FabricLM("gpt-5.1"),
+).run()
+
+knowledge = load_knowledge(
+    "/lakehouse/default/Files/knowledge/sales.json",
+    sources={
+        "orders": File("/lakehouse/default/Files/orders.parquet"),
+    },
+)
+```
+
+`RLM.learn(...)` deterministically profiles bounded source metadata, keeps
+runtime paths and authorization handles outside the persisted package, and can
+save locally or to a canonical OneLake `abfss://.../Files/...` path. Loading
+requires fresh, exact source aliases and rejects source drift before binding.
+Every knowledge-enabled task preflights the current sources before the model is
+called. For a `SemanticModel`, learning also registers one bounded
+`semantic_model.measure.v1` capability from visible measures and columns. The
+RLM may select that operation through a strict scalar JSON plan; the host
+validates the allowlisted measure, group-by, and up to three filters, executes
+`SemanticModel.measure(...)`, audits row/column/byte bounds, and gives the model
+only the compact fingerprinted result packet for synthesis. The model never
+supplies arbitrary DAX. CSV, Parquet, and Delta profiles also register a
+compiler-owned `tabular.aggregate.v1` operation. Exact Lakehouse Delta catalogs
+register bounded aggregate operations, plus a two-fact operation that
+pre-aggregates each fact at the shared key grain before joining. The model
+selects only typed scalar parameters; it never supplies SQL or file-reader
+expressions. Inexact Lakehouse file catalogs and stale source snapshots fail
+closed rather than entering registered execution.
+
+The development notebook
+`examples/notebooks/development/rlm_knowledge_benchmark_matrix.py` runs seeded,
+cache-disabled cold-versus-learned trials across these paths and records
+correctness, operation selection, audit status, turns, token usage, LM/worker/
+host/wall time, provenance, and drift rejection.
+
 ```python
 from fabric_rlm import FabricLM, FileDestination, LakehouseSource, RLM
 
@@ -689,7 +757,7 @@ documented in [docs/authoring-skills.md](docs/authoring-skills.md).
 This library runs model-generated code. The default `SecurityPolicy` scrubs
 secret-bearing environment variables from the worker, screens generated code,
 and blocks destructive Lakehouse operations such as `notebookutils.fs.rm` and
-`mssparkutils.fs.mv`. The worker remains inside the notebook trust boundary.
+`notebookutils.fs.mv`. The worker remains inside the notebook trust boundary.
 Read [SECURITY.md](SECURITY.md) before using untrusted prompts with sensitive
 data or credentials.
 

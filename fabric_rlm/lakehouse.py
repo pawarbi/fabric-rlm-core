@@ -27,6 +27,8 @@ _MAX_QUERY_RESULT_BYTES = 5 * 1024 * 1024
 _QUERY_FETCH_BATCH_ROWS = 1
 _QUERY_MEMORY_LIMIT = "256MB"
 _QUERY_TIMEOUT_SECONDS = 30.0
+_MAX_DELTA_LOG_BYTES = 4 * 1024 * 1024
+_MAX_DELTA_LOG_FILES = 1_000
 _SAFE_ALIAS = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _UNSAFE_SCALAR_FUNCTION = re.compile(
     r"^(?:"
@@ -399,15 +401,11 @@ class LakehouseSource:
 def _get_fs() -> Any:
     try:
         from notebookutils import fs
-    except ImportError:
-        try:
-            from notebookutils import mssparkutils
-        except ImportError as exc:
-            raise LakehouseDiscoveryError(
-                "Automatic Lakehouse discovery requires the Microsoft Fabric "
-                "notebookutils runtime. Supply catalog= explicitly outside Fabric."
-            ) from exc
-        return mssparkutils.fs
+    except ImportError as exc:
+        raise LakehouseDiscoveryError(
+            "Automatic Lakehouse discovery requires the Microsoft Fabric "
+            "notebookutils runtime. Supply catalog= explicitly outside Fabric."
+        ) from exc
     return fs
 
 
@@ -416,14 +414,10 @@ def _storage_token() -> str:
         from notebookutils import credentials
 
         return credentials.getToken("storage")
-    except ImportError:
-        try:
-            from notebookutils import mssparkutils
-        except ImportError as exc:
-            raise LakehouseDiscoveryError(
-                "Delta schema discovery requires Fabric storage credentials."
-            ) from exc
-        return mssparkutils.credentials.getToken("storage")
+    except ImportError as exc:
+        raise LakehouseDiscoveryError(
+            "Delta schema discovery requires Fabric storage credentials."
+        ) from exc
 
 
 def _quote_identifier(value: str) -> str:
@@ -826,7 +820,137 @@ def execute_lakehouse_query(
         con.close()
 
 
-def _read_delta_columns(path: str) -> list[list[str]]:
+def _delta_rs_path(path: str) -> str:
+    parsed = urlsplit(path)
+    if (
+        parsed.scheme.casefold() != "abfss"
+        or parsed.hostname != "onelake.dfs.fabric.microsoft.com"
+    ):
+        return path
+    segments = parsed.path.lstrip("/").split("/")
+    if segments and not segments[0].casefold().endswith(".lakehouse"):
+        segments[0] = f"{segments[0]}.Lakehouse"
+    return f"{parsed.scheme}://{parsed.netloc}/{'/'.join(segments)}"
+
+
+def _active_spark_session() -> Any | None:
+    try:
+        from pyspark.sql import SparkSession
+    except ImportError:
+        return None
+    return SparkSession.getActiveSession()
+
+
+def _read_spark_delta_metadata(spark: Any, path: str) -> dict[str, Any]:
+    escaped_path = path.replace("`", "``")
+    schema = spark.read.format("delta").load(path).schema
+    detail = spark.sql(
+        f"DESCRIBE DETAIL delta.`{escaped_path}`"
+    ).select("id").first()
+    history = spark.sql(
+        f"DESCRIBE HISTORY delta.`{escaped_path}` LIMIT 1"
+    ).select("version").first()
+    if detail is None or history is None:
+        raise LakehouseDiscoveryError(
+            "Delta transaction metadata is incomplete."
+        )
+    table_id = str(detail.id)
+    version = int(history.version)
+    return {
+        "columns": [
+            [
+                field.name,
+                str(field.dataType.simpleString()),
+            ]
+            for field in schema.fields
+        ],
+        "table_id": table_id,
+        "version": version,
+    }
+
+
+def _read_delta_log_metadata(path: str) -> dict[str, Any]:
+    delta_log = f"{path}/_delta_log"
+    version_files = []
+    for item in _list(_get_fs(), delta_log):
+        match = re.fullmatch(r"(\d{20})\.json", item.name)
+        if not item.isDir and match is not None:
+            version_files.append((int(match.group(1)), item.path))
+    if not version_files:
+        raise LakehouseDiscoveryError(
+            "Delta transaction log contains no JSON commit files."
+        )
+    if len(version_files) > _MAX_DELTA_LOG_FILES:
+        version_files = sorted(version_files, reverse=True)[:_MAX_DELTA_LOG_FILES]
+
+    latest_version = max(version for version, _path in version_files)
+    for _version, log_path in sorted(version_files, reverse=True):
+        content = _get_fs().head(log_path, _MAX_DELTA_LOG_BYTES)
+        for line in content.splitlines():
+            if not line.strip():
+                continue
+            action = json.loads(line)
+            metadata = action.get("metaData")
+            if not isinstance(metadata, dict):
+                continue
+            table_id = str(metadata.get("id", ""))
+            schema_document = json.loads(str(metadata.get("schemaString", "")))
+            fields = schema_document.get("fields")
+            if (
+                not table_id
+                or schema_document.get("type") != "struct"
+                or not isinstance(fields, list)
+            ):
+                raise LakehouseDiscoveryError(
+                    "Delta transaction metadata is incomplete."
+                )
+            columns = []
+            for field in fields:
+                if not isinstance(field, dict) or not field.get("name"):
+                    raise LakehouseDiscoveryError(
+                        "Delta transaction schema is incomplete."
+                    )
+                data_type = field.get("type")
+                normalized_type = (
+                    data_type
+                    if isinstance(data_type, str)
+                    else json.dumps(
+                        data_type,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                )
+                columns.append([str(field["name"]), normalized_type])
+            return {
+                "columns": columns,
+                "table_id": table_id,
+                "version": latest_version,
+            }
+    raise LakehouseDiscoveryError(
+        "Delta transaction metadata was not found in bounded JSON history."
+    )
+
+
+def _read_delta_metadata(path: str) -> dict[str, Any]:
+    parsed = urlsplit(path)
+    spark_error: Exception | None = None
+    if (
+        parsed.scheme.casefold() == "abfss"
+        and parsed.hostname == "onelake.dfs.fabric.microsoft.com"
+    ):
+        spark = _active_spark_session()
+        if spark is not None:
+            try:
+                metadata = _read_spark_delta_metadata(spark, path)
+            except Exception as exc:
+                spark_error = exc
+            else:
+                if not metadata["table_id"]:
+                    raise LakehouseDiscoveryError(
+                        "Delta transaction metadata has no stable table identity."
+                    )
+                return metadata
+
     try:
         from deltalake import DeltaTable
     except ImportError as exc:
@@ -842,17 +966,55 @@ def _read_delta_columns(path: str) -> list[list[str]]:
             "use_fabric_endpoint": "true",
         }
     try:
-        delta_schema = DeltaTable(path, storage_options=options).schema()
+        table = DeltaTable(
+            _delta_rs_path(path),
+            storage_options=options,
+            without_files=True,
+        )
+        delta_schema = table.schema()
         convert = getattr(delta_schema, "to_pyarrow", None)
         if convert is None:
             convert = delta_schema.to_arrow
         schema = convert()
+        version = int(table.version())
+        table_id = str(table.metadata().id)
     except Exception as exc:
+        delta_log_error: Exception | None = None
+        if (
+            parsed.scheme.casefold() == "abfss"
+            and parsed.hostname == "onelake.dfs.fabric.microsoft.com"
+        ):
+            try:
+                return _read_delta_log_metadata(path)
+            except Exception as log_exc:
+                delta_log_error = log_exc
+        reader_failures = f"Delta-RS reader failed with {type(exc).__name__}."
+        if spark_error is not None:
+            reader_failures = (
+                f"Spark reader failed with {type(spark_error).__name__}; "
+                f"{reader_failures}"
+            )
+        if delta_log_error is not None:
+            reader_failures = (
+                f"{reader_failures[:-1]}; transaction-log reader failed with "
+                f"{type(delta_log_error).__name__}."
+            )
         raise LakehouseDiscoveryError(
-            f"Delta metadata at {path!r} could not be read: "
-            f"{type(exc).__name__}: {exc}"
-        ) from exc
-    return [[field.name, str(field.type)] for field in schema]
+            f"Delta transaction metadata could not be read. {reader_failures}"
+        ) from None
+    if not table_id:
+        raise LakehouseDiscoveryError(
+            "Delta transaction metadata has no stable table identity."
+        )
+    return {
+        "columns": [[field.name, str(field.type)] for field in schema],
+        "table_id": table_id,
+        "version": version,
+    }
+
+
+def _read_delta_columns(path: str) -> list[list[str]]:
+    return _read_delta_metadata(path)["columns"]
 
 
 def _list(fs: Any, path: str) -> list[Any]:
@@ -888,7 +1050,7 @@ def _discover_delta_entries(fs: Any, scope: str) -> Iterator[dict[str, Any]]:
                 "kind": "delta",
                 "name": _delta_name(current),
                 "path": current,
-                "columns": _read_delta_columns(current),
+                **_read_delta_metadata(current),
             }
             continue
         if depth >= 3:

@@ -91,7 +91,7 @@ def record_and_save_example() -> None:
     #    traj.write_jsonl("/lakehouse/default/Files/rlm_traces/arithmetic.jsonl")
     #
     #     ...and reload it from anywhere via the abfss:// URI (read through
-    #     notebookutils.fs / mssparkutils.fs automatically, no extra deps):
+    #     notebookutils.fs automatically, no extra deps):
     #
     #    loaded = Trajectory.from_jsonl(
     #        "abfss://<workspace>@onelake.dfs.fabric.microsoft.com/"
