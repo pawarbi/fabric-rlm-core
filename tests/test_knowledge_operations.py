@@ -171,7 +171,7 @@ def test_hidden_semantic_model_fields_are_not_registered() -> None:
     )
 
 
-def test_non_semantic_sources_do_not_register_measure_operations(
+def test_tabular_sources_register_aggregate_not_measure_operations(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "orders.csv"
@@ -179,7 +179,10 @@ def test_non_semantic_sources_do_not_register_measure_operations(
 
     knowledge = RLM.learn(sources={"orders": source})
 
-    assert knowledge.package.operations == ()
+    assert tuple(
+        (operation.operation, operation.host_implementation_id)
+        for operation in knowledge.package.operations
+    ) == (("tabular.aggregate", "tabular.aggregate.v1"),)
 
 
 def test_executes_registered_measure_with_validated_scalar_parameters() -> None:

@@ -210,7 +210,7 @@ def test_rlm_task_knowledge_exposes_current_bound_sources_and_labels_fallback(
     )
     assert (
         result.trajectory.metadata["knowledge_mode"]
-        == "fallback_no_registered_operations"
+        == "fallback_operation_plan_rejected"
     )
     prompt = "\n".join(
         message["content"]

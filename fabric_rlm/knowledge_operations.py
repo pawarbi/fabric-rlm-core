@@ -9,6 +9,9 @@ from fabric_rlm.knowledge import RegisteredOperation, SourceProfile
 
 _MAX_OPERATION_VALUES = 500
 _MAX_METADATA_NAME_LENGTH = 256
+_ANALYTICS_SENSITIVE_TOKENS = frozenset(
+    {"email", "phone", "ssn", "socialsecuritynumber"}
+)
 
 
 def _records(value: object, family: str) -> list[Mapping[str, object]]:
@@ -113,6 +116,67 @@ def _semantic_measure_operation(
     )
 
 
+def _tabular_aggregate_operation(
+    profile: SourceProfile,
+) -> RegisteredOperation | None:
+    if profile.family not in {"csv", "parquet", "delta"}:
+        return None
+    safe_columns = sorted(
+        name
+        for name in profile.schema
+        if name not in set(profile.sensitive_columns)
+        and not _ANALYTICS_SENSITIVE_TOKENS.intersection(
+            name.casefold().replace("-", "_").split("_")
+        )
+    )
+    numeric_columns = sorted(
+        name
+        for name in safe_columns
+        if isinstance(profile.schema[name], Mapping)
+        and profile.schema[name].get("type") in {"integer", "number"}
+    )
+    if not safe_columns:
+        return None
+    allowed_columns = ("", *safe_columns)
+    return RegisteredOperation(
+        operation_id=f"{profile.source_id}.tabular.aggregate.v1",
+        operation="tabular.aggregate",
+        required_sources=(profile.source_id,),
+        parameter_schema={
+            "aggregate": {
+                "type": "string",
+                "enum": ("avg", "count_rows", "sum"),
+            },
+            "measure": {"type": "string", "enum": ("", *numeric_columns)},
+            "groupby": {"type": "string", "enum": allowed_columns},
+            "groupby_2": {"type": "string", "enum": allowed_columns},
+            "filter_column": {"type": "string", "enum": allowed_columns},
+            "filter_value": {"type": "string"},
+            "filter_column_2": {"type": "string", "enum": allowed_columns},
+            "filter_value_2": {"type": "string"},
+        },
+        parameter_defaults={
+            "measure": "",
+            "groupby": "",
+            "groupby_2": "",
+            "filter_column": "",
+            "filter_value": "",
+            "filter_column_2": "",
+            "filter_value_2": "",
+        },
+        output_schema={
+            "result_fingerprint": "string",
+            "row_count": "integer",
+        },
+        max_output_rows=100,
+        max_output_columns=20,
+        grain="tabular_aggregate_result",
+        host_implementation_id="tabular.aggregate.v1",
+        operation_version="1",
+        status="active",
+    )
+
+
 def discover_registered_operations(
     profiles: tuple[SourceProfile, ...],
     sources: Mapping[str, object],
@@ -121,14 +185,14 @@ def discover_registered_operations(
 
     operations: list[RegisteredOperation] = []
     for profile in profiles:
-        if profile.family != "semantic_model":
-            continue
-        model = sources[profile.source_id]
-        if not callable(getattr(model, "measures", None)) or not callable(
-            getattr(model, "columns", None)
-        ):
-            continue
-        operation = _semantic_measure_operation(profile.source_id, model)
+        operation = _tabular_aggregate_operation(profile)
+        if profile.family == "semantic_model":
+            model = sources[profile.source_id]
+            if not callable(getattr(model, "measures", None)) or not callable(
+                getattr(model, "columns", None)
+            ):
+                continue
+            operation = _semantic_measure_operation(profile.source_id, model)
         if operation is not None:
             operations.append(operation)
     return tuple(sorted(operations, key=lambda item: item.operation_id))

@@ -140,10 +140,13 @@ _ACTIVATE_MARKER = "[FABRIC_RLM_ACTIVATE]"
 
 
 def _is_supported_knowledge_operation(operation: Any) -> bool:
+    supported = {
+        ("semantic_model.measure", "semantic_model.measure.v1"),
+        ("tabular.aggregate", "tabular.aggregate.v1"),
+    }
     return (
         operation.status == "active"
-        and operation.operation == "semantic_model.measure"
-        and operation.host_implementation_id == "semantic_model.measure.v1"
+        and (operation.operation, operation.host_implementation_id) in supported
     )
 
 

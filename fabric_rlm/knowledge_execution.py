@@ -102,10 +102,11 @@ def _operation(
     operation = matches[0]
     if operation.status != "active":
         raise OperationPlanError(f"operation is not active: {operation_id}")
-    if (
-        operation.operation != "semantic_model.measure"
-        or operation.host_implementation_id != "semantic_model.measure.v1"
-    ):
+    supported = {
+        ("semantic_model.measure", "semantic_model.measure.v1"),
+        ("tabular.aggregate", "tabular.aggregate.v1"),
+    }
+    if (operation.operation, operation.host_implementation_id) not in supported:
         raise OperationPlanError(
             f"operation host implementation is unavailable: {operation_id}"
         )
@@ -180,6 +181,12 @@ def _parameters(
         raise OperationPlanError(
             "grouping dimensions must not contain duplicates"
         )
+    aggregate = normalized.get("aggregate")
+    measure = normalized.get("measure")
+    if aggregate in {"sum", "avg"} and not measure:
+        raise OperationPlanError(f"measure is required for {aggregate}")
+    if aggregate == "count_rows" and measure:
+        raise OperationPlanError("measure must be omitted for count_rows")
     return normalized
 
 
@@ -187,6 +194,8 @@ def _scalar(value: object, field_name: str) -> object:
     if value is None or type(value) in {str, bool, int}:
         return value
     if isinstance(value, float):
+        if math.isnan(value):
+            return None
         if not math.isfinite(value):
             raise ValueError(f"operation result {field_name} must be finite")
         return value + 0.0
@@ -236,6 +245,117 @@ def _result_rows(
     if len(canonical_json(rows).encode("utf-8")) > _MAX_RESULT_BYTES:
         raise ValueError("operation result exceeds byte bound")
     return rows
+
+
+def _quoted_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _bound_path(value: object) -> str:
+    path = getattr(value, "path", value)
+    try:
+        return str(__import__("os").fspath(path))
+    except TypeError as exc:
+        raise TypeError("registered tabular source must be path-like") from exc
+
+
+def _tabular_relation(
+    connection: object,
+    *,
+    family: str,
+    source: object,
+) -> tuple[str, list[object]]:
+    path = _bound_path(source)
+    if family == "csv":
+        return "read_csv_auto(?, header=true)", [path]
+    if family == "parquet":
+        return "read_parquet(?)", [path]
+    if family == "delta":
+        try:
+            from deltalake import DeltaTable
+        except ModuleNotFoundError as exc:
+            raise ValueError(
+                "Delta operation execution requires fabric-rlm[analytics]"
+            ) from exc
+        dataset = DeltaTable(path).to_pyarrow_dataset()
+        connection.register("_fabric_rlm_delta", dataset)
+        return "_fabric_rlm_delta", []
+    raise ValueError(f"unsupported tabular source family: {family}")
+
+
+def _execute_tabular_aggregate(
+    operation: RegisteredOperation,
+    profile: object,
+    source: object,
+    normalized: Mapping[str, object],
+) -> object:
+    try:
+        import duckdb
+    except ModuleNotFoundError as exc:
+        raise ValueError(
+            "tabular operation execution requires fabric-rlm[analytics]"
+        ) from exc
+
+    groupby = [
+        str(normalized[name])
+        for name in ("groupby", "groupby_2")
+        if normalized[name]
+    ]
+    filter_pairs = [
+        (str(normalized[column]), str(normalized[value]))
+        for column, value in (
+            ("filter_column", "filter_value"),
+            ("filter_column_2", "filter_value_2"),
+        )
+        if normalized[column]
+    ]
+    aggregate = str(normalized["aggregate"])
+    if aggregate == "count_rows":
+        expression = "COUNT(*)"
+    else:
+        expression = (
+            f"{aggregate.upper()}({_quoted_identifier(str(normalized['measure']))})"
+        )
+    selected = [
+        *(_quoted_identifier(column) for column in groupby),
+        f"{expression} AS value",
+    ]
+    where = " AND ".join(
+        f"CAST({_quoted_identifier(column)} AS VARCHAR) = ?"
+        for column, _value in filter_pairs
+    )
+    connection = duckdb.connect(database=":memory:")
+    try:
+        connection.execute("SET memory_limit = '256MB'")
+        connection.execute("SET threads = 1")
+        relation, relation_parameters = _tabular_relation(
+            connection,
+            family=profile.family,
+            source=source,
+        )
+        query = f"SELECT {', '.join(selected)} FROM {relation}"
+        if where:
+            query += f" WHERE {where}"
+        if groupby:
+            query += " GROUP BY " + ", ".join(
+                _quoted_identifier(column) for column in groupby
+            )
+        query += " ORDER BY " + (
+            ", ".join(_quoted_identifier(column) for column in groupby)
+            if groupby
+            else "value"
+        )
+        query += f" LIMIT {operation.max_output_rows + 1}"
+        return connection.execute(
+            query,
+            [*relation_parameters, *(value for _column, value in filter_pairs)],
+        ).fetchdf()
+    except Exception as exc:
+        if isinstance(exc, ValueError):
+            raise
+        raise ValueError("registered tabular aggregate execution failed") from exc
+    finally:
+        connection.close()
 
 
 @dataclass(frozen=True)
@@ -295,30 +415,42 @@ def execute_registered_operation(
 
     normalized = _parameters(operation, parameters)
     source_id = operation.required_sources[0]
-    model = knowledge.bindings[source_id]
-    measure = getattr(model, "measure", None)
-    if not callable(measure):
-        raise TypeError("registered semantic model source cannot evaluate measures")
-    groupby = [
-        str(normalized[name])
-        for name in ("groupby", "groupby_2")
-        if normalized[name]
-    ]
-    filters = {
-        str(normalized[column_name]): [str(normalized[value_name])]
-        for column_name, value_name in (
-            ("filter_column", "filter_value"),
-            ("filter_column_2", "filter_value_2"),
-        )
-        if normalized[column_name]
-    }
-
     started = time.perf_counter()
-    raw_result = measure(
-        str(normalized["measure"]),
-        groupby=groupby or None,
-        filters=filters or None,
+    source = knowledge.bindings[source_id]
+    profile = next(
+        item for item in preflight.package.sources if item.source_id == source_id
     )
+    if operation.operation == "semantic_model.measure":
+        measure = getattr(source, "measure", None)
+        if not callable(measure):
+            raise TypeError(
+                "registered semantic model source cannot evaluate measures"
+            )
+        groupby = [
+            str(normalized[name])
+            for name in ("groupby", "groupby_2")
+            if normalized[name]
+        ]
+        filters = {
+            str(normalized[column_name]): [str(normalized[value_name])]
+            for column_name, value_name in (
+                ("filter_column", "filter_value"),
+                ("filter_column_2", "filter_value_2"),
+            )
+            if normalized[column_name]
+        }
+        raw_result = measure(
+            str(normalized["measure"]),
+            groupby=groupby or None,
+            filters=filters or None,
+        )
+    else:
+        raw_result = _execute_tabular_aggregate(
+            operation,
+            profile,
+            source,
+            normalized,
+        )
     elapsed_seconds = time.perf_counter() - started
     rows = _result_rows(raw_result, operation)
     source_fingerprints = {
