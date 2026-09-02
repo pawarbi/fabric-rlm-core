@@ -165,6 +165,7 @@ _DEFAULT_FORBIDDEN_CALLS: tuple[str, ...] = (
     "importlib.import_module",
     "importlib.__import__",
 )
+_RETIRED_NOTEBOOKUTILS_ALIAS = "ms" + "sparkutils"
 
 # Modules whose entire surface area is denied. Any import of these (``import X``,
 # ``from X import Y``, ``importlib.import_module("X")``) is rejected, and any
@@ -588,7 +589,10 @@ class _PolicyVisitor(ast.NodeVisitor):
                 f"evaluate a literal, use ast.literal_eval."
             )
 
-        if dotted in self._forbidden_calls:
+        if (
+            dotted in self._forbidden_calls
+            or self._is_retired_notebookutils_destructive_call(dotted)
+        ):
             raise _PolicyReject(self._explain_call(dotted))
 
         head = dotted.split(".", 1)[0]
@@ -634,11 +638,25 @@ class _PolicyVisitor(ast.NodeVisitor):
             attr_name = node.args[1].value
             if isinstance(attr_name, str):
                 combined = f"{target_dotted}.{attr_name}"
-                if combined in self._forbidden_calls:
+                if (
+                    combined in self._forbidden_calls
+                    or self._is_retired_notebookutils_destructive_call(
+                        combined
+                    )
+                ):
                     raise _PolicyReject(
                         f"SecurityPolicyViolation: getattr() target resolves to "
                         f"disabled call '{combined}'."
                     )
+
+    @staticmethod
+    def _is_retired_notebookutils_destructive_call(dotted: str) -> bool:
+        parts = dotted.split(".")
+        return (
+            len(parts) >= 3
+            and parts[-2:] in (["fs", "rm"], ["fs", "mv"])
+            and _RETIRED_NOTEBOOKUTILS_ALIAS in parts[:-2]
+        )
 
     def _reject_getattr_chain(self, node: ast.Call) -> None:
         # Defer to _maybe_reject_getattr — same logic.

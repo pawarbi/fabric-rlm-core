@@ -169,8 +169,18 @@ arr_for_canada = model.measure(
 EXPECTED_TOTAL_ARR = 237576169.6
 EXPECTED_CANADA_ARR = float(arr_for_canada["ARR $"].sum())
 
-region_value_column = next(
-    column for column in arr_by_region.columns if column != "ARR $"
+def result_dimension_column(frame, qualified_name):
+    leaf_name = qualified_name.rsplit("[", 1)[-1].rstrip("]")
+    return next(
+        column
+        for column in frame.columns
+        if str(column).casefold()
+        in {qualified_name.casefold(), leaf_name.casefold()}
+    )
+
+region_value_column = result_dimension_column(
+    arr_by_region,
+    region_column,
 )
 top_region_value = float(arr_by_region["ARR $"].max())
 EXPECTED_TOP_REGIONS = {
@@ -180,7 +190,8 @@ EXPECTED_TOP_REGIONS = {
 }
 
 combination_columns = [
-    column for column in arr_by_region_product.columns if column != "ARR $"
+    result_dimension_column(arr_by_region_product, region_column),
+    result_dimension_column(arr_by_region_product, product_family_column),
 ]
 top_combination_value = float(arr_by_region_product["ARR $"].max())
 EXPECTED_TOP_COMBINATIONS = {

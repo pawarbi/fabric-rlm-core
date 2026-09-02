@@ -722,7 +722,11 @@ def encode_for_worker(value: Any) -> Any:
         return {"__fabric_rlm_semantic_model__": {
             "dataset": value.dataset,
             "workspace": value.workspace,
-            "credential_provider": value.credential_provider,
+            "credential_provider": getattr(
+                value,
+                "credential_provider",
+                None,
+            ),
         }}
     if isinstance(value, LakehouseSource):
         return {
