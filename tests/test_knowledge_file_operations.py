@@ -51,6 +51,38 @@ def test_learn_registers_bounded_tabular_aggregate_for_csv(
     assert operation.max_output_rows == 100
 
 
+def test_operation_allowlists_exclude_camelcase_pii_columns(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "contacts.csv"
+    path.write_text(
+        "CustomerEmail,contactPhone,amount\n"
+        "person@example.com,5550100,10.0\n",
+        encoding="utf-8",
+    )
+
+    operation = RLM.learn(sources={"contacts": path}).package.operations[0]
+
+    allowed = operation.parameter_schema["groupby"]["enum"]
+    assert "CustomerEmail" not in allowed
+    assert "contactPhone" not in allowed
+
+
+def test_inexact_large_file_does_not_register_an_operation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "large.csv"
+    path.write_text(
+        "amount\n" + ("1\n" * 600_000),
+        encoding="utf-8",
+    )
+
+    knowledge = RLM.learn(sources={"large": path})
+
+    assert knowledge.package.sources[0].diagnostics["snapshot_exact"] is False
+    assert knowledge.package.operations == ()
+
+
 def test_executes_compiler_owned_csv_aggregate(tmp_path: Path) -> None:
     source = _orders_csv(tmp_path)
     knowledge = RLM.learn(sources={"orders": source})

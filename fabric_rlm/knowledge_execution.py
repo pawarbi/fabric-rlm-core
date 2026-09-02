@@ -8,6 +8,7 @@ from datetime import date, datetime
 from decimal import Decimal
 import json
 import math
+import os
 import re
 import time
 
@@ -24,6 +25,40 @@ _MAX_PARAMETER_TEXT_LENGTH = 512
 _MAX_PLAN_REASON_LENGTH = 256
 _MAX_RESULT_BYTES = 256 * 1024
 _OPERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def _verified_lakehouse_bindings(
+    bindings: Mapping[str, object],
+    source_id: str,
+) -> Mapping[str, object]:
+    from fabric_rlm.lakehouse import (
+        LakehouseSource,
+        _read_delta_metadata,
+    )
+
+    bound = bindings[source_id]
+    if not isinstance(bound, LakehouseSource):
+        raise TypeError("registered Lakehouse operation requires LakehouseSource")
+    resolved = bound.resolve()
+    verified_catalog: list[dict[str, object]] = []
+    for raw_entry in resolved.catalog or ():
+        entry = dict(raw_entry)
+        if str(entry.get("kind", "")).casefold() == "delta":
+            path = entry.get("path")
+            if not isinstance(path, str) or not path:
+                raise ValueError("Lakehouse Delta catalog entry has no path")
+            live = _read_delta_metadata(path)
+            entry["version"] = live["version"]
+            entry["table_id"] = live["table_id"]
+        verified_catalog.append(entry)
+    verified = LakehouseSource(
+        resolved.root,
+        tables=resolved.tables,
+        files=resolved.files,
+        catalog=verified_catalog,
+        max_sources=resolved.max_sources,
+    )
+    return {**bindings, source_id: verified}
 
 
 class OperationPlanError(ValueError):
@@ -164,7 +199,7 @@ def _parameters(
         for name, descriptor in operation.parameter_schema.items()
     }
     filter_columns: list[str] = []
-    for suffix in ("", "_2"):
+    for suffix in ("", "_2", "_3"):
         column_name = f"filter_column{suffix}"
         value_name = f"filter_value{suffix}"
         if column_name not in normalized:
@@ -229,6 +264,8 @@ def _result_rows(
     operation: RegisteredOperation,
 ) -> tuple[dict[str, object], ...]:
     if isinstance(value, Mapping):
+        if value.get("truncated") is True:
+            raise ValueError("operation result was truncated")
         columns = value.get("columns")
         raw_rows = value.get("rows")
         if (
@@ -284,7 +321,7 @@ def _quoted_identifier(value: str) -> str:
 def _bound_path(value: object) -> str:
     path = getattr(value, "path", value)
     try:
-        return str(__import__("os").fspath(path))
+        return str(os.fspath(path))
     except TypeError as exc:
         raise TypeError("registered tabular source must be path-like") from exc
 
@@ -467,6 +504,15 @@ def _execute_lakehouse_preaggregate_join(
             else []
         ),
     ]
+    temporal_tokens = ("date", "month", "quarter", "period", "time", "year")
+    if normalized["scope"] == "latest" and not any(
+        token in key.casefold()
+        for key in join_keys
+        for token in temporal_tokens
+    ):
+        raise OperationPlanError(
+            "latest scope requires a temporal or period join key"
+        )
     left_keys = ", ".join(_quoted_identifier(key) for key in join_keys)
     right_keys = left_keys
     join_predicate = " AND ".join(
@@ -549,9 +595,16 @@ def execute_registered_operation(
     if not isinstance(parameters, Mapping):
         raise TypeError("operation parameters must be a mapping")
     operation = _operation(knowledge, operation_id)
+    source_id = operation.required_sources[0]
+    active_bindings = knowledge.bindings
+    if operation.operation.startswith("lakehouse."):
+        active_bindings = _verified_lakehouse_bindings(
+            knowledge.bindings,
+            source_id,
+        )
     preflight = preflight_knowledge(
         knowledge.package,
-        knowledge.bindings,
+        active_bindings,
         limits=knowledge._limits,
         registry=knowledge._registry,
     )
@@ -569,9 +622,9 @@ def execute_registered_operation(
         raise ValueError(f"operation is not active: {operation.operation_id}")
 
     normalized = _parameters(operation, parameters)
-    source_id = operation.required_sources[0]
+
     started = time.perf_counter()
-    source = knowledge.bindings[source_id]
+    source = active_bindings[source_id]
     profile = next(
         item for item in preflight.package.sources if item.source_id == source_id
     )
@@ -591,6 +644,7 @@ def execute_registered_operation(
             for column_name, value_name in (
                 ("filter_column", "filter_value"),
                 ("filter_column_2", "filter_value_2"),
+                ("filter_column_3", "filter_value_3"),
             )
             if normalized[column_name]
         }

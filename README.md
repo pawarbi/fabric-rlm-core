@@ -158,11 +158,22 @@ Every knowledge-enabled task preflights the current sources before the model is
 called. For a `SemanticModel`, learning also registers one bounded
 `semantic_model.measure.v1` capability from visible measures and columns. The
 RLM may select that operation through a strict scalar JSON plan; the host
-validates the allowlisted measure, group-by, and up to two filters, executes
+validates the allowlisted measure, group-by, and up to three filters, executes
 `SemanticModel.measure(...)`, audits row/column/byte bounds, and gives the model
 only the compact fingerprinted result packet for synthesis. The model never
-supplies arbitrary DAX. Other source families continue through the explicitly
-labelled normal fallback path until their host executors are implemented.
+supplies arbitrary DAX. CSV, Parquet, and Delta profiles also register a
+compiler-owned `tabular.aggregate.v1` operation. Exact Lakehouse Delta catalogs
+register bounded aggregate operations, plus a two-fact operation that
+pre-aggregates each fact at the shared key grain before joining. The model
+selects only typed scalar parameters; it never supplies SQL or file-reader
+expressions. Inexact Lakehouse file catalogs and stale source snapshots fail
+closed rather than entering registered execution.
+
+The development notebook
+`examples/notebooks/development/rlm_knowledge_benchmark_matrix.py` runs seeded,
+cache-disabled cold-versus-learned trials across these paths and records
+correctness, operation selection, audit status, turns, token usage, LM/worker/
+host/wall time, provenance, and drift rejection.
 
 ```python
 from fabric_rlm import FabricLM, FileDestination, LakehouseSource, RLM

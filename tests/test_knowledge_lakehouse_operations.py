@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 
 from fabric_rlm import RLM
-from fabric_rlm.knowledge_execution import execute_registered_operation
+from fabric_rlm.knowledge_execution import (
+    OperationPlanError,
+    execute_registered_operation,
+)
 from fabric_rlm.lakehouse import LakehouseSource
 
 
@@ -103,6 +106,40 @@ def test_lakehouse_catalog_drift_is_rejected_before_query(
         )
 
 
+def test_underlying_delta_version_drift_is_rejected(
+    tmp_path: Path,
+) -> None:
+    deltalake = pytest.importorskip("deltalake")
+    pyarrow = pytest.importorskip("pyarrow")
+    source = _lakehouse(tmp_path)
+    knowledge = RLM.learn(sources={"sales": source})
+    operation = knowledge.package.operations[0]
+    assert source.catalog is not None
+    path = str(source.catalog[0]["path"])
+    deltalake.write_deltalake(
+        path,
+        pyarrow.table(
+            {
+                "order_id": [99],
+                "region": ["Changed"],
+                "amount": [99999.0],
+            }
+        ),
+        mode="overwrite",
+    )
+
+    with pytest.raises(ValueError, match="stale.*sales"):
+        execute_registered_operation(
+            knowledge,
+            operation_id=operation.operation_id,
+            parameters={
+                "catalog_source": "orders",
+                "aggregate": "sum",
+                "measure": "amount",
+            },
+        )
+
+
 def test_preaggregate_join_avoids_multi_fact_fanout(tmp_path: Path) -> None:
     deltalake = pytest.importorskip("deltalake")
     pyarrow = pytest.importorskip("pyarrow")
@@ -182,3 +219,50 @@ def test_preaggregate_join_avoids_multi_fact_fanout(tmp_path: Path) -> None:
     raw_join_right_sum = sum([10, 20, 30]) * 2
     assert raw_join_left_sum == 900
     assert raw_join_right_sum == 120
+
+    with pytest.raises(
+        OperationPlanError,
+        match="latest scope requires a temporal",
+    ):
+        execute_registered_operation(
+            knowledge,
+            operation_id=operation.operation_id,
+            parameters={
+                "left_catalog_source": "indoor",
+                "right_catalog_source": "outdoor",
+                "left_measure": "visits",
+                "right_measure": "visits",
+                "join_key": "visits",
+                "scope": "latest",
+            },
+        )
+
+
+def test_truncated_lakehouse_result_fails_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _lakehouse(tmp_path)
+    knowledge = RLM.learn(sources={"sales": source})
+    operation = knowledge.package.operations[0]
+
+    monkeypatch.setattr(
+        LakehouseSource,
+        "query",
+        lambda *_args, **_kwargs: {
+            "columns": ["value"],
+            "rows": [[30.5]],
+            "truncated": True,
+        },
+    )
+
+    with pytest.raises(ValueError, match="result was truncated"):
+        execute_registered_operation(
+            knowledge,
+            operation_id=operation.operation_id,
+            parameters={
+                "catalog_source": "orders",
+                "aggregate": "sum",
+                "measure": "amount",
+            },
+        )

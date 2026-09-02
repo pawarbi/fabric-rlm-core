@@ -120,6 +120,12 @@ def test_learn_registers_bounded_semantic_model_measure_operation() -> None:
         "Geography[Region]",
         "Sales[Month]",
     )
+    assert operation.parameter_schema["filter_column_3"]["enum"] == (
+        "",
+        "ARR Data[IS_QUARTER]",
+        "Geography[Region]",
+        "Sales[Month]",
+    )
     assert operation.max_output_rows == 100
     assert operation.max_output_columns == 20
 
@@ -200,6 +206,8 @@ def test_executes_registered_measure_with_validated_scalar_parameters() -> None:
             "filter_value": "2025-06",
             "filter_column_2": "ARR Data[IS_QUARTER]",
             "filter_value_2": "1",
+            "filter_column_3": "Geography[Region]",
+            "filter_value_3": "North",
         },
     )
 
@@ -210,6 +218,7 @@ def test_executes_registered_measure_with_validated_scalar_parameters() -> None:
             "filters": {
                 "Sales[Month]": ["2025-06"],
                 "ARR Data[IS_QUARTER]": ["1"],
+                "Geography[Region]": ["North"],
             },
         }
     ]

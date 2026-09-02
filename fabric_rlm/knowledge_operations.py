@@ -7,6 +7,7 @@ import hashlib
 from itertools import combinations
 
 from fabric_rlm.knowledge import RegisteredOperation, SourceProfile
+from fabric_rlm.knowledge_sources import _normalized_field_tokens
 
 
 _MAX_OPERATION_VALUES = 500
@@ -14,6 +15,30 @@ _MAX_METADATA_NAME_LENGTH = 256
 _ANALYTICS_SENSITIVE_TOKENS = frozenset(
     {"email", "phone", "ssn", "socialsecuritynumber"}
 )
+
+
+def _safe_analytics_columns(
+    columns: Mapping[str, object],
+    sensitive_columns: Sequence[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    sensitive = set(sensitive_columns)
+    safe_columns = tuple(
+        sorted(
+            name
+            for name in columns
+            if name not in sensitive
+            and not _ANALYTICS_SENSITIVE_TOKENS.intersection(
+                _normalized_field_tokens(name)
+            )
+        )
+    )
+    numeric_columns = tuple(
+        name
+        for name in safe_columns
+        if isinstance(columns[name], Mapping)
+        and columns[name].get("type") in {"integer", "number"}
+    )
+    return safe_columns, numeric_columns
 
 
 def _records(value: object, family: str) -> list[Mapping[str, object]]:
@@ -96,6 +121,8 @@ def _semantic_measure_operation(
             "filter_value": {"type": "string"},
             "filter_column_2": {"type": "string", "enum": allowed_columns},
             "filter_value_2": {"type": "string"},
+            "filter_column_3": {"type": "string", "enum": allowed_columns},
+            "filter_value_3": {"type": "string"},
         },
         parameter_defaults={
             "groupby": "",
@@ -104,6 +131,8 @@ def _semantic_measure_operation(
             "filter_value": "",
             "filter_column_2": "",
             "filter_value_2": "",
+            "filter_column_3": "",
+            "filter_value_3": "",
         },
         output_schema={
             "result_fingerprint": "string",
@@ -121,21 +150,14 @@ def _semantic_measure_operation(
 def _tabular_aggregate_operation(
     profile: SourceProfile,
 ) -> RegisteredOperation | None:
-    if profile.family not in {"csv", "parquet", "delta"}:
+    if (
+        profile.family not in {"csv", "parquet", "delta"}
+        or profile.diagnostics.get("snapshot_exact") is not True
+    ):
         return None
-    safe_columns = sorted(
-        name
-        for name in profile.schema
-        if name not in set(profile.sensitive_columns)
-        and not _ANALYTICS_SENSITIVE_TOKENS.intersection(
-            name.casefold().replace("-", "_").split("_")
-        )
-    )
-    numeric_columns = sorted(
-        name
-        for name in safe_columns
-        if isinstance(profile.schema[name], Mapping)
-        and profile.schema[name].get("type") in {"integer", "number"}
+    safe_columns, numeric_columns = _safe_analytics_columns(
+        profile.schema,
+        profile.sensitive_columns,
     )
     if not safe_columns:
         return None
@@ -194,19 +216,9 @@ def _lakehouse_aggregate_operations(
         raw_columns = raw_entry.get("columns")
         if not isinstance(raw_columns, Mapping):
             continue
-        safe_columns = sorted(
-            name
-            for name in raw_columns
-            if name not in set(profile.sensitive_columns)
-            and not _ANALYTICS_SENSITIVE_TOKENS.intersection(
-                name.casefold().replace("-", "_").split("_")
-            )
-        )
-        numeric_columns = sorted(
-            name
-            for name in safe_columns
-            if isinstance(raw_columns[name], Mapping)
-            and raw_columns[name].get("type") in {"integer", "number"}
+        safe_columns, numeric_columns = _safe_analytics_columns(
+            raw_columns,
+            profile.sensitive_columns,
         )
         if not safe_columns:
             continue
@@ -292,21 +304,9 @@ def _lakehouse_preaggregate_join_operations(
         raw_columns = raw_entry.get("columns")
         if not isinstance(raw_columns, Mapping):
             continue
-        safe_columns = tuple(
-            sorted(
-                name
-                for name in raw_columns
-                if name not in set(profile.sensitive_columns)
-                and not _ANALYTICS_SENSITIVE_TOKENS.intersection(
-                    name.casefold().replace("-", "_").split("_")
-                )
-            )
-        )
-        numeric_columns = tuple(
-            name
-            for name in safe_columns
-            if isinstance(raw_columns[name], Mapping)
-            and raw_columns[name].get("type") in {"integer", "number"}
+        safe_columns, numeric_columns = _safe_analytics_columns(
+            raw_columns,
+            profile.sensitive_columns,
         )
         if safe_columns and numeric_columns:
             candidates.append((catalog_source, safe_columns, numeric_columns))
