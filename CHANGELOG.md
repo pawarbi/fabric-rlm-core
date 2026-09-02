@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.5.0 — 2026-09-02 — governed knowledge learning and execution
+
+### Added
+
+- **`RLM.learn()` and reusable knowledge packages** — profile supported local
+  files, Parquet data, Fabric Lakehouses, Delta tables, and Power BI Semantic
+  Models into immutable, fingerprinted packages with bounded source metadata.
+- **Registered audited operations** — learned packages can expose typed
+  Semantic Model measures, file aggregates, and Lakehouse queries that execute
+  in the trusted parent with bounded result packets and deterministic audit
+  records.
+- **Persistent knowledge stores** — save and reload packages locally or through
+  OneLake REST transport with integrity validation, source rebinding, and drift
+  preflight checks.
+- **Benchmark and demonstration notebooks** — compare cold and learned
+  execution, persist diagnostics to OneLake, and verify operation selection,
+  audit status, fingerprints, correctness, turns, tokens, and elapsed time.
+
+### Changed
+
+- Knowledge source adapters share generalized profiling, identity, publication,
+  and reload-safe registry contracts.
+- Semantic measure operations support bounded two-dimensional grouping and up
+  to 1,000 result rows while retaining independent column and payload limits.
+- Worker timeout recovery separates control-channel deadlines and warms
+  replacement workers before resuming execution.
+
+### Fixed
+
+- Parent-only `notebookutils` credential configuration is no longer serialized
+  into isolated workers, restoring cold Semantic Model access through SemPy's
+  established worker authentication path.
+- Fabric Lakehouse schema discovery falls back from Spark to delta-rs and then
+  to bounded Delta transaction-log metadata reads when notebook runtimes lack
+  an active Spark session or delta-rs cannot read OneLake metadata.
+- DSPy cache validation recognizes the public `lm.cache` setting.
+- OneLake cleanup failures, malformed knowledge packages, source drift, and
+  unauthorized or unbounded operations fail closed instead of producing
+  success-shaped results.
+
+### Fabric verification
+
+- A live Semantic Model release gate returned the same nonzero ARR value through
+  direct parent execution, a cold worker task, and an audited learned operation.
+- The registered-operation benchmark completed in Fabric with persistent
+  OneLake trial logs, 100% operation-selection accuracy, 100% audit pass rate,
+  and drift rejection for Semantic Model, Lakehouse, and CSV sources.
+
 ## 0.4.3 — 2026-08-31 — portable semantic insights and temporal evidence
 
 ### Added
