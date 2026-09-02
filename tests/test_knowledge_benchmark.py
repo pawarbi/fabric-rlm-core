@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import pytest
 
 from fabric_rlm.knowledge_benchmark import (
+    KnowledgeBenchmarkPlanValidators,
+    KnowledgeBenchmarkSelectedPlan,
     KnowledgeBenchmarkTask,
     run_knowledge_benchmark,
 )
@@ -15,6 +17,8 @@ from fabric_rlm.trajectory import Trajectory, TurnRecord
 @dataclass
 class FakeLM:
     kwargs: dict
+    model: str = "azure/gpt-5"
+    history: list[dict] | None = None
 
 
 def _result(
@@ -22,6 +26,8 @@ def _result(
     answer: float,
     turns: int,
     metadata: dict | None = None,
+    cached_tokens: int | None = None,
+    analysis: str | None = None,
 ) -> RLMResult:
     trajectory = Trajectory(metadata=dict(metadata or {}))
     for turn in range(1, turns + 1):
@@ -42,11 +48,15 @@ def _result(
         )
     return RLMResult(
         submitted=True,
-        payload={"answer": answer},
+        payload={
+            "answer": answer,
+            **({"analysis": analysis} if analysis is not None else {}),
+        },
         trajectory=trajectory,
         final_state={},
         total_prompt_tokens=100 * turns,
         total_completion_tokens=20 * turns,
+        total_cached_tokens=cached_tokens,
         total_lm_seconds=0.5 * turns,
         total_worker_seconds=0.25 * turns,
         max_turns=turns,
@@ -58,7 +68,7 @@ def test_repeated_benchmark_is_seeded_randomized_and_disables_cache() -> None:
         task_id="revenue",
         question="What was total revenue?",
         expected_operation_id="sales.semantic_model.measure.v1",
-        is_correct=lambda payload: payload == {"answer": 30.5},
+        is_correct=lambda payload: bool(payload and payload.get("answer") == 30.5),
     )
     lm_calls = []
     run_calls = []
@@ -121,7 +131,7 @@ def test_benchmark_accepts_lm_with_public_cache_attribute() -> None:
         task_id="revenue",
         question="What was total revenue?",
         expected_operation_id="sales.semantic_model.measure.v1",
-        is_correct=lambda payload: payload == {"answer": 30.5},
+        is_correct=lambda payload: bool(payload and payload.get("answer") == 30.5),
     )
 
     @dataclass
@@ -140,29 +150,63 @@ def test_benchmark_accepts_lm_with_public_cache_attribute() -> None:
     assert len(report.trials) == 2
 
 
-def test_benchmark_records_correctness_selection_audit_and_performance() -> None:
+def test_benchmark_records_stage_correctness_and_complete_accounting() -> None:
+    def parameters(plan: KnowledgeBenchmarkSelectedPlan) -> dict:
+        return dict(plan.parameters)
+
     task = KnowledgeBenchmarkTask(
         task_id="revenue",
         question="What was total revenue?",
         expected_operation_id="sales.semantic_model.measure.v1",
-        is_correct=lambda payload: payload == {"answer": 30.5},
+        is_correct=lambda payload: bool(payload and payload.get("answer") == 30.5),
+        plan_validators=KnowledgeBenchmarkPlanValidators(
+            measure=lambda plan: parameters(plan).get("measure") == "Net Revenue",
+            time_policy=lambda plan: parameters(plan).get("period") == "2025-06",
+            groupby=lambda plan: parameters(plan).get("groupby")
+            == "Geography[Region]",
+            filter_columns=lambda plan: parameters(plan).get("filter_column")
+            == "Sales[Month]",
+            filter_values=lambda plan: parameters(plan).get("filter_value")
+            == "2025-07",
+            full_operation_plan=lambda plan: (
+                plan.operation_id == "sales.semantic_model.measure.v1"
+                and parameters(plan).get("filter_value") == "2025-07"
+            ),
+        ),
+        is_commentary_valid=lambda payload: bool(
+            payload
+            and payload.get("analysis")
+            == "Revenue was calculated from the governed result."
+        ),
     )
 
     def make_lm(**_kwargs):
-        return FakeLM(kwargs={"cache": False})
+        return FakeLM(kwargs={"cache": False}, history=[])
 
-    def run(_task, arm, _lm):
+    def run(_task, arm, lm):
+        assert lm.history is not None
+        lm.history.extend([{"cost": 0.02}, {"cost": 0.03}])
         if arm == "cold":
-            return _result(answer=30.5, turns=4)
+            return _result(answer=30.5, turns=4, cached_tokens=120)
         return _result(
             answer=30.5,
             turns=1,
+            cached_tokens=40,
+            analysis="Revenue was calculated from the governed result.",
             metadata={
                 "knowledge_fingerprint": "package-fingerprint",
                 "knowledge_mode": "registered_operation",
                 "operation_id": "sales.semantic_model.measure.v1",
+                "operation_parameters": {
+                    "measure": "Net Revenue",
+                    "period": "2025-06",
+                    "groupby": "Geography[Region]",
+                    "filter_column": "Sales[Month]",
+                    "filter_value": "2025-06",
+                },
                 "operation_audit_status": "passed",
                 "operation_host_seconds": 0.2,
+                "deterministic_result_binding_correct": True,
             },
         )
 
@@ -175,25 +219,163 @@ def test_benchmark_records_correctness_selection_audit_and_performance() -> None
     )
     rows = {trial.arm: trial.to_dict() for trial in report.trials}
 
-    assert rows["cold"]["numeric_correct"] is True
-    assert rows["cold"]["operation_selection_correct"] is None
-    assert rows["learned"]["numeric_correct"] is True
-    assert rows["learned"]["operation_selection_correct"] is True
-    assert rows["learned"]["audit_passed"] is True
+    assert rows["cold"]["final_answer_correct"] is True
+    assert rows["cold"]["operation_id_correct"] is None
+    assert rows["learned"]["final_answer_correct"] is True
+    assert rows["learned"]["operation_id_correct"] is True
+    assert rows["learned"]["measure_correct"] is True
+    assert rows["learned"]["time_policy_correct"] is True
+    assert rows["learned"]["groupby_correct"] is True
+    assert rows["learned"]["filter_columns_correct"] is True
+    assert rows["learned"]["filter_values_correct"] is False
+    assert rows["learned"]["full_operation_plan_correct"] is False
+    assert rows["learned"]["host_execution_passed"] is True
+    assert rows["learned"]["host_audit_passed"] is True
+    assert rows["learned"]["deterministic_result_binding_correct"] is True
+    assert rows["learned"]["LLM_commentary_valid"] is True
     assert rows["learned"]["turns"] == 1
     assert rows["learned"]["prompt_tokens"] == 100
     assert rows["learned"]["completion_tokens"] == 20
+    assert rows["learned"]["cached_prompt_tokens"] == 40
+    assert rows["learned"]["uncached_prompt_tokens"] == 60
     assert rows["learned"]["lm_seconds"] == 0.5
+    assert rows["learned"]["provider"] == "azure"
+    assert rows["learned"]["model"] == "gpt-5"
+    assert rows["learned"]["provider_model_cost"] == 0.05
     assert rows["learned"]["worker_seconds"] == 0.25
     assert rows["learned"]["host_seconds"] == 0.2
     assert rows["learned"]["knowledge_fingerprint"] == "package-fingerprint"
 
     summary = report.summary()
-    assert summary["cold"]["numeric_correct_rate"] == 1.0
+    assert summary["cold"]["final_answer_correct_rate"] == 1.0
+    assert summary["learned"]["final_answer_correct_rate"] == 1.0
+    assert summary["learned"]["operation_id_correct_rate"] == 1.0
+    assert summary["learned"]["filter_values_correct_rate"] == 0.0
+    assert summary["learned"]["host_audit_passed_rate"] == 1.0
+    assert summary["learned"]["LLM_commentary_valid_rate"] == 1.0
+    assert summary["learned"]["mean_turns"] == 1.0
+    assert summary["learned"]["mean_cached_prompt_tokens"] == 40.0
+    assert summary["learned"]["mean_uncached_prompt_tokens"] == 60.0
+    assert summary["learned"]["mean_provider_model_cost"] == 0.05
     assert summary["learned"]["numeric_correct_rate"] == 1.0
     assert summary["learned"]["operation_selection_accuracy"] == 1.0
     assert summary["learned"]["audit_pass_rate"] == 1.0
-    assert summary["learned"]["mean_turns"] == 1.0
+    assert rows["learned"]["numeric_correct"] is True
+    assert rows["learned"]["operation_selection_correct"] is True
+    assert rows["learned"]["audit_passed"] is True
+
+
+def test_stage_metrics_ignore_untrusted_synthetic_booleans() -> None:
+    task = KnowledgeBenchmarkTask(
+        task_id="revenue",
+        question="What was total revenue?",
+        expected_operation_id="sales.semantic_model.measure.v1",
+        is_correct=lambda _payload: True,
+        plan_validators=KnowledgeBenchmarkPlanValidators(
+            measure=lambda _plan: True,
+            full_operation_plan=lambda _plan: True,
+        ),
+    )
+
+    report = run_knowledge_benchmark(
+        tasks=[task],
+        repetitions=1,
+        seed=0,
+        make_lm=lambda **_kwargs: FakeLM(kwargs={"cache": False}),
+        run=lambda _task, arm, _lm: _result(
+            answer=30.5,
+            turns=1,
+            metadata={
+                "knowledge_mode": "registered_operation",
+                "operation_id": "sales.semantic_model.measure.v1",
+                "measure_correct": True,
+                "full_operation_plan_correct": True,
+            }
+            if arm == "learned"
+            else {},
+        ),
+    )
+
+    learned = next(trial for trial in report.trials if trial.arm == "learned")
+    assert learned.measure_correct is None
+    assert learned.full_operation_plan_correct is None
+
+
+@pytest.mark.parametrize(
+    ("audit_status", "expected"),
+    [
+        (None, None),
+        ("unknown", None),
+        ("passed", True),
+        ("failed", False),
+    ],
+)
+def test_audit_status_only_reports_explicit_evidence(
+    audit_status: str | None,
+    expected: bool | None,
+) -> None:
+    task = KnowledgeBenchmarkTask(
+        task_id="revenue",
+        question="What was total revenue?",
+        expected_operation_id="sales.semantic_model.measure.v1",
+        is_correct=lambda _payload: True,
+    )
+
+    report = run_knowledge_benchmark(
+        tasks=[task],
+        repetitions=1,
+        seed=0,
+        make_lm=lambda **_kwargs: FakeLM(kwargs={"cache": False}),
+        run=lambda _task, arm, _lm: _result(
+            answer=30.5,
+            turns=1,
+            metadata={
+                "operation_audit_status": audit_status,
+            }
+            if arm == "learned" and audit_status is not None
+            else {},
+        ),
+    )
+
+    learned = next(trial for trial in report.trials if trial.arm == "learned")
+    assert learned.host_audit_passed is expected
+
+
+def test_commentary_validity_requires_a_task_validator() -> None:
+    without_validator = KnowledgeBenchmarkTask(
+        task_id="unvalidated",
+        question="What was total revenue?",
+        expected_operation_id="sales.semantic_model.measure.v1",
+        is_correct=lambda _payload: True,
+    )
+    with_validator = KnowledgeBenchmarkTask(
+        task_id="validated",
+        question="What was total revenue?",
+        expected_operation_id="sales.semantic_model.measure.v1",
+        is_correct=lambda _payload: True,
+        is_commentary_valid=lambda payload: bool(
+            payload and payload.get("analysis") == "grounded"
+        ),
+    )
+
+    report = run_knowledge_benchmark(
+        tasks=[without_validator, with_validator],
+        repetitions=1,
+        seed=0,
+        make_lm=lambda **_kwargs: FakeLM(kwargs={"cache": False}),
+        run=lambda task, _arm, _lm: _result(
+            answer=30.5,
+            turns=1,
+            analysis="grounded" if task.task_id == "validated" else "nonblank",
+        ),
+    )
+
+    by_task = {
+        trial.task_id: trial.LLM_commentary_valid
+        for trial in report.trials
+        if trial.arm == "learned"
+    }
+    assert by_task == {"unvalidated": None, "validated": True}
 
 
 def test_benchmark_rejects_non_natural_questions_and_cache_enabled_lms() -> None:

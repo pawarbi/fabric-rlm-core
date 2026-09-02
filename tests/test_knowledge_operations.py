@@ -5,6 +5,11 @@ from pathlib import Path
 import pytest
 
 from fabric_rlm import RLM, load_knowledge
+from fabric_rlm.knowledge_benchmark import (
+    KnowledgeBenchmarkPlanValidators,
+    KnowledgeBenchmarkTask,
+    run_knowledge_benchmark,
+)
 from fabric_rlm.knowledge_execution import (
     OperationPlan,
     OperationPlanFallback,
@@ -421,6 +426,17 @@ def test_task_selects_executes_and_synthesizes_registered_measure() -> None:
     metadata = result.trajectory.metadata
     assert metadata["knowledge_mode"] == "registered_operation"
     assert metadata["operation_id"] == "sales.semantic_model.measure.v1"
+    assert metadata["operation_parameters"] == {
+        "measure": "Net Revenue",
+        "groupby": "Geography[Region]",
+        "groupby_2": "Sales[Month]",
+        "filter_column": "Sales[Month]",
+        "filter_value": "2025-06",
+        "filter_column_2": "ARR Data[IS_QUARTER]",
+        "filter_value_2": "1",
+        "filter_column_3": "",
+        "filter_value_3": "",
+    }
     assert metadata["operation_version"] == "1"
     assert metadata["operation_audit_status"] == "passed"
     assert len(metadata["operation_fingerprint"]) == 64
@@ -431,6 +447,84 @@ def test_task_selects_executes_and_synthesizes_registered_measure() -> None:
     )
     assert "knowledge_result" in synthesis_prompt
     assert "SemanticModel dataset=" not in synthesis_prompt
+
+
+def test_benchmark_scores_host_validated_registered_operation_plan() -> None:
+    knowledge = RLM.learn(sources={"sales": FakeSemanticModel()})
+    task = KnowledgeBenchmarkTask(
+        task_id="regional-revenue",
+        question="What was net revenue by region for June 2025?",
+        expected_operation_id="sales.semantic_model.measure.v1",
+        is_correct=lambda payload: bool(payload and payload.get("answer") == 200.0),
+        plan_validators=KnowledgeBenchmarkPlanValidators(
+            measure=lambda plan: plan.parameters.get("measure") == "Net Revenue",
+            groupby=lambda plan: plan.parameters.get("groupby")
+            == "Geography[Region]",
+            filter_columns=lambda plan: plan.parameters.get("filter_column")
+            == "Sales[Month]",
+            filter_values=lambda plan: plan.parameters.get("filter_value")
+            == "2025-06",
+            full_operation_plan=lambda plan: (
+                plan.operation_id == "sales.semantic_model.measure.v1"
+                and plan.parameters.get("measure") == "Net Revenue"
+                and plan.parameters.get("groupby") == "Geography[Region]"
+                and plan.parameters.get("filter_column") == "Sales[Month]"
+                and plan.parameters.get("filter_value") == "2025-06"
+            ),
+        ),
+    )
+
+    def make_lm(*, arm, **_kwargs):
+        if arm == "cold":
+            lm = SequenceLM(["```python\nSUBMIT(answer=200.0)\n```"])
+        else:
+            lm = SequenceLM(
+                [
+                    (
+                        '{"operation_id":"sales.semantic_model.measure.v1",'
+                        '"parameters":{"measure":"Net Revenue",'
+                        '"groupby":"Geography[Region]",'
+                        '"filter_column":"Sales[Month]",'
+                        '"filter_value":"2025-06"}}'
+                    ),
+                    (
+                        "```python\n"
+                        "SUBMIT(answer=sum(row['[Net Revenue]'] "
+                        "for row in knowledge_result['rows']))\n"
+                        "```"
+                    ),
+                ]
+            )
+        lm.kwargs = {"cache": False}
+        return lm
+
+    def run(_task, arm, lm):
+        configured = RLM.task(
+            task.question,
+            outputs={"answer": float},
+            lm=lm,
+            max_turns=1,
+            timeout=5,
+            **({"knowledge": knowledge} if arm == "learned" else {}),
+        )
+        return configured.run()
+
+    report = run_knowledge_benchmark(
+        tasks=[task],
+        repetitions=1,
+        seed=0,
+        make_lm=make_lm,
+        run=run,
+    )
+
+    learned = next(trial for trial in report.trials if trial.arm == "learned")
+    assert learned.operation_id_correct is True
+    assert learned.measure_correct is True
+    assert learned.time_policy_correct is None
+    assert learned.groupby_correct is True
+    assert learned.filter_columns_correct is True
+    assert learned.filter_values_correct is True
+    assert learned.full_operation_plan_correct is True
 
 
 def test_successful_operation_preserves_explicit_task_inputs() -> None:
@@ -644,6 +738,10 @@ def test_operation_selection_usage_is_included_in_result_totals() -> None:
     assert result.total_completion_tokens == 12
     assert result.total_cached_tokens == 8
     assert result.total_reasoning_tokens == 3
+    assert result.total_lm_seconds == pytest.approx(
+        result.trajectory.metadata["operation_selection_lm_seconds"]
+        + sum(turn.lm_call_seconds or 0.0 for turn in result.turns)
+    )
 
 
 def test_parse_operation_plan_accepts_exact_plan_and_fallback_shapes() -> None:

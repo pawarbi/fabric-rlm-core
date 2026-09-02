@@ -1348,6 +1348,7 @@ class RLM:
             {
                 "knowledge_mode": "registered_operation",
                 "operation_id": execution.operation_id,
+                "operation_parameters": dict(execution.parameters),
                 "operation_version": execution.operation_version,
                 "operation_fingerprint": execution.operation_fingerprint,
                 "operation_result_fingerprint": execution.result_fingerprint,

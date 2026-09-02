@@ -26,7 +26,7 @@ import base64
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 _SEMPY_MISSING = (
     "sempy is not importable, so a SemanticModel cannot be queried here. "
@@ -175,6 +175,12 @@ class SemanticModel:
         compare=False,
     )
     validate: bool | str = field(default="auto", repr=False, compare=False)
+    _source_access_failed: bool = field(
+        default=False,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if not str(self.dataset).strip():
@@ -208,10 +214,20 @@ class SemanticModel:
             kwargs["credential"] = _NotebookUtilsPbiCredential()
         return kwargs
 
+    def _source_call(self, call: Callable[[], Any]) -> Any:
+        try:
+            return call()
+        except Exception:
+            object.__setattr__(self, "_source_access_failed", True)
+            raise
+
+    def _rlm_source_access_failed(self) -> bool:
+        return self._source_access_failed
+
     def check(self) -> "SemanticModel":
         """Confirm the model is reachable. Raises with a usable message."""
         try:
-            self._fabric.list_tables(self.dataset, **self._kw)
+            self.tables()
         except RuntimeError:
             raise
         except Exception as exc:
@@ -227,19 +243,27 @@ class SemanticModel:
 
     def tables(self) -> Any:
         """Tables in the model, as a DataFrame."""
-        return self._fabric.list_tables(self.dataset, **self._kw)
+        return self._source_call(
+            lambda: self._fabric.list_tables(self.dataset, **self._kw)
+        )
 
     def columns(self) -> Any:
         """Columns in the model, as a DataFrame."""
-        return self._fabric.list_columns(self.dataset, **self._kw)
+        return self._source_call(
+            lambda: self._fabric.list_columns(self.dataset, **self._kw)
+        )
 
     def measures(self) -> Any:
         """Measures, with their DAX expressions and descriptions."""
-        return self._fabric.list_measures(self.dataset, **self._kw)
+        return self._source_call(
+            lambda: self._fabric.list_measures(self.dataset, **self._kw)
+        )
 
     def relationships(self) -> Any:
         """Relationships between tables, as a DataFrame."""
-        return self._fabric.list_relationships(self.dataset, **self._kw)
+        return self._source_call(
+            lambda: self._fabric.list_relationships(self.dataset, **self._kw)
+        )
 
     def metadata(self) -> SemanticModelMetadata:
         """Return ordinary pandas metadata frames with stable column names.
@@ -327,7 +351,13 @@ class SemanticModel:
         Set ``normalize_columns`` to return an ordinary pandas DataFrame with
         stable snake-case names instead of SemPy's bracketed result columns.
         """
-        result = self._fabric.evaluate_dax(self.dataset, query, **self._kw)
+        result = self._source_call(
+            lambda: self._fabric.evaluate_dax(
+                self.dataset,
+                query,
+                **self._kw,
+            )
+        )
         return _plain_frame(result) if normalize_columns else result
 
     def measure(
@@ -346,14 +376,26 @@ class SemanticModel:
             kwargs["groupby_columns"] = list(groupby)
         if filters:
             kwargs["filters"] = dict(filters)
-        return self._fabric.evaluate_measure(self.dataset, measure, **kwargs)
+        return self._source_call(
+            lambda: self._fabric.evaluate_measure(
+                self.dataset,
+                measure,
+                **kwargs,
+            )
+        )
 
     def read_table(self, table: str, num_rows: int | None = None) -> Any:
         """Read a table. Use for small dimension tables only, never a fact table."""
         kwargs: dict[str, Any] = dict(self._kw)
         if num_rows is not None:
             kwargs["num_rows"] = num_rows
-        return self._fabric.read_table(self.dataset, table, **kwargs)
+        return self._source_call(
+            lambda: self._fabric.read_table(
+                self.dataset,
+                table,
+                **kwargs,
+            )
+        )
 
     # -- presentation -----------------------------------------------------
 

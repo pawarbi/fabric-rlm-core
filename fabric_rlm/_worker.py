@@ -50,6 +50,7 @@ from .artifacts import (
     decode_from_worker_wire,
 )
 from .lakehouse import _configure_host_query_transport
+from .semantic_model import SemanticModel
 from .serializers import (
     DEFAULT_INJECTED_NAMES,
     DEFAULT_MAX_SUBMIT_BYTES,
@@ -97,6 +98,7 @@ def activate_skill(name: str) -> str:
 _namespace: dict[str, Any] = {}
 _lm_spec: Any = None
 _lm_instance: Any = None
+_bound_semantic_models: list[SemanticModel] = []
 
 
 class _SubmitSignal(BaseException):
@@ -118,6 +120,12 @@ def SUBMIT(*args: Any, **kwargs: Any) -> None:
     ``SUBMIT(a=a_val, b=b_val)`` (keyword), or any mix.
     Without registered output_fields, falls back to kwargs-only.
     """
+    if any(model._rlm_source_access_failed() for model in _bound_semantic_models):
+        raise RuntimeError(
+            "Cannot SUBMIT a successful result because a bound SemanticModel "
+            "source access or query failed during this run."
+        )
+
     if not _registered_output_fields:
         if args:
             raise TypeError(
@@ -148,7 +156,9 @@ def SUBMIT(*args: Any, **kwargs: Any) -> None:
 
 
 def _install_runtime_api() -> None:
+    global _bound_semantic_models
     _namespace.clear()
+    _bound_semantic_models = []
     _namespace.update(
         {
             "File": File,
@@ -664,8 +674,28 @@ def _execute(
         }
 
 
+def _collect_semantic_models(value: Any) -> list[SemanticModel]:
+    if isinstance(value, SemanticModel):
+        return [value]
+    if isinstance(value, dict):
+        return [
+            model
+            for item in value.values()
+            for model in _collect_semantic_models(item)
+        ]
+    if isinstance(value, (list, tuple)):
+        return [
+            model
+            for item in value
+            for model in _collect_semantic_models(item)
+        ]
+    return []
+
+
 def _set_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    global _bound_semantic_models
     decoded = {name: decode_from_worker_wire(value) for name, value in inputs.items()}
+    _bound_semantic_models = _collect_semantic_models(decoded)
     _namespace.update(decoded)
     return {"ok": True, "state": _state()}
 
