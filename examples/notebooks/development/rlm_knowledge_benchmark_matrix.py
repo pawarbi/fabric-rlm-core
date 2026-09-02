@@ -231,13 +231,11 @@ print(
 
 # CELL ********************
 
-lakehouse = LakehouseSource(LAKEHOUSE_ROOT).resolve()
-orders_entry = next(
-    entry
-    for entry in lakehouse.catalog or ()
-    if str(entry["name"]).casefold().endswith("knowledge_validation_orders")
-)
-orders_packet = lakehouse.query(
+orders_lakehouse = LakehouseSource(
+    f"{LAKEHOUSE_ROOT}/Tables/knowledge_validation_orders"
+).resolve()
+orders_entry = orders_lakehouse.catalog[0]
+orders_packet = orders_lakehouse.query(
     "SELECT * FROM orders",
     sources={"orders": str(orders_entry["name"])},
     max_rows=100,
@@ -245,10 +243,6 @@ orders_packet = lakehouse.query(
 orders_frame = pd.DataFrame(
     orders_packet["rows"],
     columns=orders_packet["columns"],
-)
-orders_lakehouse = LakehouseSource(
-    LAKEHOUSE_ROOT,
-    catalog=[orders_entry],
 )
 
 def pick_column(columns, *tokens):
