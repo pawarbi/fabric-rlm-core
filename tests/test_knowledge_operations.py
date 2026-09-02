@@ -102,6 +102,12 @@ def test_learn_registers_bounded_semantic_model_measure_operation() -> None:
         "Geography[Region]",
         "Sales[Month]",
     )
+    assert operation.parameter_schema["groupby_2"]["enum"] == (
+        "",
+        "ARR Data[IS_QUARTER]",
+        "Geography[Region]",
+        "Sales[Month]",
+    )
     assert operation.parameter_schema["filter_column"]["enum"] == (
         "",
         "ARR Data[IS_QUARTER]",
@@ -186,6 +192,7 @@ def test_executes_registered_measure_with_validated_scalar_parameters() -> None:
         parameters={
             "measure": "Net Revenue",
             "groupby": "Geography[Region]",
+            "groupby_2": "Sales[Month]",
             "filter_column": "Sales[Month]",
             "filter_value": "2025-06",
             "filter_column_2": "ARR Data[IS_QUARTER]",
@@ -196,7 +203,7 @@ def test_executes_registered_measure_with_validated_scalar_parameters() -> None:
     assert model.measure_calls == [
         {
             "measure": "Net Revenue",
-            "groupby": ["Geography[Region]"],
+            "groupby": ["Geography[Region]", "Sales[Month]"],
             "filters": {
                 "Sales[Month]": ["2025-06"],
                 "ARR Data[IS_QUARTER]": ["1"],
@@ -229,6 +236,14 @@ def test_executes_registered_measure_with_validated_scalar_parameters() -> None:
                 "groupby": "Geography[Country]",
             },
             "groupby.*allowed",
+        ),
+        (
+            {
+                "measure": "Net Revenue",
+                "groupby": "Geography[Region]",
+                "groupby_2": "Geography[Region]",
+            },
+            "grouping dimensions must not contain duplicates",
         ),
         (
             {
@@ -357,6 +372,7 @@ def test_task_selects_executes_and_synthesizes_registered_measure() -> None:
                 '{"operation_id":"sales.semantic_model.measure.v1",'
                 '"parameters":{"measure":"Net Revenue",'
                 '"groupby":"Geography[Region]",'
+                '"groupby_2":"Sales[Month]",'
                 '"filter_column":"Sales[Month]",'
                 '"filter_value":"2025-06",'
                 '"filter_column_2":"ARR Data[IS_QUARTER]",'
@@ -384,7 +400,7 @@ def test_task_selects_executes_and_synthesizes_registered_measure() -> None:
     assert lm.calls == 2
     assert model.measure_calls[-1] == {
         "measure": "Net Revenue",
-        "groupby": ["Geography[Region]"],
+        "groupby": ["Geography[Region]", "Sales[Month]"],
         "filters": {
             "Sales[Month]": ["2025-06"],
             "ARR Data[IS_QUARTER]": ["1"],

@@ -171,6 +171,15 @@ def _parameters(
             filter_columns.append(str(normalized[column_name]))
     if len(set(filter_columns)) != len(filter_columns):
         raise OperationPlanError("filter columns must not contain duplicates")
+    grouping_dimensions = [
+        str(normalized[name])
+        for name in ("groupby", "groupby_2")
+        if normalized[name]
+    ]
+    if len(set(grouping_dimensions)) != len(grouping_dimensions):
+        raise OperationPlanError(
+            "grouping dimensions must not contain duplicates"
+        )
     return normalized
 
 
@@ -290,7 +299,11 @@ def execute_registered_operation(
     measure = getattr(model, "measure", None)
     if not callable(measure):
         raise TypeError("registered semantic model source cannot evaluate measures")
-    groupby_value = str(normalized["groupby"])
+    groupby = [
+        str(normalized[name])
+        for name in ("groupby", "groupby_2")
+        if normalized[name]
+    ]
     filters = {
         str(normalized[column_name]): [str(normalized[value_name])]
         for column_name, value_name in (
@@ -303,7 +316,7 @@ def execute_registered_operation(
     started = time.perf_counter()
     raw_result = measure(
         str(normalized["measure"]),
-        groupby=[groupby_value] if groupby_value else None,
+        groupby=groupby or None,
         filters=filters or None,
     )
     elapsed_seconds = time.perf_counter() - started

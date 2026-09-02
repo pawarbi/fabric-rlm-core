@@ -86,6 +86,7 @@ def _semantic_measure_operation(
         parameter_schema={
             "measure": {"type": "string", "enum": measures},
             "groupby": {"type": "string", "enum": allowed_columns},
+            "groupby_2": {"type": "string", "enum": allowed_columns},
             "filter_column": {"type": "string", "enum": allowed_columns},
             "filter_value": {"type": "string"},
             "filter_column_2": {"type": "string", "enum": allowed_columns},
@@ -93,6 +94,7 @@ def _semantic_measure_operation(
         },
         parameter_defaults={
             "groupby": "",
+            "groupby_2": "",
             "filter_column": "",
             "filter_value": "",
             "filter_column_2": "",
