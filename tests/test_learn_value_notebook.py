@@ -23,6 +23,7 @@ def test_user_facing_learn_notebook_compares_the_same_semantic_question() -> Non
     assert "knowledge=knowledge" in source
     assert source.count("QUESTION,") >= 2
     assert source.count("cache=False") >= 2
+    assert 'assert is_correct(cold_result)' in source
     assert "operation_audit_status" in source
     assert "operation_result_fingerprint" in source
     assert "mssparkutils" not in source

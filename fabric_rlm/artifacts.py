@@ -716,17 +716,12 @@ def encode_for_worker(value: Any) -> Any:
             }
         }
     if isinstance(value, SemanticModel):
-        # Only the coordinates cross the wire. The worker rebuilds a live
-        # handle, and re-validating there would repeat a network call the
-        # parent already made.
+        # Only the coordinates cross the wire. Explicit notebook credentials
+        # belong to the parent runtime; the worker uses SemPy's established
+        # authentication path and does not revalidate the handle.
         return {"__fabric_rlm_semantic_model__": {
             "dataset": value.dataset,
             "workspace": value.workspace,
-            "credential_provider": getattr(
-                value,
-                "credential_provider",
-                None,
-            ),
         }}
     if isinstance(value, LakehouseSource):
         return {

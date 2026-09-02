@@ -118,8 +118,8 @@ def no_sempy(monkeypatch):
 # -- the two things that matter -------------------------------------------
 
 
-def test_survives_the_trip_to_the_worker():
-    """The parent holds a validated handle; the worker must rebuild a usable one."""
+def test_semantic_model_worker_wire_drops_parent_notebook_credential_provider():
+    """The worker must use SemPy's established authentication path."""
     model = SemanticModel(
         "ARR Model SF (79)",
         workspace="Analytics",
@@ -135,7 +135,7 @@ def test_survives_the_trip_to_the_worker():
     assert isinstance(back, SemanticModel)
     assert back.dataset == "ARR Model SF (79)"
     assert back.workspace == "Analytics"
-    assert back.credential_provider == "notebookutils"
+    assert back.credential_provider is None
     assert back == model
 
 

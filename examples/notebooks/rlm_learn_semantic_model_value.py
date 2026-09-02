@@ -267,6 +267,9 @@ comparison = pd.DataFrame(
 display(comparison)
 
 learned_metadata = learned_result.trajectory.metadata
+assert cold_result.submitted, "The cold SemanticModel task did not submit."
+assert answer_value(cold_result) != 0.0, "The cold task returned a placeholder zero."
+assert is_correct(cold_result), "The cold answer did not match the trusted value."
 assert is_correct(learned_result), "The learned answer did not match the trusted value."
 assert learned_metadata.get("knowledge_mode") == "registered_operation"
 assert learned_metadata.get("operation_audit_status") == "passed"
