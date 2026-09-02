@@ -73,3 +73,5 @@ def test_benchmark_persists_failures_before_results_are_written() -> None:
     assert 'phase="trial"' in source
     assert "task_id=task.task_id" in source
     assert "arm=arm" in source
+    assert 'phase="trial_completed"' in source
+    assert "outputs=result.outputs" in source

@@ -751,13 +751,22 @@ def run_task(task, arm, lm):
         if arm == "learned"
         else {"inputs": config["inputs"]}
     )
-    return RLM.task(
+    result = RLM.task(
         task.question,
         outputs=config["outputs"],
         lm=lm,
         max_turns=10,
         **source_argument,
     ).run()
+    persist_run_log(
+        "running",
+        phase="trial_completed",
+        task_id=task.task_id,
+        arm=arm,
+        submitted=result.submitted,
+        outputs=result.outputs,
+    )
+    return result
 
 persist_run_log("running", phase="benchmark")
 report = run_knowledge_benchmark(
