@@ -224,6 +224,11 @@ def test_notebookutils_credential_fetches_pbi_token(
 ) -> None:
     tokens: list[str] = []
 
+    class AccessToken:
+        def __init__(self, token: str, expires_on: int) -> None:
+            self.token = token
+            self.expires_on = expires_on
+
     class Credentials:
         @staticmethod
         def getToken(resource):
@@ -236,7 +241,20 @@ def test_notebookutils_credential_fetches_pbi_token(
 
     notebookutils = types.ModuleType("notebookutils")
     notebookutils.credentials = Credentials()
+    azure = types.ModuleType("azure")
+    azure_core = types.ModuleType("azure.core")
+    azure_credentials = types.ModuleType("azure.core.credentials")
+    azure_credentials.AccessToken = AccessToken
+    azure.core = azure_core
+    azure_core.credentials = azure_credentials
     monkeypatch.setitem(sys.modules, "notebookutils", notebookutils)
+    monkeypatch.setitem(sys.modules, "azure", azure)
+    monkeypatch.setitem(sys.modules, "azure.core", azure_core)
+    monkeypatch.setitem(
+        sys.modules,
+        "azure.core.credentials",
+        azure_credentials,
+    )
 
     model = SemanticModel(
         "D",
