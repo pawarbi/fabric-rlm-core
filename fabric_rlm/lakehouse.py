@@ -27,6 +27,8 @@ _MAX_QUERY_RESULT_BYTES = 5 * 1024 * 1024
 _QUERY_FETCH_BATCH_ROWS = 1
 _QUERY_MEMORY_LIMIT = "256MB"
 _QUERY_TIMEOUT_SECONDS = 30.0
+_MAX_DELTA_LOG_BYTES = 4 * 1024 * 1024
+_MAX_DELTA_LOG_FILES = 1_000
 _SAFE_ALIAS = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _UNSAFE_SCALAR_FUNCTION = re.compile(
     r"^(?:"
@@ -867,6 +869,68 @@ def _read_spark_delta_metadata(spark: Any, path: str) -> dict[str, Any]:
     }
 
 
+def _read_delta_log_metadata(path: str) -> dict[str, Any]:
+    delta_log = f"{path}/_delta_log"
+    version_files = []
+    for item in _list(_get_fs(), delta_log):
+        match = re.fullmatch(r"(\d{20})\.json", item.name)
+        if not item.isDir and match is not None:
+            version_files.append((int(match.group(1)), item.path))
+    if not version_files:
+        raise LakehouseDiscoveryError(
+            "Delta transaction log contains no JSON commit files."
+        )
+    if len(version_files) > _MAX_DELTA_LOG_FILES:
+        version_files = sorted(version_files, reverse=True)[:_MAX_DELTA_LOG_FILES]
+
+    latest_version = max(version for version, _path in version_files)
+    for _version, log_path in sorted(version_files, reverse=True):
+        content = _get_fs().head(log_path, _MAX_DELTA_LOG_BYTES)
+        for line in content.splitlines():
+            if not line.strip():
+                continue
+            action = json.loads(line)
+            metadata = action.get("metaData")
+            if not isinstance(metadata, dict):
+                continue
+            table_id = str(metadata.get("id", ""))
+            schema_document = json.loads(str(metadata.get("schemaString", "")))
+            fields = schema_document.get("fields")
+            if (
+                not table_id
+                or schema_document.get("type") != "struct"
+                or not isinstance(fields, list)
+            ):
+                raise LakehouseDiscoveryError(
+                    "Delta transaction metadata is incomplete."
+                )
+            columns = []
+            for field in fields:
+                if not isinstance(field, dict) or not field.get("name"):
+                    raise LakehouseDiscoveryError(
+                        "Delta transaction schema is incomplete."
+                    )
+                data_type = field.get("type")
+                normalized_type = (
+                    data_type
+                    if isinstance(data_type, str)
+                    else json.dumps(
+                        data_type,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                )
+                columns.append([str(field["name"]), normalized_type])
+            return {
+                "columns": columns,
+                "table_id": table_id,
+                "version": latest_version,
+            }
+    raise LakehouseDiscoveryError(
+        "Delta transaction metadata was not found in bounded JSON history."
+    )
+
+
 def _read_delta_metadata(path: str) -> dict[str, Any]:
     parsed = urlsplit(path)
     spark_error: Exception | None = None
@@ -915,11 +979,25 @@ def _read_delta_metadata(path: str) -> dict[str, Any]:
         version = int(table.version())
         table_id = str(table.metadata().id)
     except Exception as exc:
+        delta_log_error: Exception | None = None
+        if (
+            parsed.scheme.casefold() == "abfss"
+            and parsed.hostname == "onelake.dfs.fabric.microsoft.com"
+        ):
+            try:
+                return _read_delta_log_metadata(path)
+            except Exception as log_exc:
+                delta_log_error = log_exc
         reader_failures = f"Delta-RS reader failed with {type(exc).__name__}."
         if spark_error is not None:
             reader_failures = (
                 f"Spark reader failed with {type(spark_error).__name__}; "
                 f"{reader_failures}"
+            )
+        if delta_log_error is not None:
+            reader_failures = (
+                f"{reader_failures[:-1]}; transaction-log reader failed with "
+                f"{type(delta_log_error).__name__}."
             )
         raise LakehouseDiscoveryError(
             f"Delta transaction metadata could not be read. {reader_failures}"

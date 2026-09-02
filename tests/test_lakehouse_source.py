@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from types import SimpleNamespace
 
@@ -285,6 +286,86 @@ def test_onelake_delta_metadata_falls_back_when_active_spark_fails(
         "columns": [["order_id", "Int64"]],
         "table_id": "orders-table-id",
         "version": 11,
+    }
+
+
+def test_onelake_delta_metadata_reads_transaction_log_when_clients_fail(
+    monkeypatch,
+) -> None:
+    source = (
+        "abfss://workspace-id@onelake.dfs.fabric.microsoft.com/"
+        "lakehouse-id/Tables/dbo/orders"
+    )
+    delta_log = f"{source}/_delta_log"
+    version_zero = f"{delta_log}/00000000000000000000.json"
+
+    class DeltaTable:
+        def __init__(self, *_args, **_kwargs):
+            raise OSError("Delta-RS cannot read this Fabric table")
+
+    fs = _FakeFS(
+        {
+            delta_log: [
+                _Item(version_zero, is_dir=False),
+            ],
+        },
+        {
+            version_zero: json.dumps(
+                {
+                    "metaData": {
+                        "id": "orders-table-id",
+                        "schemaString": json.dumps(
+                            {
+                                "type": "struct",
+                                "fields": [
+                                    {
+                                        "name": "order_id",
+                                        "type": "long",
+                                        "nullable": False,
+                                        "metadata": {},
+                                    },
+                                    {
+                                        "name": "amount",
+                                        "type": "decimal(18,2)",
+                                        "nullable": True,
+                                        "metadata": {},
+                                    },
+                                ],
+                            }
+                        ),
+                    }
+                }
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        lakehouse_module,
+        "_active_spark_session",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        lakehouse_module,
+        "_storage_token",
+        lambda: "storage-token",
+    )
+    monkeypatch.setattr(
+        lakehouse_module,
+        "_get_fs",
+        lambda: fs,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "deltalake",
+        SimpleNamespace(DeltaTable=DeltaTable),
+    )
+
+    assert lakehouse_module._read_delta_metadata(source) == {
+        "columns": [
+            ["order_id", "long"],
+            ["amount", "decimal(18,2)"],
+        ],
+        "table_id": "orders-table-id",
+        "version": 0,
     }
 
 
