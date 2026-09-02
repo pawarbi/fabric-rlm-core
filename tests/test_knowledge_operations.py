@@ -126,7 +126,7 @@ def test_learn_registers_bounded_semantic_model_measure_operation() -> None:
         "Geography[Region]",
         "Sales[Month]",
     )
-    assert operation.max_output_rows == 100
+    assert operation.max_output_rows == 1_000
     assert operation.max_output_columns == 20
 
 

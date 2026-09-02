@@ -740,6 +740,12 @@ def make_lm(**_trial):
 
 def run_task(task, arm, lm):
     config = TASK_CONFIG[task.task_id]
+    persist_run_log(
+        "running",
+        phase="trial",
+        task_id=task.task_id,
+        arm=arm,
+    )
     source_argument = (
         {"knowledge": config["knowledge"]}
         if arm == "learned"

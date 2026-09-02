@@ -70,3 +70,6 @@ def test_benchmark_persists_failures_before_results_are_written() -> None:
     assert source.count("install_uncaught_exception_logger()") >= 2
     assert source.count('        "failed",') >= 2
     assert "traceback.format_exception(" in source
+    assert 'phase="trial"' in source
+    assert "task_id=task.task_id" in source
+    assert "arm=arm" in source

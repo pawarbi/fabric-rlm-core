@@ -138,7 +138,7 @@ def _semantic_measure_operation(
             "result_fingerprint": "string",
             "row_count": "integer",
         },
-        max_output_rows=100,
+        max_output_rows=1_000,
         max_output_columns=20,
         grain="semantic_model_measure_result",
         host_implementation_id="semantic_model.measure.v1",
