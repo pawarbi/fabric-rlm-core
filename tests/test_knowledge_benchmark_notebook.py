@@ -28,7 +28,7 @@ def test_benchmark_scopes_lakehouse_discovery_to_orders_table() -> None:
     ]
     assert len(constructors) == 1
     assert ast.unparse(constructors[0].args[0]) == (
-        "f'{LAKEHOUSE_ROOT}/Tables/knowledge_validation_orders'"
+        "f'{LAKEHOUSE_ROOT}/Tables/dbo/knowledge_validation_orders'"
     )
 
     assignments = {
@@ -55,3 +55,18 @@ def test_benchmark_scopes_lakehouse_discovery_to_orders_table() -> None:
     assert isinstance(entry.value, ast.Attribute)
     assert isinstance(entry.value.value, ast.Name)
     assert entry.value.value.id == "orders_lakehouse"
+
+
+def test_benchmark_persists_failures_before_results_are_written() -> None:
+    source = NOTEBOOK.read_text(encoding="utf-8")
+
+    bootstrap_index = source.index("RUN_LOG_PATH =")
+    install_index = source.index("%pip install")
+    assert bootstrap_index < install_index
+
+    assert "def persist_run_log(" in source
+    assert "def persist_uncaught_exception(" in source
+    assert "get_ipython().set_custom_exc(" in source
+    assert source.count("install_uncaught_exception_logger()") >= 2
+    assert source.count('        "failed",') >= 2
+    assert "traceback.format_exception(" in source

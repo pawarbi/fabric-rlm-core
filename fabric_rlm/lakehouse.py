@@ -869,6 +869,7 @@ def _read_spark_delta_metadata(spark: Any, path: str) -> dict[str, Any]:
 
 def _read_delta_metadata(path: str) -> dict[str, Any]:
     parsed = urlsplit(path)
+    spark_error: Exception | None = None
     if (
         parsed.scheme.casefold() == "abfss"
         and parsed.hostname == "onelake.dfs.fabric.microsoft.com"
@@ -877,15 +878,14 @@ def _read_delta_metadata(path: str) -> dict[str, Any]:
         if spark is not None:
             try:
                 metadata = _read_spark_delta_metadata(spark, path)
-            except Exception:
-                raise LakehouseDiscoveryError(
-                    "Delta transaction metadata could not be read."
-                ) from None
-            if not metadata["table_id"]:
-                raise LakehouseDiscoveryError(
-                    "Delta transaction metadata has no stable table identity."
-                )
-            return metadata
+            except Exception as exc:
+                spark_error = exc
+            else:
+                if not metadata["table_id"]:
+                    raise LakehouseDiscoveryError(
+                        "Delta transaction metadata has no stable table identity."
+                    )
+                return metadata
 
     try:
         from deltalake import DeltaTable
@@ -914,9 +914,15 @@ def _read_delta_metadata(path: str) -> dict[str, Any]:
         schema = convert()
         version = int(table.version())
         table_id = str(table.metadata().id)
-    except Exception:
+    except Exception as exc:
+        reader_failures = f"Delta-RS reader failed with {type(exc).__name__}."
+        if spark_error is not None:
+            reader_failures = (
+                f"Spark reader failed with {type(spark_error).__name__}; "
+                f"{reader_failures}"
+            )
         raise LakehouseDiscoveryError(
-            "Delta transaction metadata could not be read."
+            f"Delta transaction metadata could not be read. {reader_failures}"
         ) from None
     if not table_id:
         raise LakehouseDiscoveryError(

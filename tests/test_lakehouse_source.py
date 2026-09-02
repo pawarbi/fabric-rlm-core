@@ -221,6 +221,73 @@ def test_onelake_delta_metadata_prefers_active_fabric_spark(
     }
 
 
+def test_onelake_delta_metadata_falls_back_when_active_spark_fails(
+    monkeypatch,
+) -> None:
+    source = (
+        "abfss://workspace-id@onelake.dfs.fabric.microsoft.com/"
+        "lakehouse-id/Tables/dbo/orders"
+    )
+    fields = [SimpleNamespace(name="order_id", type="Int64")]
+
+    class Spark:
+        class Reader:
+            def format(self, _value):
+                return self
+
+            def load(self, _path):
+                raise RuntimeError("Spark cannot resolve the explicit path")
+
+        read = Reader()
+
+    class Schema:
+        def to_pyarrow(self):
+            return fields
+
+    class DeltaTable:
+        def __init__(self, path, storage_options=None, without_files=False):
+            assert path == (
+                "abfss://workspace-id@onelake.dfs.fabric.microsoft.com/"
+                "lakehouse-id.Lakehouse/Tables/dbo/orders"
+            )
+            assert storage_options == {
+                "bearer_token": "storage-token",
+                "use_fabric_endpoint": "true",
+            }
+            assert without_files is True
+
+        def schema(self):
+            return Schema()
+
+        def version(self):
+            return 11
+
+        def metadata(self):
+            return SimpleNamespace(id="orders-table-id")
+
+    monkeypatch.setattr(
+        lakehouse_module,
+        "_active_spark_session",
+        lambda: Spark(),
+    )
+    monkeypatch.setattr(
+        lakehouse_module,
+        "_storage_token",
+        lambda: "storage-token",
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "deltalake",
+        SimpleNamespace(DeltaTable=DeltaTable),
+    )
+
+    assert lakehouse_module._read_delta_metadata(source) == {
+        "columns": [["order_id", "Int64"]],
+        "table_id": "orders-table-id",
+        "version": 11,
+    }
+
+
 def test_lakehouse_source_is_public_and_normalizes_scopes() -> None:
     source = LakehouseSource(
         "abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse.Lakehouse/",

@@ -30,6 +30,67 @@
 
 # CELL ********************
 
+import json
+import traceback
+from datetime import datetime, timezone
+
+import notebookutils
+
+_BOOTSTRAP_WORKSPACE_ID = "2680c303-be42-4d4a-b230-281d2cedf17b"
+_BOOTSTRAP_LAKEHOUSE_ID = "54511b33-e765-469b-8d04-84df03d623bf"
+RUN_LOG_PATH = (
+    f"abfss://{_BOOTSTRAP_WORKSPACE_ID}@onelake.dfs.fabric.microsoft.com/"
+    f"{_BOOTSTRAP_LAKEHOUSE_ID}/Files/knowledge-demo/benchmark-matrix/"
+    "benchmark-run-log.json"
+)
+RUN_LOG = {"events": []}
+
+def persist_run_log(status, **details):
+    event = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        **details,
+    }
+    RUN_LOG["status"] = status
+    RUN_LOG["events"].append(event)
+    notebookutils.fs.put(
+        RUN_LOG_PATH,
+        json.dumps(RUN_LOG, indent=2, default=str),
+        True,
+    )
+
+def persist_uncaught_exception(shell, etype, evalue, tb, tb_offset=None):
+    persist_run_log(
+        "failed",
+        error_type=etype.__name__,
+        error_message=str(evalue),
+        traceback="".join(traceback.format_exception(etype, evalue, tb)),
+    )
+    return shell.InteractiveTB.structured_traceback(
+        etype,
+        evalue,
+        tb,
+        tb_offset=tb_offset,
+    )
+
+def install_uncaught_exception_logger():
+    get_ipython().set_custom_exc(
+        (Exception,),
+        persist_uncaught_exception,
+    )
+
+install_uncaught_exception_logger()
+persist_run_log("running", phase="bootstrap")
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "jupyter_python"
+# META }
+
+# CELL ********************
+
 %pip install -q --upgrade "git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-package-rebinding-integrity" "duckdb>=1.1" "deltalake>=1.0"
 
 # METADATA ********************
@@ -50,6 +111,8 @@
 
 import copy
 import json
+import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -82,8 +145,52 @@ LAKEHOUSE_ROOT = (
     f"{LAKEHOUSE_ID}"
 )
 ARTIFACT_ROOT = f"{LAKEHOUSE_ROOT}/Files/knowledge-demo/benchmark-matrix"
+RUN_LOG_PATH = f"{ARTIFACT_ROOT}/benchmark-run-log.json"
 LOCAL_ROOT = Path("/tmp/fabric_rlm_knowledge_benchmark")
 LOCAL_ROOT.mkdir(parents=True, exist_ok=True)
+
+RUN_LOG = {"events": []}
+
+def persist_run_log(status, **details):
+    event = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        **details,
+    }
+    RUN_LOG["status"] = status
+    RUN_LOG["events"].append(event)
+    notebookutils.fs.put(
+        RUN_LOG_PATH,
+        json.dumps(RUN_LOG, indent=2, default=str),
+        True,
+    )
+
+def persist_uncaught_exception(shell, etype, evalue, tb, tb_offset=None):
+    persist_run_log(
+        "failed",
+        error_type=etype.__name__,
+        error_message=str(evalue),
+        traceback="".join(traceback.format_exception(etype, evalue, tb)),
+    )
+    return shell.InteractiveTB.structured_traceback(
+        etype,
+        evalue,
+        tb,
+        tb_offset=tb_offset,
+    )
+
+def install_uncaught_exception_logger():
+    get_ipython().set_custom_exc(
+        (Exception,),
+        persist_uncaught_exception,
+    )
+
+install_uncaught_exception_logger()
+persist_run_log(
+    "running",
+    phase="configured",
+    fabric_rlm_version=fabric_rlm.__version__,
+)
 
 print(
     {
@@ -232,7 +339,7 @@ print(
 # CELL ********************
 
 orders_lakehouse = LakehouseSource(
-    f"{LAKEHOUSE_ROOT}/Tables/knowledge_validation_orders"
+    f"{LAKEHOUSE_ROOT}/Tables/dbo/knowledge_validation_orders"
 ).resolve()
 orders_entry = orders_lakehouse.catalog[0]
 orders_packet = orders_lakehouse.query(
@@ -646,6 +753,7 @@ def run_task(task, arm, lm):
         **source_argument,
     ).run()
 
+persist_run_log("running", phase="benchmark")
 report = run_knowledge_benchmark(
     tasks=TASKS,
     repetitions=REPETITIONS,
@@ -656,6 +764,11 @@ report = run_knowledge_benchmark(
 
 trial_rows = [trial.to_dict() for trial in report.trials]
 summary = report.summary()
+persist_run_log(
+    "running",
+    phase="drift_checks",
+    completed_trials=len(trial_rows),
+)
 display(pd.DataFrame(trial_rows))
 display(pd.DataFrame(summary).T)
 
@@ -771,6 +884,12 @@ notebookutils.fs.put(
     results_path,
     json.dumps(results_document, indent=2, default=str),
     True,
+)
+persist_run_log(
+    "completed",
+    phase="persisted",
+    results_path=results_path,
+    completed_trials=len(trial_rows),
 )
 
 print(results_path)
