@@ -116,6 +116,30 @@ def test_repeated_benchmark_is_seeded_randomized_and_disables_cache() -> None:
     }
 
 
+def test_benchmark_accepts_lm_with_public_cache_attribute() -> None:
+    task = KnowledgeBenchmarkTask(
+        task_id="revenue",
+        question="What was total revenue?",
+        expected_operation_id="sales.semantic_model.measure.v1",
+        is_correct=lambda payload: payload == {"answer": 30.5},
+    )
+
+    @dataclass
+    class PublicCacheLM:
+        cache: bool
+        kwargs: dict
+
+    report = run_knowledge_benchmark(
+        tasks=[task],
+        repetitions=1,
+        seed=0,
+        make_lm=lambda **_kwargs: PublicCacheLM(cache=False, kwargs={}),
+        run=lambda *_args: _result(answer=30.5, turns=1),
+    )
+
+    assert len(report.trials) == 2
+
+
 def test_benchmark_records_correctness_selection_audit_and_performance() -> None:
     task = KnowledgeBenchmarkTask(
         task_id="revenue",

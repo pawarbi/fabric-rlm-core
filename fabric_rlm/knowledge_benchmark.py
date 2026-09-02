@@ -139,6 +139,9 @@ def _mean_optional(values: Sequence[int | float | None]) -> float | None:
 
 
 def _cache_disabled(lm: object) -> bool:
+    cache = getattr(lm, "cache", None)
+    if cache is not None:
+        return cache is False
     kwargs = getattr(lm, "kwargs", None)
     return isinstance(kwargs, Mapping) and kwargs.get("cache") is False
 
