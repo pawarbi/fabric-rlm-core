@@ -528,15 +528,13 @@ def _install_fake_notebookutils(
     monkeypatch: pytest.MonkeyPatch, payload: str
 ) -> _FakeFs:
     """Inject a fake ``notebookutils`` module into ``sys.modules`` so the
-    lazy-import path inside trajectory.py picks it up. We also clear any
-    previously-imported ``mssparkutils`` to make the test order-independent."""
+    lazy-import path inside trajectory.py picks it up."""
     import types
 
     fs = _FakeFs(payload)
     fake = types.ModuleType("notebookutils")
     fake.fs = fs  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "notebookutils", fake)
-    monkeypatch.setitem(sys.modules, "mssparkutils", fake)
     return fs
 
 
@@ -565,45 +563,19 @@ def test_from_jsonl_loads_azure_uri_via_notebookutils(
     assert any(i.kind == "markdown_in_code" for i in traj.diagnose())
 
 
-def test_from_jsonl_uses_synapse_compat_fs_when_top_level_fs_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Some Synapse runtimes ship ``notebookutils`` without a top-level
-    ``.fs`` attribute; the usable API is ``notebookutils.mssparkutils.fs``.
-    The reader must walk the candidate chain instead of giving up."""
-    import types
-
-    payload = CLEAN_TRACE.read_text(encoding="utf-8")
-    fs = _FakeFs(payload)
-
-    shim = types.ModuleType("notebookutils.mssparkutils")
-    shim.fs = fs  # type: ignore[attr-defined]
-    fake_nu = types.ModuleType("notebookutils")
-    fake_nu.mssparkutils = shim  # type: ignore[attr-defined]
-    # Deliberately NO `.fs` on the top-level notebookutils module.
-
-    monkeypatch.setitem(sys.modules, "notebookutils", fake_nu)
-    monkeypatch.delitem(sys.modules, "mssparkutils", raising=False)
-
-    traj = Trajectory.from_jsonl("abfss://account/x.jsonl")
-    assert len(traj) > 0
-    assert len(fs.calls) == 1
-
-
 def test_from_jsonl_azure_uri_falls_back_to_fsspec(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When notebookutils/mssparkutils are absent, fsspec should be tried."""
+    """When notebookutils is absent, fsspec should be tried."""
     import types
 
     monkeypatch.delitem(sys.modules, "notebookutils", raising=False)
-    monkeypatch.delitem(sys.modules, "mssparkutils", raising=False)
 
-    # Block real notebookutils/mssparkutils imports; allow everything else.
+    # Block real notebookutils imports; allow everything else.
     real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__  # type: ignore[index]
 
     def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
-        if name in {"notebookutils", "mssparkutils"}:
+        if name == "notebookutils":
             raise ImportError(name)
         return real_import(name, *args, **kwargs)
 
@@ -638,13 +610,12 @@ def test_from_jsonl_azure_uri_without_any_client_raises_helpful_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delitem(sys.modules, "notebookutils", raising=False)
-    monkeypatch.delitem(sys.modules, "mssparkutils", raising=False)
     monkeypatch.delitem(sys.modules, "fsspec", raising=False)
 
     real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__  # type: ignore[index]
 
     def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
-        if name in {"notebookutils", "mssparkutils", "fsspec"}:
+        if name in {"notebookutils", "fsspec"}:
             raise ImportError(name)
         return real_import(name, *args, **kwargs)
 

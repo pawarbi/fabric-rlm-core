@@ -120,7 +120,12 @@ def no_sempy(monkeypatch):
 
 def test_survives_the_trip_to_the_worker():
     """The parent holds a validated handle; the worker must rebuild a usable one."""
-    model = SemanticModel("ARR Model SF (79)", workspace="Analytics", validate=False)
+    model = SemanticModel(
+        "ARR Model SF (79)",
+        workspace="Analytics",
+        credential_provider="notebookutils",
+        validate=False,
+    )
     wire = encode_for_worker({"arr": model})
 
     import json
@@ -130,6 +135,7 @@ def test_survives_the_trip_to_the_worker():
     assert isinstance(back, SemanticModel)
     assert back.dataset == "ARR Model SF (79)"
     assert back.workspace == "Analytics"
+    assert back.credential_provider == "notebookutils"
     assert back == model
 
 
@@ -195,6 +201,64 @@ def test_workspace_is_threaded_through_every_call(fake_sempy):
     m.dax("EVALUATE 1")
     m.read_table("Dim", num_rows=10)
     assert all(kw.get("workspace") == "WS" for _n, _a, kw in fake_sempy)
+
+
+def test_notebookutils_credential_is_threaded_through_every_call(fake_sempy):
+    model = SemanticModel(
+        "D",
+        credential_provider="notebookutils",
+        validate=False,
+    )
+
+    model.tables()
+    model.measure("Total Sales")
+
+    for _name, _args, kwargs in fake_sempy:
+        credential = kwargs.get("credential")
+        assert credential is not None
+        assert callable(getattr(credential, "get_token", None))
+
+
+def test_notebookutils_credential_fetches_pbi_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokens: list[str] = []
+
+    class Credentials:
+        @staticmethod
+        def getToken(resource):
+            tokens.append(resource)
+            return (
+                "eyJhbGciOiJub25lIn0."
+                "eyJleHAiOjQxMDI5OTUyMDB9."
+                "signature"
+            )
+
+    notebookutils = types.ModuleType("notebookutils")
+    notebookutils.credentials = Credentials()
+    monkeypatch.setitem(sys.modules, "notebookutils", notebookutils)
+
+    model = SemanticModel(
+        "D",
+        credential_provider="notebookutils",
+        validate=False,
+    )
+    token = model._kw["credential"].get_token(
+        "https://analysis.windows.net/powerbi/api/.default"
+    )
+
+    assert tokens == ["pbi"]
+    assert token.token.startswith("eyJ")
+    assert token.expires_on == 4102995200
+
+
+def test_unknown_credential_provider_is_rejected():
+    with pytest.raises(ValueError, match="credential_provider"):
+        SemanticModel(
+            "D",
+            credential_provider="unknown",
+            validate=False,
+        )
 
 
 def test_no_workspace_means_the_kwarg_is_absent(fake_sempy):

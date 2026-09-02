@@ -399,15 +399,11 @@ class LakehouseSource:
 def _get_fs() -> Any:
     try:
         from notebookutils import fs
-    except ImportError:
-        try:
-            from notebookutils import mssparkutils
-        except ImportError as exc:
-            raise LakehouseDiscoveryError(
-                "Automatic Lakehouse discovery requires the Microsoft Fabric "
-                "notebookutils runtime. Supply catalog= explicitly outside Fabric."
-            ) from exc
-        return mssparkutils.fs
+    except ImportError as exc:
+        raise LakehouseDiscoveryError(
+            "Automatic Lakehouse discovery requires the Microsoft Fabric "
+            "notebookutils runtime. Supply catalog= explicitly outside Fabric."
+        ) from exc
     return fs
 
 
@@ -416,14 +412,10 @@ def _storage_token() -> str:
         from notebookutils import credentials
 
         return credentials.getToken("storage")
-    except ImportError:
-        try:
-            from notebookutils import mssparkutils
-        except ImportError as exc:
-            raise LakehouseDiscoveryError(
-                "Delta schema discovery requires Fabric storage credentials."
-            ) from exc
-        return mssparkutils.credentials.getToken("storage")
+    except ImportError as exc:
+        raise LakehouseDiscoveryError(
+            "Delta schema discovery requires Fabric storage credentials."
+        ) from exc
 
 
 def _quote_identifier(value: str) -> str:

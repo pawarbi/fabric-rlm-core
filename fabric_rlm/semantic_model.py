@@ -22,6 +22,8 @@ Binding a handle costs one line in the input listing.
 
 from __future__ import annotations
 
+import base64
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -123,6 +125,35 @@ def sempy_available() -> bool:
     return True
 
 
+class _NotebookUtilsPbiCredential:
+    """Refresh Power BI tokens through the current Fabric notebook identity."""
+
+    def get_token(self, *scopes: str, **kwargs: Any) -> Any:
+        del scopes, kwargs
+        try:
+            import notebookutils
+            from azure.core.credentials import AccessToken
+        except Exception as exc:  # pragma: no cover - Fabric runtime dependent
+            raise RuntimeError(
+                "credential_provider='notebookutils' requires a Fabric "
+                "notebook runtime with notebookutils and azure-core"
+            ) from exc
+        token = notebookutils.credentials.getToken("pbi")
+        if not isinstance(token, str) or not token:
+            raise RuntimeError("notebookutils returned an invalid Power BI token")
+        try:
+            payload = token.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            expires_on = int(
+                json.loads(base64.urlsafe_b64decode(payload))["exp"]
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Power BI token expiry could not be decoded"
+            ) from exc
+        return AccessToken(token, expires_on)
+
+
 @dataclass(frozen=True)
 class SemanticModel:
     """A handle to a Power BI semantic model, bound into the run namespace.
@@ -138,11 +169,20 @@ class SemanticModel:
 
     dataset: str
     workspace: str | None = None
+    credential_provider: str | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     validate: bool | str = field(default="auto", repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not str(self.dataset).strip():
             raise ValueError("SemanticModel requires a dataset name or GUID.")
+        if self.credential_provider not in {None, "notebookutils"}:
+            raise ValueError(
+                "credential_provider must be None or 'notebookutils'"
+            )
         if self.validate is False:
             return
         if self.validate == "auto" and not sempy_available():
@@ -161,7 +201,12 @@ class SemanticModel:
 
     @property
     def _kw(self) -> dict[str, Any]:
-        return {"workspace": self.workspace} if self.workspace else {}
+        kwargs: dict[str, Any] = {}
+        if self.workspace:
+            kwargs["workspace"] = self.workspace
+        if self.credential_provider == "notebookutils":
+            kwargs["credential"] = _NotebookUtilsPbiCredential()
+        return kwargs
 
     def check(self) -> "SemanticModel":
         """Confirm the model is reachable. Raises with a usable message."""

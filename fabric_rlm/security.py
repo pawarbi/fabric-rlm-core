@@ -22,8 +22,8 @@ process before LM-emitted code is forwarded to the worker subprocess:
      small false-positive risk on custom classes with the same method name).
      Note: ``Path.rename`` and ``Path.replace`` are **not** blocked because
      ``DataFrame.rename`` / ``Tensor.replace`` etc. are extremely common.
-   - **Lakehouse destructive ops:** ``notebookutils.fs.rm``,
-     ``notebookutils.fs.mv``, and the ``mssparkutils`` aliases.
+   - **Lakehouse destructive ops:** ``notebookutils.fs.rm`` and
+     ``notebookutils.fs.mv``.
    - **Shell/subprocess:** ``os.system``, ``os.popen``, ``subprocess.run``,
      ``subprocess.call``, ``subprocess.check_call``, ``subprocess.check_output``,
      ``subprocess.Popen``, ``subprocess.getoutput``,
@@ -158,13 +158,9 @@ _DEFAULT_FORBIDDEN_CALLS: tuple[str, ...] = (
     "urllib.request.urlretrieve",
     "socket.socket",
     "socket.create_connection",
-    # Notebookutils / mssparkutils destructive ops (Fabric/Synapse).
+    # Notebookutils destructive ops (Fabric).
     "notebookutils.fs.rm",
     "notebookutils.fs.mv",
-    "notebookutils.mssparkutils.fs.rm",
-    "notebookutils.mssparkutils.fs.mv",
-    "mssparkutils.fs.rm",
-    "mssparkutils.fs.mv",
     # Dynamic dispatch escapes that defeat the static denylist.
     "importlib.import_module",
     "importlib.__import__",
@@ -690,7 +686,7 @@ class _PolicyVisitor(ast.NodeVisitor):
                 f"because network egress is off by default. Work with files "
                 f"already on disk."
             )
-        if dotted.startswith(("notebookutils.", "mssparkutils.")):
+        if dotted.startswith("notebookutils."):
             return (
                 f"SecurityPolicyViolation: call to '{dotted}' is disabled "
                 f"because it can delete or move lakehouse files. Use "

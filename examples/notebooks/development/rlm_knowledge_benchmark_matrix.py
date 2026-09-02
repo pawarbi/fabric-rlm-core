@@ -30,7 +30,7 @@
 
 # CELL ********************
 
-%pip install -q --upgrade "fabric-rlm[fabric,analytics] @ git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-package-rebinding-integrity"
+%pip install -q --upgrade "git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-package-rebinding-integrity" "duckdb>=1.1" "deltalake>=1.0"
 
 # METADATA ********************
 
@@ -55,7 +55,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow as pa
 from deltalake import DeltaTable, write_deltalake
-from notebookutils import mssparkutils
+import notebookutils
 
 import fabric_rlm
 from fabric_rlm import (
@@ -114,7 +114,11 @@ print(
 
 # CELL ********************
 
-model = SemanticModel(MODEL_ID, workspace=WORKSPACE_ID)
+model = SemanticModel(
+    MODEL_ID,
+    workspace=WORKSPACE_ID,
+    credential_provider="notebookutils",
+)
 semantic_store = f"{ARTIFACT_ROOT}/semantic-model.json"
 semantic_knowledge = RLM.learn(
     sources={"arr_model": model},
@@ -165,6 +169,26 @@ arr_for_canada = model.measure(
 EXPECTED_TOTAL_ARR = 237576169.6
 EXPECTED_CANADA_ARR = float(arr_for_canada["ARR $"].sum())
 
+region_value_column = next(
+    column for column in arr_by_region.columns if column != "ARR $"
+)
+top_region_value = float(arr_by_region["ARR $"].max())
+EXPECTED_TOP_REGIONS = {
+    str(row[region_value_column])
+    for _, row in arr_by_region.iterrows()
+    if abs(float(row["ARR $"]) - top_region_value) <= 1.0
+}
+
+combination_columns = [
+    column for column in arr_by_region_product.columns if column != "ARR $"
+]
+top_combination_value = float(arr_by_region_product["ARR $"].max())
+EXPECTED_TOP_COMBINATIONS = {
+    tuple(str(row[column]) for column in combination_columns)
+    for _, row in arr_by_region_product.iterrows()
+    if abs(float(row["ARR $"]) - top_combination_value) <= 1.0
+}
+
 print(
     {
         "semantic_operation_id": semantic_operation_id,
@@ -172,6 +196,10 @@ print(
         "product_family_dimension": product_family_column,
         "expected_total_arr": EXPECTED_TOTAL_ARR,
         "expected_canada_arr": EXPECTED_CANADA_ARR,
+        "expected_top_regions": sorted(EXPECTED_TOP_REGIONS),
+        "expected_top_region_value": top_region_value,
+        "expected_top_combinations": sorted(EXPECTED_TOP_COMBINATIONS),
+        "expected_top_combination_value": top_combination_value,
     }
 )
 
@@ -224,6 +252,12 @@ region_column_orders = pick_column(orders_frame.columns, "region")
 order_id_column = pick_column(orders_frame.columns, "order")
 expected_order_value = float(orders_frame[amount_column].sum())
 expected_order_count = int(orders_frame[order_id_column].nunique())
+expected_region_values = {
+    str(region): float(value)
+    for region, value in (
+        orders_frame.groupby(region_column_orders)[amount_column].sum().items()
+    )
+}
 
 csv_path = LOCAL_ROOT / "knowledge_validation_orders.csv"
 parquet_path = LOCAL_ROOT / "knowledge_validation_orders.parquet"
@@ -401,6 +435,58 @@ def two_values(first_field, first_expected, second_field, second_expected):
         and close_to(second_field, second_expected)(payload)
     )
 
+def grouped_semantic_correct(payload):
+    return bool(
+        payload
+        and close_to("total_value", EXPECTED_TOTAL_ARR)(payload)
+        and str(payload.get("top_region")) in EXPECTED_TOP_REGIONS
+        and close_to("top_region_value", top_region_value)(payload)
+    )
+
+def two_dimension_semantic_correct(payload):
+    claimed = (
+        str(payload.get("top_region")),
+        str(payload.get("top_product_family")),
+    ) if payload else None
+    return bool(
+        payload
+        and close_to("total_value", EXPECTED_TOTAL_ARR)(payload)
+        and claimed in EXPECTED_TOP_COMBINATIONS
+        and close_to(
+            "top_combination_value",
+            top_combination_value,
+        )(payload)
+    )
+
+def grouped_file_correct(payload):
+    if not payload or not close_to(
+        "total_value",
+        expected_order_value,
+    )(payload):
+        return False
+    actual = payload.get("region_values")
+    if not isinstance(actual, dict) or set(actual) != set(expected_region_values):
+        return False
+    return all(
+        abs(float(actual[region]) - expected) <= max(
+            0.01,
+            abs(expected) * 0.0001,
+        )
+        for region, expected in expected_region_values.items()
+    )
+
+def fanout_correct(payload):
+    return bool(
+        payload
+        and payload.get("period") == "2016-08"
+        and two_values(
+            "indoor_visits",
+            EXPECTED_INDOOR_VISITS,
+            "outdoor_visits",
+            EXPECTED_OUTDOOR_VISITS,
+        )(payload)
+    )
+
 TASK_CONFIG = {
     "semantic_scalar": {
         "question": (
@@ -425,7 +511,7 @@ TASK_CONFIG = {
             "analysis": str,
         },
         "expected_operation_id": semantic_operation_id,
-        "validator": close_to("total_value", EXPECTED_TOTAL_ARR),
+        "validator": grouped_semantic_correct,
         "knowledge": semantic_knowledge,
         "inputs": {"arr_model": model},
     },
@@ -448,12 +534,13 @@ TASK_CONFIG = {
         ),
         "outputs": {
             "total_value": float,
-            "top_combination": str,
+            "top_region": str,
+            "top_product_family": str,
             "top_combination_value": float,
             "analysis": str,
         },
         "expected_operation_id": semantic_operation_id,
-        "validator": close_to("total_value", EXPECTED_TOTAL_ARR),
+        "validator": two_dimension_semantic_correct,
         "knowledge": semantic_knowledge,
         "inputs": {"arr_model": model},
     },
@@ -469,11 +556,11 @@ TASK_CONFIG = {
         "question": "How is recorded order value distributed across regions?",
         "outputs": {
             "total_value": float,
-            "distribution": str,
+            "region_values": dict,
             "analysis": str,
         },
         "expected_operation_id": csv_operation.operation_id,
-        "validator": close_to("total_value", expected_order_value),
+        "validator": grouped_file_correct,
         "knowledge": csv_knowledge,
         "inputs": {"orders_csv": File(csv_path)},
     },
@@ -497,12 +584,7 @@ TASK_CONFIG = {
             "analysis": str,
         },
         "expected_operation_id": tourism_operation.operation_id,
-        "validator": two_values(
-            "indoor_visits",
-            EXPECTED_INDOOR_VISITS,
-            "outdoor_visits",
-            EXPECTED_OUTDOOR_VISITS,
-        ),
+        "validator": fanout_correct,
         "knowledge": tourism_knowledge,
         "inputs": {"tourism": tourism_lakehouse},
     },
@@ -611,6 +693,7 @@ try:
             "arr_model": DriftedSemanticModel(
                 MODEL_ID,
                 workspace=WORKSPACE_ID,
+                credential_provider="notebookutils",
             )
         },
     )
@@ -679,7 +762,7 @@ results_document = {
     "trials": trial_rows,
     "drift_checks": drift_checks,
 }
-mssparkutils.fs.put(
+notebookutils.fs.put(
     results_path,
     json.dumps(results_document, indent=2, default=str),
     True,

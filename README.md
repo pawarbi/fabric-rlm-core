@@ -122,6 +122,21 @@ tabular engine, Delta reads honor the transaction log, file processing runs in
 Python, and generated artifacts can be written back to `Files/` without giving
 the isolated worker OneLake credentials.
 
+In Fabric Jupyter runtimes where SemPy's automatic token service is
+unavailable, opt into refreshable user-identity authentication without moving
+the token into the worker payload:
+
+```python
+model = SemanticModel(
+    "<semantic-model-id>",
+    workspace="<workspace-id>",
+    credential_provider="notebookutils",
+)
+```
+
+This calls `notebookutils.credentials.getToken("pbi")` in the process that
+uses the model. The token itself is never serialized.
+
 Learn a reusable, source-bound package when the same approved sources support
 multiple tasks:
 
@@ -742,7 +757,7 @@ documented in [docs/authoring-skills.md](docs/authoring-skills.md).
 This library runs model-generated code. The default `SecurityPolicy` scrubs
 secret-bearing environment variables from the worker, screens generated code,
 and blocks destructive Lakehouse operations such as `notebookutils.fs.rm` and
-`mssparkutils.fs.mv`. The worker remains inside the notebook trust boundary.
+`notebookutils.fs.mv`. The worker remains inside the notebook trust boundary.
 Read [SECURITY.md](SECURITY.md) before using untrusted prompts with sensitive
 data or credentials.
 
