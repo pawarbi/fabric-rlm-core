@@ -19,11 +19,11 @@ def test_file_destination_readme_example_is_self_contained() -> None:
     compile(example, "<README FileDestination example>", "exec")
 
 
-def test_project_uses_modern_spdx_license_metadata() -> None:
+def test_project_uses_fabric_compatible_license_metadata() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
     assert 'requires = ["setuptools>=77", "wheel"]' in pyproject
-    assert re.search(r'^license = "MIT"$', pyproject, re.MULTILINE)
+    assert re.search(r'^license = \{ text = "MIT" \}$', pyproject, re.MULTILINE)
     assert "License :: OSI Approved :: MIT License" not in pyproject
 
 

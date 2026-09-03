@@ -9,7 +9,9 @@ description = "A portable Python subprocess runtime for Recursive Language Model
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Sandeep Pawar" }]
-license = "MIT"
+# Keep the PEP 621 object form for Fabric runtimes whose build backend predates
+# SPDX-string support. Newer setuptools emits the same MIT core metadata.
+license = { text = "MIT" }
 keywords = [
   "rlm",
   "recursive-language-model",
