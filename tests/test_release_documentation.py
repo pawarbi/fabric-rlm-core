@@ -3,6 +3,10 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FALLBACK_BRANCH_INSTALL = (
+    '"git+https://github.com/pawarbi/fabric-rlm-core.git@'
+    'feature/knowledge-opportunistic-fallback"'
+)
 
 
 def test_file_destination_readme_example_is_self_contained() -> None:
@@ -39,3 +43,15 @@ def test_runtime_dependencies_avoid_anyio_sentinel_import() -> None:
 
     assert '"anyio>=4.5,<4.15"' in pyproject
     assert '"typing_extensions>=4.15"' in pyproject
+    assert '"numpy>=1.26,<2; python_version < \'3.13\'"' in pyproject
+
+
+def test_fabric_setup_docs_use_the_dependency_resolving_fallback_install() -> None:
+    for relative_path in (
+        "README.md",
+        "QUICKSTART.md",
+        "docs/fabric-runtime-deps.md",
+    ):
+        document = (ROOT / relative_path).read_text(encoding="utf-8")
+
+        assert FALLBACK_BRANCH_INSTALL in document

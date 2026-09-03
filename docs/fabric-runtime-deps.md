@@ -5,26 +5,28 @@ If your Fabric notebook fails at import time with errors like:
 - `ImportError: cannot import name 'Query' from 'yarl'`
 - `ModuleNotFoundError: aiohttp.ConnectionTimeoutError`
 
-…you are running on the **Synapse PySpark** kernel (Python 3.11) whose pre-installed
+…you may be running on the **Synapse PySpark** kernel (Python 3.11), whose pre-installed
 `cluster-env` ships old versions of `pydantic`, `aiohttp`, `yarl`, and `typing_extensions`.
-A fresh `pip install dspy>=3.x` pulls newer transitive deps that conflict with that frozen
-environment, and the kernel crashes before the first user cell ever runs. There is **no
-reliable way** to overwrite the cluster-env packages from a notebook subprocess — `pip
---target=…` either silently no-ops or hot-swaps a partially-loaded module and corrupts the
-kernel.
+A fresh `pip install dspy>=3.x` can pull newer transitive dependencies that conflict with
+that frozen environment before the first user cell runs. There is **no reliable way** to
+overwrite the cluster-env packages from a notebook subprocess: `pip --target=…` either
+silently no-ops or hot-swaps a partially-loaded module and corrupts the kernel.
 
-## Recipe — use the Python 3.12 (`jupyter_python`) kernel
+## Supported Fabric notebook runtime — Python 3.12
 
-Fabric exposes a second kernel — **Python 3.12 / `jupyter_python`** — whose pip is clean
-and behaves like a normal Python environment. Switch your notebook to it and the entire
-cascade goes away.
+Fabric's **Python 3.12 / `jupyter_python`** runtime is the supported notebook
+environment for `fabric-rlm`. Python 3.11 remains a Fabric notebook option, but
+the Synapse PySpark environment is outside the supported `fabric-rlm`
+configuration because its shared managed dependency stack can conflict with
+preinstalled Semantic Link, pandas, NumPy, and telemetry packages even when an
+install command appears to complete.
 
 ### 1. Notebook metadata (top of `.ipynb`)
 
 ```json
 "metadata": {
-    "kernelspec":  {"display_name": "Python 3.12", "language": "python", "name": "python3.12"},
-    "language_info": {"name": "python", "version": "3.12"},
+    "kernelspec":  {"display_name": "Jupyter", "language": "python", "name": "jupyter"},
+    "language_info": {"name": "python"},
     "kernel_info":   {"name": "jupyter", "jupyter_kernel_name": "python3.12"},
     "microsoft": {"language": "python", "language_group": "jupyter_python"},
     "dependencies": {"lakehouse": {"default_lakehouse": "<LH_ID>",
@@ -42,13 +44,17 @@ cascade goes away.
 ### 3. First code cell — install via `%pip` magic (NOT `subprocess.pip`)
 
 ```python
-%pip uninstall -y pathlib 2>/dev/null || true
-%pip install -q --no-deps --force-reinstall "/lakehouse/default/Files/.../fabric_rlm-X.Y.Z-py3-none-any.whl"
-%pip install -q "dspy>=3.0.4"
+%pip install -q "git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-opportunistic-fallback"
 ```
 
-`%pip` runs in the kernel's own pip, so the new packages are picked up immediately. No
-`sys.modules.pop` + reload trickery is needed.
+For an immutable experiment, replace the branch name with the validated commit
+SHA in a fresh Python 3.12 session:
+
+```python
+%pip install -q "git+https://github.com/pawarbi/fabric-rlm-core.git@<commit-sha>"
+```
+
+Restart the session after either command before importing `fabric_rlm`.
 
 ### 4. Use `engine="dspy"` for data-analysis tasks
 
@@ -84,9 +90,10 @@ without any of the dependency cascades above.
 
 ## Don't do this
 
-- Avoid: `subprocess.check_call(["pip","install","dspy>=3.0.4"])` from inside a Synapse PySpark
-  cell — the install pulls newer pydantic-core that needs `typing_extensions.Sentinel`
-  which the Synapse cluster-env doesn't have.
+- Do not use Python 3.11 for a supported `fabric-rlm` notebook setup. It
+  remains a Fabric option, but its shared Synapse PySpark environment can report
+  resolver conflicts such as incompatible `typeguard` or `importlib-metadata`
+  versions after an otherwise successful installation.
 - Avoid: `pip install --target=<cluster-env site-packages>` to "patch" a single dep — works
   for one package but the next transitive dep (aiohttp → yarl → multidict → ...) hits the
   same wall. Whack-a-mole.
@@ -95,8 +102,7 @@ without any of the dependency cascades above.
 
 ## Reproducible benchmark notebooks
 
-The `examples/notebooks/` directory ships ready-to-import Fabric notebooks that
-follow the recipe above — including the SpreadsheetBench runs
-(`spreadsheetbench_400_openrouter_minimax_mlflow.ipynb` and
-`ssb400_minimax_m3_fabric_repro.ipynb`). Import one and adjust the model and
+Use the metadata above when creating or converting a Fabric notebook. The
+Python 3.12 flagship example is
+`examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb`; adjust its model and
 dataset cells for your run.

@@ -5,7 +5,7 @@
 # META {
 # META   "kernel_info": {
 # META     "name": "jupyter",
-# META     "jupyter_kernel_name": "python3.11"
+# META     "jupyter_kernel_name": "python3.12"
 # META   },
 # META   "dependencies": {
 # META     "lakehouse": {
@@ -31,7 +31,7 @@
 
 # CELL ********************
 
-%pip install -q --upgrade "git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-package-rebinding-integrity"
+%pip install -q "git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-opportunistic-fallback"
 
 # METADATA ********************
 

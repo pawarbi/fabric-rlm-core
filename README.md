@@ -21,11 +21,12 @@ computed results rather than every raw byte.
 
 ## Quick start in Fabric
 
-Install `fabric-rlm` in a Fabric notebook. The Python notebook experience is
-recommended for this example.
+Install `fabric-rlm` in a Fabric notebook. Select the Python 3.12
+(`jupyter_python`) runtime before creating the session. The Python notebook
+experience is recommended for this example.
 
 ```python
-%pip install "fabric-rlm[analytics]"
+%pip install -q "git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-opportunistic-fallback"
 ```
 
 After installation, restart the session. The example below uses the roughly
@@ -416,11 +417,15 @@ back. The files are read in the subprocess. The workbook is written straight to
 
 ## Installation
 
-Python 3.10 or newer is required. In Fabric, select the Python 3.12
-(`jupyter_python`) kernel. Install the package and restart the session:
+Python 3.10 or newer is required. In Fabric, Python 3.12
+(`jupyter_python`) is the supported `fabric-rlm` notebook configuration.
+Fabric's Python 3.11 Synapse PySpark environment remains available, but is
+outside that configuration because its shared managed dependency stack can
+conflict with Semantic Link and other preinstalled packages. Install the
+package and restart the session:
 
 ```python
-%pip install fabric-rlm
+%pip install -q "git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-opportunistic-fallback"
 ```
 
 If imports fail on the Synapse PySpark kernel, see

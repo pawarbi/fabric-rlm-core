@@ -20,10 +20,15 @@ pip install -e .
 
 ### 1b. Inside a Fabric notebook
 
+Select **Python 3.12** from the notebook's Python version menu before creating
+the session. This is the supported Fabric configuration for `fabric-rlm`.
+Fabric's Python 3.11 Synapse PySpark environment remains available, but is
+outside the supported configuration because it shares managed dependencies.
+
 ```python
-%pip install -q fabric-rlm
+%pip install -q "git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-opportunistic-fallback"
 # For the PDF notebooks, add the optional PyMuPDF extra:
-# %pip install -q fabric-rlm[pdf]
+# %pip install -q pymupdf
 ```
 
 > **Restart the Python session** after `%pip install` (Fabric ribbon →

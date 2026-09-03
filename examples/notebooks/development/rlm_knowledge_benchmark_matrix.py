@@ -5,7 +5,7 @@
 # META {
 # META   "kernel_info": {
 # META     "name": "jupyter",
-# META     "jupyter_kernel_name": "python3.11"
+# META     "jupyter_kernel_name": "python3.12"
 # META   },
 # META   "dependencies": {
 # META     "lakehouse": {
@@ -91,7 +91,7 @@ persist_run_log("running", phase="bootstrap")
 
 # CELL ********************
 
-%pip install -q --upgrade "git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-package-rebinding-integrity" "duckdb>=1.1" "deltalake>=1.0"
+%pip install -q "git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-opportunistic-fallback" "duckdb>=1.1" "deltalake>=1.0"
 
 # METADATA ********************
 
