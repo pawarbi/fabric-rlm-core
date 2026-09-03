@@ -68,7 +68,10 @@ dependencies = [
   "litellm>=1.64,<1.92",
   "nest_asyncio>=1.6",
   "pydantic>=2",
-  "typing_extensions>=4.15",
+  # AnyIO imports the lower-case ``sentinel`` API, introduced in 4.16.0.
+  # Keeping this floor prevents a fresh Fabric dependency resolution from
+  # installing an AnyIO release that cannot import against 4.15.x.
+  "typing_extensions>=4.16",
 ]
 
 [project.urls]

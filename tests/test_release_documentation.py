@@ -32,3 +32,9 @@ def test_analytics_extra_includes_semantic_model_dataframe_dependency() -> None:
     analytics = pyproject.split("analytics = [", 1)[1].split("]", 1)[0]
 
     assert '"pandas>=2.0"' in analytics
+
+
+def test_runtime_dependencies_support_anyio_sentinel_import() -> None:
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert '"typing_extensions>=4.16"' in pyproject
