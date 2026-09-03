@@ -137,6 +137,54 @@ logger = logging.getLogger(__name__)
 CORE_FINAL_OUTPUT_FIELDS = frozenset({"output", "answer", "result", "report"})
 
 _ACTIVATE_MARKER = "[FABRIC_RLM_ACTIVATE]"
+_MULTI_EVIDENCE_REQUEST = re.compile(
+    r"\b(?:"
+    r"assess(?:ment)?|analy[sz](?:e|ing|is)|diagnos(?:e|is|tic|tics)|"
+    r"business\s+(?:health|performance|summary|overview)|"
+    r"state\s+of\s+(?:the\s+)?(?:business|company|organization)|"
+    r"(?:executive|performance)\s+(?:summary|overview)|"
+    r"root\s+causes?|(?:key|main|primary)\s+drivers?|why|explain(?:ed|ing|s)?|"
+    r"recommend(?:ation|ations)?|prioriti[sz](?:e|ation)|"
+    r"(?:where|how|what)\s+should\s+(?:we|i)\s+"
+    r"(?:invest|allocate|spend|focus|prioriti[sz]e)|"
+    r"(?:investment|spend|resource)\s+priorit(?:y|ies|ization)|"
+    r"(?:business|growth|go[- ]to[- ]market)\s+strategy|"
+    r"next\s+steps?|action\s+plan|"
+    r"compare|comparison|versus|vs\.?|trend(?:s)?|what\s+happened|"
+    r"(?:key|top|main)\s+(?:risks?|opportunit(?:y|ies))|"
+    r"risks?\s+and\s+opportunit(?:y|ies)|"
+    r"(?:where|how|what)\s+to\s+(?:invest|allocate|spend|focus)|"
+    r"should\s+(?:we|i)\b|\b(?:invest|recommend|prioriti[sz]|strategy)\w*\b"
+    r")\b",
+    re.IGNORECASE,
+)
+_NARROW_FACTUAL_REQUEST = re.compile(
+    r"\b(?:"
+    r"what\s+(?:is|was|are|were)|how\s+(?:much|many)|which\b|"
+    r"calculate|find|give|list|provide|report|return|show"
+    r")\b",
+    re.IGNORECASE,
+)
+_UNRESOLVED_TIME_REFERENCE = re.compile(
+    r"\b(?:latest|current(?:ly)?|today|this\s+(?:month|quarter|year)|"
+    r"last\s+(?:month|quarter|year)|year[- ]to[- ]date|ytd)\b",
+    re.IGNORECASE,
+)
+_COORDINATED_REQUEST = re.compile(
+    r"\b(?:and|also|as\s+well\s+as|along\s+with)\b",
+    re.IGNORECASE,
+)
+_REQUEST_INPUT_NAMES = frozenset(
+    {"instruction", "prompt", "query", "question", "request", "task"}
+)
+_GENERIC_KNOWLEDGE_OPERATIONS = frozenset(
+    {
+        "semantic_model.measure",
+        "tabular.aggregate",
+        "lakehouse.aggregate",
+        "lakehouse.preaggregate_join",
+    }
+)
 
 
 def _is_supported_knowledge_operation(operation: Any) -> bool:
@@ -153,6 +201,61 @@ def _is_supported_knowledge_operation(operation: Any) -> bool:
         operation.status == "active"
         and (operation.operation, operation.host_implementation_id) in supported
     )
+
+
+def _eligible_knowledge_operations(
+    task_description: str | None,
+    operations: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Keep generic aggregate operations out of broad business analysis.
+
+    Current operations produce one governed aggregate or a fixed fan-out join.
+    They can speed up narrow factual requests, but they cannot establish the
+    multiple independent facts needed for diagnosis or investment advice. Such
+    tasks retain their bound source and follow the ordinary RLM path until a
+    dedicated capability can provide a complete evidence packet.
+    """
+
+    available = list(operations)
+    # Direct RLM construction can omit a task description. Failing open retains
+    # the prior operation-selection behavior rather than turning that supported
+    # API shape into a new TypeError.
+    if not isinstance(task_description, str):
+        return available, None
+    reason: str | None = None
+    if _MULTI_EVIDENCE_REQUEST.search(task_description):
+        reason = "generic_knowledge_operation_ineligible_for_broad_analysis"
+    elif _UNRESOLVED_TIME_REFERENCE.search(task_description):
+        reason = "generic_knowledge_operation_ineligible_for_unresolved_time_scope"
+    elif _COORDINATED_REQUEST.search(task_description):
+        reason = "generic_knowledge_operation_ineligible_for_multi_metric_request"
+    elif not _NARROW_FACTUAL_REQUEST.search(task_description):
+        reason = "generic_knowledge_operation_ineligible_for_ambiguous_request"
+    if reason is None:
+        return available, None
+    eligible = [
+        operation
+        for operation in available
+        if operation["operation"] not in _GENERIC_KNOWLEDGE_OPERATIONS
+    ]
+    if len(eligible) == len(available):
+        return eligible, None
+    return eligible, reason
+
+
+def _knowledge_request_text(
+    task_description: str | None,
+    inputs: Mapping[str, Any],
+) -> str | None:
+    """Combine declared task text with conventional runtime request inputs."""
+
+    parts = [task_description] if isinstance(task_description, str) else []
+    parts.extend(
+        value
+        for name, value in inputs.items()
+        if name.casefold() in _REQUEST_INPUT_NAMES and isinstance(value, str)
+    )
+    return "\n".join(parts) if parts else None
 
 
 def _estimate_tokens(text: str) -> int:
@@ -1220,6 +1323,8 @@ class RLM:
         return bound, {
             "knowledge_fingerprint": self._knowledge.package.fingerprint,
             "knowledge_mode": mode,
+            "knowledge_available": True,
+            "knowledge_used": False,
         }
 
     def _prepare_registered_operation(
@@ -1241,6 +1346,11 @@ class RLM:
             parse_operation_plan,
         )
 
+        task_description, _ = _task_and_outputs(
+            self.signature,
+            self._inline_task,
+            self._inline_outputs,
+        )
         operations = [
             {
                 "operation_id": operation.operation_id,
@@ -1253,11 +1363,17 @@ class RLM:
             for operation in self._knowledge.package.operations
             if _is_supported_knowledge_operation(operation)
         ]
-        task_description, _ = _task_and_outputs(
-            self.signature,
-            self._inline_task,
-            self._inline_outputs,
+        request_text = _knowledge_request_text(task_description, bound_inputs)
+        operations, ineligibility_reason = _eligible_knowledge_operations(
+            request_text,
+            operations,
         )
+        if not operations:
+            return bound_inputs, {
+                **metadata,
+                "knowledge_mode": "fallback_capability_insufficient",
+                "knowledge_fallback_reason": ineligibility_reason,
+            }
         messages = [
             {
                 "role": "system",
@@ -1347,6 +1463,7 @@ class RLM:
         metadata.update(
             {
                 "knowledge_mode": "registered_operation",
+                "knowledge_used": True,
                 "operation_id": execution.operation_id,
                 "operation_parameters": dict(execution.parameters),
                 "operation_version": execution.operation_version,

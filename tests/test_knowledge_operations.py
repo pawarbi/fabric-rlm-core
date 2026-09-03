@@ -449,6 +449,43 @@ def test_task_selects_executes_and_synthesizes_registered_measure() -> None:
     assert "SemanticModel dataset=" not in synthesis_prompt
 
 
+def test_broad_business_analysis_bypasses_generic_measure_operation() -> None:
+    model = FakeSemanticModel()
+    knowledge = RLM.learn(sources={"sales": model})
+    lm = SequenceLM(
+        [
+            "```python\n"
+            "assert sales.dataset == 'Sales Model'\n"
+            "SUBMIT(answer='cold exploration retained the semantic model')\n"
+            "```"
+        ]
+    )
+
+    result = RLM.task(
+        "Assess the state of the business and recommend where we should invest.",
+        knowledge=knowledge,
+        outputs={"answer": str},
+        lm=lm,
+        max_turns=1,
+        timeout=5,
+    ).run()
+
+    assert result.payload == {
+        "answer": "cold exploration retained the semantic model"
+    }
+    assert lm.calls == 1
+    assert model.measure_calls == []
+    metadata = result.trajectory.metadata
+    assert metadata["knowledge_mode"] == "fallback_capability_insufficient"
+    assert metadata["knowledge_fallback_reason"] == (
+        "generic_knowledge_operation_ineligible_for_broad_analysis"
+    )
+    assert "operation_selection_lm_calls" not in metadata
+    prompt = "\n".join(message["content"] for message in lm.messages[0])
+    assert "SemanticModel dataset='Sales Model'" in prompt
+    assert "knowledge_result" not in prompt
+
+
 def test_benchmark_scores_host_validated_registered_operation_plan() -> None:
     knowledge = RLM.learn(sources={"sales": FakeSemanticModel()})
     task = KnowledgeBenchmarkTask(
