@@ -439,6 +439,16 @@ def test_measure_maps_to_sempy_argument_names(fake_sempy):
     assert kw["filters"] == {"Owner[Tier]": ["Tier1"]}
 
 
+def test_measure_wraps_scalar_filter_values_for_sempy(fake_sempy):
+    SemanticModel("D", validate=False).measure(
+        "Total Sales",
+        filters={"Owner[Tier]": "Tier1"},
+    )
+
+    _name, _args, kwargs = fake_sempy[0]
+    assert kwargs["filters"] == {"Owner[Tier]": ["Tier1"]}
+
+
 def test_measure_omits_empty_grouping(fake_sempy):
     SemanticModel("D", validate=False).measure("Total Sales")
     _n, _a, kw = fake_sempy[0]

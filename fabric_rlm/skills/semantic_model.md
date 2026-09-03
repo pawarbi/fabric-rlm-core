@@ -93,8 +93,14 @@ print(fabric.list_relationships(DATASET).to_string()[:2000])
 - For a bound handle, prefer `model.dax(query, normalize_columns=True)`. This
   returns an ordinary pandas DataFrame with snake-case columns rather than
   SemPy names such as `[ARR]` and `Period[Year]`.
-- `fabric.evaluate_measure(DATASET, "Total Sales", groupby_columns=[...],
-  filters={...})` for "measure by dimension". No DAX to get wrong.
+- For a bound handle, `model.measure("Total Sales", groupby=[...],
+  filters={"Table[Column]": "value"})` evaluates a measure without authoring
+  DAX. Scalar filter values are normalized to one-item lists before SemPy is
+  called.
+- For direct SemPy access, use `fabric.evaluate_measure(DATASET,
+  "Total Sales", groupby_columns=[...],
+  filters={"Table[Column]": ["value"]})`. Direct SemPy requires every filter
+  value to be a list.
 - `fabric.evaluate_dax(DATASET, "EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(...),
   <filters>)")` for grouping, several measures, TOPN or time intelligence.
 - `fabric.read_table` only for small dimension tables, always with `num_rows`.

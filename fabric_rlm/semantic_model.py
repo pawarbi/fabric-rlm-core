@@ -25,6 +25,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -114,6 +115,19 @@ def _plain_frame(frame: Any, aliases: dict[str, str] | None = None) -> Any:
         normalized.append(candidate)
     result.columns = normalized
     return result
+
+
+def _measure_filters(filters: Mapping[str, Any]) -> dict[str, list[Any]]:
+    """Normalize ergonomic scalar filter values to SemPy's list-only shape."""
+
+    return {
+        column: (
+            list(values)
+            if isinstance(values, (list, tuple, set, frozenset))
+            else [values]
+        )
+        for column, values in filters.items()
+    }
 
 
 def sempy_available() -> bool:
@@ -364,18 +378,20 @@ class SemanticModel:
         self,
         measure: str | list[str],
         groupby: list[str] | None = None,
-        filters: dict[str, list[str]] | None = None,
+        filters: Mapping[str, Any] | None = None,
     ) -> Any:
         """Evaluate a model measure, optionally grouped and filtered.
 
         No DAX to author, so no DAX syntax to get wrong. ``groupby`` entries are
-        fully qualified, e.g. ``["Owner[Owner Country]"]``.
+        fully qualified, e.g. ``["Owner[Owner Country]"]``. ``filters`` maps
+        fully qualified columns to scalar values or lists of values; scalar
+        values are normalized to the list shape SemPy requires.
         """
         kwargs: dict[str, Any] = dict(self._kw)
         if groupby:
             kwargs["groupby_columns"] = list(groupby)
         if filters:
-            kwargs["filters"] = dict(filters)
+            kwargs["filters"] = _measure_filters(filters)
         return self._source_call(
             lambda: self._fabric.evaluate_measure(
                 self.dataset,
@@ -410,7 +426,7 @@ class SemanticModel:
             f"SemanticModel dataset={self.dataset!r}{where} - already connected. "
             "Call .schema() for formatted text or .metadata() for normalized "
             "DataFrames; .dax(\"EVALUATE ...\", normalize_columns=True); "
-            ".measure(name, groupby=[...], filters={...}); "
+            '.measure(name, groupby=[...], filters={"Table[Column]": ["value"]}); '
             ".tables() .columns() .measures() .relationships()"
         )
 
