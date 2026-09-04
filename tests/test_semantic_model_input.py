@@ -415,17 +415,15 @@ def test_metadata_dataclass_equality_and_repr_are_unchanged(fake_sempy):
     from fabric_rlm import SemanticModelMetadata
 
     meta = SemanticModel("D", validate=False).metadata()
-    twin = SemanticModelMetadata(
-        tables=meta.tables,
-        columns=meta.columns,
-        measures=meta.measures,
-        relationships=meta.relationships,
-    )
 
     assert [f.name for f in dataclasses.fields(meta)] == [
         "tables", "columns", "measures", "relationships",
     ]
-    assert meta == twin
+    # Field-wise dataclass equality still holds. Sentinels rather than the
+    # DataFrames: Python 3.13 compares dataclass fields one by one, and
+    # `frame == frame` has no single truth value.
+    assert SemanticModelMetadata(1, 2, 3, 4) == SemanticModelMetadata(1, 2, 3, 4)
+    assert SemanticModelMetadata(1, 2, 3, 4) != SemanticModelMetadata(1, 2, 3, 5)
     assert repr(meta).startswith("SemanticModelMetadata(tables=")
     assert "_KEYS" not in repr(meta)
     with pytest.raises(dataclasses.FrozenInstanceError):
