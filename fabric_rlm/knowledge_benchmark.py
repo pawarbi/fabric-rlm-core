@@ -11,6 +11,7 @@ import statistics
 import time
 from typing import Any, Literal
 
+from fabric_rlm.knowledge_evidence import source_call_summary
 from fabric_rlm.runtime import RLMResult
 
 
@@ -67,6 +68,18 @@ class KnowledgeBenchmarkTrial:
     knowledge_mode: str | None
     operation_id: str | None
     operation_result_fingerprint: str | None
+    # Cold-parity metrics. Source calls and their failures come from the
+    # typed per-turn telemetry; the first useful query is the first turn a
+    # source call returned rows; verifier repairs count repair turns; the
+    # integrity status is what the analytical screen ended with.
+    reasoning_tokens: int | None = None
+    source_calls: int = 0
+    failed_source_calls: int = 0
+    source_seconds: float = 0.0
+    first_useful_query_turn: int | None = None
+    verifier_repairs: int = 0
+    integrity_ok: bool = True
+    lessons_injected: int = 0
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -109,6 +122,9 @@ class KnowledgeBenchmarkReport:
                 "mean_completion_tokens": _mean_optional(
                     [trial.completion_tokens for trial in trials]
                 ),
+                "mean_reasoning_tokens": _mean_optional(
+                    [trial.reasoning_tokens for trial in trials]
+                ),
                 "mean_lm_seconds": _mean_optional(
                     [trial.lm_seconds for trial in trials]
                 ),
@@ -121,8 +137,59 @@ class KnowledgeBenchmarkReport:
                 "mean_wall_seconds": _mean(
                     [trial.wall_seconds for trial in trials]
                 ),
+                "mean_source_calls": _mean(
+                    [trial.source_calls for trial in trials]
+                ),
+                "mean_failed_source_calls": _mean(
+                    [trial.failed_source_calls for trial in trials]
+                ),
+                "mean_source_seconds": _mean(
+                    [trial.source_seconds for trial in trials]
+                ),
+                "mean_first_useful_query_turn": _mean_optional(
+                    [trial.first_useful_query_turn for trial in trials]
+                ),
+                "mean_verifier_repairs": _mean(
+                    [trial.verifier_repairs for trial in trials]
+                ),
+                "integrity_ok_rate": _rate(
+                    [trial.integrity_ok for trial in trials]
+                ),
+                "mean_lessons_injected": _mean(
+                    [trial.lessons_injected for trial in trials]
+                ),
             }
         return summary
+
+    def cold_parity(self) -> dict[str, object]:
+        """The release rule: learned must not be worse than cold.
+
+        Correctness is the hard requirement; failed source calls and
+        unresolved integrity findings must not rise; turns and tokens are
+        reported, not gated, because a learned run may spend more thinking
+        on a better answer.
+        """
+        summary = self.summary()
+        cold, learned = summary["cold"], summary["learned"]
+
+        def value(row: Mapping[str, float | int | None], key: str) -> float:
+            item = row.get(key)
+            return float(item) if isinstance(item, (int, float)) else 0.0
+
+        correctness_ok = value(learned, "numeric_correct_rate") >= value(cold, "numeric_correct_rate")
+        failures_ok = value(learned, "mean_failed_source_calls") <= value(cold, "mean_failed_source_calls")
+        integrity_ok = value(learned, "integrity_ok_rate") >= value(cold, "integrity_ok_rate")
+        return {
+            "cold_correct_rate": cold.get("numeric_correct_rate"),
+            "learned_correct_rate": learned.get("numeric_correct_rate"),
+            "correctness_ok": correctness_ok,
+            "failed_source_calls_ok": failures_ok,
+            "integrity_ok": integrity_ok,
+            "turns_delta": value(learned, "mean_turns") - value(cold, "mean_turns"),
+            "prompt_tokens_delta": value(learned, "mean_prompt_tokens") - value(cold, "mean_prompt_tokens"),
+            "source_calls_delta": value(learned, "mean_source_calls") - value(cold, "mean_source_calls"),
+            "parity": correctness_ok and failures_ok and integrity_ok,
+        }
 
 
 def _rate(values: Sequence[bool]) -> float | None:
@@ -165,7 +232,22 @@ def _trial(
     audit_status = metadata.get("operation_audit_status")
     payload = result.payload if isinstance(result.payload, Mapping) else None
     correct = bool(result.submitted and task.is_correct(payload))
+    calls = source_call_summary(result.trajectory.turns)
+    repairs = sum(
+        1
+        for turn in result.trajectory.turns
+        if getattr(turn, "turn_type", "normal") in {"validation_repair", "verifier_repair"}
+    )
+    injected = metadata.get("knowledge_lessons_injected")
     return KnowledgeBenchmarkTrial(
+        reasoning_tokens=result.total_reasoning_tokens,
+        source_calls=int(calls["source_calls"]),
+        failed_source_calls=int(calls["failed_source_calls"]),
+        source_seconds=float(calls["source_seconds"]),
+        first_useful_query_turn=calls["first_useful_query_turn"],
+        verifier_repairs=repairs,
+        integrity_ok=bool(result.integrity_ok),
+        lessons_injected=len(injected) if isinstance(injected, (list, tuple)) else 0,
         task_id=task.task_id,
         repetition=repetition,
         arm=arm,

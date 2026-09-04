@@ -625,7 +625,69 @@ def _format_internal_traceback(exc: BaseException) -> str:
     return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip("\n")
 
 
+_TELEMETRY_SEEN: dict[int, int] = {}
+
+
+def _source_calls() -> list[dict[str, Any]]:
+    """Typed records of the source calls made since the previous turn.
+
+    Bound handles that keep a ``query_telemetry`` log (``SemanticModel``)
+    live in this namespace, so their records are read here and shipped
+    with the turn result; the parent never sees the handle. Aliases of the
+    same handle are read once, and a handle nested in a dict or list of
+    inputs is found up to three levels down.
+    """
+    calls: list[dict[str, Any]] = []
+    seen_objects: set[int] = set()
+
+    def visit(name: str, value: Any, depth: int) -> None:
+        if depth > 3 or id(value) in seen_objects:
+            return
+        if isinstance(value, dict):
+            seen_objects.add(id(value))
+            for key, item in list(value.items())[:50]:
+                visit(f"{name}.{key}", item, depth + 1)
+            return
+        if isinstance(value, (list, tuple)):
+            seen_objects.add(id(value))
+            for index, item in enumerate(list(value)[:50]):
+                visit(f"{name}[{index}]", item, depth + 1)
+            return
+        if not hasattr(type(value), "query_telemetry"):
+            return
+        seen_objects.add(id(value))
+        try:
+            records = list(value.query_telemetry)
+        except Exception:
+            return
+        already = _TELEMETRY_SEEN.get(id(value), 0)
+        for record in records[already:]:
+            if isinstance(record, dict):
+                calls.append({"input": name, **record})
+        _TELEMETRY_SEEN[id(value)] = len(records)
+
+    for name, value in list(_namespace.items()):
+        if name in DEFAULT_INJECTED_NAMES or name.startswith("__"):
+            continue
+        visit(name, value, 0)
+    return calls
+
+
 def _execute(
+    code: str,
+    max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
+) -> dict[str, Any]:
+    response = _execute_code(code, max_submit_bytes)
+    try:
+        calls = _source_calls()
+    except Exception:  # pragma: no cover - telemetry must never break a turn
+        calls = []
+    if calls:
+        response["source_calls"] = calls
+    return response
+
+
+def _execute_code(
     code: str,
     max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
 ) -> dict[str, Any]:

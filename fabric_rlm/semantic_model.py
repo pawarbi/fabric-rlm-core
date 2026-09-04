@@ -216,6 +216,72 @@ def _row_count(frame: Any) -> int | None:
         return None
 
 
+def _query_fingerprint(query: Any) -> str:
+    from hashlib import sha256
+
+    return sha256(str(query).encode("utf-8")).hexdigest()[:16]
+
+
+def _measure_observations(frame: Any, plan: "_AggregatePlan") -> dict[str, Any]:
+    """Value-free facts about the measures in an aggregate result.
+
+    Which measure columns are identical across every row, and which are a
+    constant zero, one or null. A derived measure that equals its base
+    measure under an unfiltered context is the signature of a missing
+    evaluation context (a previous-period measure with no period to be
+    previous to); the observation records that shape without recording a
+    single value, so it can travel into durable knowledge.
+    """
+    try:
+        import pandas as pd
+    except Exception:  # pragma: no cover - pandas ships with sempy
+        return {}
+    try:
+        available = set(str(c) for c in getattr(frame, "columns", ()))
+        columns: dict[str, str] = {}
+        for alias, name in plan.aliases.items():
+            for candidate in (f"[{alias}]", alias):
+                if candidate in available:
+                    columns[name] = candidate
+                    break
+        if not columns or _row_count(frame) in {None, 0}:
+            return {}
+        numeric: dict[str, Any] = {}
+        constants: dict[str, str] = {}
+        for name, column in columns.items():
+            series = frame[column]
+            if series.isna().all():
+                constants[name] = "null"
+                continue
+            values = pd.to_numeric(series, errors="coerce")
+            if values.isna().any():
+                continue
+            numeric[name] = values
+            if bool((values == 0).all()):
+                constants[name] = "zero"
+            elif bool((values == 1).all()):
+                constants[name] = "one"
+        identities: list[list[str]] = []
+        names = list(numeric)
+        for index, left in enumerate(names):
+            for right in names[index + 1:]:
+                scale = max(
+                    float(numeric[left].abs().max()),
+                    float(numeric[right].abs().max()),
+                    1.0,
+                )
+                if float((numeric[left] - numeric[right]).abs().max()) <= 1e-9 * scale:
+                    identities.append([left, right])
+        observations: dict[str, Any] = {}
+        if constants:
+            observations["constant_measures"] = constants
+        if identities:
+            observations["measure_identities"] = identities
+        return observations
+    except Exception:
+        return {}
+
+
 @dataclass(frozen=True)
 class _AggregatePlan:
     """A validated aggregate() request and the DAX built from it."""
@@ -676,8 +742,34 @@ class SemanticModel:
         worker timeout. Use ``dax`` for custom DAX that ``aggregate`` cannot
         express; it runs whatever it is given, with no size check.
         """
-        result = self._fabric.evaluate_dax(self.dataset, query, **self._kw)
+        started = time.monotonic()
+        record: dict[str, Any] = {
+            "query_type": "dax",
+            "query_fingerprint": _query_fingerprint(query),
+            "query_chars": len(str(query)),
+            "executed": True,
+        }
+        try:
+            result = self._evaluate(query)
+        except Exception as exc:
+            record.update(
+                execution_seconds=round(time.monotonic() - started, 3),
+                reason="execution_error",
+                error=f"{type(exc).__name__}: {exc}"[:300],
+            )
+            self._record_query(record)
+            raise
+        record.update(
+            execution_seconds=round(time.monotonic() - started, 3),
+            returned_rows=_row_count(result),
+            total_seconds=round(time.monotonic() - started, 3),
+        )
+        self._record_query(record)
         return _plain_frame(result) if normalize_columns else result
+
+    def _evaluate(self, query: str) -> Any:
+        """Run DAX without recording telemetry; aggregate() records its own."""
+        return self._fabric.evaluate_dax(self.dataset, query, **self._kw)
 
     def measure(
         self,
@@ -695,7 +787,35 @@ class SemanticModel:
             kwargs["groupby_columns"] = list(groupby)
         if filters:
             kwargs["filters"] = dict(filters)
-        return self._fabric.evaluate_measure(self.dataset, measure, **kwargs)
+        measures = [measure] if isinstance(measure, str) else [str(m) for m in measure]
+        started = time.monotonic()
+        record: dict[str, Any] = {
+            "query_type": "measure",
+            "measures": measures,
+            "measure_count": len(measures),
+            "groupby": [str(g) for g in (groupby or [])],
+            "groupby_count": len(groupby or []),
+            "filter_columns": [str(c) for c in (filters or {})],
+            "filter_count": len(filters or {}),
+            "executed": True,
+        }
+        try:
+            result = self._fabric.evaluate_measure(self.dataset, measure, **kwargs)
+        except Exception as exc:
+            record.update(
+                execution_seconds=round(time.monotonic() - started, 3),
+                reason="execution_error",
+                error=f"{type(exc).__name__}: {exc}"[:300],
+            )
+            self._record_query(record)
+            raise
+        record.update(
+            execution_seconds=round(time.monotonic() - started, 3),
+            returned_rows=_row_count(result),
+            total_seconds=round(time.monotonic() - started, 3),
+        )
+        self._record_query(record)
+        return result
 
     def read_table(self, table: str, num_rows: int | None = None) -> Any:
         """Read a table. Use for small dimension tables only, never a fact table."""
@@ -758,6 +878,9 @@ class SemanticModel:
             groupby=[f"{t}[{c}]" for t, c in plan.group_columns],
             groupby_count=len(plan.group_columns),
             measure_count=len(plan.measures),
+            # Filter column names only: the values are data, and telemetry
+            # feeds durable knowledge, which must never carry data values.
+            filter_columns=[f"{t}[{c}]" for (t, c), _values in plan.filters],
             filter_count=len(plan.filters),
             top=plan.top,
             order_by=plan.order_by,
@@ -773,7 +896,7 @@ class SemanticModel:
             preflight_started = time.monotonic()
             try:
                 estimated = _run_with_deadline(
-                    lambda: self.dax(plan.preflight_query()),
+                    lambda: self._evaluate(plan.preflight_query()),
                     budget,
                 )
             except TimeoutError:
@@ -816,7 +939,7 @@ class SemanticModel:
         record["query"] = query
         execution_started = time.monotonic()
         try:
-            frame = self.dax(query)
+            frame = self._evaluate(query)
         except Exception as exc:
             record.update(
                 executed=True,
@@ -831,6 +954,7 @@ class SemanticModel:
             execution_seconds=round(time.monotonic() - execution_started, 3),
             returned_rows=_row_count(frame),
             total_seconds=round(time.monotonic() - started, 3),
+            **_measure_observations(frame, plan),
         )
         self._record_query(record)
         return self._finish_aggregate_frame(frame, plan, normalize_columns)

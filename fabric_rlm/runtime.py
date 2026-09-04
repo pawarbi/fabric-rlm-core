@@ -143,6 +143,9 @@ from .analytical_integrity import (
 
 
 logger = logging.getLogger(__name__)
+# Lessons shown to one task: enough to cover time semantics, measure
+# behavior and query risk without crowding the prompt.
+_MAX_INJECTED_LESSONS = 8
 
 
 CORE_FINAL_OUTPUT_FIELDS = frozenset({"output", "answer", "result", "report"})
@@ -414,6 +417,10 @@ class RLMResult:
     # room -- models differ widely in how many turns they take for the same
     # work, so a cap tuned on one can quietly truncate another.
     max_turns: int | None = None
+    # Typed evidence harvested from the run's telemetry and outcome when the
+    # RLM was built with ``capture_evidence=True``; empty otherwise. Feed it
+    # to ``RLM.enrich`` to turn it into lessons.
+    evidence: tuple[Any, ...] = ()
 
     @property
     def integrity_problems(self) -> list[str]:
@@ -935,7 +942,12 @@ class RLM:
         security: SecurityPolicy | None = None,
         max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
         knowledge: Knowledge | None = None,
+        capture_evidence: bool = False,
     ):
+        # Evidence capture is observational: with it on, the finished result
+        # carries typed EvidenceRecords harvested from the run's telemetry.
+        # Prompts, execution and the answer are the same either way.
+        self.capture_evidence = bool(capture_evidence)
         # ---- engine validation (early, before any heavy resolution) ---------
         # Resolve aliases ('default' -> 'v6-custom', 'dspy' -> 'v7-dspy')
         # before any further engine-based logic so internal switches keep
@@ -1765,14 +1777,116 @@ class RLM:
         return winner
 
     def run(self, inputs: dict[str, Any] | None = None) -> RLMResult:
+        self._evidence_sources: dict[str, Any] = {}
+        result = self._run_engine(inputs)
+        return self._finalize_result(result)
+
+    def _finalize_result(self, result: RLMResult) -> RLMResult:
+        """Attach source-call metadata and, when asked, harvested evidence.
+
+        Both read telemetry the run already recorded; neither touches the
+        answer. Evidence capture that fails for any reason is logged and
+        the result is returned without it.
+        """
+        trajectory = getattr(result, "trajectory", None)
+        turns = list(getattr(trajectory, "turns", None) or [])
+        if trajectory is None or not hasattr(trajectory, "metadata"):
+            return result
+        from .knowledge_evidence import harvest_evidence, source_call_summary
+
+        if any(getattr(turn, "source_calls", None) for turn in turns):
+            trajectory.metadata["source_call_summary"] = source_call_summary(turns)
+        if not self.capture_evidence:
+            return result
+        options: dict[str, Any] = {}
+        if self._knowledge is not None:
+            package = self._knowledge.package
+            options["known_source_ids"] = [source.source_id for source in package.sources]
+            options["source_fingerprints"] = {
+                source.source_id: source.schema_fingerprint for source in package.sources
+            }
+        try:
+            result.evidence = harvest_evidence(
+                result, sources=self._evidence_sources, **options
+            )
+        except Exception as exc:  # noqa: BLE001 - capture must never fail a run
+            logger.warning("Evidence capture skipped: %s", exc)
+        return result
+
+    @classmethod
+    def enrich(
+        cls,
+        knowledge: Knowledge,
+        results: Iterable[RLMResult],
+        *,
+        store: KnowledgeStore | None = None,
+        transport: OneLakeKnowledgeTransport | None = None,
+        overwrite: bool = False,
+        aliases: Mapping[str, str] | None = None,
+    ) -> Knowledge:
+        """Learn from finished runs; returns a new ``Knowledge``.
+
+        Evidence is harvested from each result's typed telemetry and
+        outcome and promoted into lessons. The input package is not
+        mutated and nothing is written unless ``store`` is given, so a
+        saved package changes only when the caller decides it should.
+        """
+        from .knowledge_api import enrich_knowledge
+
+        return enrich_knowledge(
+            knowledge,
+            list(results),
+            store=store,
+            transport=transport,
+            overwrite=overwrite,
+            aliases=aliases,
+        )
+
+    def _learned_guidance(
+        self, knowledge_metadata: dict[str, Any]
+    ) -> tuple[str | None, dict[str, Any]]:
+        """Retrieved lessons for this task, rendered; nothing when there are none.
+
+        Shown only when the task will work against the live source. A
+        registered operation that already answered the task replaced the
+        bindings with its result packet, and the agent then only
+        synthesizes. Candidate lessons are never shown.
+        """
+        if self._knowledge is None:
+            return None, {}
+        if knowledge_metadata.get("knowledge_mode") == "registered_operation":
+            return None, {}
+        from .knowledge_retrieval import render_learned_guidance, retrieve_lessons
+
+        package = self._knowledge.package
+        active = [lesson for lesson in package.lessons if lesson.status == "active"]
+        if not active:
+            return None, {"knowledge_lessons_available": 0}
+        task_text, _ = _task_and_outputs(
+            self.signature, self._inline_task, self._inline_outputs
+        )
+        lessons = retrieve_lessons(package, task_text, limit=_MAX_INJECTED_LESSONS)
+        text = render_learned_guidance(lessons)
+        return text or None, {
+            "knowledge_lessons_available": len(active),
+            "knowledge_lessons_injected": [lesson.lesson_id for lesson in lessons],
+        }
+
+    def _run_engine(self, inputs: dict[str, Any] | None = None) -> RLMResult:
         bound_inputs = dict(self._inline_inputs)
         if inputs:
             bound_inputs.update(inputs)
         bound_inputs, knowledge_metadata = self._bind_knowledge_inputs(bound_inputs)
+        # Evidence is attributed by the alias a source was bound under, which
+        # for a knowledge package is its source id. Recorded before a
+        # registered operation may swap the bindings for its result packet.
+        self._evidence_sources = dict(bound_inputs)
         bound_inputs, knowledge_metadata = self._prepare_registered_operation(
             bound_inputs,
             knowledge_metadata,
         )
+        learned_guidance, guidance_metadata = self._learned_guidance(knowledge_metadata)
+        knowledge_metadata = {**knowledge_metadata, **guidance_metadata}
         bound_inputs = resolve_lakehouse_inputs(bound_inputs)
 
         if self.engine == "adaptive":
@@ -1795,6 +1909,7 @@ class RLM:
                 "skills": list(self.skills),
                 "skill_autoloading": self.enable_skill_autoloading,
                 "router_enabled": self.enable_router,
+                "analytical_integrity_mode": self.analytical_integrity,
                 **knowledge_metadata,
             }
         )
@@ -1883,6 +1998,7 @@ class RLM:
                     preloaded_skills=preloaded_skills,
                     skill_cards=cards_text,
                     router_active=self.enable_router,
+                    learned_guidance=learned_guidance,
                 ),
             },
             {"role": "user", "content": build_initial_user_message(bound_inputs)},
@@ -2266,6 +2382,7 @@ class RLM:
                         lm_call_seconds=lm_call_seconds,
                         worker_execute_seconds=worker_execute_seconds,
                         submit_payload=result.submit_payload if result.submitted else None,
+                        source_calls=list(getattr(result, "source_calls", None) or []),
                     )
                 )
 
