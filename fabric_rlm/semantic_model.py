@@ -52,7 +52,12 @@ _log = logging.getLogger("fabric_rlm.semantic_model")
 # the model the grain was too wide until the whole budget was gone. The
 # cardinality preflight below answers that in seconds instead.
 DEFAULT_MAX_GROUPS = 10_000
-DEFAULT_PREFLIGHT_TIMEOUT_SECONDS = 10.0
+# The first live run measured 8.7s and 8.3s for preflights that counted 44 and
+# 2,418 groups: the engine round trip on that model has an ~8s floor regardless
+# of grain. A 10s budget would reject legitimate queries on any latency spike,
+# so the default leaves headroom while still failing well inside the 300s
+# worker timeout.
+DEFAULT_PREFLIGHT_TIMEOUT_SECONDS = 30.0
 MAX_GROUPS_ENV = "FABRIC_RLM_SEMANTIC_MAX_GROUPS"
 PREFLIGHT_TIMEOUT_ENV = "FABRIC_RLM_SEMANTIC_PREFLIGHT_TIMEOUT"
 
@@ -522,6 +527,21 @@ class SemanticModel:
             kwargs["credential"] = _NotebookUtilsPbiCredential()
         return kwargs
 
+    def __frozen__(self) -> dict[str, Any]:
+        """What a namespace snapshot records for this handle.
+
+        The name catalog and query telemetry are working state, not identity.
+        Left to ``dataclasses.asdict`` they turned every turn's trajectory
+        state into a dump of several hundred column names.
+        """
+        return {
+            "dataset": self.dataset,
+            "workspace": self.workspace,
+            "credential_provider": self.credential_provider,
+            "validate": self.validate,
+            "max_groups": self.max_groups,
+        }
+
     def check(self) -> "SemanticModel":
         """Confirm the model is reachable. Raises with a usable message."""
         try:
@@ -543,9 +563,16 @@ class SemanticModel:
         """Tables in the model, as a DataFrame."""
         return self._fabric.list_tables(self.dataset, **self._kw)
 
-    def columns(self) -> Any:
-        """Columns in the model, as a DataFrame."""
-        return self._fabric.list_columns(self.dataset, **self._kw)
+    def columns(self, table: str | None = None) -> Any:
+        """Columns in the model, as a DataFrame. ``table`` narrows to one table.
+
+        Generated code reaches for ``columns("ARR Data")`` unprompted, and
+        sempy's ``list_columns`` takes the same argument, so pass it through.
+        """
+        kwargs: dict[str, Any] = dict(self._kw)
+        if table is not None:
+            kwargs["table"] = table
+        return self._fabric.list_columns(self.dataset, **kwargs)
 
     def measures(self) -> Any:
         """Measures, with their DAX expressions and descriptions."""
@@ -704,7 +731,7 @@ class SemanticModel:
         ``max_groups`` defaults to the value set when the handle was built,
         then ``FABRIC_RLM_SEMANTIC_MAX_GROUPS``, then 10,000. The preflight
         budget comes from ``FABRIC_RLM_SEMANTIC_PREFLIGHT_TIMEOUT`` (default
-        10 seconds). Returns an ordinary pandas DataFrame with snake-case
+        30 seconds). Returns an ordinary pandas DataFrame with snake-case
         columns unless ``normalize_columns=False``.
         """
         started = time.monotonic()

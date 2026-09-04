@@ -20,7 +20,7 @@ turns. Build your answer incrementally.
 Both return a Prediction object; read outputs by field name, for example
 `predict_sync("text -> label", text=text).label`.
 Use instructions for task-specific guidance, pydantic_schemas for typed outputs, and dspy.Image input fields for images.
-`SUBMIT(**fields)` finishes the task. You MUST call SUBMIT once ready.
+`SUBMIT(**fields)` finishes the task. You MUST call SUBMIT once ready. SUBMIT is already defined in your namespace; never import it.
 {skill_section}
 
 ## Code style - critical

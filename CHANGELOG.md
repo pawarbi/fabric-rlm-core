@@ -22,6 +22,22 @@
 - `SemanticModel.query_telemetry` records the estimate, timing, and outcome of
   each `aggregate` call.
 
+### Fixed
+
+- Namespace snapshots of a `SemanticModel` record only the handle's identity
+  again. After the first `aggregate()` call the cached name catalog and query
+  telemetry were being dumped into every turn's trajectory state.
+- The default cardinality preflight budget is 30 seconds instead of 10. A live
+  run measured an 8 second engine round trip even for a 44-group count, so the
+  old budget would have rejected legitimate queries on any latency spike.
+  `FABRIC_RLM_SEMANTIC_PREFLIGHT_TIMEOUT` still overrides it.
+- `SemanticModel.columns(table=...)` narrows to one table, matching sempy's
+  `list_columns`. Generated code reached for it and lost a turn to a
+  `TypeError`.
+- The system prompt now says `SUBMIT` is already defined and must not be
+  imported; a trace showed `from fabric import SUBMIT` blocked by the sandbox
+  on the final turn.
+
 ### Changed
 
 - The `SemanticModel` prompt listing and the `semantic_model` skill point the
