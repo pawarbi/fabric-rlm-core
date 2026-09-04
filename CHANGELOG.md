@@ -36,7 +36,13 @@
   sort of supporting detail is not mistaken for the ranking and also reads
   polars, pyspark, `sorted` and SQL `ORDER BY`, evidence inputs are counted
   recursively by a `__rlm_evidence_source__` marker, and grain matching
-  keeps `Products[Region]` and `Sold To[Region]` distinct.
+  keeps `Products[Region]` and `Sold To[Region]` distinct. A declared
+  ranking metric vouches for a code sort field only when the field names
+  the declaration's concept and every token of the field is accounted for
+  by the declaration, a tuple repair must operate on the expanded result or
+  an alias of it, `assert_grain_preserved` honours table qualification, and
+  the `analytical_integrity` skill prefers the governed metric definition
+  and recomputes only as a validation check.
 - `SemanticModelMetadata` accepts the dictionary-style access generated code
   tends to assume: `meta["columns"]`, `meta.keys()`, `meta.items()`,
   `meta.values()`, `meta.get("measures")`, and `"relationships" in meta`. The

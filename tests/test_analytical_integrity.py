@@ -298,6 +298,30 @@ def test_ranked_by_phrase_is_read_with_the_declared_ranking_metric():
     assert problems and "ranked by current ARR" in problems[0]
 
 
+def test_metric_declaration_matching_is_strict():
+    from fabric_rlm.analytical_integrity import _tokens, metric_matches_declaration
+
+    declared = "absolute ARR loss in USD (arr_2025Q4 - arr_2026Q2)"
+    assert metric_matches_declaration(_tokens("abs_loss"), declared)
+    assert metric_matches_declaration(_tokens("abs_loss_usd"), declared)
+    assert metric_matches_declaration(_tokens("arr_drop"), declared)
+    assert not metric_matches_declaration(_tokens("latest_arr"), declared)
+    assert not metric_matches_declaration(_tokens("arr"), declared)
+    assert not metric_matches_declaration(_tokens("current_arr"), declared)
+    assert not metric_matches_declaration(_tokens("q4"), declared)
+    assert metric_matches_declaration(_tokens("business_impact"), "business impact")
+    assert metric_matches_declaration(_tokens("impact"), "Estimated impact (USD)")
+    assert not metric_matches_declaration(_tokens("business"), "business impact")
+    assert metric_matches_declaration(_tokens("arr_decline"), "ARR decline between 2025/Q4 and 2026/Q2")
+    assert metric_matches_declaration(_tokens("pct_loss"), "ARR loss percentage")
+    assert metric_matches_declaration(_tokens("loss"), "USD loss (largest first)")
+
+    request = infer_requested_ranking("rank by business impact")
+    talked_into_it = "Ranking metric: absolute ARR loss in USD.\nSegments ranked by current ARR."
+    problems = check_ranking_disclosure(talked_into_it, request)
+    assert problems and "ranked by current ARR" in problems[0]
+
+
 def test_answer_hygiene_catches_leaked_object_reprs():
     from fabric_rlm.analytical_integrity import check_answer_hygiene
 
@@ -407,6 +431,25 @@ def test_zero_change_items_in_an_answer_about_change_are_flagged():
     assert check_zero_change_items("Change: $0.05 (rounding); drop = $10") == []
     assert task_asks_about_change("Identify the segments whose ARR deteriorated and rank them")
     assert not task_asks_about_change("What is total ARR by region?")
+
+
+def test_anaphoric_ranked_by_phrase_refers_to_the_declaration():
+    """From a live Parquet run: "this metric" is the declared one, and its
+    parenthetical gloss is not a second metric."""
+    request = infer_requested_ranking("rank them by business impact of the deterioration")
+    answer = (
+        "Ranking metric (business impact): business_impact = absolute USD decline from 2025/Q4 to 2026/Q2. "
+        "We sort descending by this metric (revenue at-risk).\n"
+        "Ranked segments (sorted by business_impact):"
+    )
+    assert check_ranking_disclosure(answer, request) == []
+    # "(largest first)" after the metric is an ordering note
+    assert check_ranking_disclosure(
+        "Ranking metric: absolute ARR loss in USD.\nSegments ranked by USD loss (largest first).", request
+    ) == []
+    assert check_ranking_disclosure(
+        "Ranking metric: absolute ARR loss in USD.\nSegments ranked by current ARR (largest first).", request
+    )
 
 
 def test_concept_mention_requires_the_head_of_the_concept():

@@ -42,6 +42,7 @@ __all__ = [
     "declared_ranking_phrases",
     "infer_requested_ranking",
     "is_material_change",
+    "metric_matches_declaration",
     "parse_directional_claims",
     "restrict_to_candidate_tuples",
     "validate_analysis_integrity",
@@ -519,6 +520,91 @@ def _first_clause(text: str) -> str:
     return re.split(r"(?<=\S)\.\s|;|\n", text, maxsplit=1)[0].strip()
 
 
+# Tokens that describe a metric without identifying it: units, scale and
+# ordering words, and the word "metric" itself. Ignored when matching a code
+# field against a declared ranking metric. Built through ``_tokens`` so the
+# entries are in the same stemmed form as the tokens they are compared with.
+_GENERIC_METRIC_TOKENS = set(_tokens(
+    "USD EUR GBP dollar dollars value values amount amounts unit units metric "
+    "measure total net estimated estimate largest smallest highest lowest first "
+    "top bottom"
+))
+# Words for a movement of a quantity. A field named ``drop`` is about the same
+# thing as a declared "loss"; ``latest`` or ``current`` is not.
+_MOVEMENT_TOKENS = set(_tokens(
+    "loss losses drop drops decline declines declined decrease decreases fall "
+    "falls reduction reductions delta deltas change changes difference "
+    "differences diff movement deterioration erosion shrinkage gain gains "
+    "growth increase increases rise uplift improvement"
+))
+_ABBREVIATIONS = {
+    "pct": "percent", "abs": "absolute", "avg": "average", "amt": "amount",
+    "qty": "quantity", "cnt": "count", "num": "number", "rev": "revenue",
+    "chg": "change", "diff": "difference",
+}
+# A qualifier that follows the metric proper: "(largest first)", "between
+# 2025/Q4 and 2026/Q2", "at 2026/Q2", "relative to the prior quarter".
+_METRIC_QUALIFIER_RE = re.compile(
+    r"\s*[(\[]|\s+(?:between|from|over|during|since|within|after|before|versus|vs\.?|as\s+of|at|"
+    r"across|compared|relative|among|excluding|including)\b",
+    re.IGNORECASE,
+)
+
+# "this metric", "the same", "it": a reference back to a metric already named.
+_ANAPHORA_RE = re.compile(
+    r"^(?:this|that|these|those|it|the\s+(?:same|above|latter|former|metric\s+above))\b",
+    re.IGNORECASE,
+)
+
+
+def _metric_core(phrase: str) -> str:
+    """The metric phrase without its trailing qualifiers."""
+    text = str(phrase or "").strip()
+    m = _METRIC_QUALIFIER_RE.search(text)
+    core = text[: m.start()].strip() if m else text
+    return core or text
+
+
+def _content_tokens(phrase: str) -> list[str]:
+    tokens = _tokens(_metric_core(phrase))
+    return [t for t in tokens if t not in _GENERIC_METRIC_TOKENS] or tokens
+
+
+def _token_matches(a: str, b: str) -> bool:
+    a = _ABBREVIATIONS.get(a, a)
+    b = _ABBREVIATIONS.get(b, b)
+    if a == b:
+        return True
+    if a in _MOVEMENT_TOKENS and b in _MOVEMENT_TOKENS:
+        return True
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    return len(shorter) >= 3 and longer.startswith(shorter)
+
+
+def metric_matches_declaration(field_tokens: Sequence[str], declaration: str) -> bool:
+    """Whether a declared ranking metric can vouch for a code sort field.
+
+    The declaration is read without its qualifiers ("absolute ARR loss in
+    USD (arr_2025Q4 - arr_2026Q2)" is "absolute ARR loss") and its last
+    content word is the concept it names, here ``loss``. The field must
+    name that concept, and every content token of the field must be
+    accounted for by the declaration (prefix-tolerant, so ``abs`` matches
+    ``absolute``; movement words such as ``drop`` and ``loss`` match each
+    other). So the declaration above covers ``abs_loss``, ``abs_loss_usd``
+    and ``arr_drop`` but not ``latest_arr`` or ``arr``: sharing the token
+    ``arr`` is not equivalence, and an answer cannot talk the check into
+    accepting a sort it did not do.
+    """
+    field = [t for t in field_tokens if t not in _GENERIC_METRIC_TOKENS] or list(field_tokens)
+    declared = _content_tokens(declaration)
+    if not field or not declared:
+        return False
+    head = declared[-1]
+    if not any(_token_matches(f, head) for f in field):
+        return False
+    return all(any(_token_matches(f, d) for d in declared) for f in field)
+
+
 def _declared_metric_phrases(text: str) -> list[str]:
     """Only the explicit "ranking metric: ..." declarations."""
     phrases: list[str] = []
@@ -553,11 +639,11 @@ def check_ranking_disclosure(text: str | None, request: RankingRequest) -> list[
     body = str(text or "")
     answer_tokens = _tokens(body)
     head_tokens = [concept_head(request.concept)] if concept_head(request.concept) else list(request.tokens)
-    declared = [tok for phrase in _declared_metric_phrases(body) for tok in _tokens(phrase)]
+    declared_phrases = [phrase for phrase in _declared_metric_phrases(body) if _tokens(phrase)]
     # An explicit "Ranking metric: ..." declaration makes the ranking auditable
     # even when the concept word itself is absent; without one, the answer
     # must at least name the concept it was asked to rank by.
-    if not declared and not _stems_overlap(head_tokens, answer_tokens):
+    if not declared_phrases and not _stems_overlap(head_tokens, answer_tokens):
         problems.append(
             f"The task asked to rank by {request.concept!r}, but the answer never "
             f"mentions {request.concept!r}. Show the ranking metric (a column such "
@@ -567,7 +653,12 @@ def check_ranking_disclosure(text: str | None, request: RankingRequest) -> list[
     head = concept_head(request.concept)
     seen_phrases: set[str] = set()
     for match in _RANKED_BY_RE.finditer(body):
-        metric_tokens = _tokens(match.group("metric"))
+        raw = match.group("metric").strip()
+        # "sort descending by this metric (revenue at-risk)" points back at
+        # the metric the answer named; it is not a second metric.
+        if _ANAPHORA_RE.match(raw):
+            continue
+        metric_tokens = _tokens(_metric_core(raw))
         if not metric_tokens:
             continue
         phrase_key = " ".join(metric_tokens)
@@ -580,8 +671,8 @@ def check_ranking_disclosure(text: str | None, request: RankingRequest) -> list[
             continue
         # "ranked by USD loss" is consistent with a declared "Ranking metric:
         # absolute ARR loss in USD"; the declaration is where the reader
-        # audits the choice.
-        if declared and _stems_overlap(declared, metric_tokens):
+        # audits the choice. "ranked by current ARR" is not covered by it.
+        if any(metric_matches_declaration(metric_tokens, phrase) for phrase in declared_phrases):
             continue
         # or the concept is tied to it in the same sentence
         sentence = _sentence_around(body, match.start(), match.end())

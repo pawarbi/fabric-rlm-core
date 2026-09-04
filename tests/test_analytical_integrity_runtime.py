@@ -57,6 +57,18 @@ def test_ranking_validator_requires_the_requested_metric_to_be_shown():
         v({"analysis": "Segments ranked by current ARR; impact could not be computed."})
 
 
+def test_grain_validator_honours_table_qualification_on_records():
+    """Review round 3: the validator must not pre-normalise away the table."""
+    v = assert_grain_preserved("rows", ["Products[Region]"])
+    v({"rows": [{"Products[Region]": "US", "arr": 1}]})
+    with pytest.raises(AssertionError, match=r"missing \['Products\[Region\]'\]"):
+        v({"rows": [{"Sold To[Region]": "US", "arr": 1}]})
+    both = assert_grain_preserved("rows", ["Products[Region]", "Sold To[Region]"])
+    both({"rows": [{"Products[Region]": "US", "Sold To[Region]": "CA", "arr": 1}]})
+    with pytest.raises(AssertionError):
+        both({"rows": [{"region": "US", "Sold To[Region]": "CA", "arr": 1}]})
+
+
 def test_grain_validator_on_records_and_on_text():
     v = assert_grain_preserved("rows", ["product", "region", "customer group"])
     v({"rows": [{"product": "A", "region": "US", "customer_group": "Enterprise", "arr": 1}]})
@@ -175,6 +187,26 @@ def test_an_unrelated_merge_or_partial_restriction_does_not_repair():
     assert [i for i in Trajectory(turns=before).diagnose() if i.kind == "cartesian_candidate_filter"]
 
 
+def test_repair_must_operate_on_the_expanded_result():
+    """Review round 3: a same-keys merge between unrelated frames is not a repair."""
+    unrelated_same_keys = [
+        _turn(1, LIVE_AGGREGATE_CODE),
+        _turn(2, "audit = other_data.merge(reference, on=['product', 'region', 'customer_group'])"),
+    ]
+    assert [i for i in Trajectory(turns=unrelated_same_keys).diagnose() if i.kind == "cartesian_candidate_filter"]
+    on_the_result = [
+        _turn(1, LIVE_AGGREGATE_CODE),
+        _turn(2, "seg_3q = seg_3q.merge(seg_latest[['product', 'region', 'customer_group']].drop_duplicates(), on=['product', 'region', 'customer_group'])"),
+    ]
+    assert [i for i in Trajectory(turns=on_the_result).diagnose() if i.kind == "cartesian_candidate_filter"] == []
+    through_an_alias = [
+        _turn(1, LIVE_AGGREGATE_CODE),
+        _turn(2, "hist = seg_3q.rename(columns={'Products[Product]': 'product'})"),
+        _turn(3, "hist = restrict_to_candidate_tuples(hist, seg_latest, keys=['product', 'region', 'customer_group'])"),
+    ]
+    assert [i for i in Trajectory(turns=through_an_alias).diagnose() if i.kind == "cartesian_candidate_filter"] == []
+
+
 def test_single_or_unrelated_isin_filters_are_not_flagged():
     single = "regions = candidates['region'].unique()\nout = seg[seg['region'].isin(regions)]"
     unrelated = (
@@ -261,6 +293,26 @@ def test_polars_sorted_and_sql_order_by_are_read():
     assert detect_ranking_drift([_turn(1, 'rows = sorted(rows, key=lambda r: r.risk_score, reverse=True)')], request) is None
     assert detect_ranking_drift([_turn(1, 'df = con.sql("SELECT * FROM t ORDER BY revenue DESC LIMIT 5").df()')], request) is not None
     assert detect_ranking_drift([_turn(1, 'df = con.sql("SELECT * FROM t ORDER BY t.risk_score DESC")')], request) is None
+
+
+def test_a_declaration_cannot_vouch_for_a_sort_it_does_not_describe():
+    """Review round 3: "absolute ARR loss in USD" shares the token "arr" with
+    latest_arr; that overlap must not certify the wrong sort."""
+    request = infer_requested_ranking("rank by business impact of deterioration")
+    turns = [
+        _turn(1, 'ranked = summary.sort_values("latest_arr", ascending=False)'),
+        _turn(2, 'SUBMIT(analysis=answer)', submitted=True),
+    ]
+    answer = "Ranking metric: absolute ARR loss in USD.\n1. Cloud DDoS ..."
+    issue = detect_ranking_drift(turns, request, answer_text=answer)
+    assert issue is not None and issue.kind == "ranking_drift"
+    # a single-token field needs an exact declaration
+    single = [_turn(1, 'ranked = summary.sort_values("arr", ascending=False)'), _turn(2, 'SUBMIT(analysis=answer)', submitted=True)]
+    assert detect_ranking_drift(single, request, answer_text=answer) is not None
+    assert detect_ranking_drift(single, request, answer_text="Ranking metric: ARR.") is None
+    # the declaration still covers the fields it describes
+    covered = [_turn(1, 'ranked = summary.sort_values("abs_loss_usd", ascending=False)'), _turn(2, 'SUBMIT(analysis=answer)', submitted=True)]
+    assert detect_ranking_drift(covered, request, answer_text=answer) is None
 
 
 def test_a_metric_the_answer_declares_as_the_ranking_is_accepted():

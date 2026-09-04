@@ -512,13 +512,16 @@ def assert_grain_preserved(key: str, dimensions: Iterable[str]) -> Validator:
             return
         explanation = payload.get("grain_note") or payload.get("grain_explanation")
         if isinstance(val, (list, tuple)) and val and all(isinstance(r, Mapping) for r in val):
-            first = val[0]
-            actual = list(first.keys())
-            present = [d for d in wanted if any(
-                _norm(d) == _norm(k) for k in actual
-            )]
+            # Hand the record keys to validate_grain as they are: it matches
+            # leaf names when they are unique and requires the table
+            # qualification when they are not, so Sold To[Region] cannot
+            # stand in for Products[Region]. Extra record columns (measures)
+            # are not grain, so only the requested dimensions are compared.
+            actual = [str(k) for k in val[0].keys()]
+            requested_leaves = {_norm(d) for d in wanted}
+            actual_dims = [k for k in actual if _norm(k) in requested_leaves]
             try:
-                validate_grain(requested=wanted, actual=present, explanation=explanation)
+                validate_grain(requested=wanted, actual=actual_dims, explanation=explanation)
             except AnalyticalIntegrityError as exc:
                 assert False, str(exc)
             return

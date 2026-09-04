@@ -757,6 +757,32 @@ def _is_tuple_repair(statement: ast.stmt, columns: Sequence[str]) -> bool:
     return False
 
 
+def _repaired_downstream(
+    later: Sequence[tuple[int, ast.stmt]], columns: Sequence[str], outputs: set[str]
+) -> bool:
+    """Whether a later statement restores the compound identity of the
+    expanded result itself.
+
+    ``outputs`` are the variables the consumer wrote (``seg_3q`` for
+    ``seg_3q = model.aggregate(...)``). A repair must reference one of them
+    or an alias derived from them (``hist = seg_3q.rename(...)`` then
+    ``restrict_to_candidate_tuples(hist, ...)``) and cover every flagged
+    column; a merge on the same keys between unrelated frames is not a
+    repair of this result.
+    """
+    expanded = set(outputs)
+    if not expanded:
+        return False
+    for _turn, statement in later:
+        reads = _referenced_names(statement)
+        if reads & expanded and _is_tuple_repair(statement, columns):
+            return True
+        writes = _written_names(statement)
+        if reads & expanded and writes:
+            expanded |= writes
+    return False
+
+
 def _joint_consumer(
     statement: ast.stmt, lists: dict[str, tuple[str, str]]
 ) -> tuple[str, str, list[str], list[str]] | None:
@@ -798,11 +824,13 @@ def _detect_independent_dimension_filters(turns: Sequence[TurnRecord]) -> Iterat
     candidate frame never contained.
 
     The issue is tied to its provenance: it is dropped only when a later
-    statement (same turn or later) restores the compound identity on those
-    same dimensions, via ``restrict_to_candidate_tuples(..., keys=[...])``
-    or a ``merge(..., on=[...])`` covering them. Retrieving a bounded
-    superset and restricting it at once is therefore fine; an unrelated
-    merge on other keys does not clear it.
+    statement (same turn or later) restores the compound identity of the
+    expanded result itself, referencing the variable the consumer wrote or
+    an alias derived from it, via ``restrict_to_candidate_tuples(...,
+    keys=[...])`` or a ``merge(..., on=[...])`` covering those same
+    dimensions. Retrieving a bounded superset and restricting it at once is
+    therefore fine; a merge on other keys, or on the same keys between
+    unrelated frames, does not clear it.
     """
     statements = _statements(turns)
     lists: dict[str, tuple[str, str]] = {}
@@ -812,8 +840,8 @@ def _detect_independent_dimension_filters(turns: Sequence[TurnRecord]) -> Iterat
             found = _joint_consumer(statement, lists)
             if found is not None:
                 consumer, frame, group, cols = found
-                repaired = _is_tuple_repair(statement, cols) or any(
-                    _is_tuple_repair(later, cols) for _t, later in statements[position + 1:]
+                repaired = _is_tuple_repair(statement, cols) or _repaired_downstream(
+                    statements[position + 1:], cols, _written_names(statement)
                 )
                 if not repaired:
                     reported_turns.add(turn)
@@ -997,17 +1025,25 @@ def detect_ranking_drift(
     three assignments deep, from a field that does (``df["rank"] =
     df["impact"].rank()``), or when ``answer_text`` declares it as the
     ranking metric ("Ranking metric: absolute ARR loss" covers a sort by
-    ``abs_loss``). Two live runs sorted by a correctly derived loss column
+    ``abs_loss``: every token of the field is accounted for by the
+    declaration, see ``metric_matches_declaration``; it does not cover
+    ``latest_arr``, so an answer cannot talk the check into accepting a sort
+    it did not do). Two live runs sorted by a correctly derived loss column
     and were sent back only because it was not named "impact"; one of them
     then invented a stranger metric to satisfy the name. Whether a declared
     metric answers the concept is the disclosure check's question, not this
     one's.
     """
-    from .analytical_integrity import _stems_overlap, _tokens, declared_ranking_phrases
+    from .analytical_integrity import (
+        _stems_overlap,
+        _tokens,
+        declared_ranking_phrases,
+        metric_matches_declaration,
+    )
 
     if request is None:
         return None
-    declared_tokens = [tok for phrase in declared_ranking_phrases(answer_text) for tok in _tokens(phrase)]
+    declared_phrases = [p for p in declared_ranking_phrases(answer_text) if _tokens(p)]
     statements = _statements(turns)
     sites: list[tuple[int, list[str], set[str]]] = []
     derived: dict[str, set[str]] = {}
@@ -1026,7 +1062,7 @@ def detect_ranking_drift(
         field_tokens = _tokens(field)
         if _stems_overlap(concept, field_tokens):
             return True
-        if declared_tokens and _stems_overlap(declared_tokens, field_tokens):
+        if any(metric_matches_declaration(field_tokens, phrase) for phrase in declared_phrases):
             return True
         if depth >= 3:
             return False

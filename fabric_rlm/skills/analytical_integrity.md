@@ -69,10 +69,17 @@ or drop to individual customers, without saying so and why.
 
 ## Derived metrics and time
 
-Recompute rates, shares, deltas, and averages from their verified components
-rather than trusting a model-supplied figure. "Current", "latest", and
-"this quarter" must use the source's business time (a current-period flag,
-an as-of date) when one exists, not the maximum date in the data.
+Prefer the governed metric definition. When independently verified primitive
+components are available and semantically equivalent, recompute the derived
+value (a rate, share, delta, average) as a validation check. Do not replace a
+governed measure with a raw reconstruction unless the task explicitly requires
+it or the governed calculation is shown to be unusable in the required
+context. A context-sensitive derived measure (a growth rate, a retention
+rate, a previous-period comparison) is not trustworthy until its required
+evaluation context, such as the comparison period, has been established.
+"Current", "latest", and "this quarter" must use the source's business time
+(a current-period flag, an as-of date) when one exists, not the maximum date
+in the data.
 
 ## Several sources contributing to one finding
 
