@@ -448,6 +448,33 @@ def test_integrity_mode_values_are_validated():
         RLM.from_task("x", outputs=["a"], lm=ScriptedLM([]), analytical_integrity="lenient")
 
 
+def test_leaked_object_repr_is_sent_back(monkeypatch):
+    leaked = "Ranked by impact.\n1. Product='<bound method Series.prod of product Cloud DDoS>'"
+    fixed = "Ranked by impact.\n1. Cloud DDoS | APAC | TELCO: impact $1,500,000."
+    fake = FakeInterpreter([_submit({"analysis": leaked}), _submit({"analysis": fixed})])
+    monkeypatch.setattr(runtime_mod, "Interpreter", lambda **kwargs: fake)
+    monkeypatch.delenv("FABRIC_RLM_ANALYTICAL_INTEGRITY", raising=False)
+    lm = ScriptedLM([_fence(f"SUBMIT(analysis={leaked!r})"), _fence(f"SUBMIT(analysis={fixed!r})")])
+
+    result = RLM.from_task("Rank segments by impact.", outputs=["analysis"], lm=lm, max_turns=4, timeout=5).run()
+
+    assert result.payload == {"analysis": fixed}
+    history = result.trajectory.metadata["verifier_repair_history"]
+    assert "object representation" in history[0]["assertion"]
+
+
+def test_defined_metric_note_names_only_head_related_columns():
+    request = infer_requested_ranking("rank by business impact of the deterioration")
+    turns = [
+        _turn(1, 'rank_df["deterioration_timing"] = "inside"\nrank_df = rank_df.sort_values("latest_arr")'),
+        _turn(2, 'SUBMIT(analysis=str(rank_df))', submitted=True),
+    ]
+    issue = detect_ranking_drift(turns, request)
+    assert issue is not None
+    assert "deterioration_timing" not in issue.message
+    assert "No metric for" in issue.message
+
+
 def test_a_clean_answer_to_a_plain_question_is_not_touched(monkeypatch):
     fake = FakeInterpreter([_submit({"answer": "Total ARR is 4.2M, up from 3.9M a year ago."})])
     monkeypatch.setattr(runtime_mod, "Interpreter", lambda **kwargs: fake)

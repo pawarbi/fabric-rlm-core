@@ -270,6 +270,43 @@ def test_ranking_disclosure_requires_the_metric_to_be_visible():
     ) == []
 
 
+def test_ranked_by_phrase_is_read_with_the_declared_ranking_metric():
+    """From a live CSV run: the answer declared its metric, then said
+    'ranked by USD loss'. Consistent disclosure, not a substitution."""
+    from fabric_rlm.analytical_integrity import declared_ranking_phrases
+
+    request = infer_requested_ranking("rank them by business impact of the deterioration")
+    answer = (
+        "Ranking metric: absolute ARR loss in USD (arr_2025Q4 - arr_2026Q2). Tie-breaker: percent loss.\n"
+        "Found 3 deteriorated segments; ranked by USD loss (largest first).\n"
+        "1. Cloud DDoS | APAC | TELCO: Ranking metric: USD loss = $1,500,000.00"
+    )
+    assert check_ranking_disclosure(answer, request) == []
+    assert "absolute ARR loss in USD (arr_2025Q4 - arr_2026Q2)" in declared_ranking_phrases(answer)
+    assert not any("Tie-breaker" in p for p in declared_ranking_phrases(answer))
+
+    labelled = "Ranking metric (business impact): absolute USD decline from 2025/Q4 to 2026/Q2 (larger = higher impact)."
+    phrases = declared_ranking_phrases(labelled)
+    assert "business impact" in phrases
+    assert any(p.startswith("absolute USD decline") for p in phrases)
+
+    same_sentence = "Segments ranked by USD lost, which is how we measured business impact here. Details follow."
+    assert check_ranking_disclosure(same_sentence, request) == []
+
+    bare_substitution = "Rank | Segment | ARR\nSegments ranked by current ARR.\n\nImpact analysis: see above."
+    problems = check_ranking_disclosure(bare_substitution, request)
+    assert problems and "ranked by current ARR" in problems[0]
+
+
+def test_answer_hygiene_catches_leaked_object_reprs():
+    from fabric_rlm.analytical_integrity import check_answer_hygiene
+
+    leaked = "1. Product='<bound method Series.prod of product    Cloud DDoS\nregion  APAC\nName: 0, dtype: object>'"
+    assert check_answer_hygiene(leaked) and "object representation" in check_answer_hygiene(leaked)[0]
+    assert check_answer_hygiene("1. Cloud DDoS | APAC | TELCO: ARR fell from 5,000,000 to 3,500,000.") == []
+    assert check_answer_hygiene("The class of product is 'Cloud'; method: pivot then compare.") == []
+
+
 # -- grain ------------------------------------------------------------------------
 
 

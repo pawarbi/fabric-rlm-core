@@ -1048,7 +1048,10 @@ def detect_ranking_drift(
         considered = list(sites)
     if any(related(f) for _turn, fields, _w in considered for f in fields):
         return None
-    concept_columns = [name for name in derived if _stems_overlap(concept, _tokens(name))]
+    from .analytical_integrity import concept_head
+
+    head = concept_head(request.concept)
+    concept_columns = [name for name in derived if head and _stems_overlap([head], _tokens(name))]
     defined_note = (
         f" A metric named {concept_columns[0]!r} was defined but the ranking that reaches the answer did not use it."
         if concept_columns

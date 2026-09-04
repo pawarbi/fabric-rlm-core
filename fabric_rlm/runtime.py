@@ -133,6 +133,7 @@ from .skill_loader import Skill, SkillLoader, compose_skills
 from .skill_router import RouteDecision, SkillRouter
 from .trajectory import Trajectory, TurnRecord, detect_ranking_drift
 from .analytical_integrity import (
+    check_answer_hygiene,
     check_directional_claims,
     check_ranking_disclosure,
     infer_requested_ranking,
@@ -2683,6 +2684,7 @@ class RLM:
                 stack.extend(item)
         combined = "\n".join(texts)
         problems: list[str] = []
+        problems.extend(check_answer_hygiene(combined))
         problems.extend(check_directional_claims(combined))
 
         task_text, _ = _task_and_outputs(self.signature, self._inline_task, self._inline_outputs)

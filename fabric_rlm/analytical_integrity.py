@@ -32,6 +32,7 @@ __all__ = [
     "IntegrityReport",
     "RankingRequest",
     "change_direction",
+    "check_answer_hygiene",
     "check_directional_claims",
     "check_ranking_disclosure",
     "classify_claim_level",
@@ -481,12 +482,17 @@ def infer_requested_ranking(task_text: str | None) -> RankingRequest | None:
     return None
 
 
+# "ranked by X", "rank them by X", "sorted (descending) by X", "ordered by X"
 _RANKED_BY_RE = re.compile(
-    r"\b(?:rank(?:ed|ing)?|sort(?:ed)?|order(?:ed)?)\s+by\s+(?P<metric>[^.,;:\n]{1,80})",
+    r"\b(?:rank(?:ed|ing)?|sort(?:ed)?|order(?:ed)?)\b(?:\s+\w+){0,3}?\s+by\s+(?P<metric>[^.,;:\n]{1,80})",
     re.IGNORECASE,
 )
+# "Ranking metric: X", "Ranking metric (label): X", "ranking metric = X",
+# "Ranking metric (X)". The parenthetical is a label for the concept, the
+# metric is what follows the colon; both are kept as declared vocabulary.
 _RANKING_METRIC_RE = re.compile(
-    r"\brank(?:ed|ing)?\s+(?:metric|measure|field|criterion|key)\b[^:=(\n]{0,40}[:=(]\s*(?P<metric>[^\n)]{1,80})",
+    r"\brank(?:ed|ing)?\s+(?:metric|measure|field|criterion|key|basis)\b"
+    r"\s*(?:\((?P<label>[^)\n]{0,80})\))?\s*(?:[:=]\s*(?P<metric>[^\n]{1,100}))?",
     re.IGNORECASE,
 )
 
@@ -494,14 +500,44 @@ _RANKING_METRIC_RE = re.compile(
 def declared_ranking_phrases(text: str | None) -> list[str]:
     """The metric phrases an answer says it ranked by.
 
-    Reads "ranked by X", "sorted by X", "ordered by X" and "ranking metric:
-    X" / "ranking metric (X)". Used so a ranking the answer discloses is
-    never mistaken for drift because of how the code named its column.
+    Reads "ranked by X", "rank them by X", "sorted by X", "ordered by X",
+    "Ranking metric: X", "Ranking metric (label): X" and "Ranking metric
+    (X)". Used so a ranking the answer discloses is never mistaken for
+    drift because of how the code named its column, and so a "ranked by"
+    phrase is read together with the metric declaration it refers to.
     """
     body = str(text or "")
     phrases = [m.group("metric").strip() for m in _RANKED_BY_RE.finditer(body)]
-    phrases.extend(m.group("metric").strip() for m in _RANKING_METRIC_RE.finditer(body))
+    phrases.extend(_declared_metric_phrases(body))
     return [p for p in phrases if p]
+
+
+def _first_clause(text: str) -> str:
+    """Up to the first sentence or clause end: ". ", ";" or a line break."""
+    return re.split(r"(?<=\S)\.\s|;|\n", text, maxsplit=1)[0].strip()
+
+
+def _declared_metric_phrases(text: str) -> list[str]:
+    """Only the explicit "ranking metric: ..." declarations."""
+    phrases: list[str] = []
+    for m in _RANKING_METRIC_RE.finditer(text):
+        for part in (m.group("label"), m.group("metric")):
+            if part and part.strip():
+                phrases.append(_first_clause(part))
+    return [p for p in phrases if p]
+
+
+def _sentence_around(text: str, start: int, end: int) -> str:
+    """The sentence or clause that contains ``text[start:end]``."""
+    boundaries = re.compile(r"(?<=\S)\.\s|;|\n")
+    left = 0
+    for m in boundaries.finditer(text, 0, start):
+        left = m.end()
+    right = len(text)
+    m = boundaries.search(text, end)
+    if m:
+        right = m.start()
+    return text[left:right]
 
 
 def check_ranking_disclosure(text: str | None, request: RankingRequest) -> list[str]:
@@ -521,6 +557,8 @@ def check_ranking_disclosure(text: str | None, request: RankingRequest) -> list[
             f"as 'Estimated {request.concept}' or a line 'ranked by ...') so the "
             "ranking is auditable."
         )
+    declared = [tok for phrase in _declared_metric_phrases(body) for tok in _tokens(phrase)]
+    head = concept_head(request.concept)
     for match in _RANKED_BY_RE.finditer(body):
         metric_tokens = _tokens(match.group("metric"))
         if not metric_tokens:
@@ -529,12 +567,48 @@ def check_ranking_disclosure(text: str | None, request: RankingRequest) -> list[
             continue
         if "proxy" in body.lower():
             continue
+        # "ranked by USD loss" is consistent with a declared "Ranking metric:
+        # absolute ARR loss in USD"; the declaration is where the reader
+        # audits the choice.
+        if declared and _stems_overlap(declared, metric_tokens):
+            continue
+        # or the concept is tied to it in the same sentence
+        sentence = _sentence_around(body, match.start(), match.end())
+        if head and _stems_overlap([head], _tokens(sentence)):
+            continue
         problems.append(
             f"The answer says {match.group(0).strip()!r} but the task asked to rank "
             f"by {request.concept!r}. Rank by a metric for {request.concept!r}, or "
             "state that the field used is a proxy and why."
         )
     return problems
+
+
+_REPR_LEAK_RE = re.compile(
+    r"<bound method |<function [\w.<>]+ at 0x|<class '|<[\w.]+ object at 0x|"
+    r"<generator object|<map object|<filter object|\bNaN\b(?=[^\n]*\bdtype\b)|"
+    r"dtype: (?:object|float64|int64)\s*$",
+    re.MULTILINE,
+)
+
+
+def check_answer_hygiene(text: str | None) -> list[str]:
+    """Problems that mean the answer text was never a finished answer.
+
+    Catches Python object representations leaking into prose, such as
+    ``<bound method Series.prod of ...>``, which a live repair turn produced
+    when a fix introduced a bug and the model submitted anyway. Formatting
+    only; no source query is needed.
+    """
+    body = str(text or "")
+    match = _REPR_LEAK_RE.search(body)
+    if not match:
+        return []
+    snippet = body[max(0, match.start() - 40): match.end() + 60].replace("\n", " ")
+    return [
+        f"The answer contains a raw Python object representation ({snippet.strip()!r}). "
+        "Format the values (names, numbers) rather than printing objects, then submit again."
+    ]
 
 
 # ---------------------------------------------------------------------------
