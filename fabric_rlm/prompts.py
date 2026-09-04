@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any
+from typing import Mapping, Any
 
 
 SYSTEM_PROMPT_TEMPLATE = """You are an RLM (Recursive Language Model) running in a Python REPL.
@@ -21,7 +21,8 @@ Both return a Prediction object; read outputs by field name, for example
 `predict_sync("text -> label", text=text).label`.
 Use instructions for task-specific guidance, pydantic_schemas for typed outputs, and dspy.Image input fields for images.
 `SUBMIT(**fields)` finishes the task. You MUST call SUBMIT once ready. SUBMIT is already defined in your namespace; never import it.
-{skill_section}
+`is_material_change(current, baseline, absolute_tolerance=0, relative_tolerance=0, direction=None)` and `restrict_to_candidate_tuples(frame, candidates, keys=[...])` are predefined; `validate_analysis_integrity(...)` runs pre-SUBMIT analytical checks.
+{skill_section}{cross_source_section}
 
 ## Code style - critical
 
@@ -65,6 +66,7 @@ Submit every listed field. Required fields may not be None or blank strings. Fie
 - Do NOT submit clarification requests, acknowledgements, or "please confirm" messages as your answer. Phrases like "Acknowledged", "Please confirm/clarify/specify/provide", "I need more information", "Could you please...", or "Before I can answer..." are NEVER valid SUBMIT payloads.
 - If information appears missing, make the most reasonable assumption, state it inline, and answer based on that assumption.
 - If the prompt enumerates sub-questions (Q1..Qn, numbered list, or "Part N"), produce ONE answer per sub-question in the same order. Partial answers (e.g. 3 elements when 50 sub-questions are listed) will be rejected.
+- Analytical integrity, whatever the data source: never call a value increasing, decreasing, improving, or deteriorating just because one float is larger than another; use is_material_change with a materiality rule you state. When asked to rank by a concept (impact, risk, deterioration), define the metric for it, sort by that metric, and show it in the answer; name and justify any proxy. Keep multidimensional candidates as tuples (restrict_to_candidate_tuples), never independent per-dimension lists. Keep the requested grain or say why it changed. Attribute each material figure to its input; do not combine inputs with different periods, units, or metric definitions silently, and surface contradictions instead of resolving them. Submissions whose prose contradicts their numbers, or that hide the requested ranking metric, are rejected.
 
 Begin. Write your first code block.
 """
@@ -97,6 +99,67 @@ def build_system_prompt(
         skill_section=_format_skill_section(
             skill_index, preloaded_skills, skill_cards=skill_cards, router_active=router_active
         ),
+        cross_source_section=_cross_source_section(inputs),
+    )
+
+
+def is_evidence_source(value: Any) -> bool:
+    """True for an input that carries evidence the analysis will reason over.
+
+    Decided by the ``__rlm_evidence_source__`` class marker rather than by a
+    list of classes, so a new source type opts in with one attribute and
+    the harness never has to learn its name. ``File``, ``LakehouseSource``
+    and ``SemanticModel`` carry the marker; an output sink such as
+    ``FileDestination`` does not.
+    """
+    return bool(getattr(type(value), "__rlm_evidence_source__", False))
+
+
+def evidence_leaves(inputs: Any, prefix: str = "") -> list[str]:
+    """Dotted paths of every evidence source inside ``inputs``, at any depth.
+
+    ``{"customer": {"arr": SemanticModel(...), "usage": LakehouseSource(...)}}``
+    yields ``customer.arr`` and ``customer.usage``; a list yields
+    ``sources[0]``, ``sources[1]``. Counting leaves rather than top-level
+    keys is what makes a nested bundle of sources count as several.
+    """
+    leaves: list[str] = []
+    if is_evidence_source(inputs):
+        return [prefix or "input"]
+    if isinstance(inputs, Mapping):
+        for key, value in inputs.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            leaves.extend(evidence_leaves(value, path))
+    elif isinstance(inputs, (list, tuple)):
+        for index, value in enumerate(inputs):
+            leaves.extend(evidence_leaves(value, f"{prefix}[{index}]"))
+    return leaves
+
+
+def _evidence_input_names(inputs: dict[str, Any]) -> list[str]:
+    return evidence_leaves(inputs)
+
+
+def _cross_source_section(inputs: dict[str, Any]) -> str:
+    """A compact checklist, only when a finding may draw on several inputs.
+
+    Activation is by analytical context (two or more evidence-bearing
+    inputs), not by input class: a CSV plus a PDF triggers it exactly as a
+    semantic model plus a Lakehouse does. Costs nothing on single-source
+    tasks.
+    """
+    names = _evidence_input_names(inputs)
+    if len(names) < 2:
+        return ""
+    listed = ", ".join(names)
+    return (
+        "\n\n## Several evidence inputs are bound (" + listed + ")\n"
+        "- Keep every material figure attributed to the input it came from.\n"
+        "- Join entities across inputs on an explicit shared key; a name-based match is inferred evidence and must say so.\n"
+        "- A similar metric name in two inputs is not the same metric: check population, aggregation, and time basis before comparing.\n"
+        "- Compare as-of dates, data availability, and reporting periods; align to a common period or state the mismatch.\n"
+        "- Reconcile unit, currency, and scale explicitly before comparing numbers.\n"
+        "- If the inputs disagree, report the disagreement; do not force one story."
     )
 
 

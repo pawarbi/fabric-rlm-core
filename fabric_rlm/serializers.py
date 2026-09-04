@@ -9,7 +9,10 @@ import types
 from pathlib import Path
 from typing import Any, Mapping
 
-DEFAULT_INJECTED_NAMES = {"File", "SUBMIT", "predict", "predict_sync", "load_skill", "activate_skill", "list_skills"}
+DEFAULT_INJECTED_NAMES = {
+    "File", "SUBMIT", "predict", "predict_sync", "load_skill", "activate_skill", "list_skills",
+    "is_material_change", "restrict_to_candidate_tuples", "validate_analysis_integrity",
+}
 DEFAULT_MAX_SUBMIT_BYTES = 64 * 1024 * 1024
 
 # CPython's default ``object.__repr__`` produces ``<module.path.Class object at

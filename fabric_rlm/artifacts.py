@@ -52,6 +52,9 @@ def _configure_host_file_transport(
 class File:
     """Lightweight file wrapper exposed inside the RLM worker namespace."""
 
+    # Marks an input that carries evidence; see prompts.is_evidence_source.
+    __rlm_evidence_source__ = True
+
     path: str
 
     def __init__(self, path: str | Path):

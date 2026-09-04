@@ -249,6 +249,9 @@ class LakehouseSource:
     isolated worker. Supplying ``catalog`` bypasses discovery.
     """
 
+    # Marks an input that carries evidence; see prompts.is_evidence_source.
+    __rlm_evidence_source__ = True
+
     root: str
     tables: tuple[str, ...] = ("Tables",)
     files: tuple[str, ...] = ()

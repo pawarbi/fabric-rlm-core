@@ -4,6 +4,45 @@
 
 ### Added
 
+- **Source-agnostic analytical integrity guardrails.** `fabric_rlm.analytical_integrity`
+  adds `is_material_change` (noise- and tolerance-aware change test with no
+  built-in business threshold), `restrict_to_candidate_tuples` (keeps
+  multidimensional candidates as compound identities), `validate_ranking`,
+  `validate_grain`, `validate_evidence_lineage` (provenance, cross-source
+  period/unit/definition/entity reconciliation, contradiction surfacing) and
+  the single entry point `validate_analysis_integrity`, which runs whichever
+  checks have inputs. The first two and the entry point are predefined in the
+  sandbox. New validators `assert_directional_claims_consistent`,
+  `assert_ranking_disclosed` and `assert_grain_preserved`; new trajectory
+  detectors `cartesian_candidate_filter` and `ranking_drift` and an
+  `extract_plan` helper. `RLM(analytical_integrity=True)` (default; env
+  `FABRIC_RLM_ANALYTICAL_INTEGRITY=0` disables) rejects, at most twice per
+  run, a SUBMIT whose prose contradicts its own numbers, hides a requested
+  ranking metric, sorted by something other than the requested concept, or
+  followed a cartesian candidate filter. The checks activate by analytical
+  operation, not by input type, so `File`, `LakehouseSource` and
+  `SemanticModel` evidence is held to the same rules. New `analytical_integrity`
+  skill with the cross-source guidance. `RLM(analytical_integrity=...)` takes
+  `"repair"` (default), `"strict"` (never accept a submission with findings)
+  or `False`; `result.integrity_problems` and `result.integrity_ok` expose
+  what a run ended with. The system prompt adds a compact cross-source
+  checklist whenever two or more evidence inputs are bound. Cross-source
+  reconciliation itself (entities, definitions, periods, units,
+  contradictions) is explicit: `validate_evidence_lineage` on declared
+  claims, not an automatic runtime check. The tuple-loss detector is tied to
+  its provenance (a same-turn or later `restrict_to_candidate_tuples` or
+  `merge` on the same dimensions clears it; an unrelated merge does not), the
+  ranking-drift detector follows variable lineage from `SUBMIT` so a display
+  sort of supporting detail is not mistaken for the ranking and also reads
+  polars, pyspark, `sorted` and SQL `ORDER BY`, evidence inputs are counted
+  recursively by a `__rlm_evidence_source__` marker, and grain matching
+  keeps `Products[Region]` and `Sold To[Region]` distinct. A declared
+  ranking metric vouches for a code sort field only when the field names
+  the declaration's concept and every token of the field is accounted for
+  by the declaration, a tuple repair must operate on the expanded result or
+  an alias of it, `assert_grain_preserved` honours table qualification, and
+  the `analytical_integrity` skill prefers the governed metric definition
+  and recomputes only as a validation check.
 - `SemanticModelMetadata` accepts the dictionary-style access generated code
   tends to assume: `meta["columns"]`, `meta.keys()`, `meta.items()`,
   `meta.values()`, `meta.get("measures")`, and `"relationships" in meta`. The

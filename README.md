@@ -612,6 +612,50 @@ The handle gives generated code a clear entry point. Across two semantic models
 and two model families, tasks scored 18-19/19 and 13/15 with the handle. The
 same tasks scored 7/19 and 5/15 when they only named the semantic model.
 
+### Analytical integrity
+
+The same rules apply whether a number came from a `File`, a `LakehouseSource`,
+or a `SemanticModel`. Three helpers are predefined in the sandbox and exported
+from `fabric_rlm`:
+
+```python
+is_material_change(current, baseline, absolute_tolerance=1000, direction="decrease")
+restrict_to_candidate_tuples(history, candidates, keys=["product", "region", "group"])
+validate_analysis_integrity(ranking={...}, requested_grain=[...], actual_grain=[...], claims=[...])
+```
+
+`is_material_change` never treats float noise as a trend and carries no
+business threshold of its own; the analysis states the rule. The tuple helper
+keeps multidimensional candidates as compound identities instead of independent
+per-dimension lists. `validate_analysis_integrity` runs whichever checks have
+inputs: ranking concept versus metric, grain, materiality, candidate identity,
+provenance, and cross-source period, unit, definition, entity, and
+contradiction reconciliation.
+
+Before accepting a `SUBMIT`, the runtime also screens the answer: prose that
+contradicts its own numbers, a "rank by impact" task whose ranking that reaches
+the answer sorted by something else or whose answer hides the impact metric,
+and code that consumed independent per-dimension value lists from a candidate
+frame together (a cartesian filter, whether as `.isin` chains or
+`aggregate(filters=...)`) without restoring the compound identity on those
+dimensions afterwards, are sent back with the reason. The code detectors are
+high-confidence and best-effort: they read pandas, polars, pyspark, `sorted`
+and SQL `ORDER BY` spellings and follow variable lineage from `SUBMIT`, and
+they stay silent when they cannot tell. In the default `"repair"` mode this happens at
+most twice, then the answer is accepted and the findings are exposed as
+`result.integrity_problems` with `result.integrity_ok` false. In `"strict"`
+mode a submission with findings is never accepted. Pass
+`analytical_integrity=False` or set `FABRIC_RLM_ANALYTICAL_INTEGRITY=0` to turn
+the screen off.
+
+Cross-source reconciliation (entities, metric definitions, periods, units,
+contradictions) is not enforced automatically, because the runtime has no
+structured claims to check. It is available three ways: as guidance the prompt
+injects whenever two or more evidence inputs are bound, in the
+`analytical_integrity` skill, and as `validate_evidence_lineage` /
+`validate_analysis_integrity(claims=...)` for an analysis that declares its
+claims, sources, joins, and disclosures.
+
 ### Submission contract
 
 The runtime injects `SUBMIT(...)`. Call it with keyword arguments matching the
