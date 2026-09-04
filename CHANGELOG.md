@@ -22,7 +22,14 @@
   followed a cartesian candidate filter. The checks activate by analytical
   operation, not by input type, so `File`, `LakehouseSource` and
   `SemanticModel` evidence is held to the same rules. New `analytical_integrity`
-  skill with the cross-source guidance.
+  skill with the cross-source guidance. `RLM(analytical_integrity=...)` takes
+  `"repair"` (default), `"strict"` (never accept a submission with findings)
+  or `False`; `result.integrity_problems` and `result.integrity_ok` expose
+  what a run ended with. The system prompt adds a compact cross-source
+  checklist whenever two or more evidence inputs are bound. Cross-source
+  reconciliation itself (entities, definitions, periods, units,
+  contradictions) is explicit: `validate_evidence_lineage` on declared
+  claims, not an automatic runtime check.
 - `SemanticModelMetadata` accepts the dictionary-style access generated code
   tends to assume: `meta["columns"]`, `meta.keys()`, `meta.items()`,
   `meta.values()`, `meta.get("measures")`, and `"relationships" in meta`. The

@@ -413,6 +413,23 @@ class RLMResult:
     max_turns: int | None = None
 
     @property
+    def integrity_problems(self) -> list[str]:
+        """Analytical-integrity findings the run ended with, if any.
+
+        In ``"repair"`` mode (the default) these are the problems still
+        present when the repair budget ran out and the answer was accepted
+        anyway; in ``"strict"`` mode they are the problems of the last
+        rejected submission. Empty when the screen was off or satisfied.
+        """
+        metadata = getattr(self.trajectory, "metadata", None) or {}
+        return list(metadata.get("analytical_integrity_unresolved") or [])
+
+    @property
+    def integrity_ok(self) -> bool:
+        """False when the answer was accepted with unresolved integrity findings."""
+        return not self.integrity_problems
+
+    @property
     def turns(self) -> list[TurnRecord]:
         """Convenience alias for ``self.trajectory.turns``.
 
@@ -905,7 +922,7 @@ class RLM:
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
         output_validator_context: Callable[[Mapping[str, Any], Mapping[str, Any]], None] | None = None,
-        analytical_integrity: bool = True,
+        analytical_integrity: bool | str = True,
         halve_max_iter_on_retry: bool = True,
         engine: str = "auto",
         adaptive: dict | None = None,
@@ -1057,7 +1074,7 @@ class RLM:
             self.digest_after_turn = digest_after_turn
             self.output_validator = output_validator
             self.output_validator_context = output_validator_context
-            self.analytical_integrity = bool(analytical_integrity)
+            self.analytical_integrity = _normalize_integrity_mode(analytical_integrity)
             self._integrity_rejections = 0
             self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
             self._loaded_skills: list[Skill] = []
@@ -1133,7 +1150,7 @@ class RLM:
         self.digest_after_turn = digest_after_turn
         self.output_validator = output_validator
         self.output_validator_context = output_validator_context
-        self.analytical_integrity = bool(analytical_integrity)
+        self.analytical_integrity = _normalize_integrity_mode(analytical_integrity)
         self._integrity_rejections = 0
         self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
         # Per-run counter for repeat-aware repair nudges (keyed by repair target);
@@ -2635,7 +2652,9 @@ class RLM:
             )
         return None
 
-    # Two rejections per run is the budget for the heuristic screens below.
+    # Two rejections per run is the repair budget for the heuristic screens
+    # below; "strict" mode has no budget and keeps rejecting until the run
+    # runs out of turns, so a known-bad answer is never returned as success.
     # They catch prose that contradicts its own numbers; they do not decide
     # the analysis, so past that point the answer is accepted and the
     # unresolved findings are recorded on the trajectory instead.
@@ -2699,10 +2718,14 @@ class RLM:
         ``FABRIC_RLM_ANALYTICAL_INTEGRITY=0``. Graceful degrade like the
         other validators: a bug in the screen never blocks a valid answer.
         """
-        if not getattr(self, "analytical_integrity", True):
+        mode = getattr(self, "analytical_integrity", "repair")
+        if mode == "off":
             return None
-        if os.environ.get("FABRIC_RLM_ANALYTICAL_INTEGRITY", "").strip().lower() in {"0", "false", "off", "no"}:
+        env_mode = os.environ.get("FABRIC_RLM_ANALYTICAL_INTEGRITY", "").strip().lower()
+        if env_mode in {"0", "false", "off", "no"}:
             return None
+        if env_mode == "strict":
+            mode = "strict"
         try:
             problems = self._analytical_integrity_problems(payload, context)
         except Exception as exc:  # noqa: BLE001 - graceful degrade
@@ -2713,11 +2736,17 @@ class RLM:
             )
             return None
         if not problems:
+            cleared = context.get("trajectory")
+            if cleared is not None and hasattr(cleared, "metadata"):
+                cleared.metadata.pop("analytical_integrity_unresolved", None)
             return None
         trajectory = context.get("trajectory")
-        if self._integrity_rejections >= self._ANALYTICAL_INTEGRITY_MAX_REJECTIONS:
-            if trajectory is not None and hasattr(trajectory, "metadata"):
-                trajectory.metadata["analytical_integrity_unresolved"] = list(problems)
+        if trajectory is not None and hasattr(trajectory, "metadata"):
+            # Always visible on the result: in repair mode this is what the
+            # answer was accepted with, in strict mode what it was last
+            # rejected for. Cleared again when a later submission passes.
+            trajectory.metadata["analytical_integrity_unresolved"] = list(problems)
+        if mode != "strict" and self._integrity_rejections >= self._ANALYTICAL_INTEGRITY_MAX_REJECTIONS:
             return None
         self._integrity_rejections += 1
         message = "\n".join(f"- {p}" for p in problems)
@@ -3431,6 +3460,22 @@ def _required_output_fields(
 ) -> tuple[str, ...]:
     _, outputs = _task_and_outputs(signature, inline_task, inline_outputs)
     return _normalize_required_fields(outputs)
+
+
+def _normalize_integrity_mode(value: Any) -> str:
+    """``analytical_integrity`` accepts True/"repair", "strict", or False/"off"."""
+    if value is True or value is None:
+        return "repair"
+    if value is False:
+        return "off"
+    text = str(value).strip().lower()
+    if text in {"repair", "strict", "off"}:
+        return text
+    if text in {"1", "true", "yes", "on"}:
+        return "repair"
+    if text in {"0", "false", "no"}:
+        return "off"
+    raise ValueError("analytical_integrity must be True, False, 'repair', 'strict' or 'off'")
 
 
 def _preview_payload(payload: Mapping[str, Any] | None) -> str:

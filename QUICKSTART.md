@@ -504,7 +504,7 @@ See `fabric_rlm/validators.py` for the implementation and
 | Param | Default | What |
 |---|---|---|
 | `max_turns` | 20 | Cap on tool-loop iterations |
-| `analytical_integrity` | True | Reject a SUBMIT whose prose contradicts its numbers, hides a requested ranking metric, or collapsed candidate tuples (at most twice per run; `FABRIC_RLM_ANALYTICAL_INTEGRITY=0` disables) |
+| `analytical_integrity` | True | `True`/`"repair"`: send back a SUBMIT whose prose contradicts its numbers, hides a requested ranking metric, or collapsed candidate tuples, at most twice, then accept and expose the findings as `result.integrity_problems`. `"strict"`: never accept such a SUBMIT. `False`/`FABRIC_RLM_ANALYTICAL_INTEGRITY=0`: off |
 | `timeout` | 300.0 | Subprocess timeout (seconds) |
 | `enable_router` | False | Turn on skill router |
 | `max_active_skills` | 2 | Max skills the router activates |

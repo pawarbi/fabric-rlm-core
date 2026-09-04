@@ -687,14 +687,34 @@ def _isin_names(node: ast.AST) -> list[str]:
     return names
 
 
+# Calls that merely look at the lists rather than consuming them together.
+_TRIVIAL_CONSUMERS = {"print", "len", "repr", "str", "display", "type", "isinstance", "set", "list", "sorted", "tuple"}
+
+
+def _call_name(node: ast.Call) -> str:
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
+
+
+def _referenced_names(node: ast.AST) -> set[str]:
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
 def _detect_independent_dimension_filters(turns: Sequence[TurnRecord]) -> Iterator[Issue]:
     """Flag candidate tuples collapsed into independent per-dimension lists.
 
-    Seen live: candidates chosen at Product x Region x Customer Group were
-    turned into ``products = c["product"].unique()``, ``regions = ...``,
-    ``groups = ...`` and a later frame was filtered with three ``.isin``
-    calls joined by ``&``. That admits every combination of the three
-    lists, including ones never selected. The fix is a tuple merge
+    The pattern, source-agnostic: two or more value lists are taken from
+    different columns of the same frame (``c["product"].unique()``,
+    ``c["region"].unique().tolist()``, ...) and a later operation consumes
+    them together. Seen live as ``aggregate(..., filters={"Product":
+    prod_vals, "Region": reg_vals, "Customer Group": cust_vals})`` on a
+    semantic model, and as ``df[a.isin(x) & b.isin(y) & c.isin(z)]`` on a
+    frame. Either admits every combination of the lists, including ones the
+    candidate frame never contained. The fix is a tuple merge
     (``restrict_to_candidate_tuples``).
     """
     lists: dict[str, tuple[str, str]] = {}
@@ -702,33 +722,52 @@ def _detect_independent_dimension_filters(turns: Sequence[TurnRecord]) -> Iterat
         tree = _parse(t.code)
         if tree is None:
             continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                source = _unique_list_source(node.value)
-                if source is not None:
-                    lists[node.targets[0].id] = source
-        if not lists:
-            continue
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd)):
-                continue
-            names = [n for n in _isin_names(node) if n in lists]
-            frames = {lists[n][0] for n in names}
-            if len(names) >= 2 and len(frames) == 1:
-                cols = [lists[n][1] for n in names]
-                frame = frames.pop()
-                yield Issue(
-                    turn=t.turn,
-                    kind="cartesian_candidate_filter",
-                    message=(
-                        f"Filters by independent lists {names} taken from {frame}"
-                        f"[{cols}] admit every combination of those values, not only "
-                        f"the candidates selected in {frame}. Keep the compound "
-                        "identity: restrict_to_candidate_tuples(frame, candidates, "
-                        f"keys={cols})."
-                    ),
-                )
-                break
+        reported = False
+        for statement in tree.body:
+            # Consumers first, then the lists this statement defines, so a
+            # list is never "consumed" by its own definition.
+            if lists and not reported:
+                for node in ast.walk(statement):
+                    names: list[str] = []
+                    if isinstance(node, ast.Call):
+                        if _call_name(node) in _TRIVIAL_CONSUMERS:
+                            continue
+                        args_and_kwargs = list(node.args) + [kw.value for kw in node.keywords]
+                        names = sorted(
+                            {n for arg in args_and_kwargs for n in _referenced_names(arg)} & set(lists)
+                        )
+                    elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd):
+                        names = sorted({n for n in _isin_names(node) if n in lists})
+                    if len(names) < 2:
+                        continue
+                    by_frame: dict[str, list[str]] = {}
+                    for name in names:
+                        by_frame.setdefault(lists[name][0], []).append(name)
+                    for frame, group in by_frame.items():
+                        cols = sorted({lists[n][1] for n in group})
+                        if len(cols) < 2:
+                            continue
+                        consumer = _call_name(node) if isinstance(node, ast.Call) else "isin filter"
+                        yield Issue(
+                            turn=t.turn,
+                            kind="cartesian_candidate_filter",
+                            message=(
+                                f"{consumer} consumes independent lists {group} taken from "
+                                f"{frame}[{cols}] together, which admits every combination of "
+                                f"those values, not only the candidates in {frame}. Keep the "
+                                "compound identity: restrict_to_candidate_tuples(frame, "
+                                f"candidates, keys={cols})."
+                            ),
+                        )
+                        reported = True
+                        break
+                    if reported:
+                        break
+            for node in ast.walk(statement):
+                if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                    source = _unique_list_source(node.value)
+                    if source is not None:
+                        lists[node.targets[0].id] = source
 
 
 def _sort_fields(tree: ast.Module) -> list[str]:
@@ -748,55 +787,110 @@ def _sort_fields(tree: ast.Module) -> list[str]:
     return fields
 
 
-def _defined_columns(tree: ast.Module) -> list[str]:
-    names: list[str] = []
+def _sort_calls(tree: ast.Module) -> list[list[str]]:
+    """Sort fields per sort call, in source order (last one is the final ranking)."""
+    calls: list[tuple[int, int, list[str]]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr not in {"sort_values", "nlargest", "nsmallest"}:
+            continue
+        fields: list[str] = []
+        for kw in node.keywords:
+            if kw.arg in {"by", "columns"}:
+                fields.extend(_string_constants(kw.value))
+        if node.func.attr == "sort_values" and node.args:
+            fields.extend(_string_constants(node.args[0]))
+        elif node.func.attr in {"nlargest", "nsmallest"} and len(node.args) >= 2:
+            fields.extend(_string_constants(node.args[1]))
+        if fields:
+            calls.append((node.lineno, node.col_offset, fields))
+    return [fields for _line, _col, fields in sorted(calls)]
+
+
+def _column_derivations(tree: ast.Module) -> dict[str, set[str]]:
+    """Defined column or variable -> names and string columns its expression reads."""
+    derived: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
+            reads = _referenced_names(node.value) | set(_string_constants_deep(node.value))
             for target in node.targets:
                 if isinstance(target, ast.Subscript):
-                    names.extend(_string_constants(target.slice))
+                    for col in _string_constants(target.slice):
+                        derived.setdefault(col, set()).update(reads)
                 elif isinstance(target, ast.Name):
-                    names.append(target.id)
+                    derived.setdefault(target.id, set()).update(reads)
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "assign":
-            names.extend(kw.arg for kw in node.keywords if kw.arg)
-    return names
+            for kw in node.keywords:
+                if kw.arg:
+                    derived.setdefault(kw.arg, set()).update(
+                        _referenced_names(kw.value) | set(_string_constants_deep(kw.value))
+                    )
+    return derived
+
+
+def _string_constants_deep(node: ast.AST) -> list[str]:
+    return [n.value for n in ast.walk(node) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+
+
+def _defined_columns(tree: ast.Module) -> list[str]:
+    return list(_column_derivations(tree))
 
 
 def detect_ranking_drift(turns: Sequence[TurnRecord], request: Any) -> Issue | None:
-    """The code sorted by something other than the requested ranking concept.
+    """The final ranking sorted by something other than the requested concept.
 
     ``request`` is a :class:`fabric_rlm.analytical_integrity.RankingRequest`.
-    Drift is reported when the trajectory sorts, but no sort field and no
-    column it defined relates to the concept. A defined column that names
-    the concept (``summary["impact"] = ...``) is taken as the metric.
+    Only the last sort in the trajectory counts as the ranking, so
+    ``summary["impact"] = ...`` followed by ``sort_values("latest_arr")`` is
+    drift: defining the metric is not ranking by it. A field is related to
+    the concept when its name overlaps the concept, or when it was derived
+    (up to three assignments deep) from a field that does, so
+    ``df["rank"] = df["impact"].rank()`` followed by ``sort_values("rank")``
+    is accepted.
     """
     from .analytical_integrity import _stems_overlap, _tokens
 
     if request is None:
         return None
-    sort_fields: list[tuple[int, str]] = []
-    defined: list[str] = []
+    sorts: list[tuple[int, list[str]]] = []
+    derived: dict[str, set[str]] = {}
     for t in turns:
         tree = _parse(t.code)
         if tree is None:
             continue
-        sort_fields.extend((t.turn, f) for f in _sort_fields(tree))
-        defined.extend(_defined_columns(tree))
-    if not sort_fields:
+        sorts.extend((t.turn, fields) for fields in _sort_calls(tree))
+        for name, reads in _column_derivations(tree).items():
+            derived.setdefault(name, set()).update(reads)
+    if not sorts:
         return None
     concept = list(request.tokens)
-    if any(_stems_overlap(concept, _tokens(f)) for _turn, f in sort_fields):
+
+    def related(field: str, depth: int = 0) -> bool:
+        if _stems_overlap(concept, _tokens(field)):
+            return True
+        if depth >= 3:
+            return False
+        return any(
+            related(dep, depth + 1) for dep in derived.get(field, ()) if dep != field
+        )
+
+    last_turn, last_fields = sorts[-1]
+    if any(related(f) for f in last_fields):
         return None
-    if any(_stems_overlap(concept, _tokens(name)) for name in defined):
-        return None
-    last_turn, last_field = sort_fields[-1]
+    concept_columns = [name for name in derived if _stems_overlap(concept, _tokens(name))]
+    defined_note = (
+        f" A metric named {concept_columns[0]!r} was defined but the final ranking did not use it."
+        if concept_columns
+        else f" No metric for {request.concept!r} was defined."
+    )
     return Issue(
         turn=last_turn,
         kind="ranking_drift",
         message=(
-            f"The task asked to rank by {request.concept!r} but the code sorted by "
-            f"{sorted({f for _t, f in sort_fields})} and never defined a metric for "
-            f"{request.concept!r}. Derive that metric, sort by it, and show it."
+            f"The task asked to rank by {request.concept!r} but the final ranking "
+            f"sorted by {last_fields}.{defined_note} Derive the metric, sort by it, "
+            "and show it."
         ),
     )
 

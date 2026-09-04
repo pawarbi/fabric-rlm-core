@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
 __all__ = [
+    "DEFAULT_NOISE_RELATIVE_TOLERANCE",
     "AnalyticalIntegrityError",
     "DirectionalClaim",
     "IntegrityReport",
@@ -34,6 +35,7 @@ __all__ = [
     "check_directional_claims",
     "check_ranking_disclosure",
     "classify_claim_level",
+    "concept_head",
     "infer_requested_ranking",
     "is_material_change",
     "parse_directional_claims",
@@ -53,10 +55,14 @@ class AnalyticalIntegrityError(AssertionError):
     """
 
 
-# Two floats closer than this are the same number for analytical purposes,
-# whatever tolerance the caller passes. It is the float64 noise floor, not a
-# business threshold.
-_NOISE_RELATIVE_TOLERANCE = 1e-9
+# Accumulated float64 rounding error, not a business threshold. Summing a few
+# thousand doubles in a different order moves the result by parts in 1e-13 to
+# 1e-12 (roughly 4,500 ULP at this setting), which is what turns 926400.0 into
+# 926400.0000001. At one trillion this is one dollar; anything larger is left
+# to the caller's absolute and relative tolerances, which are the only
+# materiality rules. Callers may pass ``noise_relative_tolerance=0`` to
+# disable even this.
+DEFAULT_NOISE_RELATIVE_TOLERANCE = 1e-12
 
 _DIRECTIONS = (None, "increase", "decrease")
 
@@ -135,6 +141,7 @@ def is_material_change(
     absolute_tolerance: float = 0.0,
     relative_tolerance: float = 0.0,
     direction: str | None = None,
+    noise_relative_tolerance: float = DEFAULT_NOISE_RELATIVE_TOLERANCE,
 ) -> bool:
     """True when ``current`` differs from ``baseline`` by more than noise
     and more than the caller's materiality rule.
@@ -142,28 +149,32 @@ def is_material_change(
     ``absolute_tolerance`` is in the values' own unit; ``relative_tolerance``
     is a fraction of ``abs(baseline)`` and is skipped when the baseline is
     zero, because no relative rule is meaningful there. Both default to
-    zero, which still rejects float noise: two values within one part in
-    1e9 of each other are never a change. ``direction`` narrows the answer
-    to ``"increase"`` or ``"decrease"``. Missing, NaN and unparsable values
-    are never a material change.
+    zero. Separately, ``noise_relative_tolerance`` (default one part in
+    1e12, about 4,500 ULP) absorbs float64 rounding error such as summation
+    order; it is numerical, not analytical, and can be set to zero.
+    ``direction`` narrows the answer to ``"increase"`` or ``"decrease"``.
+    Missing, NaN and unparsable values are never a material change.
 
     No currency, percentage or business threshold is assumed. The analysis
     decides what matters and passes it in.
     """
     if direction not in _DIRECTIONS:
         raise ValueError("direction must be None, 'increase' or 'decrease'")
-    if absolute_tolerance < 0 or relative_tolerance < 0:
+    if absolute_tolerance < 0 or relative_tolerance < 0 or noise_relative_tolerance < 0:
         raise ValueError("tolerances must be non-negative")
     current_value = _as_float(current)
     baseline_value = _as_float(baseline)
     if current_value is None or baseline_value is None:
         return False
     difference = current_value - baseline_value
-    if difference == 0 or math.isclose(
-        current_value,
-        baseline_value,
-        rel_tol=_NOISE_RELATIVE_TOLERANCE,
-        abs_tol=0.0,
+    if difference == 0 or (
+        noise_relative_tolerance > 0
+        and math.isclose(
+            current_value,
+            baseline_value,
+            rel_tol=noise_relative_tolerance,
+            abs_tol=0.0,
+        )
     ):
         return False
     if abs(difference) <= absolute_tolerance:
@@ -187,6 +198,7 @@ def change_direction(
     *,
     absolute_tolerance: float = 0.0,
     relative_tolerance: float = 0.0,
+    noise_relative_tolerance: float = DEFAULT_NOISE_RELATIVE_TOLERANCE,
 ) -> str:
     """``"increase"``, ``"decrease"``, ``"flat"`` or ``"unknown"``.
 
@@ -202,6 +214,7 @@ def change_direction(
             absolute_tolerance=absolute_tolerance,
             relative_tolerance=relative_tolerance,
             direction=candidate,
+            noise_relative_tolerance=noise_relative_tolerance,
         ):
             return candidate
     return "flat"
@@ -333,6 +346,19 @@ def _stems_overlap(left: Iterable[str], right: Iterable[str]) -> bool:
     return False
 
 
+def concept_head(concept: str) -> str:
+    """The token a ranking concept is really about.
+
+    "business impact of deterioration" is about impact, not deterioration;
+    "churn risk" is about risk. The head is the last non-stopword before an
+    "of", else the last non-stopword.
+    """
+    text = str(concept or "")
+    before_of = re.split(r"\bof\b", text, maxsplit=1, flags=re.IGNORECASE)[0]
+    tokens = _tokens(before_of) or _tokens(text)
+    return tokens[-1] if tokens else ""
+
+
 def validate_ranking(
     *,
     requested_concept: str,
@@ -344,11 +370,15 @@ def validate_ranking(
     """Check that a ranking answers the concept that was requested.
 
     A request to rank by "business impact" is not answered by sorting on
-    current size. The check passes when the ranking metric names the
-    concept, or when the operational definition explicitly presents the
-    metric as a proxy for it. When ``ranking_values`` are given they must
-    already be in the requested order. Raises ``AnalyticalIntegrityError``
-    otherwise; returns a small summary for the answer to display.
+    current size, and "business impact of deterioration" is not answered by
+    a deterioration rate: severity is not economic magnitude. Lexical overlap
+    between the metric name and the concept certifies nothing on its own.
+    The operational definition must name the metric and relate it to the
+    head of the concept (impact, risk, ...); when the metric does not itself
+    name the concept it is recorded as a declared proxy. When
+    ``ranking_values`` are given they must already be in the requested
+    order. Raises ``AnalyticalIntegrityError`` otherwise; returns a small
+    summary for the answer to display.
     """
     concept_tokens = _tokens(requested_concept)
     metric_tokens = _tokens(ranking_metric)
@@ -365,20 +395,20 @@ def validate_ranking(
             f"of the metric {ranking_metric!r} (what it measures and how it is "
             "computed). State it before sorting."
         )
-    direct = _stems_overlap(concept_tokens, metric_tokens)
+    head = concept_head(requested_concept)
     definition_tokens = _tokens(definition)
-    proxy_justified = (
-        not direct
-        and _stems_overlap(definition_tokens, metric_tokens)
-        and _stems_overlap(definition_tokens, concept_tokens)
-    )
-    if not direct and not proxy_justified:
+    names_metric = _stems_overlap(definition_tokens, metric_tokens)
+    relates_to_concept = _stems_overlap(definition_tokens, [head]) if head else False
+    if not names_metric or not relates_to_concept:
         raise AnalyticalIntegrityError(
             f"The task asked to rank by {requested_concept!r} but the ranking "
-            f"metric is {ranking_metric!r}. Derive a metric that represents "
-            f"{requested_concept!r} and sort by it, or state in the operational "
-            f"definition why {ranking_metric!r} stands in for it."
+            f"metric is {ranking_metric!r} and the operational definition "
+            f"({definition[:80]!r}) does not establish how {ranking_metric!r} "
+            f"measures {head or requested_concept!r}. Define the metric in terms "
+            f"of {head or requested_concept!r}, or derive one that represents it "
+            "and sort by that."
         )
+    proxy_justified = not _stems_overlap(metric_tokens, [head]) if head else False
     count = 0
     if ranking_values is not None:
         numbers = [_as_float(v) for v in ranking_values]

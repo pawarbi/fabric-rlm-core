@@ -22,7 +22,7 @@ Both return a Prediction object; read outputs by field name, for example
 Use instructions for task-specific guidance, pydantic_schemas for typed outputs, and dspy.Image input fields for images.
 `SUBMIT(**fields)` finishes the task. You MUST call SUBMIT once ready. SUBMIT is already defined in your namespace; never import it.
 `is_material_change(current, baseline, absolute_tolerance=0, relative_tolerance=0, direction=None)` and `restrict_to_candidate_tuples(frame, candidates, keys=[...])` are predefined; `validate_analysis_integrity(...)` runs pre-SUBMIT analytical checks.
-{skill_section}
+{skill_section}{cross_source_section}
 
 ## Code style - critical
 
@@ -99,6 +99,47 @@ def build_system_prompt(
         skill_section=_format_skill_section(
             skill_index, preloaded_skills, skill_cards=skill_cards, router_active=router_active
         ),
+        cross_source_section=_cross_source_section(inputs),
+    )
+
+
+def _evidence_input_names(inputs: dict[str, Any]) -> list[str]:
+    """Inputs that carry evidence: bound files, Lakehouse sources, semantic models."""
+    from .artifacts import File
+    from .lakehouse import LakehouseSource
+    from .semantic_model import SemanticModel
+
+    names: list[str] = []
+    for name, value in inputs.items():
+        if isinstance(value, (File, LakehouseSource, SemanticModel)):
+            names.append(name)
+        elif isinstance(value, (list, tuple)) and value and all(
+            isinstance(item, (File, LakehouseSource, SemanticModel)) for item in value
+        ):
+            names.append(name)
+    return names
+
+
+def _cross_source_section(inputs: dict[str, Any]) -> str:
+    """A compact checklist, only when a finding may draw on several inputs.
+
+    Activation is by analytical context (two or more evidence-bearing
+    inputs), not by input class: a CSV plus a PDF triggers it exactly as a
+    semantic model plus a Lakehouse does. Costs nothing on single-source
+    tasks.
+    """
+    names = _evidence_input_names(inputs)
+    if len(names) < 2:
+        return ""
+    listed = ", ".join(names)
+    return (
+        "\n\n## Several evidence inputs are bound (" + listed + ")\n"
+        "- Keep every material figure attributed to the input it came from.\n"
+        "- Join entities across inputs on an explicit shared key; a name-based match is inferred evidence and must say so.\n"
+        "- A similar metric name in two inputs is not the same metric: check population, aggregation, and time basis before comparing.\n"
+        "- Compare as-of dates, data availability, and reporting periods; align to a common period or state the mismatch.\n"
+        "- Reconcile unit, currency, and scale explicitly before comparing numbers.\n"
+        "- If the inputs disagree, report the disagreement; do not force one story."
     )
 
 

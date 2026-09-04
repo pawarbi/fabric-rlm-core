@@ -632,13 +632,25 @@ inputs: ranking concept versus metric, grain, materiality, candidate identity,
 provenance, and cross-source period, unit, definition, entity, and
 contradiction reconciliation.
 
-Before accepting a `SUBMIT`, the runtime also screens the answer (at most twice
-per run): prose that contradicts its own numbers, a "rank by impact" task
-answered without an impact metric or sorted by something else, and a cartesian
-candidate filter in the code are sent back with the reason. Pass
+Before accepting a `SUBMIT`, the runtime also screens the answer: prose that
+contradicts its own numbers, a "rank by impact" task whose final ranking sorted
+by something else or whose answer hides the impact metric, and code that
+consumed independent per-dimension value lists from a candidate frame together
+(a cartesian filter, whether as `.isin` chains or `aggregate(filters=...)`)
+are sent back with the reason. In the default `"repair"` mode this happens at
+most twice, then the answer is accepted and the findings are exposed as
+`result.integrity_problems` with `result.integrity_ok` false. In `"strict"`
+mode a submission with findings is never accepted. Pass
 `analytical_integrity=False` or set `FABRIC_RLM_ANALYTICAL_INTEGRITY=0` to turn
-that off. The `analytical_integrity` skill carries the fuller guidance,
-including entity, metric, period, and unit reconciliation across sources.
+the screen off.
+
+Cross-source reconciliation (entities, metric definitions, periods, units,
+contradictions) is not enforced automatically, because the runtime has no
+structured claims to check. It is available three ways: as guidance the prompt
+injects whenever two or more evidence inputs are bound, in the
+`analytical_integrity` skill, and as `validate_evidence_lineage` /
+`validate_analysis_integrity(claims=...)` for an analysis that declares its
+claims, sources, joins, and disclosures.
 
 ### Submission contract
 

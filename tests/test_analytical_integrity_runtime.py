@@ -84,6 +84,24 @@ TUPLE_CODE = '''
 history = restrict_to_candidate_tuples(seg, candidates, keys=["product", "region", "group"])
 '''
 
+# The live pattern, verbatim in shape: independent lists from the candidate
+# frame fed together to aggregate(filters=...) on a semantic model.
+LIVE_AGGREGATE_CODE = '''
+prod_vals = seg_latest["product"].unique().tolist()
+reg_vals = seg_latest["region"].unique().tolist()
+cust_vals = seg_latest["customer_group"].unique().tolist()
+
+seg_3q = business_model.aggregate(
+    measures=["ARR $ Basic", "Active Customers #"],
+    groupby=["Products[Product]", "Sold To[Region]", "Sold To[Customer Group]", "Period[YearQuarter]"],
+    filters={
+        "Products[Product]": prod_vals,
+        "Sold To[Region]": reg_vals,
+        "Sold To[Customer Group]": cust_vals,
+    },
+)
+'''
+
 
 def _turn(n: int, code: str, submitted: bool = False) -> TurnRecord:
     return TurnRecord(turn=n, code=code, stdout="", stderr="", error=None, submitted=submitted, state={})
@@ -95,7 +113,40 @@ def test_cartesian_candidate_filter_is_detected():
     assert "cartesian_candidate_filter" in kinds
     issue = next(i for i in issues if i.kind == "cartesian_candidate_filter")
     assert issue.turn == 2
-    assert "restrict_to_candidate_tuples" in issue.message and "['product', 'region', 'group']" in issue.message
+    assert "restrict_to_candidate_tuples" in issue.message
+    for col in ("product", "region", "group"):
+        assert col in issue.message
+
+
+def test_the_live_aggregate_filters_pattern_is_detected():
+    """Regression for the trajectory that motivated the feature."""
+    issues = Trajectory(turns=[_turn(1, "seg_latest = wide[wide.deteriorating]"), _turn(2, LIVE_AGGREGATE_CODE)]).diagnose()
+    flagged = [i for i in issues if i.kind == "cartesian_candidate_filter"]
+    assert flagged and flagged[0].turn == 2
+    assert "aggregate" in flagged[0].message and "seg_latest" in flagged[0].message
+    for name in ("prod_vals", "reg_vals", "cust_vals"):
+        assert name in flagged[0].message
+
+
+def test_lists_consumed_by_other_operations_are_also_detected():
+    frame_rebuild = (
+        "products = c['product'].unique()\nregions = c['region'].unique()\n"
+        "pairs = pd.DataFrame({'product': products, 'region': regions})"
+    )
+    query = (
+        "products = c['product'].unique().tolist()\nregions = c['region'].unique().tolist()\n"
+        "rows = source.query(products=products, regions=regions)"
+    )
+    for code in (frame_rebuild, query):
+        assert [i for i in Trajectory(turns=[_turn(1, code)]).diagnose() if i.kind == "cartesian_candidate_filter"]
+
+
+def test_looking_at_lists_or_using_one_is_not_flagged():
+    looked_at = "products = c['product'].unique()\nregions = c['region'].unique()\nprint(products, regions)\nn = len(regions)"
+    one_list = "products = c['product'].unique().tolist()\nregions = c['region'].unique().tolist()\nout = model.aggregate(['x'], filters={'P': products})"
+    same_column_twice = "a = c['product'].unique()\nb = c['product'].unique()\nout = f(a, b)"
+    for code in (looked_at, one_list, same_column_twice):
+        assert [i for i in Trajectory(turns=[_turn(1, code)]).diagnose() if i.kind == "cartesian_candidate_filter"] == []
 
 
 def test_single_or_unrelated_isin_filters_are_not_flagged():
@@ -128,6 +179,29 @@ def test_ranking_drift_between_plan_and_sort_field():
 
     fixed = turns + [_turn(3, 'summary["impact"] = summary.prior - summary.latest\nsummary = summary.sort_values("impact")')]
     assert [i for i in Trajectory(turns=fixed).diagnose() if i.kind == "ranking_drift"] == []
+
+
+def test_defining_the_metric_is_not_ranking_by_it():
+    """The review's false negative: an impact column exists, the sort ignores it."""
+    request = infer_requested_ranking("rank by business impact")
+    turns = [_turn(1, 'summary["impact"] = summary["prior"] - summary["current"]\nsummary = summary.sort_values("latest_arr", ascending=False)')]
+    issue = detect_ranking_drift(turns, request)
+    assert issue is not None and issue.kind == "ranking_drift"
+    assert "latest_arr" in issue.message and "'impact' was defined but the final ranking did not use it" in issue.message
+
+
+def test_only_the_final_sort_counts_as_the_ranking():
+    request = infer_requested_ranking("rank by business impact")
+    sorted_then_resorted = [
+        _turn(1, 'summary["impact"] = summary.prior - summary.current\nsummary = summary.sort_values("impact")'),
+        _turn(2, 'summary = summary.sort_values("latest_arr", ascending=False)'),
+    ]
+    assert detect_ranking_drift(sorted_then_resorted, request) is not None
+    resorted_by_derived = [
+        _turn(1, 'summary["impact"] = summary.prior - summary.current'),
+        _turn(2, 'summary["rank"] = summary["impact"].rank(ascending=False)\nsummary = summary.sort_values("rank")'),
+    ]
+    assert detect_ranking_drift(resorted_by_derived, request) is None
 
 
 def test_detect_ranking_drift_with_an_explicit_request():
@@ -205,9 +279,14 @@ def _fence(code: str) -> str:
 def test_regression_bad_submission_is_sent_back_then_accepted(monkeypatch):
     fake = FakeInterpreter([_ran(), _submit({"analysis": BAD_ANALYSIS}), _ran(), _submit({"analysis": GOOD_ANALYSIS})])
     monkeypatch.setattr(runtime_mod, "Interpreter", lambda **kwargs: fake)
+    monkeypatch.delenv("FABRIC_RLM_ANALYTICAL_INTEGRITY", raising=False)
     lm = ScriptedLM(
         [
-            _fence(CARTESIAN_CODE + '\nsummary = history.sort_values("latest_arr", ascending=False)'),
+            _fence(
+                LIVE_AGGREGATE_CODE
+                + '\nsummary["impact"] = seg_3q.prior - seg_3q.latest'
+                + '\nsummary = summary.sort_values("latest_arr", ascending=False)'
+            ),
             _fence(f"SUBMIT(analysis={BAD_ANALYSIS!r})"),
             _fence(
                 'summary["impact"] = summary["prior"] - summary["latest"]\n'
@@ -231,8 +310,11 @@ def test_regression_bad_submission_is_sent_back_then_accepted(monkeypatch):
     assert "effectively equal" in rejection
     assert "ranked by current ARR" in rejection
     assert "sorted by" in rejection and "latest_arr" in rejection
+    assert "'impact' was defined but the final ranking did not use it" in rejection
+    assert "aggregate consumes independent lists" in rejection
     assert "restrict_to_candidate_tuples" in rejection
     assert "analytical_integrity_unresolved" not in result.trajectory.metadata
+    assert result.integrity_ok is True and result.integrity_problems == []
 
 
 def test_screen_can_be_disabled_by_argument_and_by_environment(monkeypatch):
@@ -263,6 +345,27 @@ def test_screen_gives_up_after_two_rejections_and_records_the_findings(monkeypat
     assert [t.turn_type for t in result.trajectory] == ["normal", "verifier_repair", "verifier_repair"]
     unresolved = result.trajectory.metadata["analytical_integrity_unresolved"]
     assert any("effectively equal" in p for p in unresolved)
+    assert result.integrity_ok is False
+    assert result.integrity_problems == unresolved
+
+
+def test_strict_mode_never_accepts_a_submission_with_findings(monkeypatch):
+    fake = FakeInterpreter([_submit({"analysis": BAD_ANALYSIS})] * 4)
+    monkeypatch.setattr(runtime_mod, "Interpreter", lambda **kwargs: fake)
+    monkeypatch.delenv("FABRIC_RLM_ANALYTICAL_INTEGRITY", raising=False)
+    lm = ScriptedLM([_fence(f"SUBMIT(analysis={BAD_ANALYSIS!r})")] * 4)
+
+    result = RLM.from_task(TASK, outputs=["analysis"], lm=lm, max_turns=4, timeout=5, analytical_integrity="strict").run()
+
+    assert result.submitted is False
+    assert result.integrity_ok is False
+    assert any("effectively equal" in p for p in result.integrity_problems)
+    assert all(t.turn_type == "verifier_repair" for t in result.trajectory.turns[1:])
+
+
+def test_integrity_mode_values_are_validated():
+    with pytest.raises(ValueError, match="analytical_integrity"):
+        RLM.from_task("x", outputs=["a"], lm=ScriptedLM([]), analytical_integrity="lenient")
 
 
 def test_a_clean_answer_to_a_plain_question_is_not_touched(monkeypatch):
@@ -275,3 +378,32 @@ def test_a_clean_answer_to_a_plain_question_is_not_touched(monkeypatch):
 
     assert result.submitted and [t.turn_type for t in result.trajectory] == ["normal"]
     assert "verifier_repair_history" not in result.trajectory.metadata
+
+
+# -- mixed-input prompt checklist -------------------------------------------------------
+
+
+def test_prompt_adds_cross_source_checklist_only_with_several_evidence_inputs(tmp_path):
+    from fabric_rlm import File, LakehouseSource, SemanticModel
+    from fabric_rlm.prompts import build_system_prompt
+
+    csv = tmp_path / "usage.csv"
+    csv.write_text("customer_id,usage\n1,10\n", encoding="utf-8")
+    pdf = tmp_path / "contract.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    single = build_system_prompt(inline_task="t", inputs={"arr": SemanticModel("ARR", validate=False)}, inline_outputs=["a"])
+    assert "Several evidence inputs are bound" not in single
+
+    mixed = build_system_prompt(
+        inline_task="t",
+        inputs={"arr": SemanticModel("ARR", validate=False), "usage": File(str(csv)), "contract": File(str(pdf))},
+        inline_outputs=["a"],
+    )
+    assert "Several evidence inputs are bound (arr, usage, contract)" in mixed
+    assert "explicit shared key" in mixed and "report the disagreement" in mixed
+
+    files_only = build_system_prompt(
+        inline_task="t", inputs={"usage": File(str(csv)), "contract": File(str(pdf))}, inline_outputs=["a"]
+    )
+    assert "Several evidence inputs are bound" in files_only, "activation is by count, not by input class"

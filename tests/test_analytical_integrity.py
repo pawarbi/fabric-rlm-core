@@ -78,6 +78,15 @@ def test_formatted_strings_parse_like_the_answer_prints_them():
     assert not is_material_change("926,400.00", "926,400.00")
 
 
+def test_noise_floor_is_numerical_not_a_hidden_materiality_rule():
+    """One part in 1e9 is a real change at zero tolerance; 1e-13 is rounding."""
+    assert is_material_change(1_000_000_001, 1_000_000_000)
+    assert is_material_change(18_120_000_018.0, 18_120_000_000.0)
+    assert not is_material_change(926400.0, 926400.0000001)
+    assert is_material_change(926400.0, 926400.0000001, noise_relative_tolerance=0)
+    assert change_direction(926400.0, 926400.0000001, noise_relative_tolerance=0) == "decrease"
+
+
 def test_invalid_arguments_are_rejected():
     with pytest.raises(ValueError):
         is_material_change(1, 2, direction="sideways")
@@ -188,6 +197,29 @@ def test_a_stated_and_justified_proxy_is_accepted():
         ),
         ranking_metric="current_size",
         ranking_values=[20_000_000, 5_000_000],
+    )
+    assert summary["proxy"] is True
+
+
+def test_lexical_overlap_does_not_certify_the_ranking_metric():
+    """Severity is not economic magnitude: a deterioration rate does not
+    answer 'business impact of deterioration' just because both say
+    'deterioration'."""
+    with pytest.raises(AnalyticalIntegrityError, match="does not establish how 'deterioration_rate' measures 'impact'"):
+        validate_ranking(
+            requested_concept="business impact of deterioration",
+            operational_definition="deterioration_rate is the percent decline in ARR over the window",
+            ranking_metric="deterioration_rate",
+            ranking_values=[0.3, 0.2],
+        )
+    summary = validate_ranking(
+        requested_concept="business impact of deterioration",
+        operational_definition=(
+            "deterioration_rate is used as the impact measure: the percent of ARR lost, "
+            "weighted by prior ARR, so it is proportional to dollars at risk"
+        ),
+        ranking_metric="deterioration_rate",
+        ranking_values=[0.3, 0.2],
     )
     assert summary["proxy"] is True
 
