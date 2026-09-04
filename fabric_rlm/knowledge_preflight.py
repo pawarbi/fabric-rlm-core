@@ -10,6 +10,7 @@ from typing import Literal
 from fabric_rlm.knowledge import (
     KnowledgeEvent,
     KnowledgePackage,
+    LearnedLesson,
     RegisteredOperation,
     Relationship,
     SourceProfile,
@@ -270,12 +271,43 @@ def preflight_knowledge(
                 )
             )
 
+    lessons_out: list[LearnedLesson] = []
+    for lesson in package.lessons:
+        # A lesson depends on the schema of its sources. Data-only drift
+        # (a refreshed file with the same columns) leaves a time-semantics
+        # or grain lesson standing; a schema change stales it, and only it.
+        dependencies = {
+            source_id
+            for source_id in lesson.source_dependencies
+            if source_id in changed_ids and drift[source_id] != "snapshot"
+        }
+        if not dependencies:
+            lessons_out.append(lesson)
+            continue
+        reason_code = _reason_code(dependencies, drift)
+        updated_lesson = (
+            lesson
+            if lesson.status in {"quarantined", "retired", "stale"}
+            else replace(lesson, status="stale", reason_code=reason_code)
+        )
+        lessons_out.append(updated_lesson)
+        if updated_lesson.status == "stale" and lesson.status != "stale":
+            add_event(
+                _event(
+                    subject_type="lesson",
+                    subject_id=lesson.lesson_id,
+                    reason_code=reason_code,
+                )
+            )
+
     updated_package = KnowledgePackage(
         package_id=package.package_id,
         sources=tuple(sources_out),
         relationships=tuple(relationships_out),
         operations=tuple(operations_out),
         events=tuple(events),
+        evidence=package.evidence,
+        lessons=tuple(lessons_out),
     )
     return KnowledgePreflightResult(
         package=updated_package,

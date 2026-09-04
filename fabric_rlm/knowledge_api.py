@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import os
 
 from fabric_rlm.knowledge import (
+    EvidenceRecord,
     KnowledgePackage,
     SourceProfile,
     SourceRole,
     _domain_fingerprint,
 )
+from fabric_rlm.knowledge_evidence import harvest_evidence
 from fabric_rlm.knowledge_lakehouse_sources import fabric_source_registry
+from fabric_rlm.knowledge_lessons import promote_lessons, structural_lessons
 from fabric_rlm.knowledge_operations import discover_registered_operations
 from fabric_rlm.knowledge_sources import (
     ProfileLimits,
@@ -202,27 +205,97 @@ def learn(
         sources=profiles,
         operations=discover_registered_operations(profiles, sources),
     )
+    # Structural lessons: what the sources declare about themselves (a
+    # semantic model's current-period construct). Sources that declare
+    # nothing produce no lessons, and the package is then exactly what it
+    # was before learning existed.
+    package = KnowledgePackage(
+        package_id=package.package_id,
+        sources=package.sources,
+        relationships=package.relationships,
+        operations=package.operations,
+        events=package.events,
+        lessons=structural_lessons(package),
+    )
     bindings = _bindings_from_profiles(profiles, sources)
     if store is not None:
-        location = _onelake_location(store)
-        if location is None:
-            if transport is not None:
-                raise ValueError(
-                    "transport is only supported for OneLake knowledge stores"
-                )
-            save_knowledge_package(store, package, overwrite=overwrite)
-        else:
-            save_onelake_knowledge_package(
-                location,
-                package,
-                transport=transport or OneLakeRestTransport(),
-                overwrite=overwrite,
-            )
+        _persist(store, package, transport=transport, overwrite=overwrite)
     return Knowledge(
         package=package,
         bindings={alias: binding.value for alias, binding in bindings.items()},
         _registry=active_registry,
         _limits=active_limits,
+    )
+
+
+def _persist(
+    store: KnowledgeStore,
+    package: KnowledgePackage,
+    *,
+    transport: OneLakeKnowledgeTransport | None,
+    overwrite: bool,
+) -> None:
+    location = _onelake_location(store)
+    if location is None:
+        if transport is not None:
+            raise ValueError(
+                "transport is only supported for OneLake knowledge stores"
+            )
+        save_knowledge_package(store, package, overwrite=overwrite)
+    else:
+        save_onelake_knowledge_package(
+            location,
+            package,
+            transport=transport or OneLakeRestTransport(),
+            overwrite=overwrite,
+        )
+
+
+def enrich_knowledge(
+    knowledge: Knowledge,
+    results: Sequence[object],
+    *,
+    store: KnowledgeStore | None = None,
+    transport: OneLakeKnowledgeTransport | None = None,
+    overwrite: bool = False,
+    aliases: Mapping[str, str] | None = None,
+) -> Knowledge:
+    """A new ``Knowledge`` whose package has learned from finished runs.
+
+    Evidence is harvested from each result's typed telemetry and outcome,
+    attributed to the package's sources by the alias the run bound, and
+    promoted into lessons by the per-kind policy. Nothing is written
+    unless ``store`` is given, and the input ``knowledge`` is untouched;
+    the caller decides when a learned package replaces a saved one.
+    """
+    if not isinstance(knowledge, Knowledge):
+        raise TypeError("knowledge must be a Knowledge instance")
+    package = knowledge.package
+    known = [source.source_id for source in package.sources]
+    fingerprints = {
+        source.source_id: source.schema_fingerprint for source in package.sources
+    }
+    harvested: list[EvidenceRecord] = []
+    for result in results:
+        if not hasattr(getattr(result, "trajectory", None), "turns"):
+            raise TypeError("results must contain RLMResult values")
+        harvested.extend(
+            harvest_evidence(
+                result,
+                sources=knowledge.bindings,
+                known_source_ids=known,
+                source_fingerprints=fingerprints,
+                aliases=aliases,
+            )
+        )
+    promoted = promote_lessons(package, harvested)
+    if store is not None:
+        _persist(store, promoted, transport=transport, overwrite=overwrite)
+    return Knowledge(
+        package=promoted,
+        bindings=knowledge.bindings,
+        _registry=knowledge._registry,
+        _limits=knowledge._limits,
     )
 
 
@@ -273,4 +346,4 @@ def load_knowledge(
     )
 
 
-__all__ = ["Knowledge", "learn", "load_knowledge"]
+__all__ = ["Knowledge", "enrich_knowledge", "learn", "load_knowledge"]

@@ -184,11 +184,48 @@ selects only typed scalar parameters; it never supplies SQL or file-reader
 expressions. Inexact Lakehouse file catalogs and stale source snapshots fail
 closed rather than entering registered execution.
 
+A package can also carry what earlier runs learned about a source. Every turn
+records its source calls as typed telemetry (the grain a semantic-model query
+asked for, the estimated group count, whether it ran, was rejected or timed
+out, how long it took, which measures came back identical) and never the data
+values. `capture_evidence=True` turns that telemetry, together with the run's
+verification and analytical-integrity status, into `result.evidence`;
+`RLM.enrich` promotes evidence into structured lessons by a per-kind policy and
+returns a new package without touching the saved one:
+
+```python
+knowledge = RLM.learn(sources={"arr_model": model}, store=store)
+
+result = RLM.task(question, knowledge=knowledge, lm=lm, capture_evidence=True).run()
+knowledge = RLM.enrich(knowledge, [result], store=store, overwrite=True)
+
+for lesson in knowledge.package.lessons:
+    print(lesson.kind, lesson.status, lesson.confidence, lesson.subject)
+```
+
+Lesson kinds include `time_semantics` (a semantic model that declares its
+current period is active from `learn()` on), `context_requirement` (a derived
+measure that collapsed to its base measure under an unfiltered context; a
+contrasting filtered observation confirms it), `expensive_grain` (proved by a
+cardinality preflight at once, by a timeout only after repetition),
+`valid_grain` and `preferred_strategy` (only from runs whose answer passed
+verification and the integrity screen), `invalid_path` and
+`metric_equivalence`. Candidates are never shown to the model. When a task
+falls through to the live source, the active lessons relevant to it are
+rendered into a short "Learned source guidance" section after the inputs; the
+source stays bound, so learning narrows the search and never removes the cold
+path. A package with no evidence and no lessons serializes exactly as before,
+and a schema change stales only the lessons that depend on it.
+
 The development notebook
 `examples/notebooks/development/rlm_knowledge_benchmark_matrix.py` runs seeded,
 cache-disabled cold-versus-learned trials across these paths and records
 correctness, operation selection, audit status, turns, token usage, LM/worker/
-host/wall time, provenance, and drift rejection.
+host/wall time, provenance, and drift rejection. `KnowledgeBenchmarkReport`
+also records source calls, failed calls, source seconds, the first useful
+query turn, verifier repairs, integrity status and injected lessons, and
+`cold_parity()` states the release rule: learned correctness must not fall
+below cold.
 
 ```python
 from fabric_rlm import FabricLM, FileDestination, LakehouseSource, RLM

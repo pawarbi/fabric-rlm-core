@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Evidence and lessons in knowledge packages.** Each turn now records its
+  source calls as typed telemetry in `TurnRecord.source_calls` (semantic-model
+  `aggregate`, `measure` and `dax` records with grain, counts, estimated
+  groups, timings, outcome codes and value-free measure observations such as
+  identical or constant measure columns; parent-side Lakehouse SQL timings).
+  `RLM(capture_evidence=True)` harvests that telemetry and the run's
+  verification and analytical-integrity status into `result.evidence`
+  (`EvidenceRecord`); `RLM.enrich(knowledge, results)` promotes evidence into
+  `LearnedLesson` records by a per-kind policy (structural time semantics
+  active from `learn()`; expensive grain proved by a cardinality preflight or
+  repeated timeouts; context requirement nominated by a degenerate unfiltered
+  identity and confirmed by a contrasting filtered one; valid grain and
+  preferred strategy only from verified runs; invalid references after
+  repetition; metric equivalence only across filtered contexts) and returns a
+  new package, saving it only when asked. Active lessons relevant to a task
+  are rendered into a "Learned source guidance" prompt section when the task
+  runs against the live source; candidates are never shown and the source
+  stays bound. Packages without learning records keep format 1 and their
+  fingerprints; packages with them use format 2. Schema drift stales only the
+  lessons that depend on the drifted source. `KnowledgeBenchmarkTrial` gains
+  reasoning tokens, source calls, failed calls, source seconds, first useful
+  query turn, verifier repairs, integrity status and injected lessons, and the
+  report has `cold_parity()`.
+
 ## 0.6.0 — 2026-09-04 — analytical integrity guardrails and bounded semantic-model aggregation
 
 ### Added

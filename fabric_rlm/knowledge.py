@@ -25,7 +25,24 @@ SourceRole = Literal[
     "excluded",
 ]
 Cardinality = Literal["one_to_one", "one_to_many", "many_to_one", "many_to_many"]
-SubjectType = Literal["source", "relationship", "operation", "package"]
+SubjectType = Literal[
+    "source", "relationship", "operation", "package", "lesson", "evidence"
+]
+LessonKind = Literal[
+    "semantic_fact",
+    "time_semantics",
+    "context_requirement",
+    "valid_grain",
+    "expensive_grain",
+    "invalid_path",
+    "preferred_strategy",
+    "metric_equivalence",
+    "metric_non_equivalence",
+    "relationship_path",
+    "query_behavior",
+    "cross_source_mapping",
+]
+Confidence = Literal["high", "medium", "low"]
 
 _STATUSES = {"candidate", "active", "stale", "quarantined", "retired"}
 _SOURCE_ROLES = {
@@ -36,7 +53,42 @@ _SOURCE_ROLES = {
     "excluded",
 }
 _CARDINALITIES = {"one_to_one", "one_to_many", "many_to_one", "many_to_many"}
-_SUBJECT_TYPES = {"source", "relationship", "operation", "package"}
+_SUBJECT_TYPES = {
+    "source", "relationship", "operation", "package", "lesson", "evidence"
+}
+_LESSON_KINDS = {
+    "semantic_fact",
+    "time_semantics",
+    "context_requirement",
+    "valid_grain",
+    "expensive_grain",
+    "invalid_path",
+    "preferred_strategy",
+    "metric_equivalence",
+    "metric_non_equivalence",
+    "relationship_path",
+    "query_behavior",
+    "cross_source_mapping",
+}
+_CONFIDENCES = {"high", "medium", "low"}
+_EVIDENCE_TYPES = {"execution", "structural", "trajectory", "verification"}
+_OBSERVATION_TYPES = {
+    "query_execution",
+    "run_outcome",
+    "turn_error",
+    "strategy_sequence",
+    "source_declaration",
+    "verification",
+    "integrity_finding",
+}
+_EXECUTION_STATUSES = {"success", "failure", "timeout", "rejected", "not_applicable"}
+_VERIFIER_STATUSES = {"passed", "failed", "none"}
+_INTEGRITY_STATUSES = {"passed", "unresolved", "failed", "off"}
+# Structured rules and observations hold names and codes, never prose: one
+# line, bounded length, and the whole record bounded when serialized.
+_MAX_NAME_LENGTH = 256
+_MAX_STRUCTURED_DEPTH = 6
+_MAX_STRUCTURED_BYTES = 8 * 1024
 _SCALAR_TYPES = {"string", "integer", "number", "boolean", "null"}
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _JWT_LIKE = re.compile(
@@ -319,6 +371,79 @@ def _positive_bound(value: object, field_name: str) -> int:
 
 def _domain_fingerprint(domain: str, value: object) -> str:
     return _canonical_fingerprint({"domain": domain, "value": value})
+
+
+def _bounded_name(value: object, field_name: str) -> str:
+    """A measure, column, table or concept name: one line, bounded, no secret shape."""
+
+    text = _required_text(value, field_name)
+    if len(text) > _MAX_NAME_LENGTH:
+        raise ValueError(f"{field_name} must be at most {_MAX_NAME_LENGTH} characters")
+    if any(ord(character) < 32 for character in text):
+        raise ValueError(f"{field_name} must be a single line without control characters")
+    if text.lower().startswith("sk-proj-") or _JWT_LIKE.fullmatch(text):
+        raise ValueError(f"{field_name} must not contain a secret-like value")
+    return text
+
+
+def _structured_value(value: object, path: str, depth: int = 0) -> object:
+    """Freeze a structured rule or observation, rejecting prose.
+
+    Strings are names or codes: a single bounded line. Anything longer, or
+    with a line break, is free text and does not belong in durable
+    knowledge; the runtime renders structured rules into language later.
+    """
+    if depth > _MAX_STRUCTURED_DEPTH:
+        raise ValueError(f"{path} is nested too deeply")
+    if isinstance(value, str):
+        return _bounded_name(value, path) if value.strip() else value
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{path} must contain only finite JSON values")
+        return value + 0.0
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError(f"{path} must have string object keys")
+        return MappingProxyType(
+            {
+                key: _structured_value(value[key], f"{path}.{key}", depth + 1)
+                for key in sorted(value)
+            }
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(
+            _structured_value(item, f"{path}[{index}]", depth + 1)
+            for index, item in enumerate(value)
+        )
+    raise ValueError(f"{path} must be JSON-compatible")
+
+
+def _structured_mapping(value: object, field_name: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be an object")
+    frozen = _structured_value(value, field_name)
+    encoded = len(_canonical_json(_thaw(frozen)).encode("utf-8"))
+    if encoded > _MAX_STRUCTURED_BYTES:
+        raise ValueError(f"{field_name} exceeds {_MAX_STRUCTURED_BYTES} bytes")
+    return frozen  # type: ignore[return-value]
+
+
+def _fingerprint_mapping(value: object, field_name: str) -> Mapping[str, str]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be an object")
+    normalized: dict[str, str] = {}
+    for raw_key in sorted(value, key=str):
+        key = _logical_identifier(raw_key, f"{field_name} key")
+        normalized[key] = _required_text(value[raw_key], f"{field_name}.{key}")
+    return MappingProxyType(normalized)
+
+
+def _code_choice(value: object, field_name: str, choices: set[str]) -> str:
+    if value not in choices:
+        raise ValueError(f"{field_name} is not supported")
+    return str(value)
 
 
 @dataclass(frozen=True)
@@ -636,12 +761,253 @@ class KnowledgeEvent:
 
 
 @dataclass(frozen=True)
+class EvidenceRecord:
+    """One typed observation about how a source behaved.
+
+    Evidence is captured from runtime telemetry (a query's grain, its
+    estimated group count, whether it ran or was rejected) and from run
+    outcomes (verification and analytical-integrity status), never from
+    agent prose. ``observation`` holds names, codes and numbers only.
+    """
+
+    evidence_id: str
+    evidence_type: str
+    source_ids: tuple[str, ...]
+    observation_type: str
+    observation: Mapping[str, object] = field(default_factory=dict)
+    operation_ids: tuple[str, ...] = ()
+    source_fingerprints: Mapping[str, str] = field(default_factory=dict)
+    execution_status: str = "success"
+    verifier_status: str | None = None
+    analytical_integrity_status: str | None = None
+    run_fingerprint: str | None = None
+    turn: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "evidence_id", _logical_identifier(self.evidence_id, "evidence_id")
+        )
+        object.__setattr__(
+            self,
+            "evidence_type",
+            _code_choice(self.evidence_type, "evidence_type", _EVIDENCE_TYPES),
+        )
+        object.__setattr__(
+            self,
+            "source_ids",
+            _text_tuple(self.source_ids, "source_ids", allow_empty=False),
+        )
+        object.__setattr__(
+            self, "operation_ids", _text_tuple(self.operation_ids, "operation_ids")
+        )
+        object.__setattr__(
+            self,
+            "observation_type",
+            _code_choice(self.observation_type, "observation_type", _OBSERVATION_TYPES),
+        )
+        object.__setattr__(
+            self, "observation", _structured_mapping(self.observation, "observation")
+        )
+        object.__setattr__(
+            self,
+            "source_fingerprints",
+            _fingerprint_mapping(self.source_fingerprints, "source_fingerprints"),
+        )
+        object.__setattr__(
+            self,
+            "execution_status",
+            _code_choice(self.execution_status, "execution_status", _EXECUTION_STATUSES),
+        )
+        if self.verifier_status is not None:
+            object.__setattr__(
+                self,
+                "verifier_status",
+                _code_choice(self.verifier_status, "verifier_status", _VERIFIER_STATUSES),
+            )
+        if self.analytical_integrity_status is not None:
+            object.__setattr__(
+                self,
+                "analytical_integrity_status",
+                _code_choice(
+                    self.analytical_integrity_status,
+                    "analytical_integrity_status",
+                    _INTEGRITY_STATUSES,
+                ),
+            )
+        if self.run_fingerprint is not None:
+            object.__setattr__(
+                self,
+                "run_fingerprint",
+                _logical_identifier(self.run_fingerprint, "run_fingerprint"),
+            )
+        if self.turn is not None and (type(self.turn) is not int or self.turn < 1):
+            raise ValueError("turn must be a positive integer")
+
+    @property
+    def trusted(self) -> bool:
+        """Whether a success lesson may rest on this record.
+
+        A strategy is only proven by a run whose answer passed verification
+        and the analytical-integrity screen; typed execution failures teach
+        regardless, because a timeout is a fact about the source.
+        """
+        return (
+            self.execution_status == "success"
+            and self.verifier_status in {"passed", None}
+            and self.analytical_integrity_status in {"passed", "off", None}
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "evidence_id": self.evidence_id,
+            "evidence_type": self.evidence_type,
+            "source_ids": list(self.source_ids),
+            "operation_ids": list(self.operation_ids),
+            "observation_type": self.observation_type,
+            "observation": _thaw(self.observation),
+            "source_fingerprints": dict(self.source_fingerprints),
+            "execution_status": self.execution_status,
+            "verifier_status": self.verifier_status,
+            "analytical_integrity_status": self.analytical_integrity_status,
+            "run_fingerprint": self.run_fingerprint,
+            "turn": self.turn,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> EvidenceRecord:
+        payload = _strict_payload(
+            value,
+            record_name="EvidenceRecord",
+            fields={
+                "evidence_id",
+                "evidence_type",
+                "source_ids",
+                "operation_ids",
+                "observation_type",
+                "observation",
+                "source_fingerprints",
+                "execution_status",
+                "verifier_status",
+                "analytical_integrity_status",
+                "run_fingerprint",
+                "turn",
+            },
+        )
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
+class LearnedLesson:
+    """A durable, structured rule about a source, tied to its evidence.
+
+    ``structured_rule`` is what future runs receive, rendered into language
+    at retrieval time; ``evidence_ids`` say why it is believed;
+    ``source_fingerprints`` say what it depends on, so a changed measure or
+    schema can stale it without discarding the rest of the package.
+    """
+
+    lesson_id: str
+    kind: str
+    subject: str
+    structured_rule: Mapping[str, object]
+    evidence_ids: tuple[str, ...] = ()
+    confidence: str = "low"
+    status: Status = "candidate"
+    source_dependencies: tuple[str, ...] = ()
+    operation_dependencies: tuple[str, ...] = ()
+    source_fingerprints: Mapping[str, str] = field(default_factory=dict)
+    basis: tuple[str, ...] = ()
+    reason_code: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "lesson_id", _logical_identifier(self.lesson_id, "lesson_id")
+        )
+        object.__setattr__(self, "kind", _code_choice(self.kind, "kind", _LESSON_KINDS))
+        object.__setattr__(self, "subject", _bounded_name(self.subject, "subject"))
+        object.__setattr__(
+            self,
+            "structured_rule",
+            _structured_mapping(self.structured_rule, "structured_rule"),
+        )
+        if not self.structured_rule:
+            raise ValueError("structured_rule must not be empty")
+        object.__setattr__(
+            self, "evidence_ids", _text_tuple(self.evidence_ids, "evidence_ids")
+        )
+        object.__setattr__(
+            self,
+            "confidence",
+            _code_choice(self.confidence, "confidence", _CONFIDENCES),
+        )
+        object.__setattr__(self, "status", _status(self.status))
+        object.__setattr__(
+            self,
+            "source_dependencies",
+            _text_tuple(self.source_dependencies, "source_dependencies", allow_empty=False),
+        )
+        object.__setattr__(
+            self,
+            "operation_dependencies",
+            _text_tuple(self.operation_dependencies, "operation_dependencies"),
+        )
+        object.__setattr__(
+            self,
+            "source_fingerprints",
+            _fingerprint_mapping(self.source_fingerprints, "source_fingerprints"),
+        )
+        object.__setattr__(self, "basis", _text_tuple(self.basis, "basis"))
+        if self.reason_code is not None:
+            object.__setattr__(self, "reason_code", _reason_code(self.reason_code))
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "lesson_id": self.lesson_id,
+            "kind": self.kind,
+            "subject": self.subject,
+            "structured_rule": _thaw(self.structured_rule),
+            "evidence_ids": list(self.evidence_ids),
+            "confidence": self.confidence,
+            "status": self.status,
+            "source_dependencies": list(self.source_dependencies),
+            "operation_dependencies": list(self.operation_dependencies),
+            "source_fingerprints": dict(self.source_fingerprints),
+            "basis": list(self.basis),
+            "reason_code": self.reason_code,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> LearnedLesson:
+        payload = _strict_payload(
+            value,
+            record_name="LearnedLesson",
+            fields={
+                "lesson_id",
+                "kind",
+                "subject",
+                "structured_rule",
+                "evidence_ids",
+                "confidence",
+                "status",
+                "source_dependencies",
+                "operation_dependencies",
+                "source_fingerprints",
+                "basis",
+                "reason_code",
+            },
+        )
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
 class KnowledgePackage:
     package_id: str
     sources: tuple[SourceProfile, ...]
     relationships: tuple[Relationship, ...] = ()
     operations: tuple[RegisteredOperation, ...] = ()
     events: tuple[KnowledgeEvent, ...] = ()
+    evidence: tuple[EvidenceRecord, ...] = ()
+    lessons: tuple[LearnedLesson, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -652,6 +1018,8 @@ class KnowledgePackage:
             ("relationships", Relationship),
             ("operations", RegisteredOperation),
             ("events", KnowledgeEvent),
+            ("evidence", EvidenceRecord),
+            ("lessons", LearnedLesson),
         ):
             values = getattr(self, field_name)
             if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
@@ -661,11 +1029,12 @@ class KnowledgePackage:
                 raise ValueError(
                     f"{field_name} must contain {record_type.__name__} values"
                 )
-            if field_name != "events":
+            if field_name not in {"events", "evidence"}:
                 identifier = {
                     "sources": "source_id",
                     "relationships": "relationship_id",
                     "operations": "operation_id",
+                    "lessons": "lesson_id",
                 }[field_name]
                 normalized = tuple(
                     sorted(normalized, key=lambda item: getattr(item, identifier))
@@ -680,6 +1049,38 @@ class KnowledgePackage:
         )
         operation_ids = self._unique_ids(self.operations, "operation_id")
         self._unique_ids(self.events, "event_id")
+        evidence_ids = self._unique_ids(self.evidence, "evidence_id")
+        lesson_ids = self._unique_ids(self.lessons, "lesson_id")
+
+        for record in self.evidence:
+            unknown_sources = sorted(set(record.source_ids) - source_ids)
+            if unknown_sources:
+                raise ValueError(
+                    f"evidence references unknown source: {unknown_sources[0]}"
+                )
+            unknown_operations = sorted(set(record.operation_ids) - operation_ids)
+            if unknown_operations:
+                raise ValueError(
+                    f"evidence references unknown operation: {unknown_operations[0]}"
+                )
+        for lesson in self.lessons:
+            unknown_sources = sorted(set(lesson.source_dependencies) - source_ids)
+            if unknown_sources:
+                raise ValueError(
+                    f"lesson references unknown source: {unknown_sources[0]}"
+                )
+            unknown_operations = sorted(
+                set(lesson.operation_dependencies) - operation_ids
+            )
+            if unknown_operations:
+                raise ValueError(
+                    f"lesson references unknown operation: {unknown_operations[0]}"
+                )
+            unknown_evidence = sorted(set(lesson.evidence_ids) - evidence_ids)
+            if unknown_evidence:
+                raise ValueError(
+                    f"lesson references unknown evidence: {unknown_evidence[0]}"
+                )
 
         for relationship in self.relationships:
             for source_id in (
@@ -710,6 +1111,8 @@ class KnowledgePackage:
             "relationship": relationship_ids,
             "operation": operation_ids,
             "package": {self.package_id},
+            "lesson": lesson_ids,
+            "evidence": evidence_ids,
         }
         for event in self.events:
             if event.subject_id not in subjects[event.subject_type]:
@@ -752,9 +1155,20 @@ class KnowledgePackage:
             self.to_dict(),
         )
 
+    @property
+    def format_version(self) -> int:
+        """1 for a package without learning records, 2 with them.
+
+        A package that carries no evidence and no lessons serializes exactly
+        as before learning existed, so its fingerprint and its readers are
+        unchanged; the learning records are the only thing that moves the
+        format to 2.
+        """
+        return 2 if (self.evidence or self.lessons) else 1
+
     def to_dict(self) -> dict[str, object]:
-        return {
-            "format_version": 1,
+        payload: dict[str, object] = {
+            "format_version": self.format_version,
             "package_id": self.package_id,
             "sources": [
                 item.to_dict()
@@ -776,6 +1190,13 @@ class KnowledgePackage:
             ],
             "events": [item.to_dict() for item in self.events],
         }
+        if self.format_version == 2:
+            payload["evidence"] = [item.to_dict() for item in self.evidence]
+            payload["lessons"] = [
+                item.to_dict()
+                for item in sorted(self.lessons, key=lambda item: item.lesson_id)
+            ]
+        return payload
 
     @classmethod
     def from_dict(cls, value: object) -> KnowledgePackage:
@@ -789,16 +1210,22 @@ class KnowledgePackage:
                 "relationships",
                 "operations",
                 "events",
+                "evidence",
+                "lessons",
             },
         )
         format_version = payload.pop("format_version", _MISSING)
-        if type(format_version) is not int or format_version != 1:
-            raise ValueError("format_version must be 1")
+        if type(format_version) is not int or format_version not in {1, 2}:
+            raise ValueError("format_version must be 1 or 2")
+        if format_version == 1 and ("evidence" in payload or "lessons" in payload):
+            raise ValueError("format_version 1 packages carry no learning records")
         for field_name, record_type in (
             ("sources", SourceProfile),
             ("relationships", Relationship),
             ("operations", RegisteredOperation),
             ("events", KnowledgeEvent),
+            ("evidence", EvidenceRecord),
+            ("lessons", LearnedLesson),
         ):
             raw_values = payload.get(field_name, ())
             if not isinstance(raw_values, (list, tuple)):

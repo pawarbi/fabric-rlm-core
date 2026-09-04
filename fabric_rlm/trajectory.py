@@ -78,6 +78,12 @@ class TurnRecord:
     # Populated when the worker called SUBMIT(...) on this turn — the literal
     # payload that was submitted. ``None`` for non-submit turns.
     submit_payload: dict[str, Any] | None = None
+    # Typed telemetry for every source call the turn made: semantic-model
+    # aggregate/measure/dax records and Lakehouse SQL queries, with grain,
+    # counts, timings and outcome codes but no data values. Empty for turns
+    # that touched no bound source. This is what evidence capture reads,
+    # instead of mining stdout.
+    source_calls: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def state_keys(self) -> list[str]:
