@@ -416,6 +416,15 @@ def test_concept_mention_requires_the_head_of_the_concept():
     problems = check_ranking_disclosure(prose, request)
     assert problems and "never mentions" in problems[0]
     assert check_ranking_disclosure("Ranking metric (business impact): absolute decrease. " + prose, request) == []
+    # a live baseline answer: the metric is declared, the concept word never appears
+    declared_only = (
+        "Ranking metric: absolute ARR loss in USD between 2025/Q4 and 2026/Q2.\n"
+        "Found 5 segments, ranked by absolute USD loss:"
+    )
+    assert check_ranking_disclosure(declared_only, request) == []
+    repeated = "\n".join("Segment X | Ranked by absolute change: $1.00" for _ in range(6))
+    problems = check_ranking_disclosure(repeated, request)
+    assert len([p for p in problems if "Ranked by absolute change" in p]) == 1
 
 
 # -- claim levels and lineage -------------------------------------------------------

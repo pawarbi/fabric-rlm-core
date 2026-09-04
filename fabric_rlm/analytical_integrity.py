@@ -553,19 +553,27 @@ def check_ranking_disclosure(text: str | None, request: RankingRequest) -> list[
     body = str(text or "")
     answer_tokens = _tokens(body)
     head_tokens = [concept_head(request.concept)] if concept_head(request.concept) else list(request.tokens)
-    if not _stems_overlap(head_tokens, answer_tokens):
+    declared = [tok for phrase in _declared_metric_phrases(body) for tok in _tokens(phrase)]
+    # An explicit "Ranking metric: ..." declaration makes the ranking auditable
+    # even when the concept word itself is absent; without one, the answer
+    # must at least name the concept it was asked to rank by.
+    if not declared and not _stems_overlap(head_tokens, answer_tokens):
         problems.append(
             f"The task asked to rank by {request.concept!r}, but the answer never "
             f"mentions {request.concept!r}. Show the ranking metric (a column such "
             f"as 'Estimated {request.concept}' or a line 'ranked by ...') so the "
             "ranking is auditable."
         )
-    declared = [tok for phrase in _declared_metric_phrases(body) for tok in _tokens(phrase)]
     head = concept_head(request.concept)
+    seen_phrases: set[str] = set()
     for match in _RANKED_BY_RE.finditer(body):
         metric_tokens = _tokens(match.group("metric"))
         if not metric_tokens:
             continue
+        phrase_key = " ".join(metric_tokens)
+        if phrase_key in seen_phrases:
+            continue
+        seen_phrases.add(phrase_key)
         if _stems_overlap(request.tokens, metric_tokens):
             continue
         if "proxy" in body.lower():
