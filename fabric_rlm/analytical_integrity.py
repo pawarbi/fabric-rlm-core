@@ -594,6 +594,8 @@ _ZERO_CHANGE_RE = re.compile(
     r"\s*[:=]\s*(?:[-+]?\s?[$€£¥]?\s?[-+]?0(?:\.0+)?(?!\d|\.\d))(?:\s?(?:%|USD|EUR|GBP|units?|users?))?(?!\d|\.\d)",
     re.IGNORECASE,
 )
+# "-2.000015e-07", "1.2e-9": a printed number whose magnitude is below 1e-4
+_TINY_SCI_RE = re.compile(r"(?<![\w.])[-+]?\d+(?:\.\d+)?[eE]-0*(?:[5-9]|[1-9]\d)\b")
 _CHANGE_TASK_RE = re.compile(
     r"\b(?:deteriorat|declin|decreas|drop|fall|fell|grow|grew|increas|chang|trend|improv|worsen|movement)",
     re.IGNORECASE,
@@ -623,6 +625,17 @@ def check_zero_change_items(text: str | None, *, absolute_tolerance: float = 0.0
             f"{line[:120]!r} reports a {match.group('label').strip().lower()} of zero for an item the "
             "answer presents as having moved. A zero change is float noise or a flat item: exclude "
             "it under the stated materiality rule, or call it flat."
+        )
+        if len(problems) >= 3:
+            break
+    for match in _TINY_SCI_RE.finditer(body):
+        line_start = body.rfind("\n", 0, match.start()) + 1
+        line_end = body.find("\n", match.end())
+        line = body[line_start: line_end if line_end >= 0 else len(body)].strip()
+        problems.append(
+            f"{line[:120]!r} prints a value of {match.group(0)}, a change far below any unit of the "
+            "data, for an item the answer presents as having moved. That is float noise: exclude the "
+            "item under the stated materiality rule, or call it flat."
         )
         if len(problems) >= 3:
             break

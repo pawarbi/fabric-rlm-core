@@ -401,6 +401,9 @@ def test_zero_change_items_in_an_answer_about_change_are_flagged():
     assert check_zero_change_items(gpt5)
     healthy = "1. Cloud DDoS | APAC | TELCO\n   Change: $-1,500,000 (-30.0%)   Ranked-by: abs drop = $1,500,000\n"
     assert check_zero_change_items(healthy) == []
+    table_row = "    Alteon    EMEA     ENTERPRISE   926400.0   926400.0 -2.000015e-07 2.000015e-07   Started inside window"
+    assert check_zero_change_items(table_row) and "float noise" in check_zero_change_items(table_row)[0]
+    assert check_zero_change_items("growth rate 1.5e-3 per quarter; loss = 2.5e+06") == []
     assert check_zero_change_items("Change: $0.05 (rounding); drop = $10") == []
     assert task_asks_about_change("Identify the segments whose ARR deteriorated and rank them")
     assert not task_asks_about_change("What is total ARR by region?")
