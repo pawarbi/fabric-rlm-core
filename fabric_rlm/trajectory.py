@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import re
 import tempfile
 from dataclasses import asdict, dataclass, field, fields
@@ -454,6 +455,8 @@ class Trajectory:
         issues.extend(_detect_repeated_error(self.turns))
         issues.extend(_detect_noop_turn(self.turns))
         issues.extend(_detect_token_cliff(self.turns))
+        issues.extend(_detect_independent_dimension_filters(self.turns))
+        issues.extend(_detect_ranking_drift(self.turns))
         issues.sort(key=lambda i: (i.turn, i.kind))
         return issues
 
@@ -600,3 +603,211 @@ def _detect_token_cliff(turns: Sequence[TurnRecord]) -> Iterator[Issue]:
                     f"({baseline:,.0f}). Likely pasted-back input."
                 ),
             )
+
+
+# ---------------------------------------------------------------------------
+# Analytical-integrity detectors
+#
+# These read the code the model wrote, not the data it saw, so they are the
+# same for a CSV, a Lakehouse query and a semantic-model aggregate.
+# ---------------------------------------------------------------------------
+
+_PLAN_HEADING_RE = re.compile(r"^\s*#\s*#{1,3}\s*PLAN\b", re.IGNORECASE)
+_PLAN_END_RE = re.compile(r"^\s*#\s*#{1,3}\s*(?!PLAN)\w+", re.IGNORECASE)
+
+
+def extract_plan(turns: Sequence[TurnRecord]) -> str | None:
+    """Return the text of the first ``## PLAN`` comment block, if any.
+
+    The core skill asks for the plan as a Python comment block on the
+    first turn. Nothing parsed it before; the ranking-drift detector needs
+    the ranking concept the plan committed to.
+    """
+    for t in turns:
+        lines = (t.code or "").splitlines()
+        for index, line in enumerate(lines):
+            if not _PLAN_HEADING_RE.match(line):
+                continue
+            body: list[str] = []
+            for following in lines[index + 1:]:
+                stripped = following.strip()
+                if not stripped.startswith("#") or _PLAN_END_RE.match(following):
+                    break
+                body.append(stripped.lstrip("#").strip())
+            return "\n".join(body).strip() or None
+    return None
+
+
+def _string_constants(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, (ast.List, ast.Tuple)):
+        out: list[str] = []
+        for elt in node.elts:
+            out.extend(_string_constants(elt))
+        return out
+    return []
+
+
+def _parse(code: str | None) -> ast.Module | None:
+    try:
+        return ast.parse(code or "")
+    except (SyntaxError, ValueError):
+        return None
+
+
+def _unique_list_source(value: ast.AST) -> tuple[str, str] | None:
+    """``frame["col"].unique()`` (or ``.tolist()``/``list(...)``/``set(...)``) -> (frame, col)."""
+    node = value
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"list", "set", "sorted"} and node.args:
+        node = node.args[0]
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in {"tolist", "to_list"}:
+        node = node.func.value
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+        return None
+    if node.func.attr not in {"unique", "drop_duplicates"}:
+        return None
+    target = node.func.value
+    if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+        cols = _string_constants(target.slice)
+        if len(cols) == 1:
+            return target.value.id, cols[0]
+    return None
+
+
+def _isin_names(node: ast.AST) -> list[str]:
+    """Names passed to ``.isin(name)`` inside a ``&``-combined filter."""
+    names: list[str] = []
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd):
+        names.extend(_isin_names(node.left))
+        names.extend(_isin_names(node.right))
+    elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "isin":
+        if node.args and isinstance(node.args[0], ast.Name):
+            names.append(node.args[0].id)
+    return names
+
+
+def _detect_independent_dimension_filters(turns: Sequence[TurnRecord]) -> Iterator[Issue]:
+    """Flag candidate tuples collapsed into independent per-dimension lists.
+
+    Seen live: candidates chosen at Product x Region x Customer Group were
+    turned into ``products = c["product"].unique()``, ``regions = ...``,
+    ``groups = ...`` and a later frame was filtered with three ``.isin``
+    calls joined by ``&``. That admits every combination of the three
+    lists, including ones never selected. The fix is a tuple merge
+    (``restrict_to_candidate_tuples``).
+    """
+    lists: dict[str, tuple[str, str]] = {}
+    for t in turns:
+        tree = _parse(t.code)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                source = _unique_list_source(node.value)
+                if source is not None:
+                    lists[node.targets[0].id] = source
+        if not lists:
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd)):
+                continue
+            names = [n for n in _isin_names(node) if n in lists]
+            frames = {lists[n][0] for n in names}
+            if len(names) >= 2 and len(frames) == 1:
+                cols = [lists[n][1] for n in names]
+                frame = frames.pop()
+                yield Issue(
+                    turn=t.turn,
+                    kind="cartesian_candidate_filter",
+                    message=(
+                        f"Filters by independent lists {names} taken from {frame}"
+                        f"[{cols}] admit every combination of those values, not only "
+                        f"the candidates selected in {frame}. Keep the compound "
+                        "identity: restrict_to_candidate_tuples(frame, candidates, "
+                        f"keys={cols})."
+                    ),
+                )
+                break
+
+
+def _sort_fields(tree: ast.Module) -> list[str]:
+    fields: list[str] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr not in {"sort_values", "nlargest", "nsmallest"}:
+            continue
+        for kw in node.keywords:
+            if kw.arg in {"by", "columns"}:
+                fields.extend(_string_constants(kw.value))
+        if node.func.attr == "sort_values" and node.args:
+            fields.extend(_string_constants(node.args[0]))
+        elif node.func.attr in {"nlargest", "nsmallest"} and len(node.args) >= 2:
+            fields.extend(_string_constants(node.args[1]))
+    return fields
+
+
+def _defined_columns(tree: ast.Module) -> list[str]:
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Subscript):
+                    names.extend(_string_constants(target.slice))
+                elif isinstance(target, ast.Name):
+                    names.append(target.id)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "assign":
+            names.extend(kw.arg for kw in node.keywords if kw.arg)
+    return names
+
+
+def detect_ranking_drift(turns: Sequence[TurnRecord], request: Any) -> Issue | None:
+    """The code sorted by something other than the requested ranking concept.
+
+    ``request`` is a :class:`fabric_rlm.analytical_integrity.RankingRequest`.
+    Drift is reported when the trajectory sorts, but no sort field and no
+    column it defined relates to the concept. A defined column that names
+    the concept (``summary["impact"] = ...``) is taken as the metric.
+    """
+    from .analytical_integrity import _stems_overlap, _tokens
+
+    if request is None:
+        return None
+    sort_fields: list[tuple[int, str]] = []
+    defined: list[str] = []
+    for t in turns:
+        tree = _parse(t.code)
+        if tree is None:
+            continue
+        sort_fields.extend((t.turn, f) for f in _sort_fields(tree))
+        defined.extend(_defined_columns(tree))
+    if not sort_fields:
+        return None
+    concept = list(request.tokens)
+    if any(_stems_overlap(concept, _tokens(f)) for _turn, f in sort_fields):
+        return None
+    if any(_stems_overlap(concept, _tokens(name)) for name in defined):
+        return None
+    last_turn, last_field = sort_fields[-1]
+    return Issue(
+        turn=last_turn,
+        kind="ranking_drift",
+        message=(
+            f"The task asked to rank by {request.concept!r} but the code sorted by "
+            f"{sorted({f for _t, f in sort_fields})} and never defined a metric for "
+            f"{request.concept!r}. Derive that metric, sort by it, and show it."
+        ),
+    )
+
+
+def _detect_ranking_drift(turns: Sequence[TurnRecord]) -> Iterator[Issue]:
+    """Plan-to-execution drift: the PLAN promised a ranking the code did not do."""
+    from .analytical_integrity import infer_requested_ranking
+
+    plan = extract_plan(turns)
+    if not plan:
+        return
+    issue = detect_ranking_drift(turns, infer_requested_ranking(plan))
+    if issue is not None:
+        yield issue

@@ -46,8 +46,20 @@ from .runtime import RLM, RLMResult
 from .skill_loader import Skill, SkillLoader, compose_skills, list_skills, load_skill
 from .verify import VerifiedResult, answers_agree, verified_task
 from .trajectory import Issue, Trajectory, TurnRecord
+from .analytical_integrity import (
+    AnalyticalIntegrityError,
+    IntegrityReport,
+    is_material_change,
+    restrict_to_candidate_tuples,
+    validate_analysis_integrity,
+)
 from .validators import (
+    assert_answers_all_subquestions,
+    assert_directional_claims_consistent,
+    assert_grain_preserved,
     assert_in_range,
+    assert_not_clarification_request,
+    assert_ranking_disclosed,
     assert_keys,
     assert_list_len,
     assert_list_of,
@@ -79,6 +91,16 @@ __all__ = [
     "RunInspector",
     "SemanticModel",
     "SemanticModelMetadata",
+    "AnalyticalIntegrityError",
+    "IntegrityReport",
+    "is_material_change",
+    "restrict_to_candidate_tuples",
+    "validate_analysis_integrity",
+    "assert_answers_all_subquestions",
+    "assert_directional_claims_consistent",
+    "assert_grain_preserved",
+    "assert_not_clarification_request",
+    "assert_ranking_disclosed",
     "SemanticModelQueryError",
     "SemanticModelQueryRiskUnknown",
     "SemanticModelQueryTooBroad",

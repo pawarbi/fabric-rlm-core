@@ -40,6 +40,14 @@ except ImportError:  # pragma: no cover
 
 Validator = Callable[[Mapping[str, Any]], None]
 
+from .analytical_integrity import (  # noqa: E402 - after the Validator alias on purpose
+    check_directional_claims,
+    check_ranking_disclosure,
+    infer_requested_ranking,
+    validate_grain,
+    AnalyticalIntegrityError,
+)
+
 
 # ---------------------------------------------------------------------------
 # Composition
@@ -404,8 +412,142 @@ def assert_not_clarification_request(key: str) -> Validator:
     return v
 
 
+# ---------------------------------------------------------------------------
+# Analytical integrity (source-agnostic)
+# ---------------------------------------------------------------------------
+
+
+def _payload_texts(payload: Mapping[str, Any], key: str | None) -> list[str]:
+    """Collect the string content a reader would see, at ``key`` or everywhere."""
+    values: list[Any]
+    if key is not None:
+        val = _resolve(payload, key)
+        values = [] if val is _MISSING else [val]
+    else:
+        values = list(payload.values())
+    texts: list[str] = []
+    stack = list(values)
+    depth = 0
+    while stack and depth < 10_000:
+        depth += 1
+        item = stack.pop()
+        if isinstance(item, str):
+            texts.append(item)
+        elif isinstance(item, Mapping):
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+    return texts
+
+
+def assert_directional_claims_consistent(
+    key: str | None = None,
+    *,
+    absolute_tolerance: float = 0.0,
+    relative_tolerance: float = 0.0,
+) -> Validator:
+    """Reject prose whose direction disagrees with its own numbers.
+
+    Scans the submitted text (``key``, or every string in the payload) for
+    "<moved> from A to B" claims and rejects "declined from 926,400.00 to
+    926,400.00" (effectively equal) or "fell from 3.9M to 4.2M" (opposite
+    direction). Tolerances are the task's materiality rule; the defaults
+    only reject float noise. Works the same whatever produced the numbers.
+    """
+
+    def v(payload: Mapping[str, Any]) -> None:
+        problems: list[str] = []
+        for text in _payload_texts(payload, key):
+            problems.extend(
+                check_directional_claims(
+                    text,
+                    absolute_tolerance=absolute_tolerance,
+                    relative_tolerance=relative_tolerance,
+                )
+            )
+        assert not problems, "Directional claims disagree with their numbers:\n" + "\n".join(
+            f"- {p}" for p in problems
+        )
+
+    return v
+
+
+def assert_ranking_disclosed(
+    key: str | None,
+    question_text: str,
+) -> Validator | None:
+    """Reject an answer to a "rank by <concept>" task that hides the metric.
+
+    Returns ``None`` when the task does not ask for a ranking by a concept,
+    so it chains unconditionally. When it does, the answer must mention the
+    concept (the ranking metric must be visible or explained) and must not
+    say "ranked by <something else>" without calling it a proxy.
+    """
+    request = infer_requested_ranking(question_text or "")
+    if request is None:
+        return None
+
+    def v(payload: Mapping[str, Any]) -> None:
+        text = "\n".join(_payload_texts(payload, key))
+        problems = check_ranking_disclosure(text, request)
+        assert not problems, "\n".join(problems)
+
+    return v
+
+
+def assert_grain_preserved(key: str, dimensions: Iterable[str]) -> Validator:
+    """Reject a result that silently drops or adds analytical dimensions.
+
+    ``payload[key]`` may be a list of record dicts (each must carry every
+    dimension key) or text (each dimension label must appear). A grain
+    change is tolerated only when the payload also explains it: a string
+    field named ``grain_note`` or ``grain_explanation``, or the word
+    "grain" in the text.
+    """
+    wanted = [str(d) for d in dimensions]
+
+    def v(payload: Mapping[str, Any]) -> None:
+        val = _resolve(payload, key)
+        if val is _MISSING or val is None:
+            return
+        explanation = payload.get("grain_note") or payload.get("grain_explanation")
+        if isinstance(val, (list, tuple)) and val and all(isinstance(r, Mapping) for r in val):
+            first = val[0]
+            actual = list(first.keys())
+            present = [d for d in wanted if any(
+                _norm(d) == _norm(k) for k in actual
+            )]
+            try:
+                validate_grain(requested=wanted, actual=present, explanation=explanation)
+            except AnalyticalIntegrityError as exc:
+                assert False, str(exc)
+            return
+        text = val if isinstance(val, str) else str(val)
+        lowered = _norm(text)
+        present = [d for d in wanted if _norm(d) in lowered]
+        if len(present) != len(wanted) and not explanation and "grain" not in text.lower():
+            missing = [d for d in wanted if d not in present]
+            assert False, (
+                f"The result does not show the requested grain {wanted}; "
+                f"{missing} never appear. Report at the requested grain or state why it changed."
+            )
+
+    return v
+
+
+def _norm(value: Any) -> str:
+    text = str(value)
+    m = re.match(r"^\s*'?([^'\[\]]+?)'?\s*\[([^\[\]]+)\]\s*$", text)
+    if m:
+        text = m.group(2)
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
 __all__ = [
     "Validator",
+    "assert_directional_claims_consistent",
+    "assert_ranking_disclosed",
+    "assert_grain_preserved",
     "chain",
     "signature_validator",
     "assert_keys",

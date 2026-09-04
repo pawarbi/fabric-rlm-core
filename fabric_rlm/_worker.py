@@ -147,6 +147,13 @@ def SUBMIT(*args: Any, **kwargs: Any) -> None:
     raise _SubmitSignal(payload)
 
 
+from fabric_rlm.analytical_integrity import (  # noqa: E402
+    is_material_change,
+    restrict_to_candidate_tuples,
+    validate_analysis_integrity,
+)
+
+
 def _install_runtime_api() -> None:
     _namespace.clear()
     _namespace.update(
@@ -158,6 +165,9 @@ def _install_runtime_api() -> None:
             "load_skill": load_skill,
             "activate_skill": activate_skill,
             "list_skills": list_skills,
+            "is_material_change": is_material_change,
+            "restrict_to_candidate_tuples": restrict_to_candidate_tuples,
+            "validate_analysis_integrity": validate_analysis_integrity,
         }
     )
     _install_sandbox_shim()
@@ -176,6 +186,9 @@ _SANDBOX_PUBLIC_NAMES: tuple[str, ...] = (
     "load_skill",
     "activate_skill",
     "list_skills",
+    "is_material_change",
+    "restrict_to_candidate_tuples",
+    "validate_analysis_integrity",
 )
 
 # Private sentinel used to mark our shim module so re-installs don't clobber

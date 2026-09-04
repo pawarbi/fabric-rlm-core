@@ -131,7 +131,12 @@ from .prompts import (
 )
 from .skill_loader import Skill, SkillLoader, compose_skills
 from .skill_router import RouteDecision, SkillRouter
-from .trajectory import Trajectory, TurnRecord
+from .trajectory import Trajectory, TurnRecord, detect_ranking_drift
+from .analytical_integrity import (
+    check_directional_claims,
+    check_ranking_disclosure,
+    infer_requested_ranking,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -900,6 +905,7 @@ class RLM:
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
         output_validator_context: Callable[[Mapping[str, Any], Mapping[str, Any]], None] | None = None,
+        analytical_integrity: bool = True,
         halve_max_iter_on_retry: bool = True,
         engine: str = "auto",
         adaptive: dict | None = None,
@@ -1051,6 +1057,8 @@ class RLM:
             self.digest_after_turn = digest_after_turn
             self.output_validator = output_validator
             self.output_validator_context = output_validator_context
+            self.analytical_integrity = bool(analytical_integrity)
+            self._integrity_rejections = 0
             self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
             self._loaded_skills: list[Skill] = []
             self._activated_skills: set[str] = set()
@@ -1084,6 +1092,7 @@ class RLM:
                 digest_after_turn=digest_after_turn,
                 output_validator=output_validator,
                 output_validator_context=output_validator_context,
+                analytical_integrity=analytical_integrity,
                 halve_max_iter_on_retry=halve_max_iter_on_retry,
                 stuck_loop_threshold=stuck_loop_threshold,
                 security=self._security,
@@ -1124,6 +1133,8 @@ class RLM:
         self.digest_after_turn = digest_after_turn
         self.output_validator = output_validator
         self.output_validator_context = output_validator_context
+        self.analytical_integrity = bool(analytical_integrity)
+        self._integrity_rejections = 0
         self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
         # Per-run counter for repeat-aware repair nudges (keyed by repair target);
         # reset at the start of each run().
@@ -1904,6 +1915,7 @@ class RLM:
             reached_max = False
             verifier_repair_history: list[dict[str, Any]] = []
             self._repair_counts = {}
+            self._integrity_rejections = 0
             timeout_recoveries = 0
 
             while turn_counter < self.max_turns:
@@ -2304,6 +2316,16 @@ class RLM:
                                 "trajectory": trajectory,
                             },
                         )
+                    if output_feedback is None:
+                        output_feedback = self._run_analytical_integrity(
+                            result.submit_payload,
+                            {
+                                "inputs": bound_inputs,
+                                "state": result.state,
+                                "turn": turn_counter,
+                                "trajectory": trajectory,
+                            },
+                        )
                     if output_feedback is not None:
                         feedback_text, history_entry = output_feedback
                         if history_entry is not None:
@@ -2613,6 +2635,107 @@ class RLM:
             )
         return None
 
+    # Two rejections per run is the budget for the heuristic screens below.
+    # They catch prose that contradicts its own numbers; they do not decide
+    # the analysis, so past that point the answer is accepted and the
+    # unresolved findings are recorded on the trajectory instead.
+    _ANALYTICAL_INTEGRITY_MAX_REJECTIONS = 2
+
+    def _analytical_integrity_problems(
+        self, payload: Mapping[str, Any] | None, context: Mapping[str, Any]
+    ) -> list[str]:
+        """Source-agnostic checks on a SUBMIT payload and the code behind it.
+
+        Directional prose must agree with its printed numbers; a task that
+        asks to rank by a concept must get an answer that shows that metric
+        and code that sorted by it; multidimensional candidates must not
+        have been collapsed into independent per-dimension filters. Each
+        check reads only the payload and the trajectory, never the sources.
+        """
+        texts: list[str] = []
+        stack: list[Any] = list((payload or {}).values())
+        while stack:
+            item = stack.pop()
+            if isinstance(item, str):
+                texts.append(item)
+            elif isinstance(item, Mapping):
+                stack.extend(item.values())
+            elif isinstance(item, (list, tuple)):
+                stack.extend(item)
+        combined = "\n".join(texts)
+        problems: list[str] = []
+        problems.extend(check_directional_claims(combined))
+
+        task_text, _ = _task_and_outputs(self.signature, self._inline_task, self._inline_outputs)
+        request = infer_requested_ranking(task_text or "")
+        trajectory = context.get("trajectory")
+        turns = list(getattr(trajectory, "turns", None) or [])
+        if request is not None:
+            problems.extend(check_ranking_disclosure(combined, request))
+            drift = detect_ranking_drift(turns, request)
+            if drift is not None:
+                problems.append(drift.message)
+        if trajectory is not None and hasattr(trajectory, "diagnose"):
+            for issue in trajectory.diagnose():
+                if issue.kind != "cartesian_candidate_filter":
+                    continue
+                # A later turn that merges on the candidate tuples has already
+                # repaired the pattern; only an unrepaired filter is reported.
+                repaired = any(
+                    t.turn > issue.turn
+                    and ("restrict_to_candidate_tuples(" in (t.code or "") or ".merge(" in (t.code or ""))
+                    for t in turns
+                )
+                if not repaired:
+                    problems.append(f"Turn {issue.turn}: {issue.message}")
+        return problems
+
+    def _run_analytical_integrity(
+        self, payload: Mapping[str, Any] | None, context: Mapping[str, Any]
+    ) -> tuple[str, dict[str, Any] | None] | None:
+        """Drive a verifier-repair turn when the analytical integrity screen fails.
+
+        Off when ``analytical_integrity=False`` or the environment sets
+        ``FABRIC_RLM_ANALYTICAL_INTEGRITY=0``. Graceful degrade like the
+        other validators: a bug in the screen never blocks a valid answer.
+        """
+        if not getattr(self, "analytical_integrity", True):
+            return None
+        if os.environ.get("FABRIC_RLM_ANALYTICAL_INTEGRITY", "").strip().lower() in {"0", "false", "off", "no"}:
+            return None
+        try:
+            problems = self._analytical_integrity_problems(payload, context)
+        except Exception as exc:  # noqa: BLE001 - graceful degrade
+            logger.warning(
+                "Analytical integrity check raised %s: %s; accepting payload (graceful degrade).",
+                type(exc).__name__,
+                exc,
+            )
+            return None
+        if not problems:
+            return None
+        trajectory = context.get("trajectory")
+        if self._integrity_rejections >= self._ANALYTICAL_INTEGRITY_MAX_REJECTIONS:
+            if trajectory is not None and hasattr(trajectory, "metadata"):
+                trajectory.metadata["analytical_integrity_unresolved"] = list(problems)
+            return None
+        self._integrity_rejections += 1
+        message = "\n".join(f"- {p}" for p in problems)
+        feedback = (
+            "Your SUBMIT was rejected by the analytical integrity check:\n\n"
+            f"{message}\n\n"
+            f"Submitted payload preview: {_preview_payload(payload)}\n"
+            "Fix the analysis or the wording so the answer is faithful to the "
+            "request and the numbers, then call SUBMIT(...) again."
+            + self._repair_nudge_suffix("analytical_integrity")
+        )
+        history_entry: dict[str, Any] = {
+            "skill": "analytical_integrity",
+            "rejected_payload": dict(payload) if isinstance(payload, Mapping) else payload,
+            "assertion": message,
+        }
+        return feedback, history_entry
+
     def _run_output_validator_context(
         self, payload: Mapping[str, Any] | None, context: Mapping[str, Any]
     ) -> tuple[str, dict[str, Any] | None] | None:
@@ -2891,6 +3014,16 @@ class RLM:
                 verifier_feedback = self._run_output_validator(payload)
             if verifier_feedback is None:
                 verifier_feedback = self._run_output_validator_context(
+                    payload,
+                    {
+                        "inputs": current_inputs,
+                        "attempt": attempt,
+                        "prediction": prediction,
+                        "trajectory": trajectory,
+                    },
+                )
+            if verifier_feedback is None:
+                verifier_feedback = self._run_analytical_integrity(
                     payload,
                     {
                         "inputs": current_inputs,

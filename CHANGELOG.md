@@ -4,6 +4,25 @@
 
 ### Added
 
+- **Source-agnostic analytical integrity guardrails.** `fabric_rlm.analytical_integrity`
+  adds `is_material_change` (noise- and tolerance-aware change test with no
+  built-in business threshold), `restrict_to_candidate_tuples` (keeps
+  multidimensional candidates as compound identities), `validate_ranking`,
+  `validate_grain`, `validate_evidence_lineage` (provenance, cross-source
+  period/unit/definition/entity reconciliation, contradiction surfacing) and
+  the single entry point `validate_analysis_integrity`, which runs whichever
+  checks have inputs. The first two and the entry point are predefined in the
+  sandbox. New validators `assert_directional_claims_consistent`,
+  `assert_ranking_disclosed` and `assert_grain_preserved`; new trajectory
+  detectors `cartesian_candidate_filter` and `ranking_drift` and an
+  `extract_plan` helper. `RLM(analytical_integrity=True)` (default; env
+  `FABRIC_RLM_ANALYTICAL_INTEGRITY=0` disables) rejects, at most twice per
+  run, a SUBMIT whose prose contradicts its own numbers, hides a requested
+  ranking metric, sorted by something other than the requested concept, or
+  followed a cartesian candidate filter. The checks activate by analytical
+  operation, not by input type, so `File`, `LakehouseSource` and
+  `SemanticModel` evidence is held to the same rules. New `analytical_integrity`
+  skill with the cross-source guidance.
 - `SemanticModelMetadata` accepts the dictionary-style access generated code
   tends to assume: `meta["columns"]`, `meta.keys()`, `meta.items()`,
   `meta.values()`, `meta.get("measures")`, and `"relationships" in meta`. The

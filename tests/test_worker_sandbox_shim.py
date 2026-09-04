@@ -125,7 +125,9 @@ def test_sandbox_does_not_pollute_with_private_names() -> None:
     sandbox = sys.modules["sandbox"]
     public = [n for n in dir(sandbox) if not n.startswith("_")]
     expected = {"File", "SUBMIT", "predict", "predict_sync",
-                "load_skill", "activate_skill", "list_skills"}
+                "load_skill", "activate_skill", "list_skills",
+                "is_material_change", "restrict_to_candidate_tuples",
+                "validate_analysis_integrity"}
     assert set(public) == expected, (
         f"sandbox public surface drift: extra={set(public)-expected}, "
         f"missing={expected-set(public)}"

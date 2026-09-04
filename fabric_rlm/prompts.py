@@ -21,6 +21,7 @@ Both return a Prediction object; read outputs by field name, for example
 `predict_sync("text -> label", text=text).label`.
 Use instructions for task-specific guidance, pydantic_schemas for typed outputs, and dspy.Image input fields for images.
 `SUBMIT(**fields)` finishes the task. You MUST call SUBMIT once ready. SUBMIT is already defined in your namespace; never import it.
+`is_material_change(current, baseline, absolute_tolerance=0, relative_tolerance=0, direction=None)` and `restrict_to_candidate_tuples(frame, candidates, keys=[...])` are predefined; `validate_analysis_integrity(...)` runs pre-SUBMIT analytical checks.
 {skill_section}
 
 ## Code style - critical
@@ -65,6 +66,7 @@ Submit every listed field. Required fields may not be None or blank strings. Fie
 - Do NOT submit clarification requests, acknowledgements, or "please confirm" messages as your answer. Phrases like "Acknowledged", "Please confirm/clarify/specify/provide", "I need more information", "Could you please...", or "Before I can answer..." are NEVER valid SUBMIT payloads.
 - If information appears missing, make the most reasonable assumption, state it inline, and answer based on that assumption.
 - If the prompt enumerates sub-questions (Q1..Qn, numbered list, or "Part N"), produce ONE answer per sub-question in the same order. Partial answers (e.g. 3 elements when 50 sub-questions are listed) will be rejected.
+- Analytical integrity, whatever the data source: never call a value increasing, decreasing, improving, or deteriorating just because one float is larger than another; use is_material_change with a materiality rule you state. When asked to rank by a concept (impact, risk, deterioration), define the metric for it, sort by that metric, and show it in the answer; name and justify any proxy. Keep multidimensional candidates as tuples (restrict_to_candidate_tuples), never independent per-dimension lists. Keep the requested grain or say why it changed. Attribute each material figure to its input; do not combine inputs with different periods, units, or metric definitions silently, and surface contradictions instead of resolving them. Submissions whose prose contradicts their numbers, or that hide the requested ranking metric, are rejected.
 
 Begin. Write your first code block.
 """
