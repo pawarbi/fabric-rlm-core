@@ -550,7 +550,8 @@ def check_ranking_disclosure(text: str | None, request: RankingRequest) -> list[
     problems: list[str] = []
     body = str(text or "")
     answer_tokens = _tokens(body)
-    if not _stems_overlap(request.tokens, answer_tokens):
+    head_tokens = [concept_head(request.concept)] if concept_head(request.concept) else list(request.tokens)
+    if not _stems_overlap(head_tokens, answer_tokens):
         problems.append(
             f"The task asked to rank by {request.concept!r}, but the answer never "
             f"mentions {request.concept!r}. Show the ranking metric (a column such "
@@ -730,10 +731,20 @@ _NUMBER_TOKEN = (
     r"[-+]?[$€£¥]?\s?\(?[-+]?\d[\d,]*(?:\.\d+)?\)?"
     r"(?:\s?(?:%|(?:percent|pct|bps|[KMBT](?:illion)?|thousand|million|billion|trillion|mm|bn)(?![A-Za-z])))?"
 )
+# A unit word after the number ("926,400.00 USD", "18 users") and an
+# optional "in <period>" before the "to".
+_UNIT_WORD = r"(?:\s?(?:USD|EUR|GBP|dollars?|euros?|units?|users?|customers?|seats?|accounts?|rows?))?"
+_PERIOD_TAG = r"(?:\s+(?:in|for|at|during)\s+[\w/\-]+)?"
 _FROM_TO_RE = re.compile(
-    r"(?P<lead>\b\w+\b(?:\s+\w+){0,4}?)\s+from\s+(?P<a>" + _NUMBER_TOKEN + r")"
-    r"\s+(?:in\s+[\w/\-]+\s+)?to\s+(?P<b>" + _NUMBER_TOKEN + r")"
-    r"(?P<tail>[^.;\n]{0,80})",
+    r"(?P<lead>\b\w+\b(?:\s+\w+){0,4}?)\s+from\s+(?P<a>" + _NUMBER_TOKEN + r")" + _UNIT_WORD + _PERIOD_TAG
+    + r"\s+to\s+(?P<b>" + _NUMBER_TOKEN + r")" + _UNIT_WORD + _PERIOD_TAG
+    + r"(?P<tail>[^.;\n]{0,80})",
+    re.IGNORECASE,
+)
+# "a decrease of 0.00 USD", "an increase of 0%": a movement word with a zero amount
+_CHANGE_OF_RE = re.compile(
+    r"\b(?P<word>decrease|decline|drop|reduction|loss|fall|increase|growth|gain|rise|improvement|deterioration)"
+    r"\s+of\s+(?P<amount>" + _NUMBER_TOKEN + r")" + _UNIT_WORD,
     re.IGNORECASE,
 )
 
@@ -806,6 +817,16 @@ def check_directional_claims(
     formatting checks: no source query is needed.
     """
     problems: list[str] = []
+    for match in _CHANGE_OF_RE.finditer(str(text or "")):
+        amount = _as_float(match.group("amount").replace(" ", ""))
+        if amount is None:
+            continue
+        if amount == 0 or abs(amount) <= absolute_tolerance:
+            problems.append(
+                f"{match.group(0).strip()!r} names a {match.group('word').lower()} whose amount is "
+                f"{amount:g}, which is no movement at all under the materiality rule. Call it "
+                "flat, or state the unrounded movement and the threshold that makes it material."
+            )
     for claim in parse_directional_claims(
         text,
         absolute_tolerance=absolute_tolerance,

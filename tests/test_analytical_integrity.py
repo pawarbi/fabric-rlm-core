@@ -277,7 +277,7 @@ def test_ranked_by_phrase_is_read_with_the_declared_ranking_metric():
 
     request = infer_requested_ranking("rank them by business impact of the deterioration")
     answer = (
-        "Ranking metric: absolute ARR loss in USD (arr_2025Q4 - arr_2026Q2). Tie-breaker: percent loss.\n"
+        "Ranking metric (business impact): absolute ARR loss in USD (arr_2025Q4 - arr_2026Q2). Tie-breaker: percent loss.\n"
         "Found 3 deteriorated segments; ranked by USD loss (largest first).\n"
         "1. Cloud DDoS | APAC | TELCO: Ranking metric: USD loss = $1,500,000.00"
     )
@@ -371,6 +371,29 @@ def test_materiality_rule_applies_to_prose_claims():
     assert flagged and "effectively equal" in flagged[0]
     claim = parse_directional_claims(text)[0]
     assert (claim.baseline, claim.current, claim.claimed) == (1000.0, 999.0, "decrease")
+
+
+def test_units_and_period_tags_inside_a_from_to_claim_are_read():
+    """The live gpt-4.1-mini sentence that slipped through."""
+    live = (
+        "Segment (Product=Alteon, Region=EMEA, Customer Group=ENTERPRISE): ARR dropped from "
+        "926,400.00 USD in 2025/Q4 to 926,400.00 USD in 2026/Q2, a decrease of 0.00 USD."
+    )
+    problems = check_directional_claims(live)
+    assert any("effectively equal" in p for p in problems)
+    assert any("no movement at all" in p for p in problems)
+    assert check_directional_claims("ARR dropped from 5,000,000.00 USD in 2025/Q4 to 3,500,000.00 USD in 2026/Q2, a decrease of 1,500,000.00 USD.") == []
+    assert check_directional_claims("Active users grew from 120 users in March to 140 users in June.") == []
+    assert check_directional_claims("a decrease of 900 units", absolute_tolerance=1000)
+
+
+def test_concept_mention_requires_the_head_of_the_concept():
+    """'deterioration' in the prose does not disclose an impact metric."""
+    request = infer_requested_ranking("rank them by business impact of the deterioration")
+    prose = "Trend analysis indicates deterioration started inside the window. Segments listed by decrease."
+    problems = check_ranking_disclosure(prose, request)
+    assert problems and "never mentions" in problems[0]
+    assert check_ranking_disclosure("Ranking metric (business impact): absolute decrease. " + prose, request) == []
 
 
 # -- claim levels and lineage -------------------------------------------------------
