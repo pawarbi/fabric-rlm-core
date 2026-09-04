@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-09-04 — analytical integrity guardrails and bounded semantic-model aggregation
 
 ### Added
 
@@ -60,8 +60,6 @@
   `FABRIC_RLM_SEMANTIC_PREFLIGHT_TIMEOUT` sets the preflight budget.
 - `SemanticModel.query_telemetry` records the estimate, timing, and outcome of
   each `aggregate` call.
-
-### Added
 
 - `RunInspector` shows a one-line plain-language summary next to each turn
   (for example "Aggregated revenue by region" or "Inspected available
