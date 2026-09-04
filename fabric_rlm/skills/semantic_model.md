@@ -90,9 +90,18 @@ print(fabric.list_relationships(DATASET).to_string()[:2000])
 
 ## Querying
 
-- For a bound handle, prefer `model.dax(query, normalize_columns=True)`. This
-  returns an ordinary pandas DataFrame with snake-case columns rather than
-  SemPy names such as `[ARR]` and `Period[Year]`.
+- For a bound handle and "measure(s) by dimension(s)", prefer
+  `model.aggregate(measures=[...], groupby=["Table[Column]", ...],
+  filters={...}, order_by=..., top=...)`. It checks the names and the result
+  grain before running. If it raises `SemanticModelQueryTooBroad` or
+  `SemanticModelQueryRiskUnknown`, follow the message: a coarser dimension,
+  one dimension fewer, a narrower filter, or TOP N. Start coarse (one measure
+  by one or two dimensions), then drill into the top segments; do not ask for
+  every combination and every measure at once.
+- For custom DAX that `aggregate` cannot express, use
+  `model.dax(query, normalize_columns=True)`. This returns an ordinary pandas
+  DataFrame with snake-case columns rather than SemPy names such as `[ARR]`
+  and `Period[Year]`. It runs whatever it is given, with no size check.
 - `fabric.evaluate_measure(DATASET, "Total Sales", groupby_columns=[...],
   filters={...})` for "measure by dimension". No DAX to get wrong.
 - `fabric.evaluate_dax(DATASET, "EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(...),

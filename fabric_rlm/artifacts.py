@@ -719,10 +719,13 @@ def encode_for_worker(value: Any) -> Any:
         # Only the coordinates cross the wire. Explicit notebook credentials
         # belong to the parent runtime; the worker uses SemPy's established
         # authentication path and does not revalidate the handle.
-        return {"__fabric_rlm_semantic_model__": {
+        spec: dict[str, Any] = {
             "dataset": value.dataset,
             "workspace": value.workspace,
-        }}
+        }
+        if value.max_groups is not None:
+            spec["max_groups"] = value.max_groups
+        return {"__fabric_rlm_semantic_model__": spec}
     if isinstance(value, LakehouseSource):
         return {
             "__fabric_rlm_lakehouse_source__": {
@@ -773,6 +776,7 @@ def decode_from_worker_wire(value: Any) -> Any:
                 workspace=spec.get("workspace"),
                 credential_provider=spec.get("credential_provider"),
                 validate=False,
+                max_groups=spec.get("max_groups"),
             )
         if "__fabric_rlm_lakehouse_source__" in value:
             spec = value["__fabric_rlm_lakehouse_source__"]

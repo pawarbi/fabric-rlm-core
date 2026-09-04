@@ -9,9 +9,24 @@
   `meta.values()`, `meta.get("measures")`, and `"relationships" in meta`. The
   attribute API and the `metadata()` return type are unchanged; only the four
   public frames are exposed as keys.
+- `SemanticModel.aggregate(measures, groupby=..., filters=..., order_by=...,
+  top=...)` for grouped measure analysis behind a query-size guardrail. Names
+  are validated against the model, a short cardinality preflight estimates the
+  result grain, and a request over the limit (10,000 groups by default) or one
+  whose estimate does not return within the budget (10 seconds) raises
+  `SemanticModelQueryTooBroad` or `SemanticModelQueryRiskUnknown` with
+  concrete narrowing guidance instead of consuming the worker timeout. The
+  handle stays usable after a rejection. `max_groups=` on the handle or
+  `FABRIC_RLM_SEMANTIC_MAX_GROUPS` raise the ceiling;
+  `FABRIC_RLM_SEMANTIC_PREFLIGHT_TIMEOUT` sets the preflight budget.
+- `SemanticModel.query_telemetry` records the estimate, timing, and outcome of
+  each `aggregate` call.
 
 ### Changed
 
+- The `SemanticModel` prompt listing and the `semantic_model` skill point the
+  model at `aggregate()` first and reserve `dax()` for custom DAX. `dax()`
+  itself is unchanged.
 - Python 3.13 is no longer listed as supported or tested in CI. Supported
   versions are 3.10 to 3.12.
 
