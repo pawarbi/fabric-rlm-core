@@ -29,9 +29,12 @@ _STOPWORDS = frozenset(
     }
 )
 _KIND_TRIGGERS: dict[str, frozenset[str]] = {
+    # A time-semantics lesson matters when the task asks about the current
+    # or latest period; a task that names its window ("2025/Q4 through
+    # 2026/Q2") does not need it, so period nouns alone do not trigger it.
     "time_semantics": frozenset(
         {"current", "currently", "latest", "now", "today", "recent", "this",
-         "quarter", "month", "year", "period", "week", "date", "asof", "fiscal"}
+         "asof", "fiscal", "ytd", "qtd", "mtd", "todate"}
     ),
     "context_requirement": frozenset(
         {"growth", "previous", "prior", "change", "changed", "trend", "trends",
@@ -61,6 +64,9 @@ _KIND_TRIGGERS: dict[str, frozenset[str]] = {
     "relationship_path": frozenset({"join", "relationship", "related", "link"}),
     "cross_source_mapping": frozenset({"join", "combine", "both", "sources", "compare"}),
 }
+# Kinds that need one of their trigger words in the task before vocabulary
+# overlap counts at all.
+_TRIGGER_REQUIRED = frozenset({"time_semantics"})
 _KIND_ORDER = (
     "time_semantics",
     "context_requirement",
@@ -131,8 +137,17 @@ def lesson_score(lesson: LearnedLesson, task_tokens: set[str]) -> float:
     rule even if it never names the construct), and confidence breaks
     ties so a verified lesson outranks a nominated one.
     """
-    subject_tokens = _tokens(lesson.subject) | _rule_tokens(lesson.structured_rule)
+    if lesson.kind in {"valid_grain", "expensive_grain"}:
+        # A grain lesson is about its dimensions; the measures it happened
+        # to carry would match every task that names the same measure.
+        subject_tokens = _tokens(lesson.subject) | _rule_tokens(lesson.structured_rule.get("grain"))
+    else:
+        subject_tokens = _tokens(lesson.subject) | _rule_tokens(lesson.structured_rule)
     triggers = _KIND_TRIGGERS.get(lesson.kind, frozenset())
+    if lesson.kind in _TRIGGER_REQUIRED and not (triggers & task_tokens):
+        # A lesson about "current" has nothing to say to a task that names
+        # its own window, however many model names the two share.
+        return 0.0
     score = float(len(subject_tokens & task_tokens))
     score += 0.5 * len(triggers & task_tokens)
     if score <= 0:
