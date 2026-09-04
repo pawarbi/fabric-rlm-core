@@ -871,7 +871,7 @@ class RLM:
         *,
         lm: Any,
         sub_lm: Any | None = None,
-        max_turns: int = 10,
+        max_turns: int = 20,
         timeout: float = 300.0,
         verbose: bool = False,
         skills: list[str] | None = None,

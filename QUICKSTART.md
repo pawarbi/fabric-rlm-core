@@ -503,7 +503,7 @@ See `fabric_rlm/validators.py` for the implementation and
 
 | Param | Default | What |
 |---|---|---|
-| `max_turns` | 10 | Cap on tool-loop iterations |
+| `max_turns` | 20 | Cap on tool-loop iterations |
 | `timeout` | 300.0 | Subprocess timeout (seconds) |
 | `enable_router` | False | Turn on skill router |
 | `max_active_skills` | 2 | Max skills the router activates |

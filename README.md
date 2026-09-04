@@ -575,7 +575,7 @@ Pass `workspace=` for a model outside the attached workspace.
 For measures by dimensions, prefer `arr.aggregate(...)`. It validates measure
 and column names against the model, estimates how many groups the request
 would produce, and refuses to run a query whose estimate exceeds the safe
-limit (10,000 groups by default) or cannot be produced within ten seconds. The
+limit (10,000 groups by default) or cannot be produced within thirty seconds. The
 error names the grouping, the measures, and concrete ways to narrow the query,
 so the model recovers in one turn instead of waiting out the worker timeout.
 
