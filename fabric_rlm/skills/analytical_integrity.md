@@ -1,23 +1,20 @@
 ---
 applies_when:
   keywords:
-    - rank
+    - rank by
+    - rank the
+    - rank them
+    - ranked by
     - ranking
-    - top
-    - impact
+    - business impact
     - deteriorat
-    - decline
-    - growth
-    - trend
-    - compare
-    - driver
-    - segment
+    - materiality
+    - materially
     - multiple sources
     - cross-source
     - reconcile
     - contradict
-    - usage
-    - arr
+    - provenance
   output_fields: []
 excludes: []
 depends_on: []
