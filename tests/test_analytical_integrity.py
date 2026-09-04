@@ -387,6 +387,25 @@ def test_units_and_period_tags_inside_a_from_to_claim_are_read():
     assert check_directional_claims("a decrease of 900 units", absolute_tolerance=1000)
 
 
+def test_zero_change_items_in_an_answer_about_change_are_flagged():
+    """Two live answers listed the float-noise segment with a zero change."""
+    from fabric_rlm.analytical_integrity import check_zero_change_items, task_asks_about_change
+
+    gpt41 = (
+        "Segment: product=Alteon, region=EMEA, customer_group=ENTERPRISE\n"
+        "  ARR at 2025/Q4: $926,400\n  ARR at 2026/Q2: $926,400\n  Change in ARR: $0\n"
+        "  Business impact metric (ARR drop): $0\n"
+    )
+    gpt5 = "6. Alteon | EMEA | ENTERPRISE\n   Change: $-0 (-0.0%)    Ranked-by: abs drop = $0\n"
+    assert check_zero_change_items(gpt41) and "zero" in check_zero_change_items(gpt41)[0]
+    assert check_zero_change_items(gpt5)
+    healthy = "1. Cloud DDoS | APAC | TELCO\n   Change: $-1,500,000 (-30.0%)   Ranked-by: abs drop = $1,500,000\n"
+    assert check_zero_change_items(healthy) == []
+    assert check_zero_change_items("Change: $0.05 (rounding); drop = $10") == []
+    assert task_asks_about_change("Identify the segments whose ARR deteriorated and rank them")
+    assert not task_asks_about_change("What is total ARR by region?")
+
+
 def test_concept_mention_requires_the_head_of_the_concept():
     """'deterioration' in the prose does not disclose an impact metric."""
     request = infer_requested_ranking("rank them by business impact of the deterioration")

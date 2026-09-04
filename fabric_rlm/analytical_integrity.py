@@ -35,6 +35,8 @@ __all__ = [
     "check_answer_hygiene",
     "check_directional_claims",
     "check_ranking_disclosure",
+    "check_zero_change_items",
+    "task_asks_about_change",
     "classify_claim_level",
     "concept_head",
     "declared_ranking_phrases",
@@ -582,6 +584,48 @@ def check_ranking_disclosure(text: str | None, request: RankingRequest) -> list[
             f"by {request.concept!r}. Rank by a metric for {request.concept!r}, or "
             "state that the field used is a proxy and why."
         )
+    return problems
+
+
+# "Change: $-0 (-0.0%)", "Change in ARR: $0", "abs drop = $0", "impact metric (ARR drop): $0"
+_ZERO_CHANGE_RE = re.compile(
+    r"\b(?P<label>(?:net\s+|abs(?:olute)?\s+|total\s+)?(?:change|delta|difference|decline|decrease|drop|loss|"
+    r"increase|growth|gain|movement|impact(?:\s+metric)?)(?:\s+in\s+\w+)?(?:\s*\([^)\n]{0,40}\))?)"
+    r"\s*[:=]\s*(?:[-+]?\s?[$€£¥]?\s?[-+]?0(?:\.0+)?(?!\d|\.\d))(?:\s?(?:%|USD|EUR|GBP|units?|users?))?(?!\d|\.\d)",
+    re.IGNORECASE,
+)
+_CHANGE_TASK_RE = re.compile(
+    r"\b(?:deteriorat|declin|decreas|drop|fall|fell|grow|grew|increas|chang|trend|improv|worsen|movement)",
+    re.IGNORECASE,
+)
+
+
+def task_asks_about_change(task_text: str | None) -> bool:
+    """True when the task is about movement, so a zero-change item is a finding."""
+    return bool(_CHANGE_TASK_RE.search(str(task_text or "")))
+
+
+def check_zero_change_items(text: str | None, *, absolute_tolerance: float = 0.0) -> list[str]:
+    """Items reported with a change of zero inside an answer about change.
+
+    Only meaningful when the task asked for items that moved; the caller
+    decides that with :func:`task_asks_about_change`. A listed segment whose
+    own line says "Change: $0" or "impact metric: $0" is float noise or a
+    flat item that should have been excluded or called flat.
+    """
+    problems: list[str] = []
+    body = str(text or "")
+    for match in _ZERO_CHANGE_RE.finditer(body):
+        line_start = body.rfind("\n", 0, match.start()) + 1
+        line_end = body.find("\n", match.end())
+        line = body[line_start: line_end if line_end >= 0 else len(body)].strip()
+        problems.append(
+            f"{line[:120]!r} reports a {match.group('label').strip().lower()} of zero for an item the "
+            "answer presents as having moved. A zero change is float noise or a flat item: exclude "
+            "it under the stated materiality rule, or call it flat."
+        )
+        if len(problems) >= 3:
+            break
     return problems
 
 

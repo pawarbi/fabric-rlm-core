@@ -475,6 +475,33 @@ def test_defined_metric_note_names_only_head_related_columns():
     assert "No metric for" in issue.message
 
 
+def test_zero_change_item_is_sent_back_when_the_task_is_about_change(monkeypatch):
+    listed = "Deteriorated segments:\n1. Alteon | EMEA | ENTERPRISE\n   Change: $-0 (-0.0%)   Ranked-by: abs drop = $0\n"
+    fixed = "Deteriorated segments (materiality: >= $1,000):\n1. Cloud DDoS | APAC | TELCO\n   Change: $-1,500,000   Ranked-by: abs drop = $1,500,000\n"
+    fake = FakeInterpreter([_submit({"analysis": listed}), _submit({"analysis": fixed})])
+    monkeypatch.setattr(runtime_mod, "Interpreter", lambda **kwargs: fake)
+    monkeypatch.delenv("FABRIC_RLM_ANALYTICAL_INTEGRITY", raising=False)
+    lm = ScriptedLM([_fence(f"SUBMIT(analysis={listed!r})"), _fence(f"SUBMIT(analysis={fixed!r})")])
+
+    result = RLM.from_task("List the segments whose ARR deteriorated.", outputs=["analysis"], lm=lm, max_turns=4, timeout=5).run()
+
+    assert result.payload == {"analysis": fixed}
+    assert "zero" in result.trajectory.metadata["verifier_repair_history"][0]["assertion"]
+
+
+def test_zero_change_is_not_flagged_when_the_task_is_not_about_change(monkeypatch):
+    listed = "Inventory by segment:\n1. Alteon | EMEA | ENTERPRISE\n   Change: $0\n"
+    fake = FakeInterpreter([_submit({"analysis": listed})])
+    monkeypatch.setattr(runtime_mod, "Interpreter", lambda **kwargs: fake)
+    monkeypatch.delenv("FABRIC_RLM_ANALYTICAL_INTEGRITY", raising=False)
+    lm = ScriptedLM([_fence(f"SUBMIT(analysis={listed!r})")])
+
+    result = RLM.from_task("List ARR by segment.", outputs=["analysis"], lm=lm, max_turns=3, timeout=5).run()
+
+    assert result.payload == {"analysis": listed}
+    assert "verifier_repair_history" not in result.trajectory.metadata
+
+
 def test_a_clean_answer_to_a_plain_question_is_not_touched(monkeypatch):
     fake = FakeInterpreter([_submit({"answer": "Total ARR is 4.2M, up from 3.9M a year ago."})])
     monkeypatch.setattr(runtime_mod, "Interpreter", lambda **kwargs: fake)

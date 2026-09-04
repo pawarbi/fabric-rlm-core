@@ -136,7 +136,9 @@ from .analytical_integrity import (
     check_answer_hygiene,
     check_directional_claims,
     check_ranking_disclosure,
+    check_zero_change_items,
     infer_requested_ranking,
+    task_asks_about_change,
 )
 
 
@@ -2688,6 +2690,8 @@ class RLM:
         problems.extend(check_directional_claims(combined))
 
         task_text, _ = _task_and_outputs(self.signature, self._inline_task, self._inline_outputs)
+        if task_asks_about_change(task_text):
+            problems.extend(check_zero_change_items(combined))
         request = infer_requested_ranking(task_text or "")
         trajectory = context.get("trajectory")
         turns = list(getattr(trajectory, "turns", None) or [])
