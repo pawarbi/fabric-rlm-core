@@ -150,6 +150,150 @@ def test_inspector_marks_a_successful_turn_after_an_error_as_recovered() -> None
     assert "Recovered" in html
 
 
+def test_inspector_summarizes_turns_without_an_lm_call() -> None:
+    result = _result(
+        _turn(
+            1,
+            code="schema = sales.schema()",
+            error="ValueError: model unavailable",
+        ),
+        _turn(
+            2,
+            code=(
+                'totals = sales.groupby("region")["revenue"].sum()\n'
+                "SUBMIT(answer=totals)"
+            ),
+            submitted=True,
+        ),
+    )
+
+    html = result.inspect().to_html()
+
+    assert "Inspected the source schema - error: ValueError" in html
+    assert (
+        "Recovered from the previous error; aggregated revenue by region; "
+        "submitted the answer"
+    ) in html
+
+
+def test_inspector_uses_a_factual_fallback_for_unrecognized_code() -> None:
+    html = _result(_turn(1, code="x = 1")).inspect().to_html()
+
+    assert "Executed Python code" in html
+
+
+def test_inspector_handles_whitespace_only_errors() -> None:
+    html = _result(_turn(1, error=" \n ")).inspect().to_html()
+
+    assert "Executed Python code - error: Unknown error" in html
+
+
+def test_inspector_does_not_mark_consecutive_errors_as_recovered() -> None:
+    html = _result(
+        _turn(1, error="ValueError: first"),
+        _turn(2, error="TypeError: second"),
+    ).inspect().to_html()
+
+    assert html.count("Recovered from the previous error") == 0
+    assert "Recovered" not in html
+
+
+def test_inspector_does_not_describe_unreached_submission() -> None:
+    html = _result(
+        _turn(
+            1,
+            code='raise ValueError("failed")\nSUBMIT(answer=0)',
+            error="ValueError: failed",
+        )
+    ).inspect().to_html()
+
+    assert "Submitted the answer" not in html
+    assert "submitted the answer" not in html
+
+
+def test_inspector_ignores_calls_inside_uninvoked_functions() -> None:
+    html = _result(
+        _turn(
+            1,
+            code=(
+                "def helper():\n"
+                '    return sales.groupby("region")["revenue"].sum()\n'
+                "x = 1"
+            ),
+        )
+    ).inspect().to_html()
+
+    assert "Aggregated revenue by region" not in html
+    assert "Executed Python code" in html
+
+
+def test_inspector_does_not_claim_a_later_operation_ran_after_an_error() -> None:
+    html = _result(
+        _turn(
+            1,
+            code="missing_name()\nschema = sales.schema()",
+            error="NameError: name 'missing_name' is not defined",
+        )
+    ).inspect().to_html()
+
+    assert "Inspected the source schema" not in html
+    assert "Ran missing name - error: NameError" in html
+
+
+def test_inspector_ignores_deferred_generator_operations() -> None:
+    html = _result(
+        _turn(
+            1,
+            code="queries = (sales.query(sql) for sql in statements)",
+        )
+    ).inspect().to_html()
+
+    assert "Queried the data source" not in html
+    assert "Executed Python code" in html
+
+
+def test_inspector_reports_a_failing_argument_before_the_outer_operation() -> None:
+    html = _result(
+        _turn(
+            1,
+            code="schema = sales.schema(missing_name())",
+            error="NameError: name 'missing_name' is not defined",
+        )
+    ).inspect().to_html()
+
+    assert "Inspected the source schema" not in html
+    assert "Ran missing name - error: NameError" in html
+
+
+def test_inspector_does_not_claim_a_short_circuited_operation_ran() -> None:
+    html = _result(
+        _turn(
+            1,
+            code='result = False and sales.query("SELECT 1")',
+        )
+    ).inspect().to_html()
+
+    assert "Queried the data source" not in html
+    assert "Executed Python code" in html
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "rows = [sales.query(sql) for sql in []]",
+        "rows = {sales.query(sql) for sql in []}",
+        "rows = {sql: sales.query(sql) for sql in []}",
+        "rows = [sales.query(sql) for sql in get_items()]",
+    ],
+)
+def test_inspector_does_not_claim_comprehension_bodies_ran(code: str) -> None:
+    error = "RuntimeError: failed iterable" if "get_items" in code else None
+    html = _result(_turn(1, code=code, error=error)).inspect().to_html()
+
+    assert "Queried the data source" not in html
+    assert "Executed Python code" in html
+
+
 def test_inspector_escapes_untrusted_trajectory_content() -> None:
     result = _result(
         _turn(
