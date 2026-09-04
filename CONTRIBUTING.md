@@ -11,7 +11,7 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-Python ≥ 3.10. The test suite spawns real CPython subprocesses (the worker),
+Python 3.10 to 3.12 (3.13 is not supported yet). The test suite spawns real CPython subprocesses (the worker),
 so expect it to take a few minutes; no API keys are required for the unit
 suite.
 

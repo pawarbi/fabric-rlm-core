@@ -10,6 +10,11 @@
   attribute API and the `metadata()` return type are unchanged; only the four
   public frames are exposed as keys.
 
+### Changed
+
+- Python 3.13 is no longer listed as supported or tested in CI. Supported
+  versions are 3.10 to 3.12.
+
 ## 0.5.0 — 2026-09-02 — governed knowledge learning and execution
 
 ### Added
