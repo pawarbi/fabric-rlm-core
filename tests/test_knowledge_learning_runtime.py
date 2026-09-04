@@ -347,6 +347,32 @@ def test_active_lessons_are_injected_after_the_inputs_and_the_source_stays_bound
     assert result.trajectory.metadata["knowledge_lessons_available"] == 1
 
 
+def test_lessons_reach_the_operation_planner_but_not_a_synthesis_prompt(tmp_path: Path) -> None:
+    """The planner sees the guidance so it can add the context a measure needs.
+
+    When the host then executes the operation, the agent only synthesizes
+    the packet and gets no guidance section.
+    """
+    source = _csv(tmp_path)
+    knowledge = _knowledge_with_lesson(source, status="active")
+    lm = ScriptedLM('{"fallback": true, "reason": "test"}', _code("SUBMIT(answer=orders.name)"))
+    result = RLM.task("Total amount by region", outputs=["answer"], knowledge=knowledge, lm=lm, max_turns=1, timeout=10).run()
+    planner = lm.messages[0][1]["content"]
+    assert "Registered operations:" in planner
+    assert "## Learned source guidance" in planner and "reliable analysis grain" in planner
+    assert "Apply this guidance" in planner
+    assert result.trajectory.metadata["knowledge_mode"] == "fallback_no_compatible_operation"
+    assert "## Learned source guidance" in _system_prompt(lm)
+
+    plan = '{"operation_id": "orders.tabular.aggregate.v1", "parameters": {"aggregate": "sum", "measure": "amount"}}'
+    lm = ScriptedLM(plan, _code("SUBMIT(answer=knowledge_result['row_count'])"))
+    result = RLM.task("Total amount by region", outputs=["answer"], knowledge=knowledge, lm=lm, max_turns=1, timeout=10).run()
+    assert result.trajectory.metadata["knowledge_mode"] == "registered_operation"
+    assert "## Learned source guidance" in lm.messages[0][1]["content"]
+    assert "## Learned source guidance" not in _system_prompt(lm)
+    assert result.trajectory.metadata["knowledge_lessons_injected"] == ["lesson.valid_grain.orders"]
+
+
 def test_candidates_and_unrelated_lessons_leave_the_prompt_untouched(tmp_path: Path) -> None:
     source = _csv(tmp_path)
     prompts = {}

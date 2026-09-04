@@ -1278,6 +1278,8 @@ class RLM:
         self,
         bound_inputs: dict[str, Any],
         metadata: dict[str, Any],
+        *,
+        learned_guidance: str | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         if (
             self._knowledge is None
@@ -1328,6 +1330,15 @@ class RLM:
                 "content": (
                     f"Task:\n{task_description}\n\n"
                     f"Registered operations:\n{canonical_json(operations)}"
+                    + (
+                        "\n\n"
+                        + learned_guidance
+                        + "\n\nApply this guidance when choosing the operation and its "
+                        "parameters (for example a period filter a measure requires). "
+                        "If no operation can honour it, return the fallback."
+                        if learned_guidance
+                        else ""
+                    )
                 ),
             },
         ]
@@ -1847,14 +1858,12 @@ class RLM:
     ) -> tuple[str | None, dict[str, Any]]:
         """Retrieved lessons for this task, rendered; nothing when there are none.
 
-        Shown only when the task will work against the live source. A
-        registered operation that already answered the task replaced the
-        bindings with its result packet, and the agent then only
-        synthesizes. Candidate lessons are never shown.
+        The text goes to the registered-operation planner, so a measure that
+        needs a period context is not planned without one, and then to the
+        agent when the task works against the live source. Candidate
+        lessons are never shown.
         """
         if self._knowledge is None:
-            return None, {}
-        if knowledge_metadata.get("knowledge_mode") == "registered_operation":
             return None, {}
         from .knowledge_retrieval import render_learned_guidance, retrieve_lessons
 
@@ -1881,11 +1890,16 @@ class RLM:
         # for a knowledge package is its source id. Recorded before a
         # registered operation may swap the bindings for its result packet.
         self._evidence_sources = dict(bound_inputs)
+        learned_guidance, guidance_metadata = self._learned_guidance(knowledge_metadata)
         bound_inputs, knowledge_metadata = self._prepare_registered_operation(
             bound_inputs,
             knowledge_metadata,
+            learned_guidance=learned_guidance,
         )
-        learned_guidance, guidance_metadata = self._learned_guidance(knowledge_metadata)
+        if knowledge_metadata.get("knowledge_mode") == "registered_operation":
+            # The host executed an operation and the agent only synthesizes
+            # its packet; the lessons already shaped the plan.
+            learned_guidance = None
         knowledge_metadata = {**knowledge_metadata, **guidance_metadata}
         bound_inputs = resolve_lakehouse_inputs(bound_inputs)
 
