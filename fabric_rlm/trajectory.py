@@ -43,6 +43,11 @@ _MD_PROSE_RE = re.compile(
 )
 
 
+def _last_error_line(error: str | None) -> str:
+    lines = (error or "").strip().splitlines()
+    return lines[-1].strip() if lines else ""
+
+
 @dataclass
 class TurnRecord:
     turn: int
@@ -416,7 +421,7 @@ class Trajectory:
         errs = [t for t in self.turns if t.error]
         kinds: dict[str, int] = {}
         for t in errs:
-            line = (t.error or "").strip().splitlines()[-1] if t.error else ""
+            line = _last_error_line(t.error)
             kind = line.split(":", 1)[0].strip() or "Unknown"
             kinds[kind] = kinds.get(kind, 0) + 1
         lm_seconds = _sum_or_none("lm_call_seconds")
@@ -503,7 +508,7 @@ def _detect_repeated_error(turns: Sequence[TurnRecord]) -> Iterator[Issue]:
     """
 
     def _kind(t: TurnRecord) -> str:
-        return t.error.strip().splitlines()[-1].split(":", 1)[0].strip() if t.error else ""
+        return _last_error_line(t.error).split(":", 1)[0].strip()
 
     streak_kind: str | None = None
     streak_start: int = 0

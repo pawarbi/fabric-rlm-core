@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from dataclasses import dataclass
 from html import escape
@@ -57,7 +58,8 @@ _STYLES = """
 .frlm-turn > summary { border-bottom: 1px solid var(--frlm-border); box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 8px; min-height: var(--frlm-turn-row-height); padding: 12px 16px; }
 .frlm-turn:last-child > summary { border-bottom: 0; }
 .frlm-turn > summary:hover { background: var(--frlm-surface); }
-.frlm-turn-title { font-weight: 600; margin-right: auto; }
+.frlm-turn-title { font-weight: 600; white-space: nowrap; }
+.frlm-turn-summary { color: var(--frlm-muted); margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .frlm-badge { border: 1px solid currentColor; border-radius: 999px; font-size: 11px; font-weight: 600; padding: 1px 7px; }
 .frlm-good { color: var(--frlm-good); }
 .frlm-warn { color: var(--frlm-warn); }
@@ -91,6 +93,179 @@ def _format_number(value: Any, *, suffix: str = "") -> str:
 
 def _json_text(value: Any) -> str:
     return json.dumps(value, indent=2, default=str, ensure_ascii=False)
+
+
+def _humanize_identifier(value: str) -> str:
+    text = value.strip().strip("[]").replace("_", " ")
+    return " ".join(text.split())
+
+
+def _literal_label(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return _humanize_identifier(node.value)
+    if isinstance(node, (ast.List, ast.Tuple)) and len(node.elts) == 1:
+        return _literal_label(node.elts[0])
+    return None
+
+
+def _grouped_aggregation_summary(call: ast.Call) -> str | None:
+    if not isinstance(call.func, ast.Attribute):
+        return None
+    if call.func.attr not in {"sum", "mean", "median", "min", "max", "count", "nunique"}:
+        return None
+
+    value: ast.AST = call.func.value
+    metric: str | None = None
+    if isinstance(value, ast.Subscript):
+        metric = _literal_label(value.slice)
+        value = value.value
+    if not (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == "groupby"
+        and value.args
+    ):
+        return None
+
+    group = _literal_label(value.args[0])
+    if not group:
+        return None
+    if call.func.attr in {"count", "nunique"} and not metric:
+        return f"Counted records by {group}"
+    target = metric or "values"
+    return f"Aggregated {target} by {group}"
+
+
+def _top_level_calls(tree: ast.Module, *, errored: bool) -> list[ast.Call]:
+    class CallVisitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.calls: list[ast.Call] = []
+
+        def visit_Call(self, node: ast.Call) -> None:
+            self.visit(node.func)
+            for argument in node.args:
+                self.visit(argument)
+            for keyword in node.keywords:
+                self.visit(keyword.value)
+            self.calls.append(node)
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return
+
+        def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+            return
+
+        def visit_ListComp(self, node: ast.ListComp) -> None:
+            return
+
+        def visit_SetComp(self, node: ast.SetComp) -> None:
+            return
+
+        def visit_DictComp(self, node: ast.DictComp) -> None:
+            return
+
+        def visit_BoolOp(self, node: ast.BoolOp) -> None:
+            return
+
+        def visit_IfExp(self, node: ast.IfExp) -> None:
+            return
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            return
+
+    calls: list[ast.Call] = []
+    for statement in tree.body:
+        if isinstance(statement, ast.Raise):
+            break
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if not isinstance(
+            statement,
+            (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Expr),
+        ):
+            continue
+        visitor = CallVisitor()
+        visitor.visit(statement)
+        calls.extend(visitor.calls)
+        if errored:
+            break
+    return calls
+
+
+def _call_action(call: ast.Call) -> str | None:
+    summary = _grouped_aggregation_summary(call)
+    if summary:
+        return summary
+
+    method_actions = {
+        "schema": "Inspected the source schema",
+        "metadata": "Inspected source metadata",
+        "tables": "Inspected available tables",
+        "columns": "Inspected available columns",
+        "measures": "Inspected available measures",
+        "relationships": "Inspected source relationships",
+        "describe": "Profiled the data",
+        "profile": "Profiled the data",
+        "read_csv": "Loaded CSV data",
+        "read_parquet": "Loaded Parquet data",
+        "read_table": "Loaded a source table",
+        "dax": "Queried the semantic model",
+        "sql": "Queried the data source",
+        "query": "Queried the data source",
+        "merge": "Joined datasets",
+        "join": "Joined datasets",
+        "plot": "Created a visualization",
+        "hist": "Created a distribution chart",
+        "sort_values": "Ranked the results",
+        "nlargest": "Selected the largest results",
+        "nsmallest": "Selected the smallest results",
+    }
+    if isinstance(call.func, ast.Attribute):
+        return method_actions.get(call.func.attr)
+    if isinstance(call.func, ast.Name) and call.func.id != "SUBMIT":
+        name = _humanize_identifier(call.func.id)
+        if name not in {"print", "len", "list", "dict", "set", "tuple"}:
+            return f"Ran {name}"
+    return None
+
+
+def _turn_action(code: str, *, errored: bool) -> str:
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return "Executed Python code"
+
+    for call in _top_level_calls(tree, errored=errored):
+        action = _call_action(call)
+        if action:
+            return action
+    return "Executed Python code"
+
+
+def _turn_summary(turn: "TurnRecord", *, recovered: bool) -> str:
+    action = _turn_action(turn.code, errored=bool(turn.error))
+    if recovered:
+        action = f"Recovered from the previous error; {action[:1].lower()}{action[1:]}"
+    if turn.error:
+        error_lines = turn.error.strip().splitlines()
+        error_kind = (
+            error_lines[-1].split(":", 1)[0].strip()
+            if error_lines
+            else "Unknown error"
+        ) or "Unknown error"
+        action += f" - error: {error_kind}"
+    if turn.submitted:
+        if action == "Executed Python code" and turn.code.strip().startswith("SUBMIT("):
+            action = "Submitted the answer"
+        else:
+            action += "; submitted the answer"
+    return action
 
 
 @dataclass(frozen=True)
@@ -151,6 +326,7 @@ class RunInspector:
 
     def _turn_html(self, turn: "TurnRecord", *, recovered: bool = False) -> str:
         elapsed = self._elapsed(turn)
+        summary = _turn_summary(turn, recovered=recovered)
         badges: list[str] = []
         if turn.error:
             badges.append('<span class="frlm-badge frlm-bad">Error</span>')
@@ -190,6 +366,7 @@ class RunInspector:
         return (
             '<details class="frlm-turn"><summary>'
             f'<span class="frlm-turn-title">Turn {turn.turn}</span>'
+            f'<span class="frlm-turn-summary">{escape(summary)}</span>'
             f'{"".join(badges)}'
             f'<span class="frlm-neutral">{_format_number(elapsed, suffix="s")}</span>'
             f'</summary><div class="frlm-body">{"".join(sections)}</div></details>'
@@ -219,7 +396,11 @@ class RunInspector:
             turns = "".join(
                 self._turn_html(
                     turn,
-                    recovered=index > 0 and bool(self.result.turns[index - 1].error),
+                    recovered=(
+                        index > 0
+                        and bool(self.result.turns[index - 1].error)
+                        and not bool(turn.error)
+                    ),
                 )
                 for index, turn in enumerate(self.result.turns)
             )

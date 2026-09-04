@@ -22,8 +22,18 @@
 - `SemanticModel.query_telemetry` records the estimate, timing, and outcome of
   each `aggregate` call.
 
+### Added
+
+- `RunInspector` shows a one-line plain-language summary next to each turn
+  (for example "Aggregated revenue by region" or "Inspected available
+  measures - error: KeyError"), derived from the turn's code without an LM
+  call. Recovery turns are labelled, and nothing after a failing statement
+  is described as having run.
+
 ### Fixed
 
+- Trajectory error-kind counts no longer crash on an error string that is
+  only whitespace.
 - Namespace snapshots of a `SemanticModel` record only the handle's identity
   again. After the first `aggregate()` call the cached name catalog and query
   telemetry were being dumped into every turn's trajectory state.
