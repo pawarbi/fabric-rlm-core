@@ -36,6 +36,7 @@ __all__ = [
     "check_ranking_disclosure",
     "classify_claim_level",
     "concept_head",
+    "declared_ranking_phrases",
     "infer_requested_ranking",
     "is_material_change",
     "parse_directional_claims",
@@ -484,6 +485,23 @@ _RANKED_BY_RE = re.compile(
     r"\b(?:rank(?:ed|ing)?|sort(?:ed)?|order(?:ed)?)\s+by\s+(?P<metric>[^.,;:\n]{1,80})",
     re.IGNORECASE,
 )
+_RANKING_METRIC_RE = re.compile(
+    r"\brank(?:ed|ing)?\s+(?:metric|measure|field|criterion|key)\b[^:=(\n]{0,40}[:=(]\s*(?P<metric>[^\n)]{1,80})",
+    re.IGNORECASE,
+)
+
+
+def declared_ranking_phrases(text: str | None) -> list[str]:
+    """The metric phrases an answer says it ranked by.
+
+    Reads "ranked by X", "sorted by X", "ordered by X" and "ranking metric:
+    X" / "ranking metric (X)". Used so a ranking the answer discloses is
+    never mistaken for drift because of how the code named its column.
+    """
+    body = str(text or "")
+    phrases = [m.group("metric").strip() for m in _RANKED_BY_RE.finditer(body)]
+    phrases.extend(m.group("metric").strip() for m in _RANKING_METRIC_RE.finditer(body))
+    return [p for p in phrases if p]
 
 
 def check_ranking_disclosure(text: str | None, request: RankingRequest) -> list[str]:
@@ -524,12 +542,67 @@ def check_ranking_disclosure(text: str | None, request: RankingRequest) -> list[
 # ---------------------------------------------------------------------------
 
 
-def _norm_dimension(label: Any) -> str:
+def _norm_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+
+
+def _dimension_parts(label: Any) -> tuple[str | None, str]:
+    """(table, leaf) for ``Table[Column]``; (None, leaf) for a bare name."""
     text = str(label)
     match = re.match(r"^\s*'?([^'\[\]]+?)'?\s*\[([^\[\]]+)\]\s*$", text)
     if match:
-        text = match.group(2)
-    return re.sub(r"[^a-z0-9]", "", text.lower())
+        return _norm_text(match.group(1)), _norm_text(match.group(2))
+    return None, _norm_text(text)
+
+
+def _norm_dimension(label: Any) -> str:
+    return _dimension_parts(label)[1]
+
+
+def _match_dimensions(
+    requested: Sequence[Any], actual: Sequence[Any]
+) -> tuple[list[str], list[str]]:
+    """Missing and extra labels, with table qualification when leaves collide.
+
+    ``Products[Line Of Business]`` matches ``line_of_business`` because that
+    leaf is unique. When a leaf appears more than once on either side
+    (``Products[Region]`` and ``Sold To[Region]``) a match needs the table
+    too, so those two never collapse into one and a bare ``region`` cannot
+    stand in for either.
+    """
+    req = [(*_dimension_parts(d), str(d)) for d in requested]
+    act = [(*_dimension_parts(d), str(d)) for d in actual]
+    req_leaf_counts: dict[str, int] = {}
+    act_leaf_counts: dict[str, int] = {}
+    for _t, leaf, _o in req:
+        req_leaf_counts[leaf] = req_leaf_counts.get(leaf, 0) + 1
+    for _t, leaf, _o in act:
+        act_leaf_counts[leaf] = act_leaf_counts.get(leaf, 0) + 1
+    used: set[int] = set()
+    missing: list[str] = []
+    for r_table, r_leaf, r_orig in req:
+        candidates = [
+            (i, a_table) for i, (a_table, a_leaf, _o) in enumerate(act)
+            if a_leaf == r_leaf and i not in used
+        ]
+        if not candidates:
+            missing.append(r_orig)
+            continue
+        ambiguous = req_leaf_counts[r_leaf] > 1 or act_leaf_counts[r_leaf] > 1
+        if ambiguous:
+            exact = [i for i, a_table in candidates if r_table is not None and a_table == r_table]
+            if not exact:
+                missing.append(r_orig)
+                continue
+            used.add(exact[0])
+        else:
+            i, a_table = candidates[0]
+            if r_table is not None and a_table is not None and a_table != r_table:
+                missing.append(r_orig)
+                continue
+            used.add(i)
+    extra = [orig for i, (_t, _l, orig) in enumerate(act) if i not in used]
+    return missing, extra
 
 
 def validate_grain(
@@ -541,13 +614,12 @@ def validate_grain(
     """Detect a silent change of analytical grain.
 
     ``requested`` and ``actual`` are dimension labels; ``Products[Line Of
-    Business]`` and ``line_of_business`` compare equal. A dropped or added
-    dimension is allowed only with an ``explanation`` the answer will show.
+    Business]`` and ``line_of_business`` compare equal when that leaf name
+    is unique, while ``Products[Region]`` and ``Sold To[Region]`` stay
+    distinct. A dropped or added dimension is allowed only with an
+    ``explanation`` the answer will show.
     """
-    requested_map = {_norm_dimension(d): str(d) for d in requested}
-    actual_map = {_norm_dimension(d): str(d) for d in actual}
-    missing = [requested_map[k] for k in requested_map if k not in actual_map]
-    extra = [actual_map[k] for k in actual_map if k not in requested_map]
+    missing, extra = _match_dimensions(requested, actual)
     explained = bool((explanation or "").strip())
     if (missing or extra) and not explained:
         raise AnalyticalIntegrityError(

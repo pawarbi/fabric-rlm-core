@@ -469,6 +469,9 @@ class SemanticModel:
     sempy is missing, ``False`` never checks.
     """
 
+    # Marks an input that carries evidence; see prompts.is_evidence_source.
+    __rlm_evidence_source__ = True
+
     dataset: str
     workspace: str | None = None
     credential_provider: str | None = field(

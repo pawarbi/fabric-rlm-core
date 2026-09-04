@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any
+from typing import Mapping, Any
 
 
 SYSTEM_PROMPT_TEMPLATE = """You are an RLM (Recursive Language Model) running in a Python REPL.
@@ -103,21 +103,41 @@ def build_system_prompt(
     )
 
 
-def _evidence_input_names(inputs: dict[str, Any]) -> list[str]:
-    """Inputs that carry evidence: bound files, Lakehouse sources, semantic models."""
-    from .artifacts import File
-    from .lakehouse import LakehouseSource
-    from .semantic_model import SemanticModel
+def is_evidence_source(value: Any) -> bool:
+    """True for an input that carries evidence the analysis will reason over.
 
-    names: list[str] = []
-    for name, value in inputs.items():
-        if isinstance(value, (File, LakehouseSource, SemanticModel)):
-            names.append(name)
-        elif isinstance(value, (list, tuple)) and value and all(
-            isinstance(item, (File, LakehouseSource, SemanticModel)) for item in value
-        ):
-            names.append(name)
-    return names
+    Decided by the ``__rlm_evidence_source__`` class marker rather than by a
+    list of classes, so a new source type opts in with one attribute and
+    the harness never has to learn its name. ``File``, ``LakehouseSource``
+    and ``SemanticModel`` carry the marker; an output sink such as
+    ``FileDestination`` does not.
+    """
+    return bool(getattr(type(value), "__rlm_evidence_source__", False))
+
+
+def evidence_leaves(inputs: Any, prefix: str = "") -> list[str]:
+    """Dotted paths of every evidence source inside ``inputs``, at any depth.
+
+    ``{"customer": {"arr": SemanticModel(...), "usage": LakehouseSource(...)}}``
+    yields ``customer.arr`` and ``customer.usage``; a list yields
+    ``sources[0]``, ``sources[1]``. Counting leaves rather than top-level
+    keys is what makes a nested bundle of sources count as several.
+    """
+    leaves: list[str] = []
+    if is_evidence_source(inputs):
+        return [prefix or "input"]
+    if isinstance(inputs, Mapping):
+        for key, value in inputs.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            leaves.extend(evidence_leaves(value, path))
+    elif isinstance(inputs, (list, tuple)):
+        for index, value in enumerate(inputs):
+            leaves.extend(evidence_leaves(value, f"{prefix}[{index}]"))
+    return leaves
+
+
+def _evidence_input_names(inputs: dict[str, Any]) -> list[str]:
+    return evidence_leaves(inputs)
 
 
 def _cross_source_section(inputs: dict[str, Any]) -> str:

@@ -633,11 +633,15 @@ provenance, and cross-source period, unit, definition, entity, and
 contradiction reconciliation.
 
 Before accepting a `SUBMIT`, the runtime also screens the answer: prose that
-contradicts its own numbers, a "rank by impact" task whose final ranking sorted
-by something else or whose answer hides the impact metric, and code that
-consumed independent per-dimension value lists from a candidate frame together
-(a cartesian filter, whether as `.isin` chains or `aggregate(filters=...)`)
-are sent back with the reason. In the default `"repair"` mode this happens at
+contradicts its own numbers, a "rank by impact" task whose ranking that reaches
+the answer sorted by something else or whose answer hides the impact metric,
+and code that consumed independent per-dimension value lists from a candidate
+frame together (a cartesian filter, whether as `.isin` chains or
+`aggregate(filters=...)`) without restoring the compound identity on those
+dimensions afterwards, are sent back with the reason. The code detectors are
+high-confidence and best-effort: they read pandas, polars, pyspark, `sorted`
+and SQL `ORDER BY` spellings and follow variable lineage from `SUBMIT`, and
+they stay silent when they cannot tell. In the default `"repair"` mode this happens at
 most twice, then the answer is accepted and the findings are exposed as
 `result.integrity_problems` with `result.integrity_ok` false. In `"strict"`
 mode a submission with findings is never accepted. Pass

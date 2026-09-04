@@ -84,6 +84,10 @@ TUPLE_CODE = '''
 history = restrict_to_candidate_tuples(seg, candidates, keys=["product", "region", "group"])
 '''
 
+LIVE_REPAIR_CODE = '''
+seg_3q = restrict_to_candidate_tuples(seg_3q, seg_latest, keys=["product", "region", "customer_group"])
+'''
+
 # The live pattern, verbatim in shape: independent lists from the candidate
 # frame fed together to aggregate(filters=...) on a semantic model.
 LIVE_AGGREGATE_CODE = '''
@@ -149,6 +153,28 @@ def test_looking_at_lists_or_using_one_is_not_flagged():
         assert [i for i in Trajectory(turns=[_turn(1, code)]).diagnose() if i.kind == "cartesian_candidate_filter"] == []
 
 
+def test_same_turn_tuple_restriction_is_a_repair():
+    """Retrieve a bounded superset, then restore exact identity at once."""
+    code = LIVE_AGGREGATE_CODE + LIVE_REPAIR_CODE
+    assert [i for i in Trajectory(turns=[_turn(1, code)]).diagnose() if i.kind == "cartesian_candidate_filter"] == []
+    inline = (
+        "prod_vals = c['product'].unique().tolist()\nreg_vals = c['region'].unique().tolist()\n"
+        "history = restrict_to_candidate_tuples(model.aggregate(['x'], filters={'P': prod_vals, 'R': reg_vals}), c, keys=['product', 'region'])"
+    )
+    assert [i for i in Trajectory(turns=[_turn(1, inline)]).diagnose() if i.kind == "cartesian_candidate_filter"] == []
+    merged = LIVE_AGGREGATE_CODE + "\nseg_3q = seg_3q.merge(seg_latest[['product', 'region', 'customer_group']].drop_duplicates(), on=['product', 'region', 'customer_group'])"
+    assert [i for i in Trajectory(turns=[_turn(1, merged)]).diagnose() if i.kind == "cartesian_candidate_filter"] == []
+
+
+def test_an_unrelated_merge_or_partial_restriction_does_not_repair():
+    unrelated = [_turn(1, LIVE_AGGREGATE_CODE), _turn(2, "lookup = accounts.merge(owners, on='owner_id')")]
+    assert [i for i in Trajectory(turns=unrelated).diagnose() if i.kind == "cartesian_candidate_filter"]
+    partial = [_turn(1, LIVE_AGGREGATE_CODE), _turn(2, "seg_3q = restrict_to_candidate_tuples(seg_3q, seg_latest, keys=['product', 'region'])")]
+    assert [i for i in Trajectory(turns=partial).diagnose() if i.kind == "cartesian_candidate_filter"]
+    before = [_turn(1, "seg_3q = restrict_to_candidate_tuples(seg_3q, seg_latest, keys=['product', 'region', 'customer_group'])"), _turn(2, LIVE_AGGREGATE_CODE)]
+    assert [i for i in Trajectory(turns=before).diagnose() if i.kind == "cartesian_candidate_filter"]
+
+
 def test_single_or_unrelated_isin_filters_are_not_flagged():
     single = "regions = candidates['region'].unique()\nout = seg[seg['region'].isin(regions)]"
     unrelated = (
@@ -187,21 +213,73 @@ def test_defining_the_metric_is_not_ranking_by_it():
     turns = [_turn(1, 'summary["impact"] = summary["prior"] - summary["current"]\nsummary = summary.sort_values("latest_arr", ascending=False)')]
     issue = detect_ranking_drift(turns, request)
     assert issue is not None and issue.kind == "ranking_drift"
-    assert "latest_arr" in issue.message and "'impact' was defined but the final ranking did not use it" in issue.message
+    assert "latest_arr" in issue.message and "'impact' was defined but the ranking that reaches the answer did not use it" in issue.message
 
 
-def test_only_the_final_sort_counts_as_the_ranking():
+def test_the_sort_that_reaches_the_answer_is_the_ranking():
+    """Lineage from SUBMIT decides which sort is the ranking, not the clock."""
     request = infer_requested_ranking("rank by business impact")
-    sorted_then_resorted = [
+    overwritten = [
         _turn(1, 'summary["impact"] = summary.prior - summary.current\nsummary = summary.sort_values("impact")'),
         _turn(2, 'summary = summary.sort_values("latest_arr", ascending=False)'),
+        _turn(3, 'SUBMIT(analysis=summary.to_string())', submitted=True),
     ]
-    assert detect_ranking_drift(sorted_then_resorted, request) is not None
+    assert detect_ranking_drift(overwritten, request) is not None
     resorted_by_derived = [
         _turn(1, 'summary["impact"] = summary.prior - summary.current'),
         _turn(2, 'summary["rank"] = summary["impact"].rank(ascending=False)\nsummary = summary.sort_values("rank")'),
+        _turn(3, 'SUBMIT(analysis=summary.to_string())', submitted=True),
     ]
     assert detect_ranking_drift(resorted_by_derived, request) is None
+
+
+def test_a_display_sort_of_supporting_detail_is_not_the_ranking():
+    """The review's false positive: a later quarter sort feeds the answer too."""
+    request = infer_requested_ranking("rank by business impact")
+    turns = [
+        _turn(1, 'ranked = summary.sort_values("impact", ascending=False).head(5)'),
+        _turn(2, 'detail = history.sort_values("quarter")\nlines = []\nfor _, r in ranked.iterrows():\n    lines.append(str(r))'),
+        _turn(3, 'SUBMIT(analysis=build_answer(ranked, detail, lines))', submitted=True),
+    ]
+    assert detect_ranking_drift(turns, request) is None
+
+
+def test_without_lineage_any_concept_sort_satisfies_the_check():
+    request = infer_requested_ranking("rank by business impact")
+    turns = [
+        _turn(1, 'summary = summary.sort_values("impact")'),
+        _turn(2, 'summary = summary.sort_values("latest_arr")'),
+    ]
+    assert detect_ranking_drift(turns, request) is None
+
+
+def test_polars_sorted_and_sql_order_by_are_read():
+    request = infer_requested_ranking("rank by churn risk")
+    assert detect_ranking_drift([_turn(1, 'out = frame.sort("revenue", descending=True)')], request) is not None
+    assert detect_ranking_drift([_turn(1, 'out = frame.sort("risk_score", descending=True)')], request) is None
+    assert detect_ranking_drift([_turn(1, 'rows = sorted(rows, key=lambda r: r["revenue"], reverse=True)')], request) is not None
+    assert detect_ranking_drift([_turn(1, 'rows = sorted(rows, key=lambda r: r.risk_score, reverse=True)')], request) is None
+    assert detect_ranking_drift([_turn(1, 'df = con.sql("SELECT * FROM t ORDER BY revenue DESC LIMIT 5").df()')], request) is not None
+    assert detect_ranking_drift([_turn(1, 'df = con.sql("SELECT * FROM t ORDER BY t.risk_score DESC")')], request) is None
+
+
+def test_a_metric_the_answer_declares_as_the_ranking_is_accepted():
+    """From the live CSV run: the code sorted by abs_loss and a history sort
+    by period_order fed the answer; the answer said 'Ranking metric:
+    absolute ARR loss (USD)'. That is a disclosed ranking, not drift."""
+    request = infer_requested_ranking("rank them by business impact of the deterioration")
+    turns = [
+        _turn(1, 'ranked = candidates.sort_values(["abs_loss", "pct_loss"], ascending=[False, False])\nlines = []\nfor i, r in ranked.iterrows():\n    seg_hist = hist[hist.product == r.product].sort_values("period_order")\n    lines.append(str(r))'),
+        _turn(2, 'analysis_text = "\\n".join(lines)\nSUBMIT(analysis=analysis_text)', submitted=True),
+    ]
+    undeclared = "Rank 1: Cloud DDoS. Business impact was assessed."
+    assert detect_ranking_drift(turns, request, answer_text=undeclared) is not None
+    declared = "Ranking metric: absolute ARR loss (USD) from 2025/Q4 to 2026/Q2. Rank 1: Cloud DDoS, business impact $1,500,000."
+    assert detect_ranking_drift(turns, request, answer_text=declared) is None
+    parquet_style = "Methodology: ranked by absolute USD loss (arr_2025Q4 - arr_2026Q2); business impact is the ARR lost."
+    parquet_turns = [_turn(1, 'candidates = candidates.sort_values("abs_loss_usd", ascending=False)'), _turn(2, 'SUBMIT(analysis=str(candidates))', submitted=True)]
+    assert detect_ranking_drift(parquet_turns, request, answer_text=parquet_style) is None
+    assert detect_ranking_drift(parquet_turns, request, answer_text="Segments ranked by current ARR.") is not None
 
 
 def test_detect_ranking_drift_with_an_explicit_request():
@@ -261,8 +339,10 @@ TASK = (
     "Find the product x region x customer group segments whose ARR deteriorated over the "
     "last three quarters and rank them by business impact of the deterioration."
 )
+# No ranking metric declared, the concept never mentioned, a decline claimed
+# over equal values: every screen has something to say about this one.
 BAD_ANALYSIS = (
-    "Segments ranked by current ARR. DefensePro in AMERICA (CARRIER) declined from "
+    "Segments listed by current ARR. DefensePro in AMERICA (CARRIER) declined from "
     "926,400.00 to 926,400.00 over the period."
 )
 GOOD_ANALYSIS = (
@@ -291,7 +371,7 @@ def test_regression_bad_submission_is_sent_back_then_accepted(monkeypatch):
             _fence(
                 'summary["impact"] = summary["prior"] - summary["latest"]\n'
                 'summary = summary.sort_values("impact", ascending=False)\n'
-                + TUPLE_CODE
+                + LIVE_REPAIR_CODE
             ),
             _fence(f"SUBMIT(analysis={GOOD_ANALYSIS!r})"),
         ]
@@ -308,9 +388,9 @@ def test_regression_bad_submission_is_sent_back_then_accepted(monkeypatch):
     assert history[0]["skill"] == "analytical_integrity"
     rejection = history[0]["assertion"]
     assert "effectively equal" in rejection
-    assert "ranked by current ARR" in rejection
+    assert "never mentions" in rejection
     assert "sorted by" in rejection and "latest_arr" in rejection
-    assert "'impact' was defined but the final ranking did not use it" in rejection
+    assert "'impact' was defined but the ranking that reaches the answer did not use it" in rejection
     assert "aggregate consumes independent lists" in rejection
     assert "restrict_to_candidate_tuples" in rejection
     assert "analytical_integrity_unresolved" not in result.trajectory.metadata
@@ -407,3 +487,30 @@ def test_prompt_adds_cross_source_checklist_only_with_several_evidence_inputs(tm
         inline_task="t", inputs={"usage": File(str(csv)), "contract": File(str(pdf))}, inline_outputs=["a"]
     )
     assert "Several evidence inputs are bound" in files_only, "activation is by count, not by input class"
+
+    nested_list = build_system_prompt(
+        inline_task="t", inputs={"sources": [File(str(csv)), File(str(pdf))]}, inline_outputs=["a"]
+    )
+    assert "Several evidence inputs are bound (sources[0], sources[1])" in nested_list
+    nested_dict = build_system_prompt(
+        inline_task="t",
+        inputs={"customer": {"arr": SemanticModel("ARR", validate=False), "usage": File(str(csv))}},
+        inline_outputs=["a"],
+    )
+    assert "Several evidence inputs are bound (customer.arr, customer.usage)" in nested_dict
+
+
+def test_evidence_sources_are_recognised_by_marker_not_by_class(tmp_path):
+    from fabric_rlm import FileDestination
+    from fabric_rlm.prompts import evidence_leaves, is_evidence_source
+
+    class FutureSource:
+        __rlm_evidence_source__ = True
+
+    class NotEvidence:
+        pass
+
+    assert is_evidence_source(FutureSource())
+    assert not is_evidence_source(NotEvidence())
+    assert not is_evidence_source(object.__new__(FileDestination))
+    assert evidence_leaves({"a": FutureSource(), "b": {"c": FutureSource()}, "d": NotEvidence()}) == ["a", "b.c"]

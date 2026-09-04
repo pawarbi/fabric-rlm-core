@@ -704,8 +704,89 @@ def _referenced_names(node: ast.AST) -> set[str]:
     return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
 
 
+def _norm_column(name: Any) -> str:
+    """Leaf column name, lowercase alphanumerics: ``Sold To[Region]`` -> ``region``."""
+    text = str(name)
+    match = re.match(r"^\s*'?([^'\[\]]+?)'?\s*\[([^\[\]]+)\]\s*$", text)
+    if match:
+        text = match.group(2)
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _statements(turns: Sequence[TurnRecord]) -> list[tuple[int, ast.stmt]]:
+    """Every top-level statement of every parsable turn, in program order."""
+    out: list[tuple[int, ast.stmt]] = []
+    for t in turns:
+        tree = _parse(t.code)
+        if tree is None:
+            continue
+        out.extend((t.turn, stmt) for stmt in tree.body)
+    return out
+
+
+def _call_keyword_strings(node: ast.Call, names: set[str], position: int | None = None) -> list[str]:
+    fields: list[str] = []
+    for kw in node.keywords:
+        if kw.arg in names:
+            fields.extend(_string_constants(kw.value))
+    if position is not None and len(node.args) > position:
+        fields.extend(_string_constants(node.args[position]))
+    return fields
+
+
+def _is_tuple_repair(statement: ast.stmt, columns: Sequence[str]) -> bool:
+    """A restriction to compound identities on exactly these dimensions.
+
+    ``restrict_to_candidate_tuples(..., keys=[...])`` or ``.merge(..., on=[...])``
+    whose keys cover every flagged column. A merge on other keys (an
+    unrelated lookup join) is not a repair.
+    """
+    wanted = {_norm_column(c) for c in columns}
+    for node in ast.walk(statement):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _call_name(node)
+        if name == "restrict_to_candidate_tuples":
+            keys = _call_keyword_strings(node, {"keys"}, position=2)
+            if keys and wanted <= {_norm_column(k) for k in keys}:
+                return True
+        elif name == "merge":
+            keys = _call_keyword_strings(node, {"on", "left_on", "right_on"}, position=1)
+            if keys and wanted <= {_norm_column(k) for k in keys}:
+                return True
+    return False
+
+
+def _joint_consumer(
+    statement: ast.stmt, lists: dict[str, tuple[str, str]]
+) -> tuple[str, str, list[str], list[str]] | None:
+    """(consumer, frame, list names, columns) when a statement consumes two or
+    more lists from different columns of one frame together."""
+    for node in ast.walk(statement):
+        names: list[str] = []
+        if isinstance(node, ast.Call):
+            if _call_name(node) in _TRIVIAL_CONSUMERS:
+                continue
+            args = list(node.args) + [kw.value for kw in node.keywords]
+            names = sorted({n for arg in args for n in _referenced_names(arg)} & set(lists))
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd):
+            names = sorted({n for n in _isin_names(node) if n in lists})
+        if len(names) < 2:
+            continue
+        by_frame: dict[str, list[str]] = {}
+        for name in names:
+            by_frame.setdefault(lists[name][0], []).append(name)
+        for frame, group in by_frame.items():
+            cols = sorted({lists[n][1] for n in group})
+            if len(cols) >= 2:
+                consumer = _call_name(node) if isinstance(node, ast.Call) else "isin filter"
+                return consumer, frame, group, cols
+    return None
+
+
 def _detect_independent_dimension_filters(turns: Sequence[TurnRecord]) -> Iterator[Issue]:
-    """Flag candidate tuples collapsed into independent per-dimension lists.
+    """Flag candidate tuples collapsed into independent per-dimension lists
+    and not restored afterwards.
 
     The pattern, source-agnostic: two or more value lists are taken from
     different columns of the same frame (``c["product"].unique()``,
@@ -714,98 +795,152 @@ def _detect_independent_dimension_filters(turns: Sequence[TurnRecord]) -> Iterat
     prod_vals, "Region": reg_vals, "Customer Group": cust_vals})`` on a
     semantic model, and as ``df[a.isin(x) & b.isin(y) & c.isin(z)]`` on a
     frame. Either admits every combination of the lists, including ones the
-    candidate frame never contained. The fix is a tuple merge
-    (``restrict_to_candidate_tuples``).
+    candidate frame never contained.
+
+    The issue is tied to its provenance: it is dropped only when a later
+    statement (same turn or later) restores the compound identity on those
+    same dimensions, via ``restrict_to_candidate_tuples(..., keys=[...])``
+    or a ``merge(..., on=[...])`` covering them. Retrieving a bounded
+    superset and restricting it at once is therefore fine; an unrelated
+    merge on other keys does not clear it.
     """
+    statements = _statements(turns)
     lists: dict[str, tuple[str, str]] = {}
-    for t in turns:
-        tree = _parse(t.code)
-        if tree is None:
-            continue
-        reported = False
-        for statement in tree.body:
-            # Consumers first, then the lists this statement defines, so a
-            # list is never "consumed" by its own definition.
-            if lists and not reported:
-                for node in ast.walk(statement):
-                    names: list[str] = []
-                    if isinstance(node, ast.Call):
-                        if _call_name(node) in _TRIVIAL_CONSUMERS:
-                            continue
-                        args_and_kwargs = list(node.args) + [kw.value for kw in node.keywords]
-                        names = sorted(
-                            {n for arg in args_and_kwargs for n in _referenced_names(arg)} & set(lists)
-                        )
-                    elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd):
-                        names = sorted({n for n in _isin_names(node) if n in lists})
-                    if len(names) < 2:
-                        continue
-                    by_frame: dict[str, list[str]] = {}
-                    for name in names:
-                        by_frame.setdefault(lists[name][0], []).append(name)
-                    for frame, group in by_frame.items():
-                        cols = sorted({lists[n][1] for n in group})
-                        if len(cols) < 2:
-                            continue
-                        consumer = _call_name(node) if isinstance(node, ast.Call) else "isin filter"
-                        yield Issue(
-                            turn=t.turn,
-                            kind="cartesian_candidate_filter",
-                            message=(
-                                f"{consumer} consumes independent lists {group} taken from "
-                                f"{frame}[{cols}] together, which admits every combination of "
-                                f"those values, not only the candidates in {frame}. Keep the "
-                                "compound identity: restrict_to_candidate_tuples(frame, "
-                                f"candidates, keys={cols})."
-                            ),
-                        )
-                        reported = True
-                        break
-                    if reported:
-                        break
-            for node in ast.walk(statement):
-                if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                    source = _unique_list_source(node.value)
-                    if source is not None:
-                        lists[node.targets[0].id] = source
+    reported_turns: set[int] = set()
+    for position, (turn, statement) in enumerate(statements):
+        if lists and turn not in reported_turns:
+            found = _joint_consumer(statement, lists)
+            if found is not None:
+                consumer, frame, group, cols = found
+                repaired = _is_tuple_repair(statement, cols) or any(
+                    _is_tuple_repair(later, cols) for _t, later in statements[position + 1:]
+                )
+                if not repaired:
+                    reported_turns.add(turn)
+                    yield Issue(
+                        turn=turn,
+                        kind="cartesian_candidate_filter",
+                        message=(
+                            f"{consumer} consumes independent lists {group} taken from "
+                            f"{frame}[{cols}] together, which admits every combination of "
+                            f"those values, not only the candidates in {frame}. Keep the "
+                            "compound identity: restrict_to_candidate_tuples(frame, "
+                            f"candidates, keys={cols})."
+                        ),
+                    )
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                source = _unique_list_source(node.value)
+                if source is not None:
+                    lists[node.targets[0].id] = source
 
 
-def _sort_fields(tree: ast.Module) -> list[str]:
+# -- ranking drift -------------------------------------------------------------
+
+_SORT_METHODS = {"sort_values", "nlargest", "nsmallest"}
+# polars / pyspark / generic spellings; string arguments name the sort fields
+_GENERIC_SORT_METHODS = {"sort", "orderBy", "order_by", "sort_by", "top_k"}
+_SQL_ORDER_BY_RE = re.compile(
+    r"\border\s+by\s+(?P<fields>.+?)(?:\s+(?:limit|offset|fetch)\b|;|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _lambda_fields(node: ast.AST) -> list[str]:
+    """Fields a ``key=lambda r: r["impact"]`` or ``r.impact`` sorts on."""
     fields: list[str] = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-            continue
-        if node.func.attr not in {"sort_values", "nlargest", "nsmallest"}:
-            continue
-        for kw in node.keywords:
-            if kw.arg in {"by", "columns"}:
-                fields.extend(_string_constants(kw.value))
-        if node.func.attr == "sort_values" and node.args:
-            fields.extend(_string_constants(node.args[0]))
-        elif node.func.attr in {"nlargest", "nsmallest"} and len(node.args) >= 2:
-            fields.extend(_string_constants(node.args[1]))
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Subscript):
+            fields.extend(_string_constants(sub.slice))
+        elif isinstance(sub, ast.Attribute):
+            fields.append(sub.attr)
     return fields
 
 
-def _sort_calls(tree: ast.Module) -> list[list[str]]:
-    """Sort fields per sort call, in source order (last one is the final ranking)."""
-    calls: list[tuple[int, int, list[str]]] = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-            continue
-        if node.func.attr not in {"sort_values", "nlargest", "nsmallest"}:
-            continue
-        fields: list[str] = []
-        for kw in node.keywords:
-            if kw.arg in {"by", "columns"}:
-                fields.extend(_string_constants(kw.value))
-        if node.func.attr == "sort_values" and node.args:
-            fields.extend(_string_constants(node.args[0]))
-        elif node.func.attr in {"nlargest", "nsmallest"} and len(node.args) >= 2:
-            fields.extend(_string_constants(node.args[1]))
-        if fields:
-            calls.append((node.lineno, node.col_offset, fields))
-    return [fields for _line, _col, fields in sorted(calls)]
+def _sort_fields_in_statement(statement: ast.stmt) -> list[str]:
+    fields: list[str] = []
+    for node in ast.walk(statement):
+        if isinstance(node, ast.Call):
+            name = _call_name(node)
+            if name in _SORT_METHODS:
+                fields.extend(_call_keyword_strings(node, {"by", "columns"}))
+                if name == "sort_values" and node.args:
+                    fields.extend(_string_constants(node.args[0]))
+                elif name in {"nlargest", "nsmallest"} and len(node.args) >= 2:
+                    fields.extend(_string_constants(node.args[1]))
+            elif name in _GENERIC_SORT_METHODS and isinstance(node.func, ast.Attribute):
+                fields.extend(_call_keyword_strings(node, {"by", "columns"}))
+                for arg in node.args:
+                    fields.extend(_string_constants(arg))
+            elif name == "sorted" and isinstance(node.func, ast.Name):
+                for kw in node.keywords:
+                    if kw.arg == "key":
+                        fields.extend(_lambda_fields(kw.value))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and "order" in node.value.lower():
+            for match in _SQL_ORDER_BY_RE.finditer(node.value):
+                for part in match.group("fields").split(","):
+                    token = re.sub(r"\s+(asc|desc)\b.*$", "", part.strip(), flags=re.IGNORECASE)
+                    token = token.strip().strip("\"'`[]")
+                    if token:
+                        fields.append(token.split(".")[-1].strip("\"'`[]"))
+    return fields
+
+
+_MUTATORS = {"append", "extend", "insert", "update", "add", "setdefault", "sort", "reverse", "pop", "remove", "clear"}
+
+
+def _written_names(statement: ast.stmt) -> set[str]:
+    """Names a statement assigns or mutates, including loop targets."""
+    written: set[str] = set()
+
+    def base(target: ast.AST) -> None:
+        if isinstance(target, ast.Name):
+            written.add(target.id)
+        elif isinstance(target, (ast.Subscript, ast.Attribute)):
+            base(target.value)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                base(elt)
+        elif isinstance(target, ast.Starred):
+            base(target.value)
+
+    for node in ast.walk(statement):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                base(target)
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            base(node.target)
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            base(node.target)
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            base(node.optional_vars)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _MUTATORS:
+            base(node.func.value)
+    return written
+
+
+def _answer_closure(statements: Sequence[tuple[int, ast.stmt]]) -> set[str]:
+    """Names whose values reach the last SUBMIT, by a backward slice over
+    statements: whenever a statement writes a name in the closure, every
+    name it reads joins it. Empty when SUBMIT was given only literals."""
+    seeds: set[str] = set()
+    for _turn, statement in statements:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "SUBMIT":
+                args = list(node.args) + [kw.value for kw in node.keywords]
+                seeds = {n for arg in args for n in _referenced_names(arg)}
+    closure = set(seeds)
+    for _ in range(50):
+        grew = False
+        for _turn, statement in statements:
+            if _written_names(statement) & closure:
+                new = _referenced_names(statement) - closure
+                if new:
+                    closure |= new
+                    grew = True
+        if not grew:
+            break
+    return closure
 
 
 def _column_derivations(tree: ast.Module) -> dict[str, set[str]]:
@@ -837,59 +972,96 @@ def _defined_columns(tree: ast.Module) -> list[str]:
     return list(_column_derivations(tree))
 
 
-def detect_ranking_drift(turns: Sequence[TurnRecord], request: Any) -> Issue | None:
-    """The final ranking sorted by something other than the requested concept.
+def detect_ranking_drift(
+    turns: Sequence[TurnRecord], request: Any, answer_text: str | None = None
+) -> Issue | None:
+    """The ranking that reaches the answer is not by the requested concept.
 
     ``request`` is a :class:`fabric_rlm.analytical_integrity.RankingRequest`.
-    Only the last sort in the trajectory counts as the ranking, so
-    ``summary["impact"] = ...`` followed by ``sort_values("latest_arr")`` is
-    drift: defining the metric is not ranking by it. A field is related to
-    the concept when its name overlaps the concept, or when it was derived
-    (up to three assignments deep) from a field that does, so
-    ``df["rank"] = df["impact"].rank()`` followed by ``sort_values("rank")``
-    is accepted.
+    Sorts are recognised in pandas (``sort_values``, ``nlargest``,
+    ``nsmallest``), polars and pyspark (``sort``, ``orderBy``), ``sorted(...,
+    key=...)`` and SQL ``ORDER BY`` inside string constants; a best-effort
+    set, not a parser for every engine.
+
+    Which sort is "the ranking" follows the data, not the clock: a backward
+    slice from the last SUBMIT finds the variables that reach the answer,
+    and for each of them the last sort that wrote it counts. So ``ranked =
+    df.sort_values("impact")`` followed by ``detail = hist.sort_values(
+    "quarter")`` and ``SUBMIT(build(ranked, detail))`` is fine, while
+    ``summary["impact"] = ...`` followed by ``summary =
+    summary.sort_values("latest_arr")`` and an answer built from ``summary``
+    is drift: defining the metric is not ranking by it. When no lineage can
+    be established (SUBMIT was given literals) every sort is considered and
+    any concept-related one satisfies the check. A field is related to the
+    concept when its name overlaps the concept or it was derived, up to
+    three assignments deep, from a field that does (``df["rank"] =
+    df["impact"].rank()``), or when ``answer_text`` declares it as the
+    ranking metric ("Ranking metric: absolute ARR loss" covers a sort by
+    ``abs_loss``). Two live runs sorted by a correctly derived loss column
+    and were sent back only because it was not named "impact"; one of them
+    then invented a stranger metric to satisfy the name. Whether a declared
+    metric answers the concept is the disclosure check's question, not this
+    one's.
     """
-    from .analytical_integrity import _stems_overlap, _tokens
+    from .analytical_integrity import _stems_overlap, _tokens, declared_ranking_phrases
 
     if request is None:
         return None
-    sorts: list[tuple[int, list[str]]] = []
+    declared_tokens = [tok for phrase in declared_ranking_phrases(answer_text) for tok in _tokens(phrase)]
+    statements = _statements(turns)
+    sites: list[tuple[int, list[str], set[str]]] = []
     derived: dict[str, set[str]] = {}
-    for t in turns:
-        tree = _parse(t.code)
-        if tree is None:
-            continue
-        sorts.extend((t.turn, fields) for fields in _sort_calls(tree))
-        for name, reads in _column_derivations(tree).items():
+    for turn, statement in statements:
+        fields = _sort_fields_in_statement(statement)
+        if fields:
+            sites.append((turn, fields, _written_names(statement)))
+        module = ast.Module(body=[statement], type_ignores=[])
+        for name, reads in _column_derivations(module).items():
             derived.setdefault(name, set()).update(reads)
-    if not sorts:
+    if not sites:
         return None
     concept = list(request.tokens)
 
     def related(field: str, depth: int = 0) -> bool:
-        if _stems_overlap(concept, _tokens(field)):
+        field_tokens = _tokens(field)
+        if _stems_overlap(concept, field_tokens):
+            return True
+        if declared_tokens and _stems_overlap(declared_tokens, field_tokens):
             return True
         if depth >= 3:
             return False
-        return any(
-            related(dep, depth + 1) for dep in derived.get(field, ()) if dep != field
-        )
+        return any(related(dep, depth + 1) for dep in derived.get(field, ()) if dep != field)
 
-    last_turn, last_fields = sorts[-1]
-    if any(related(f) for f in last_fields):
+    closure = _answer_closure(statements)
+    considered: list[tuple[int, list[str], set[str]]] = []
+    if closure:
+        last_by_variable: dict[str, tuple[int, list[str], set[str]]] = {}
+        for site in sites:
+            for name in site[2] & closure:
+                last_by_variable[name] = site
+        seen: set[int] = set()
+        for site in last_by_variable.values():
+            if id(site) not in seen:
+                seen.add(id(site))
+                considered.append(site)
+    if not considered:
+        considered = list(sites)
+    if any(related(f) for _turn, fields, _w in considered for f in fields):
         return None
     concept_columns = [name for name in derived if _stems_overlap(concept, _tokens(name))]
     defined_note = (
-        f" A metric named {concept_columns[0]!r} was defined but the final ranking did not use it."
+        f" A metric named {concept_columns[0]!r} was defined but the ranking that reaches the answer did not use it."
         if concept_columns
         else f" No metric for {request.concept!r} was defined."
     )
+    last_turn, last_fields, _w = considered[-1]
+    fields_shown = sorted({f for _t, fields, _w in considered for f in fields})
     return Issue(
         turn=last_turn,
         kind="ranking_drift",
         message=(
-            f"The task asked to rank by {request.concept!r} but the final ranking "
-            f"sorted by {last_fields}.{defined_note} Derive the metric, sort by it, "
+            f"The task asked to rank by {request.concept!r} but the ranking that reaches "
+            f"the answer sorted by {fields_shown}.{defined_note} Derive the metric, sort by it, "
             "and show it."
         ),
     )

@@ -29,7 +29,14 @@
   checklist whenever two or more evidence inputs are bound. Cross-source
   reconciliation itself (entities, definitions, periods, units,
   contradictions) is explicit: `validate_evidence_lineage` on declared
-  claims, not an automatic runtime check.
+  claims, not an automatic runtime check. The tuple-loss detector is tied to
+  its provenance (a same-turn or later `restrict_to_candidate_tuples` or
+  `merge` on the same dimensions clears it; an unrelated merge does not), the
+  ranking-drift detector follows variable lineage from `SUBMIT` so a display
+  sort of supporting detail is not mistaken for the ranking and also reads
+  polars, pyspark, `sorted` and SQL `ORDER BY`, evidence inputs are counted
+  recursively by a `__rlm_evidence_source__` marker, and grain matching
+  keeps `Products[Region]` and `Sold To[Region]` distinct.
 - `SemanticModelMetadata` accepts the dictionary-style access generated code
   tends to assume: `meta["columns"]`, `meta.keys()`, `meta.items()`,
   `meta.values()`, `meta.get("measures")`, and `"relationships" in meta`. The

@@ -295,6 +295,21 @@ def test_explained_grain_change_and_label_normalisation_pass():
     assert summary["missing"] == ["Customer Group"] and summary["explained"]
 
 
+def test_grain_keeps_same_named_columns_from_different_tables_distinct():
+    ok = validate_grain(
+        requested=["Products[Region]", "Sold To[Region]"],
+        actual=["Sold To[Region]", "Products[Region]"],
+    )
+    assert ok["missing"] == [] and ok["extra"] == []
+    with pytest.raises(AnalyticalIntegrityError, match=r"missing \['Products\[Region\]'\]"):
+        validate_grain(requested=["Products[Region]", "Sold To[Region]"], actual=["Sold To[Region]"])
+    with pytest.raises(AnalyticalIntegrityError):
+        # a bare leaf cannot stand in for either when the leaf is ambiguous
+        validate_grain(requested=["Products[Region]", "Sold To[Region]"], actual=["region", "Sold To[Region]"])
+    unique_leaf = validate_grain(requested=["Products[Line Of Business]", "Sold To[Region]"], actual=["line_of_business", "region"])
+    assert unique_leaf["missing"] == [] and unique_leaf["extra"] == []
+
+
 # -- directional prose ----------------------------------------------------------
 
 

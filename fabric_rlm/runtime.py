@@ -2691,21 +2691,14 @@ class RLM:
         turns = list(getattr(trajectory, "turns", None) or [])
         if request is not None:
             problems.extend(check_ranking_disclosure(combined, request))
-            drift = detect_ranking_drift(turns, request)
+            drift = detect_ranking_drift(turns, request, answer_text=combined)
             if drift is not None:
                 problems.append(drift.message)
         if trajectory is not None and hasattr(trajectory, "diagnose"):
+            # The detector only reports a tuple loss that no later statement
+            # repaired on the same dimensions, so every issue here is live.
             for issue in trajectory.diagnose():
-                if issue.kind != "cartesian_candidate_filter":
-                    continue
-                # A later turn that merges on the candidate tuples has already
-                # repaired the pattern; only an unrepaired filter is reported.
-                repaired = any(
-                    t.turn > issue.turn
-                    and ("restrict_to_candidate_tuples(" in (t.code or "") or ".merge(" in (t.code or ""))
-                    for t in turns
-                )
-                if not repaired:
+                if issue.kind == "cartesian_candidate_filter":
                     problems.append(f"Turn {issue.turn}: {issue.message}")
         return problems
 
