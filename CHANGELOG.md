@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `SemanticModelMetadata` accepts the dictionary-style access generated code
+  tends to assume: `meta["columns"]`, `meta.keys()`, `meta.items()`,
+  `meta.values()`, `meta.get("measures")`, and `"relationships" in meta`. The
+  attribute API and the `metadata()` return type are unchanged; only the four
+  public frames are exposed as keys.
+
 ## 0.5.0 — 2026-09-02 — governed knowledge learning and execution
 
 ### Added

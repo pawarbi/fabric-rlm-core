@@ -26,7 +26,7 @@ import base64
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 _SEMPY_MISSING = (
     "sempy is not importable, so a SemanticModel cannot be queried here. "
@@ -39,12 +39,58 @@ _SEMPY_MISSING = (
 
 @dataclass(frozen=True)
 class SemanticModelMetadata:
-    """Normalized semantic-model metadata with stable snake-case columns."""
+    """Normalized semantic-model metadata with stable snake-case columns.
+
+    The four frames are attributes (``meta.columns``) and also reachable the
+    way generated code tends to assume a metadata container works:
+    ``meta["columns"]``, ``meta.keys()``, ``meta.items()``, ``meta.values()``,
+    ``meta.get("measures")`` and ``"relationships" in meta``. A trace showed
+    the model writing ``for name, df in meta.items():`` on its first turn and
+    spending the next one recovering from the AttributeError; that turn was
+    pure overhead.
+
+    This is deliberately not a ``collections.abc.Mapping`` subclass: the
+    serializer and prompt code dispatch on dataclasses, and turning this into
+    a Mapping would change how a metadata snapshot is frozen and described.
+    Only the four public frames are exposed as keys, so a private field added
+    later does not leak into ``keys()``.
+    """
 
     tables: Any
     columns: Any
     measures: Any
     relationships: Any
+
+    _KEYS: ClassVar[tuple[str, ...]] = (
+        "tables",
+        "columns",
+        "measures",
+        "relationships",
+    )
+
+    def __getitem__(self, key: str) -> Any:
+        if not isinstance(key, str) or key not in self._KEYS:
+            raise KeyError(key)
+        return getattr(self, key)
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and key in self._KEYS
+
+    def keys(self) -> tuple[str, ...]:
+        """The four metadata frame names, in a stable order."""
+        return self._KEYS
+
+    def values(self) -> tuple[Any, ...]:
+        return tuple(getattr(self, key) for key in self._KEYS)
+
+    def items(self) -> tuple[tuple[str, Any], ...]:
+        return tuple((key, getattr(self, key)) for key in self._KEYS)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 
 _METADATA_COLUMNS = {
