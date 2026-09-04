@@ -416,7 +416,7 @@ back. The files are read in the subprocess. The workbook is written straight to
 
 ## Installation
 
-Python 3.10 or newer is required. In Fabric, select the Python 3.12
+Python 3.10 to 3.12 is required; 3.13 is not supported yet. In Fabric, select the Python 3.12
 (`jupyter_python`) kernel. Install the package and restart the session:
 
 ```python

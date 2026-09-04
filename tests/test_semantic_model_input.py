@@ -321,6 +321,128 @@ def test_metadata_returns_stable_plain_dataframes(fake_sempy):
     assert metadata.measures.iloc[0]["measure_name"] == "Total Sales"
 
 
+# -- metadata behaves like the dict generated code assumes -----------------
+#
+# A trace showed the model writing `for name, df in meta.items():` on its first
+# turn and spending the next one recovering from the AttributeError. These pin
+# the dict-style surface without turning the object into a dict.
+
+
+def test_metadata_is_subscriptable_by_frame_name(fake_sempy):
+    meta = SemanticModel("D", validate=False).metadata()
+
+    assert meta["tables"] is meta.tables
+    assert meta["columns"] is meta.columns
+    assert meta["measures"] is meta.measures
+    assert meta["relationships"] is meta.relationships
+
+
+def test_metadata_keys_are_exactly_the_four_public_frames(fake_sempy):
+    meta = SemanticModel("D", validate=False).metadata()
+
+    assert tuple(meta.keys()) == (
+        "tables",
+        "columns",
+        "measures",
+        "relationships",
+    )
+
+
+def test_metadata_items_and_values_pair_with_keys(fake_sempy):
+    meta = SemanticModel("D", validate=False).metadata()
+
+    assert dict(meta.items())["columns"] is meta.columns
+    assert [name for name, _df in meta.items()] == list(meta.keys())
+    assert all(a is b for a, b in zip(meta.values(), (
+        meta.tables, meta.columns, meta.measures, meta.relationships,
+    )))
+    assert dict(meta)["measures"] is meta.measures
+
+
+def test_metadata_items_loop_runs_without_a_repair_turn(fake_sempy):
+    """The exact pattern from the trace: iterate frames by name."""
+    meta = SemanticModel("D", validate=False).metadata()
+
+    seen = {}
+    for name, df in meta.items():
+        seen[name] = df.columns.tolist()
+
+    assert seen["measures"][:2] == ["table_name", "measure_name"]
+    assert set(seen) == {"tables", "columns", "measures", "relationships"}
+
+
+def test_metadata_get_returns_default_for_unknown_keys(fake_sempy):
+    meta = SemanticModel("D", validate=False).metadata()
+
+    assert meta.get("measures") is meta.measures
+    assert meta.get("missing") is None
+    assert meta.get("missing", 123) == 123
+
+
+def test_metadata_membership_covers_only_public_frames(fake_sempy):
+    meta = SemanticModel("D", validate=False).metadata()
+
+    assert "columns" in meta
+    assert "foo" not in meta
+    assert "_KEYS" not in meta
+    assert 0 not in meta
+
+
+def test_metadata_unknown_key_raises_key_error_like_a_dict(fake_sempy):
+    meta = SemanticModel("D", validate=False).metadata()
+
+    with pytest.raises(KeyError):
+        meta["foo"]
+    with pytest.raises(KeyError):
+        meta["_KEYS"]
+    with pytest.raises(AttributeError):
+        meta.foo  # noqa: B018 - attribute access must stay attribute access
+
+
+def test_metadata_is_not_a_mapping_instance(fake_sempy):
+    """Serializer and prompt code dispatch on dataclasses; keep it that way."""
+    from collections.abc import Mapping
+
+    meta = SemanticModel("D", validate=False).metadata()
+
+    assert not isinstance(meta, Mapping)
+    assert not isinstance(meta, dict)
+
+
+def test_metadata_dataclass_equality_and_repr_are_unchanged(fake_sempy):
+    import dataclasses
+
+    from fabric_rlm import SemanticModelMetadata
+
+    meta = SemanticModel("D", validate=False).metadata()
+
+    assert [f.name for f in dataclasses.fields(meta)] == [
+        "tables", "columns", "measures", "relationships",
+    ]
+    # Field-wise dataclass equality still holds. Sentinels rather than the
+    # DataFrames: Python 3.13 compares dataclass fields one by one, and
+    # `frame == frame` has no single truth value.
+    assert SemanticModelMetadata(1, 2, 3, 4) == SemanticModelMetadata(1, 2, 3, 4)
+    assert SemanticModelMetadata(1, 2, 3, 4) != SemanticModelMetadata(1, 2, 3, 5)
+    assert repr(meta).startswith("SemanticModelMetadata(tables=")
+    assert "_KEYS" not in repr(meta)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        meta.tables = None
+
+
+def test_metadata_freezes_as_a_dataclass_snapshot(fake_sempy):
+    """`freeze()` must keep treating metadata as a dataclass, not a mapping."""
+    import dataclasses
+
+    from fabric_rlm.serializers import freeze
+
+    meta = SemanticModel("D", validate=False).metadata()
+
+    frozen = freeze(meta)
+    assert list(frozen) == ["tables", "columns", "measures", "relationships"]
+    assert frozen == freeze(dataclasses.asdict(meta))
+
+
 def test_dax_can_return_plain_dataframe_with_normalized_columns(fake_sempy):
     result = SemanticModel("D", validate=False).dax(
         'EVALUATE ROW("v", 1)',
