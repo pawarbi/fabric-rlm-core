@@ -42,7 +42,7 @@ Thumbs.db
 # Anything inside _local/ is for the maintainer's machine only and must
 # never enter the published package or git history.
 _local/
+/analysis_output/
 
 # Notebook checkpoints
 .ipynb_checkpoints/
-

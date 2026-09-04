@@ -28,6 +28,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+_HOST_SEMANTIC_MODEL_TRANSPORT: Callable[..., Any] | None = None
+
 _SEMPY_MISSING = (
     "sempy is not importable, so a SemanticModel cannot be queried here. "
     "sempy ships in the Microsoft Fabric notebook runtime; outside Fabric, "
@@ -35,6 +37,15 @@ _SEMPY_MISSING = (
     "authenticated. Note that `import fabric` is a different package (SSH "
     "automation) and is not what this needs."
 )
+
+
+def _configure_host_semantic_model_transport(
+    transport: Callable[..., Any] | None,
+) -> None:
+    """Configure the worker-only transport for cold SemanticModel operations."""
+
+    global _HOST_SEMANTIC_MODEL_TRANSPORT
+    _HOST_SEMANTIC_MODEL_TRANSPORT = transport
 
 
 @dataclass(frozen=True)
@@ -214,7 +225,19 @@ class SemanticModel:
             kwargs["credential"] = _NotebookUtilsPbiCredential()
         return kwargs
 
-    def _source_call(self, call: Callable[[], Any]) -> Any:
+    def _source_call(
+        self,
+        operation: str,
+        call: Callable[[], Any],
+        **kwargs: Any,
+    ) -> Any:
+        if _HOST_SEMANTIC_MODEL_TRANSPORT is not None:
+            return _HOST_SEMANTIC_MODEL_TRANSPORT(
+                operation=operation,
+                dataset=self.dataset,
+                workspace=self.workspace,
+                **kwargs,
+            )
         try:
             return call()
         except Exception:
@@ -244,24 +267,28 @@ class SemanticModel:
     def tables(self) -> Any:
         """Tables in the model, as a DataFrame."""
         return self._source_call(
+            "tables",
             lambda: self._fabric.list_tables(self.dataset, **self._kw)
         )
 
     def columns(self) -> Any:
         """Columns in the model, as a DataFrame."""
         return self._source_call(
+            "columns",
             lambda: self._fabric.list_columns(self.dataset, **self._kw)
         )
 
     def measures(self) -> Any:
         """Measures, with their DAX expressions and descriptions."""
         return self._source_call(
+            "measures",
             lambda: self._fabric.list_measures(self.dataset, **self._kw)
         )
 
     def relationships(self) -> Any:
         """Relationships between tables, as a DataFrame."""
         return self._source_call(
+            "relationships",
             lambda: self._fabric.list_relationships(self.dataset, **self._kw)
         )
 
@@ -352,11 +379,13 @@ class SemanticModel:
         stable snake-case names instead of SemPy's bracketed result columns.
         """
         result = self._source_call(
+            "dax",
             lambda: self._fabric.evaluate_dax(
                 self.dataset,
                 query,
                 **self._kw,
-            )
+            ),
+            query=query,
         )
         return _plain_frame(result) if normalize_columns else result
 
@@ -377,11 +406,15 @@ class SemanticModel:
         if filters:
             kwargs["filters"] = dict(filters)
         return self._source_call(
+            "measure",
             lambda: self._fabric.evaluate_measure(
                 self.dataset,
                 measure,
                 **kwargs,
-            )
+            ),
+            measure=measure,
+            groupby=groupby,
+            filters=filters,
         )
 
     def read_table(self, table: str, num_rows: int | None = None) -> Any:
@@ -390,11 +423,14 @@ class SemanticModel:
         if num_rows is not None:
             kwargs["num_rows"] = num_rows
         return self._source_call(
+            "read_table",
             lambda: self._fabric.read_table(
                 self.dataset,
                 table,
                 **kwargs,
-            )
+            ),
+            table=table,
+            num_rows=num_rows,
         )
 
     # -- presentation -----------------------------------------------------

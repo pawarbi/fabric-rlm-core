@@ -8,9 +8,12 @@ several of which had finished the analysis and were writing output.
 
 from __future__ import annotations
 
+import sys
+from types import ModuleType
+
 import pytest
 
-from fabric_rlm import ExecResult, RLM, WorkerTimeout
+from fabric_rlm import ExecResult, RLM, SemanticModel, WorkerTimeout
 import fabric_rlm.runtime as runtime_module
 
 
@@ -158,6 +161,47 @@ def test_inputs_survive_the_restart():
                       recover_worker_timeouts=1).run()
     assert result.submitted is True
     assert result.payload["answer"] == "42", "input was not re-bound"
+
+
+def test_recovery_preserves_prior_semantic_model_failure_latch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fabric = ModuleType("sempy.fabric")
+
+    def evaluate_dax(_dataset, _query, **_kwargs):
+        raise PermissionError("source access denied")
+
+    fabric.evaluate_dax = evaluate_dax
+    sempy = ModuleType("sempy")
+    sempy.fabric = fabric
+    monkeypatch.setitem(sys.modules, "sempy", sempy)
+    monkeypatch.setitem(sys.modules, "sempy.fabric", fabric)
+
+    lm = ScriptedLM(
+        [
+            """```python
+try:
+    sales.dax("EVALUATE ROW(\\"value\\", [Revenue])")
+except Exception:
+    pass
+```""",
+            SLOW,
+            "```python\nSUBMIT(answer=0)\n```",
+        ]
+    )
+
+    result = RLM.task(
+        task="t",
+        inputs={"sales": SemanticModel("Sales", validate=False)},
+        outputs=["answer"],
+        lm=lm,
+        max_turns=4,
+        timeout=2,
+        recover_worker_timeouts=1,
+    ).run()
+
+    assert result.submitted is False
+    assert "SemanticModel" in (result.trajectory.turns[-1].error or "")
 
 
 def test_recovery_warms_replacement_before_the_next_model_turn(

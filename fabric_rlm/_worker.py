@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import base64
 import contextlib
 
 # Allow user code that uses the canonical `asyncio.run(...)` /
@@ -37,6 +38,7 @@ import inspect
 import io
 import json
 import os
+import pickle
 import sys
 import traceback
 from collections.abc import Mapping
@@ -50,7 +52,10 @@ from .artifacts import (
     decode_from_worker_wire,
 )
 from .lakehouse import _configure_host_query_transport
-from .semantic_model import SemanticModel
+from .semantic_model import (
+    SemanticModel,
+    _configure_host_semantic_model_transport,
+)
 from .serializers import (
     DEFAULT_INJECTED_NAMES,
     DEFAULT_MAX_SUBMIT_BYTES,
@@ -852,6 +857,19 @@ def _file_publish_transport(**kwargs: Any) -> dict[str, Any]:
     return result
 
 
+def _semantic_model_transport(**kwargs: Any) -> Any:
+    value = _make_tool_stub("__fabric_rlm_semantic_model__")(**kwargs)
+    if not isinstance(value, str):
+        raise RuntimeError("SemanticModel host returned an invalid response.")
+    result = json.loads(value)
+    if not isinstance(result, dict):
+        raise RuntimeError("SemanticModel host returned an invalid response.")
+    payload = result.get("__fabric_rlm_pickle__")
+    if not isinstance(payload, str):
+        raise RuntimeError("SemanticModel host returned an invalid response.")
+    return pickle.loads(base64.b64decode(payload))
+
+
 def _install_registered_tool_stubs() -> None:
     for name in _registered_tools:
         _namespace[name] = _make_tool_stub(name)
@@ -1042,6 +1060,7 @@ def main() -> None:
         netguard.install()
     _configure_host_query_transport(_lakehouse_query_transport)
     _configure_host_file_transport(_file_publish_transport)
+    _configure_host_semantic_model_transport(_semantic_model_transport)
     _install_runtime_api()
     while True:
         line = _REAL_STDIN.readline()

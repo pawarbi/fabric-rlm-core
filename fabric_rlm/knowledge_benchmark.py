@@ -16,6 +16,10 @@ from fabric_rlm.runtime import RLMResult
 
 BenchmarkArm = Literal["cold", "learned"]
 PlanValidator = Callable[["KnowledgeBenchmarkSelectedPlan"], bool]
+ResultBindingValidator = Callable[
+    [Mapping[str, Any] | None, Mapping[str, Any]],
+    bool,
+]
 _IMPLEMENTATION_DETAIL = re.compile(
     r"semantic_model\.|operation_id|evaluate_measure|"
     r"\b(?:dax|sql|python)\b|[A-Za-z][A-Za-z0-9 ]*\[[^\]]+\]",
@@ -59,6 +63,7 @@ class KnowledgeBenchmarkTask:
     is_commentary_valid: (
         Callable[[Mapping[str, Any] | None], bool] | None
     ) = None
+    is_deterministic_result_binding_correct: ResultBindingValidator | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.task_id, str) or not self.task_id.strip():
@@ -91,6 +96,13 @@ class KnowledgeBenchmarkTask:
             and not callable(self.is_commentary_valid)
         ):
             raise TypeError("is_commentary_valid must be callable")
+        if (
+            self.is_deterministic_result_binding_correct is not None
+            and not callable(self.is_deterministic_result_binding_correct)
+        ):
+            raise TypeError(
+                "is_deterministic_result_binding_correct must be callable"
+            )
 
 
 @dataclass(frozen=True)
@@ -337,20 +349,92 @@ def _provider_and_model(lm: object) -> tuple[str | None, str | None]:
     return provider, raw_model.split("/", 1)[-1]
 
 
-def _cost_value(value: object) -> float | None:
+_COST_TOTAL_KEYS = (
+    "total_cost_usd",
+    "total_cost",
+    "total",
+    "cost",
+)
+_COST_COMPONENT_KEYS = frozenset(
+    {
+        "input",
+        "input_cost",
+        "input_cost_usd",
+        "output",
+        "output_cost",
+        "output_cost_usd",
+        "prompt",
+        "prompt_cost",
+        "prompt_cost_usd",
+        "completion",
+        "completion_cost",
+        "completion_cost_usd",
+        "cache_read",
+        "cache_read_cost",
+        "cache_read_cost_usd",
+        "cache_write",
+        "cache_write_cost",
+        "cache_write_cost_usd",
+        "reasoning",
+        "reasoning_cost",
+        "reasoning_cost_usd",
+    }
+)
+
+
+def _cost_number(value: object) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)) and math.isfinite(value):
         return float(value)
+    return None
+
+
+def _nested_cost_total(value: Mapping[object, object]) -> float | None:
+    normalized = {
+        key.lower(): item
+        for key, item in value.items()
+        if isinstance(key, str)
+    }
+    for key in _COST_TOTAL_KEYS:
+        total = _cost_number(normalized.get(key))
+        if total is not None:
+            return total
+    for item in value.values():
+        if isinstance(item, Mapping):
+            total = _nested_cost_total(item)
+            if total is not None:
+                return total
+    return None
+
+
+def _cost_value(value: object) -> float | None:
+    scalar = _cost_number(value)
+    if scalar is not None:
+        return scalar
     if isinstance(value, Mapping):
-        costs = [
-            float(item)
-            for item in value.values()
-            if not isinstance(item, bool)
-            and isinstance(item, (int, float))
-            and math.isfinite(item)
+        total = _nested_cost_total(value)
+        if total is not None:
+            return total
+        normalized = {
+            key.lower(): item
+            for key, item in value.items()
+            if isinstance(key, str)
+        }
+        components = [
+            cost
+            for key, item in normalized.items()
+            if key in _COST_COMPONENT_KEYS
+            for cost in [_cost_number(item)]
+            if cost is not None
         ]
-        return sum(costs) if costs else None
+        if components:
+            return math.fsum(components)
+        for item in value.values():
+            if isinstance(item, Mapping):
+                nested = _cost_value(item)
+                if nested is not None:
+                    return nested
     return None
 
 
@@ -372,10 +456,13 @@ def _provider_model_cost(
         if costs:
             return sum(costs)
     for value in (
-        getattr(result, "total_cost", None),
         getattr(result, "total_cost_usd", None),
-        result.trajectory.metadata.get("provider_model_cost"),
+        getattr(result, "total_cost", None),
+        result.trajectory.metadata.get("total_cost_usd"),
         result.trajectory.metadata.get("total_cost"),
+        result.trajectory.metadata.get("total"),
+        result.trajectory.metadata.get("provider_model_cost"),
+        result.trajectory.metadata.get("cost"),
     ):
         cost = _cost_value(value)
         if cost is not None:
@@ -417,16 +504,12 @@ def _trial(
     if learned and host_execution_passed is None:
         host_execution_passed = metadata.get("knowledge_mode") == "registered_operation"
     deterministic_binding = None
-    if learned:
-        explicit_binding = metadata.get(
-            "deterministic_result_binding_correct"
-        )
-        if isinstance(explicit_binding, bool):
-            deterministic_binding = explicit_binding
-    if learned and deterministic_binding is None:
+    if (
+        learned
+        and task.is_deterministic_result_binding_correct is not None
+    ):
         deterministic_binding = bool(
-            metadata.get("knowledge_mode") == "registered_operation"
-            and _text_optional(metadata.get("operation_result_fingerprint"))
+            task.is_deterministic_result_binding_correct(payload, metadata)
         )
     return KnowledgeBenchmarkTrial(
         task_id=task.task_id,

@@ -178,6 +178,11 @@ def test_benchmark_records_stage_correctness_and_complete_accounting() -> None:
             and payload.get("analysis")
             == "Revenue was calculated from the governed result."
         ),
+        is_deterministic_result_binding_correct=lambda payload, metadata: bool(
+            payload
+            and payload.get("answer")
+            == metadata.get("trusted_host_packet", {}).get("answer")
+        ),
     )
 
     def make_lm(**_kwargs):
@@ -206,7 +211,7 @@ def test_benchmark_records_stage_correctness_and_complete_accounting() -> None:
                 },
                 "operation_audit_status": "passed",
                 "operation_host_seconds": 0.2,
-                "deterministic_result_binding_correct": True,
+                "trusted_host_packet": {"answer": 30.5},
             },
         )
 
@@ -263,6 +268,104 @@ def test_benchmark_records_stage_correctness_and_complete_accounting() -> None:
     assert rows["learned"]["numeric_correct"] is True
     assert rows["learned"]["operation_selection_correct"] is True
     assert rows["learned"]["audit_passed"] is True
+
+
+def test_registered_operation_fingerprint_does_not_prove_result_binding() -> None:
+    task = KnowledgeBenchmarkTask(
+        task_id="revenue",
+        question="What was total revenue?",
+        expected_operation_id="sales.semantic_model.measure.v1",
+        is_correct=lambda payload: bool(payload and payload.get("answer") == 30.5),
+    )
+
+    report = run_knowledge_benchmark(
+        tasks=[task],
+        repetitions=1,
+        seed=0,
+        make_lm=lambda **_kwargs: FakeLM(kwargs={"cache": False}),
+        run=lambda _task, arm, _lm: _result(
+            answer=999.0,
+            turns=1,
+            metadata={
+                "knowledge_mode": "registered_operation",
+                "operation_id": "sales.semantic_model.measure.v1",
+                "operation_result_fingerprint": "host-result-fingerprint",
+                "deterministic_result_binding_correct": True,
+            }
+            if arm == "learned"
+            else {},
+        ),
+    )
+
+    learned = next(trial for trial in report.trials if trial.arm == "learned")
+    assert learned.host_execution_passed is True
+    assert learned.operation_result_fingerprint == "host-result-fingerprint"
+    assert learned.final_answer_correct is False
+    assert learned.deterministic_result_binding_correct is None
+
+
+@pytest.mark.parametrize(
+    ("cost", "expected"),
+    [
+        (0.12, 0.12),
+        ({"total_cost_usd": 0.12, "request_count": 7}, 0.12),
+        ({"prompt_cost": 0.05, "completion_cost": 0.07}, 0.12),
+        (
+            {
+                "total_cost": 0.12,
+                "prompt_cost": 0.5,
+                "completion_cost": 0.7,
+            },
+            0.12,
+        ),
+        ({"azure": {"total": 0.12, "latency_ms": 400}}, 0.12),
+        (
+            {
+                "provider": {
+                    "cost": {
+                        "input": 0.05,
+                        "output": 0.07,
+                        "token_count": 1000,
+                    }
+                }
+            },
+            0.12,
+        ),
+        ({"total": True, "input_cost": float("nan"), "tokens": 1000}, None),
+    ],
+)
+def test_provider_cost_normalization_uses_only_recognized_cost_fields(
+    cost: object,
+    expected: float | None,
+) -> None:
+    task = KnowledgeBenchmarkTask(
+        task_id="revenue",
+        question="What was total revenue?",
+        expected_operation_id="sales.semantic_model.measure.v1",
+        is_correct=lambda _payload: True,
+    )
+
+    def make_lm(**_kwargs):
+        return FakeLM(kwargs={"cache": False}, history=[])
+
+    def run(_task, _arm, lm):
+        assert lm.history is not None
+        lm.history.append({"cost": cost})
+        return _result(answer=30.5, turns=1)
+
+    report = run_knowledge_benchmark(
+        tasks=[task],
+        repetitions=1,
+        seed=0,
+        make_lm=make_lm,
+        run=run,
+    )
+
+    for trial in report.trials:
+        if expected is None:
+            assert trial.provider_model_cost is None
+        else:
+            assert trial.provider_model_cost == pytest.approx(expected)
 
 
 def test_stage_metrics_ignore_untrusted_synthetic_booleans() -> None:

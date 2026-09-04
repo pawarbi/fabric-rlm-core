@@ -69,7 +69,10 @@ def _extract_error_signature(error: str | None) -> tuple[str | None, str | None]
     """
     if not error:
         return (None, None)
-    last_line = error.strip().splitlines()[-1].strip()
+    lines = error.strip().splitlines()
+    if not lines:
+        return (None, None)
+    last_line = lines[-1].strip()
     head, _, msg = last_line.partition(":")
     error_type = head.strip() or None
     message = msg.strip() or None
@@ -481,7 +484,12 @@ class RLMResult:
         # and moved on.
         kinds_count: dict[str, int] = {}
         for t in errored:
-            k = (t.error or "").strip().splitlines()[-1].split(":", 1)[0].strip() or "Unknown"
+            error_lines = (t.error or "").strip().splitlines()
+            k = (
+                error_lines[-1].split(":", 1)[0].strip()
+                if error_lines
+                else "Unknown"
+            ) or "Unknown"
             kinds_count[k] = kinds_count.get(k, 0) + 1
         repeated_error = next(
             ((k, v) for k, v in sorted(kinds_count.items(), key=lambda kv: -kv[1]) if v >= 3),
@@ -597,7 +605,8 @@ class RLMResult:
         if slowest is not None and (slowest.duration_s or 0) > 0:
             lines.append(f"slowest turn {slowest.turn} ({slowest.duration_s:.1f}s)")
         if last_error is not None:
-            msg = (last_error.error or "").strip().splitlines()[-1][:100]
+            error_lines = (last_error.error or "").strip().splitlines()
+            msg = error_lines[-1][:100] if error_lines else "Unknown error"
             lines.append(f"last error  turn {last_error.turn}: {msg}")
 
         # What to try. Every hint is tied to a fact printed above, so none of
@@ -2060,7 +2069,12 @@ class RLM:
                             if self.sub_lm_spec is not None:
                                 interpreter.configure_lm(self.sub_lm_spec)
                             if bound_inputs:
-                                interpreter.set_inputs(bound_inputs)
+                                rebind = getattr(
+                                    interpreter,
+                                    "rebind_inputs",
+                                    interpreter.set_inputs,
+                                )
+                                rebind(bound_inputs)
                             interpreter.warmup()
                         except Exception as restart_error:
                             trajectory.turns[-1].error = (

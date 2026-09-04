@@ -16,8 +16,10 @@ worker dispatches per-message based on envelope shape (see ``_worker.main``).
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import pickle
 import queue
 import signal
 import subprocess
@@ -30,6 +32,7 @@ from . import netguard
 from .artifacts import FileDestination, encode_for_worker, publish_file
 from .lakehouse import LakehouseSource, execute_lakehouse_query
 from .security import SecurityPolicy
+from .semantic_model import SemanticModel
 from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
 
 
@@ -82,6 +85,11 @@ class WorkerProtocolError(RuntimeError):
 
 _LAKEHOUSE_QUERY_TOOL = "__fabric_rlm_lakehouse_query__"
 _FILE_PUBLISH_TOOL = "__fabric_rlm_file_publish__"
+_SEMANTIC_MODEL_TOOL = "__fabric_rlm_semantic_model__"
+_SEMANTIC_MODEL_FAILURE = (
+    "Cannot SUBMIT a successful result because a bound SemanticModel "
+    "source access or query failed during this run."
+)
 
 
 def _collect_lakehouse_sources(value: Any) -> list[LakehouseSource]:
@@ -118,6 +126,76 @@ def _collect_file_destinations(value: Any) -> list[FileDestination]:
             for destination in _collect_file_destinations(item)
         ]
     return []
+
+
+def _collect_semantic_models(value: Any) -> list[SemanticModel]:
+    if isinstance(value, SemanticModel):
+        return [value]
+    if isinstance(value, dict):
+        return [
+            model
+            for item in value.values()
+            for model in _collect_semantic_models(item)
+        ]
+    if isinstance(value, (list, tuple)):
+        return [
+            model
+            for item in value
+            for model in _collect_semantic_models(item)
+        ]
+    return []
+
+
+def _execute_bound_semantic_model_operation(
+    bound_models: list[SemanticModel],
+    kwargs: dict[str, Any],
+) -> Any:
+    dataset = kwargs.get("dataset")
+    workspace = kwargs.get("workspace")
+    model = next(
+        (
+            candidate
+            for candidate in bound_models
+            if candidate.dataset == dataset and candidate.workspace == workspace
+        ),
+        None,
+    )
+    if model is None:
+        raise PermissionError(
+            "SemanticModel is not bound to this worker or was modified."
+        )
+
+    operation = kwargs.get("operation")
+    if operation == "tables":
+        return model.tables()
+    if operation == "columns":
+        return model.columns()
+    if operation == "measures":
+        return model.measures()
+    if operation == "relationships":
+        return model.relationships()
+    if operation == "dax":
+        return model.dax(kwargs.get("query", ""))
+    if operation == "measure":
+        return model.measure(
+            kwargs.get("measure"),
+            groupby=kwargs.get("groupby"),
+            filters=kwargs.get("filters"),
+        )
+    if operation == "read_table":
+        return model.read_table(
+            kwargs.get("table", ""),
+            num_rows=kwargs.get("num_rows"),
+        )
+    raise PermissionError(f"Unsupported SemanticModel operation: {operation!r}")
+
+
+def _pickle_tool_result(value: Any) -> dict[str, str]:
+    return {
+        "__fabric_rlm_pickle__": base64.b64encode(
+            pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+        ).decode("ascii")
+    }
 
 
 def _execute_bound_lakehouse_query(
@@ -262,6 +340,8 @@ class Interpreter:
         self._stderr_thread: threading.Thread | None = None
         self._lakehouse_sources: list[LakehouseSource] = []
         self._file_destinations: list[FileDestination] = []
+        self._semantic_models: list[SemanticModel] = []
+        self._semantic_source_access_failed = False
 
     @property
     def is_running(self) -> bool:
@@ -363,16 +443,46 @@ class Interpreter:
             if raw.get("method") == "tool_call":
                 self._handle_internal_tool_call(raw)
                 continue
-            return ExecResult.from_response(raw)
+            result = ExecResult.from_response(raw)
+            if result.submitted and self._semantic_source_access_failed:
+                return ExecResult(
+                    ok=False,
+                    submitted=False,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    state=result.state,
+                    error=_SEMANTIC_MODEL_FAILURE,
+                )
+            return result
 
     def configure_lm(self, spec: Any) -> dict[str, Any]:
         return self._request({"op": "configure_lm", "spec": encode_for_worker(spec)})
 
-    def set_inputs(self, inputs: dict[str, Any]) -> dict[str, Any]:
+    def set_inputs(
+        self,
+        inputs: dict[str, Any],
+        *,
+        reset_source_failure: bool = True,
+    ) -> dict[str, Any]:
+        """Bind a fresh input set and start a new source-failure lifecycle.
+
+        A SemanticModel operation failure is terminal for successful
+        submission throughout the current run. Explicit fresh input binding
+        resets that parent-owned latch; worker restart recovery uses
+        :meth:`rebind_inputs` so it cannot erase an earlier failure.
+        """
         self._lakehouse_sources = _collect_lakehouse_sources(inputs)
         self._file_destinations = _collect_file_destinations(inputs)
+        self._semantic_models = _collect_semantic_models(inputs)
+        if reset_source_failure:
+            self._semantic_source_access_failed = False
         encoded = {name: encode_for_worker(value) for name, value in inputs.items()}
         return self._request({"op": "set_inputs", "inputs": encoded})
+
+    def rebind_inputs(self, inputs: dict[str, Any]) -> dict[str, Any]:
+        """Restore worker inputs without resetting run-level source failures."""
+
+        return self.set_inputs(inputs, reset_source_failure=False)
 
     def _handle_internal_tool_call(self, request: dict[str, Any]) -> None:
         request_id = request.get("id")
@@ -390,6 +500,17 @@ class Interpreter:
                     self._file_destinations,
                     kwargs,
                 )
+            elif name == _SEMANTIC_MODEL_TOOL:
+                try:
+                    result = _pickle_tool_result(
+                        _execute_bound_semantic_model_operation(
+                            self._semantic_models,
+                            kwargs,
+                        )
+                    )
+                except Exception:
+                    self._semantic_source_access_failed = True
+                    raise
             else:
                 raise WorkerProtocolError(f"Unknown internal worker tool: {name}")
             response = {
@@ -416,6 +537,8 @@ class Interpreter:
         self._send(response)
 
     def reset(self) -> dict[str, Any]:
+        self._semantic_source_access_failed = False
+        self._semantic_models = []
         return self._request({"op": "reset"})
 
     def ping(self) -> dict[str, Any]:
@@ -625,6 +748,9 @@ class SubprocessPythonInterpreter:
         self._request_id = 0
         self._lakehouse_sources: list[LakehouseSource] = []
         self._file_destinations: list[FileDestination] = []
+        self._semantic_models: list[SemanticModel] = []
+        self._semantic_binding_identity: tuple[int, ...] | None = None
+        self._semantic_source_access_failed = False
 
         # Diagnostics populated by start():
         self._spawn_cmd: list[str] | None = None
@@ -784,6 +910,7 @@ class SubprocessPythonInterpreter:
                 for name, value in variables.items()
                 if _collect_lakehouse_sources(value)
                 or _collect_file_destinations(value)
+                or _collect_semantic_models(value)
             }
             ordinary_variables = {
                 name: value
@@ -797,6 +924,12 @@ class SubprocessPythonInterpreter:
                 self._file_destinations = _collect_file_destinations(
                     bound_variables
                 )
+                semantic_models = _collect_semantic_models(bound_variables)
+                binding_identity = tuple(id(model) for model in semantic_models)
+                if binding_identity != self._semantic_binding_identity:
+                    self._semantic_source_access_failed = False
+                    self._semantic_binding_identity = binding_identity
+                self._semantic_models = semantic_models
                 self._send_jsonrpc(
                     "set_inputs",
                     {
@@ -849,6 +982,8 @@ class SubprocessPythonInterpreter:
             if "result" in msg:
                 result = msg["result"]
                 if isinstance(result, dict) and "final" in result:
+                    if self._semantic_source_access_failed:
+                        raise CodeInterpreterError(_SEMANTIC_MODEL_FAILURE)
                     return FinalOutput(result["final"])
                 if isinstance(result, dict) and "output" in result:
                     out = result["output"]
@@ -919,6 +1054,17 @@ class SubprocessPythonInterpreter:
                     self._file_destinations,
                     kwargs,
                 )
+            elif name == _SEMANTIC_MODEL_TOOL:
+                try:
+                    result = _pickle_tool_result(
+                        _execute_bound_semantic_model_operation(
+                            self._semantic_models,
+                            kwargs,
+                        )
+                    )
+                except Exception:
+                    self._semantic_source_access_failed = True
+                    raise
             elif name not in self.tools:
                 raise CodeInterpreterError(f"Unknown tool: {name}")
             else:

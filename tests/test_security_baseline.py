@@ -120,6 +120,14 @@ _ALLOW_CASES: list[tuple[str, str]] = [
     ("re.compile", "import re\npat = re.compile(r'\\d+')\nprint(pat.findall('a1b2'))"),
     ("__import__ benign", "print(__import__('re').findall(r'\\d+', 'a1b2'))"),
     ("compile()/exec() bare", "src='x=1'\nexec(compile(src, '<s>', 'exec'))"),
+    (
+        "ordinary object reflection",
+        "object.__setattr__(model, '_source_access_failed', False)",
+    ),
+    (
+        "function globals reflection",
+        "SUBMIT.__globals__['_bound_semantic_models'].clear()",
+    ),
 ]
 
 

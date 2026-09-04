@@ -130,6 +130,7 @@ from fabric_rlm import (
     load_knowledge,
 )
 from fabric_rlm.knowledge_benchmark import (
+    KnowledgeBenchmarkPlanValidators,
     KnowledgeBenchmarkTask,
     run_knowledge_benchmark,
 )
@@ -599,6 +600,149 @@ def fanout_correct(payload):
         )(payload)
     )
 
+def operation_filter_pairs(parameters, count):
+    pairs = []
+    for index in range(1, count + 1):
+        suffix = "" if index == 1 else f"_{index}"
+        column = parameters.get(f"filter_column{suffix}", "")
+        value = parameters.get(f"filter_value{suffix}", "")
+        if bool(column) != bool(value):
+            return None
+        if column:
+            pairs.append((str(column), str(value)))
+    if len({column for column, _value in pairs}) != len(pairs):
+        return None
+    return dict(pairs)
+
+def operation_groupby(parameters, names):
+    values = tuple(str(parameters.get(name, "")) for name in names)
+    return tuple(value for value in values if value)
+
+def make_plan_validators(
+    *,
+    operation,
+    measures,
+    groupby=(),
+    filters=None,
+    time_filters=None,
+    fixed=None,
+    time_fixed=None,
+    groupby_names=("groupby", "groupby_2"),
+    filter_count=2,
+):
+    expected_operation_id = operation.operation_id
+    expected_parameter_names = set(operation.parameter_schema)
+    expected_measures = dict(measures)
+    expected_groupby = tuple(groupby)
+    expected_filters = dict(filters or {})
+    expected_time_filters = (
+        None if time_filters is None else dict(time_filters)
+    )
+    expected_fixed = dict(fixed or {})
+    expected_time_fixed = dict(time_fixed or {})
+
+    def parameters(plan):
+        return dict(plan.parameters)
+
+    def measure_valid(plan):
+        selected = parameters(plan)
+        return all(
+            selected.get(name) == value
+            for name, value in expected_measures.items()
+        )
+
+    def time_policy_valid(plan):
+        selected = parameters(plan)
+        if expected_time_fixed:
+            return all(
+                selected.get(name) == value
+                for name, value in expected_time_fixed.items()
+            )
+        selected_filters = operation_filter_pairs(selected, filter_count)
+        if selected_filters is None:
+            return False
+        if expected_time_filters is None:
+            return selected_filters == expected_filters
+        return all(
+            selected_filters.get(column) == value
+            for column, value in expected_time_filters.items()
+        )
+
+    def groupby_valid(plan):
+        return operation_groupby(
+            parameters(plan),
+            groupby_names,
+        ) == expected_groupby
+
+    def filter_columns_valid(plan):
+        selected_filters = operation_filter_pairs(
+            parameters(plan),
+            filter_count,
+        )
+        return (
+            selected_filters is not None
+            and set(selected_filters) == set(expected_filters)
+        )
+
+    def filter_values_valid(plan):
+        selected_filters = operation_filter_pairs(
+            parameters(plan),
+            filter_count,
+        )
+        return selected_filters == expected_filters
+
+    def full_operation_plan_valid(plan):
+        selected = parameters(plan)
+        if (
+            plan.operation_id != expected_operation_id
+            or set(selected) != expected_parameter_names
+            or not measure_valid(plan)
+            or not groupby_valid(plan)
+            or not filter_values_valid(plan)
+            or any(
+                selected.get(name) != value
+                for name, value in expected_fixed.items()
+            )
+        ):
+            return False
+        consumed = (
+            set(expected_measures)
+            | set(groupby_names)
+            | set(expected_fixed)
+        )
+        for index in range(1, filter_count + 1):
+            suffix = "" if index == 1 else f"_{index}"
+            consumed.add(f"filter_column{suffix}")
+            consumed.add(f"filter_value{suffix}")
+        return all(
+            selected.get(name) == "" or selected.get(name) is None
+            for name in expected_parameter_names - consumed
+        )
+
+    return KnowledgeBenchmarkPlanValidators(
+        measure=measure_valid,
+        time_policy=time_policy_valid,
+        groupby=groupby_valid,
+        filter_columns=filter_columns_valid,
+        filter_values=filter_values_valid,
+        full_operation_plan=full_operation_plan_valid,
+    )
+
+def make_commentary_validator(*required_fields):
+    def validate(payload):
+        return bool(
+            payload
+            and all(payload.get(field) is not None for field in required_fields)
+            and isinstance(payload.get("analysis"), str)
+            and payload["analysis"].strip()
+        )
+    return validate
+
+quarter_filter_values = {
+    column: str(values[0])
+    for column, values in quarter_filters.items()
+}
+
 TASK_CONFIG = {
     "semantic_scalar": {
         "question": (
@@ -608,6 +752,14 @@ TASK_CONFIG = {
         "outputs": {"value": float, "analysis": str},
         "expected_operation_id": semantic_operation_id,
         "validator": close_to("value", EXPECTED_TOTAL_ARR),
+        "commentary_validator": make_commentary_validator("value"),
+        "plan_validators": make_plan_validators(
+            operation=semantic_operation,
+            measures={"measure": "ARR $"},
+            filters=quarter_filter_values,
+            time_filters=quarter_filter_values,
+            filter_count=3,
+        ),
         "knowledge": semantic_knowledge,
         "inputs": {"arr_model": model},
     },
@@ -624,6 +776,19 @@ TASK_CONFIG = {
         },
         "expected_operation_id": semantic_operation_id,
         "validator": grouped_semantic_correct,
+        "commentary_validator": make_commentary_validator(
+            "total_value",
+            "top_region",
+            "top_region_value",
+        ),
+        "plan_validators": make_plan_validators(
+            operation=semantic_operation,
+            measures={"measure": "ARR $"},
+            groupby=(region_column,),
+            filters=quarter_filter_values,
+            time_filters=quarter_filter_values,
+            filter_count=3,
+        ),
         "knowledge": semantic_knowledge,
         "inputs": {"arr_model": model},
     },
@@ -635,6 +800,17 @@ TASK_CONFIG = {
         "outputs": {"value": float, "analysis": str},
         "expected_operation_id": semantic_operation_id,
         "validator": close_to("value", EXPECTED_CANADA_ARR),
+        "commentary_validator": make_commentary_validator("value"),
+        "plan_validators": make_plan_validators(
+            operation=semantic_operation,
+            measures={"measure": "ARR $"},
+            filters={
+                **quarter_filter_values,
+                region_column: "Americas - Canada",
+            },
+            time_filters=quarter_filter_values,
+            filter_count=3,
+        ),
         "knowledge": semantic_knowledge,
         "inputs": {"arr_model": model},
     },
@@ -653,6 +829,20 @@ TASK_CONFIG = {
         },
         "expected_operation_id": semantic_operation_id,
         "validator": two_dimension_semantic_correct,
+        "commentary_validator": make_commentary_validator(
+            "total_value",
+            "top_region",
+            "top_product_family",
+            "top_combination_value",
+        ),
+        "plan_validators": make_plan_validators(
+            operation=semantic_operation,
+            measures={"measure": "ARR $"},
+            groupby=(region_column, product_family_column),
+            filters=quarter_filter_values,
+            time_filters=quarter_filter_values,
+            filter_count=3,
+        ),
         "knowledge": semantic_knowledge,
         "inputs": {"arr_model": model},
     },
@@ -661,6 +851,15 @@ TASK_CONFIG = {
         "outputs": {"value": float, "analysis": str},
         "expected_operation_id": lakehouse_operation.operation_id,
         "validator": close_to("value", expected_order_value),
+        "commentary_validator": make_commentary_validator("value"),
+        "plan_validators": make_plan_validators(
+            operation=lakehouse_operation,
+            measures={"measure": amount_column},
+            fixed={
+                "catalog_source": str(orders_entry["name"]),
+                "aggregate": "sum",
+            },
+        ),
         "knowledge": lakehouse_knowledge,
         "inputs": {"orders_lakehouse": orders_lakehouse},
     },
@@ -673,6 +872,16 @@ TASK_CONFIG = {
         },
         "expected_operation_id": csv_operation.operation_id,
         "validator": grouped_file_correct,
+        "commentary_validator": make_commentary_validator(
+            "total_value",
+            "region_values",
+        ),
+        "plan_validators": make_plan_validators(
+            operation=csv_operation,
+            measures={"measure": amount_column},
+            groupby=(region_column_orders,),
+            fixed={"aggregate": "sum"},
+        ),
         "knowledge": csv_knowledge,
         "inputs": {"orders_csv": File(csv_path)},
     },
@@ -681,6 +890,12 @@ TASK_CONFIG = {
         "outputs": {"value": float, "analysis": str},
         "expected_operation_id": parquet_operation.operation_id,
         "validator": close_to("value", expected_order_value),
+        "commentary_validator": make_commentary_validator("value"),
+        "plan_validators": make_plan_validators(
+            operation=parquet_operation,
+            measures={"measure": amount_column},
+            fixed={"aggregate": "sum"},
+        ),
         "knowledge": parquet_knowledge,
         "inputs": {"orders_parquet": File(parquet_path)},
     },
@@ -697,6 +912,31 @@ TASK_CONFIG = {
         },
         "expected_operation_id": tourism_operation.operation_id,
         "validator": fanout_correct,
+        "commentary_validator": make_commentary_validator(
+            "indoor_visits",
+            "outdoor_visits",
+            "period",
+        ),
+        "plan_validators": make_plan_validators(
+            operation=tourism_operation,
+            measures={
+                "left_measure": "visits",
+                "right_measure": "visits",
+            },
+            groupby=("month",),
+            fixed={
+                "left_catalog_source": tourism_operation.parameter_schema[
+                    "left_catalog_source"
+                ]["enum"][0],
+                "right_catalog_source": tourism_operation.parameter_schema[
+                    "right_catalog_source"
+                ]["enum"][0],
+                "scope": "latest",
+            },
+            time_fixed={"scope": "latest"},
+            groupby_names=("join_key", "join_key_2"),
+            filter_count=0,
+        ),
         "knowledge": tourism_knowledge,
         "inputs": {"tourism": tourism_lakehouse},
     },
@@ -708,6 +948,8 @@ TASKS = tuple(
         question=config["question"],
         expected_operation_id=config["expected_operation_id"],
         is_correct=config["validator"],
+        plan_validators=config["plan_validators"],
+        is_commentary_valid=config["commentary_validator"],
     )
     for task_id, config in TASK_CONFIG.items()
 )
