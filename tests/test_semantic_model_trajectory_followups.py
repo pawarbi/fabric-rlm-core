@@ -106,3 +106,12 @@ def test_prompt_says_submit_is_predefined():
 
     assert "SUBMIT is already defined" in prompt
     assert "never import it" in prompt
+
+
+def test_default_max_turns_leaves_room_for_metadata_discovery():
+    """The live run spent 8 of 14 turns on discovery; 10 was too tight."""
+    import inspect
+
+    from fabric_rlm import RLM
+
+    assert inspect.signature(RLM.__init__).parameters["max_turns"].default == 20

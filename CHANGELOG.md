@@ -40,6 +40,9 @@
 
 ### Changed
 
+- `max_turns` defaults to 20 instead of 10. Semantic-model tasks routinely
+  spend the first several turns on metadata discovery before the analysis
+  starts, and 10 left too little room to finish.
 - The `SemanticModel` prompt listing and the `semantic_model` skill point the
   model at `aggregate()` first and reserve `dax()` for custom DAX. `dax()`
   itself is unchanged.
