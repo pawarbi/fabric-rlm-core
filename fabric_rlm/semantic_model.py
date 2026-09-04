@@ -23,9 +23,16 @@ Binding a handle costs one line in the input listing.
 from __future__ import annotations
 
 import base64
+import difflib
 import json
+import logging
+import os
 import re
+import threading
+import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, ClassVar
 
 _SEMPY_MISSING = (
@@ -35,6 +42,250 @@ _SEMPY_MISSING = (
     "authenticated. Note that `import fabric` is a different package (SSH "
     "automation) and is not what this needs."
 )
+
+
+_log = logging.getLogger("fabric_rlm.semantic_model")
+
+# Guardrails for SemanticModel.aggregate(). One observed run asked for
+# Sub Product Line x Region x Customer Group x Quarter with five measures, hit
+# the 300s worker timeout, retried per quarter and hit it again. Nothing told
+# the model the grain was too wide until the whole budget was gone. The
+# cardinality preflight below answers that in seconds instead.
+DEFAULT_MAX_GROUPS = 10_000
+DEFAULT_PREFLIGHT_TIMEOUT_SECONDS = 10.0
+MAX_GROUPS_ENV = "FABRIC_RLM_SEMANTIC_MAX_GROUPS"
+PREFLIGHT_TIMEOUT_ENV = "FABRIC_RLM_SEMANTIC_PREFLIGHT_TIMEOUT"
+
+
+class SemanticModelQueryError(RuntimeError):
+    """A semantic-model query was rejected before or instead of running.
+
+    Recoverable: the handle stays usable and a narrower query can follow.
+    """
+
+
+class SemanticModelQueryTooBroad(SemanticModelQueryError):
+    """The cardinality preflight estimated more groups than the safe limit."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        estimated_groups: int,
+        max_groups: int,
+    ) -> None:
+        super().__init__(message)
+        self.estimated_groups = estimated_groups
+        self.max_groups = max_groups
+
+
+class SemanticModelQueryRiskUnknown(SemanticModelQueryError):
+    """The cardinality preflight did not finish inside its short budget."""
+
+    def __init__(self, message: str, *, timeout_seconds: float) -> None:
+        super().__init__(message)
+        self.timeout_seconds = timeout_seconds
+
+
+_COLUMN_REF = re.compile(
+    r"^\s*'?(?P<table>[^'\[\]]+?)'?\s*\[(?P<column>[^\[\]]+)\]\s*$"
+)
+
+
+def _split_column_ref(ref: Any) -> tuple[str, str]:
+    match = _COLUMN_REF.match(str(ref))
+    if not match:
+        raise SemanticModelQueryError(
+            f"Column references must look like Table[Column]; got {ref!r}."
+        )
+    return match.group("table").strip(), match.group("column").strip()
+
+
+def _dax_column(table: str, column: str) -> str:
+    return f"'{table}'[{column}]"
+
+
+def _dax_literal(value: Any) -> str:
+    if value is None:
+        return "BLANK()"
+    if isinstance(value, bool):
+        return "TRUE()" if value else "FALSE()"
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and value != value:
+            return "BLANK()"
+        return repr(value)
+    if isinstance(value, datetime):
+        return (
+            f"DATE({value.year}, {value.month}, {value.day}) + "
+            f"TIME({value.hour}, {value.minute}, {value.second})"
+        )
+    if isinstance(value, date):
+        return f"DATE({value.year}, {value.month}, {value.day})"
+    text = str(value).replace('"', '""')
+    return f'"{text}"'
+
+
+def _positive_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise SemanticModelQueryError(
+            f"{name} must be a positive integer; got {value!r}."
+        )
+    return value
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        _log.warning("%s=%r is not an integer; using %s", name, raw, default)
+        return default
+    if value <= 0:
+        _log.warning("%s=%r is not positive; using %s", name, raw, default)
+        return default
+    return value
+
+
+def _env_positive_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        _log.warning("%s=%r is not a number; using %s", name, raw, default)
+        return default
+    if value <= 0:
+        _log.warning("%s=%r is not positive; using %s", name, raw, default)
+        return default
+    return value
+
+
+def _run_with_deadline(call: Any, timeout: float) -> Any:
+    """Run ``call`` on a daemon thread and give up waiting after ``timeout``.
+
+    sempy exposes no per-query timeout, so the only way to bound a preflight
+    is to stop waiting for it. The thread is abandoned, not cancelled; the
+    engine may still finish the query. Raises ``TimeoutError`` on expiry.
+    """
+    box: dict[str, Any] = {}
+
+    def target() -> None:
+        try:
+            box["value"] = call()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller
+            box["error"] = exc
+
+    thread = threading.Thread(
+        target=target,
+        name="fabric-rlm-semantic-preflight",
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise TimeoutError(f"preflight exceeded {timeout}s")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+def _first_scalar(frame: Any) -> Any:
+    try:
+        return frame.iloc[0, 0]
+    except Exception:
+        pass
+    records = frame.to_dict(orient="records")
+    if not records:
+        return None
+    first = records[0]
+    return next(iter(first.values()), None) if first else None
+
+
+def _row_count(frame: Any) -> int | None:
+    try:
+        return int(len(frame))
+    except Exception:
+        return None
+
+
+@dataclass(frozen=True)
+class _AggregatePlan:
+    """A validated aggregate() request and the DAX built from it."""
+
+    measures: tuple[str, ...]
+    group_columns: tuple[tuple[str, str], ...]
+    filters: tuple[tuple[tuple[str, str], tuple[Any, ...]], ...]
+    order_by: str | None
+    descending: bool
+    top: int | None
+
+    @property
+    def aliases(self) -> dict[str, str]:
+        """Output column alias -> requested measure name.
+
+        Output columns are aliased ``__m0``, ``__m1``... so that TOPN and
+        ORDER BY refer unambiguously to the summarized column rather than to
+        a measure of the same name being re-evaluated per row.
+        """
+        return {f"__m{i}": name for i, name in enumerate(self.measures)}
+
+    def _order_expression(self) -> str | None:
+        if self.order_by is None:
+            return None
+        for alias, name in self.aliases.items():
+            if name == self.order_by:
+                return f"[{alias}]"
+        for table, column in self.group_columns:
+            if f"{table}[{column}]" == self.order_by:
+                return _dax_column(table, column)
+        return None
+
+    def _summarize_arguments(self, *, with_measures: bool) -> list[str]:
+        args = [_dax_column(t, c) for t, c in self.group_columns]
+        for (table, column), values in self.filters:
+            literals = ", ".join(_dax_literal(v) for v in values)
+            args.append(f"TREATAS({{{literals}}}, {_dax_column(table, column)})")
+        if with_measures:
+            for alias, name in self.aliases.items():
+                args.append(f'"{alias}", [{name}]')
+        return args
+
+    def preflight_query(self) -> str:
+        inner = ",\n            ".join(self._summarize_arguments(with_measures=False))
+        return (
+            "EVALUATE\n"
+            "ROW(\n"
+            '    "group_count",\n'
+            "    COUNTROWS(\n"
+            "        SUMMARIZECOLUMNS(\n"
+            f"            {inner}\n"
+            "        )\n"
+            "    )\n"
+            ")"
+        )
+
+    def query(self) -> str:
+        inner = ",\n        ".join(self._summarize_arguments(with_measures=True))
+        summarize = f"SUMMARIZECOLUMNS(\n        {inner}\n    )"
+        direction = "DESC" if self.descending else "ASC"
+        order = self._order_expression()
+        if self.top is not None:
+            body = (
+                "TOPN(\n"
+                f"    {self.top},\n"
+                f"    {summarize},\n"
+                f"    {order}, {direction}\n"
+                ")"
+            )
+        else:
+            body = summarize
+        text = f"EVALUATE\n{body}"
+        if order is not None:
+            text += f"\nORDER BY {order} {direction}"
+        return text
 
 
 @dataclass(frozen=True)
@@ -221,6 +472,17 @@ class SemanticModel:
         compare=False,
     )
     validate: bool | str = field(default="auto", repr=False, compare=False)
+    # Host-side ceiling for aggregate(); None means the environment default.
+    # Set by whoever builds the handle. The LM-visible rejection never
+    # mentions raising it, so a wide query gets narrowed rather than waved on.
+    max_groups: int | None = field(default=None, repr=False, compare=False)
+    _catalog: Any = field(default=None, init=False, repr=False, compare=False)
+    _query_telemetry: Any = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if not str(self.dataset).strip():
@@ -229,6 +491,12 @@ class SemanticModel:
             raise ValueError(
                 "credential_provider must be None or 'notebookutils'"
             )
+        if self.max_groups is not None and (
+            isinstance(self.max_groups, bool)
+            or not isinstance(self.max_groups, int)
+            or self.max_groups <= 0
+        ):
+            raise ValueError("max_groups must be a positive integer or None")
         if self.validate is False:
             return
         if self.validate == "auto" and not sempy_available():
@@ -372,6 +640,11 @@ class SemanticModel:
         Aggregate here rather than pulling rows out and aggregating in pandas.
         Set ``normalize_columns`` to return an ordinary pandas DataFrame with
         stable snake-case names instead of SemPy's bracketed result columns.
+
+        Use :meth:`aggregate` for grouped measure analysis: it estimates the
+        result grain before running and rejects queries likely to consume the
+        worker timeout. Use ``dax`` for custom DAX that ``aggregate`` cannot
+        express; it runs whatever it is given, with no size check.
         """
         result = self._fabric.evaluate_dax(self.dataset, query, **self._kw)
         return _plain_frame(result) if normalize_columns else result
@@ -401,6 +674,417 @@ class SemanticModel:
             kwargs["num_rows"] = num_rows
         return self._fabric.read_table(self.dataset, table, **kwargs)
 
+    # -- bounded aggregation ------------------------------------------------
+
+    def aggregate(
+        self,
+        measures: str | list[str],
+        *,
+        groupby: list[str] | None = None,
+        filters: Mapping[str, Any] | None = None,
+        order_by: str | None = None,
+        descending: bool = True,
+        top: int | None = None,
+        max_groups: int | None = None,
+        preflight: bool = True,
+        normalize_columns: bool = True,
+    ) -> Any:
+        """Evaluate measures by dimensions with a query-size guardrail.
+
+        Names are validated against the model first, so a typo costs one
+        message rather than a round trip to the engine. A short cardinality
+        preflight then counts the groups the grouping columns and filters
+        would produce (an upper bound: the cross join of the grouping columns
+        after filters); if that exceeds ``max_groups``, or the preflight does
+        not finish inside its budget, the expensive query never runs and the
+        error explains how to narrow it. ``top``/``order_by`` bound what is
+        returned but not what the engine has to evaluate, so they do not
+        skip the preflight.
+
+        ``max_groups`` defaults to the value set when the handle was built,
+        then ``FABRIC_RLM_SEMANTIC_MAX_GROUPS``, then 10,000. The preflight
+        budget comes from ``FABRIC_RLM_SEMANTIC_PREFLIGHT_TIMEOUT`` (default
+        10 seconds). Returns an ordinary pandas DataFrame with snake-case
+        columns unless ``normalize_columns=False``.
+        """
+        started = time.monotonic()
+        record: dict[str, Any] = {"query_type": "aggregate", "executed": False}
+        try:
+            limit = self._effective_max_groups(max_groups)
+            plan = self._plan_aggregate(
+                measures,
+                groupby=groupby,
+                filters=filters,
+                order_by=order_by,
+                descending=descending,
+                top=top,
+            )
+        except SemanticModelQueryError as exc:
+            record.update(reason="validation", error=str(exc)[:300])
+            self._record_query(record)
+            raise
+        record.update(
+            measures=list(plan.measures),
+            groupby=[f"{t}[{c}]" for t, c in plan.group_columns],
+            groupby_count=len(plan.group_columns),
+            measure_count=len(plan.measures),
+            filter_count=len(plan.filters),
+            top=plan.top,
+            order_by=plan.order_by,
+            max_groups=limit,
+            preflight=bool(preflight and plan.group_columns),
+        )
+        if not plan.group_columns:
+            record["estimated_groups"] = 1
+        elif preflight:
+            budget = _env_positive_float(
+                PREFLIGHT_TIMEOUT_ENV, DEFAULT_PREFLIGHT_TIMEOUT_SECONDS
+            )
+            preflight_started = time.monotonic()
+            try:
+                estimated = _run_with_deadline(
+                    lambda: self.dax(plan.preflight_query()),
+                    budget,
+                )
+            except TimeoutError:
+                record.update(
+                    preflight_seconds=round(time.monotonic() - preflight_started, 3),
+                    reason="preflight_timeout",
+                )
+                self._record_query(record)
+                raise SemanticModelQueryRiskUnknown(
+                    self._risk_unknown_message(plan, budget),
+                    timeout_seconds=budget,
+                ) from None
+            except Exception as exc:
+                record.update(
+                    preflight_seconds=round(time.monotonic() - preflight_started, 3),
+                    reason="preflight_error",
+                    error=f"{type(exc).__name__}: {exc}"[:300],
+                )
+                self._record_query(record)
+                raise
+            record["preflight_seconds"] = round(
+                time.monotonic() - preflight_started, 3
+            )
+            count = _first_scalar(estimated)
+            try:
+                estimated_groups = int(count) if count == count else 0
+            except (TypeError, ValueError):
+                estimated_groups = 0
+            record["estimated_groups"] = estimated_groups
+            if estimated_groups > limit:
+                record["reason"] = "cardinality_limit"
+                self._record_query(record)
+                raise SemanticModelQueryTooBroad(
+                    self._too_broad_message(plan, estimated_groups, limit),
+                    estimated_groups=estimated_groups,
+                    max_groups=limit,
+                )
+
+        query = plan.query()
+        record["query"] = query
+        execution_started = time.monotonic()
+        try:
+            frame = self.dax(query)
+        except Exception as exc:
+            record.update(
+                executed=True,
+                execution_seconds=round(time.monotonic() - execution_started, 3),
+                reason="execution_error",
+                error=f"{type(exc).__name__}: {exc}"[:300],
+            )
+            self._record_query(record)
+            raise
+        record.update(
+            executed=True,
+            execution_seconds=round(time.monotonic() - execution_started, 3),
+            returned_rows=_row_count(frame),
+            total_seconds=round(time.monotonic() - started, 3),
+        )
+        self._record_query(record)
+        return self._finish_aggregate_frame(frame, plan, normalize_columns)
+
+    @property
+    def query_telemetry(self) -> tuple[dict[str, Any], ...]:
+        """Per-query records from :meth:`aggregate`, oldest first.
+
+        Each record carries the grouping/measure counts, the estimated group
+        count, preflight and execution seconds, whether the query executed
+        and, when it did not, the reason (``cardinality_limit``,
+        ``preflight_timeout``, ``validation``).
+        """
+        log = getattr(self, "_query_telemetry", None)
+        return tuple(dict(item) for item in (log or ()))
+
+    def _record_query(self, record: dict[str, Any]) -> None:
+        log = getattr(self, "_query_telemetry", None)
+        if log is None:
+            log = []
+            object.__setattr__(self, "_query_telemetry", log)
+        log.append(dict(record))
+        _log.debug("semantic model query: %s", record)
+
+    def _effective_max_groups(self, override: int | None) -> int:
+        if override is not None:
+            return _positive_int(override, "max_groups")
+        configured = getattr(self, "max_groups", None)
+        if configured is not None:
+            return int(configured)
+        return _env_positive_int(MAX_GROUPS_ENV, DEFAULT_MAX_GROUPS)
+
+    # -- name resolution --------------------------------------------------
+
+    def _catalog_names(self) -> dict[str, dict[str, Any]]:
+        """Case-insensitive lookups for measure names and Table[Column] refs.
+
+        Fetched once per handle: two metadata calls, then cached. Model
+        schemas do not change mid-run and each fetch is a network round trip.
+        """
+        cached = getattr(self, "_catalog", None)
+        if cached is not None:
+            return cached
+        measures = _plain_frame(self.measures(), _METADATA_COLUMNS["measures"])
+        columns = _plain_frame(self.columns(), _METADATA_COLUMNS["columns"])
+        measure_names: dict[str, str] = {}
+        for row in measures.to_dict(orient="records"):
+            name = str(row.get("measure_name", "")).strip()
+            if name:
+                measure_names.setdefault(name.lower(), name)
+        column_refs: dict[str, tuple[str, str]] = {}
+        for row in columns.to_dict(orient="records"):
+            table = str(row.get("table_name", "")).strip()
+            column = str(row.get("column_name", "")).strip()
+            if table and column:
+                column_refs.setdefault(f"{table}[{column}]".lower(), (table, column))
+        catalog = {"measures": measure_names, "columns": column_refs}
+        object.__setattr__(self, "_catalog", catalog)
+        return catalog
+
+    def _resolve_measure(self, name: Any, catalog: dict[str, Any]) -> str:
+        text = str(name).strip()
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1].strip()
+        if not text:
+            raise SemanticModelQueryError("Measure names must not be empty.")
+        hit = catalog["measures"].get(text.lower())
+        if hit is not None:
+            return hit
+        known = list(catalog["measures"].values())
+        close = difflib.get_close_matches(text, known, n=5, cutoff=0.4)
+        lines = [f"Unknown semantic-model measure: {text}"]
+        if close:
+            lines.append("")
+            lines.append("Available close matches:")
+            lines.extend(f"- {m}" for m in close)
+        elif known:
+            lines.append("")
+            lines.append("Some available measures:")
+            lines.extend(f"- {m}" for m in known[:10])
+        lines.append("")
+        lines.append("Call .metadata().measures for the full list.")
+        raise SemanticModelQueryError("\n".join(lines))
+
+    def _resolve_column(
+        self, ref: Any, catalog: dict[str, Any], role: str
+    ) -> tuple[str, str]:
+        table, column = _split_column_ref(ref)
+        hit = catalog["columns"].get(f"{table}[{column}]".lower())
+        if hit is not None:
+            return hit
+        known = [f"{t}[{c}]" for t, c in catalog["columns"].values()]
+        close = difflib.get_close_matches(f"{table}[{column}]", known, n=5, cutoff=0.5)
+        same_name = [
+            k for k in known
+            if k.lower().endswith(f"[{column.lower()}]") and k not in close
+        ]
+        lines = [f"Unknown semantic-model column ({role}): {table}[{column}]"]
+        suggestions = close + same_name[:3]
+        if suggestions:
+            lines.append("")
+            lines.append("Available close matches:")
+            lines.extend(f"- {c}" for c in suggestions)
+        lines.append("")
+        lines.append("Call .metadata().columns for the full list.")
+        raise SemanticModelQueryError("\n".join(lines))
+
+    def _plan_aggregate(
+        self,
+        measures: str | list[str],
+        *,
+        groupby: list[str] | None,
+        filters: Mapping[str, Any] | None,
+        order_by: str | None,
+        descending: bool,
+        top: int | None,
+    ) -> _AggregatePlan:
+        if isinstance(measures, str):
+            requested = [measures]
+        elif isinstance(measures, (list, tuple)):
+            requested = list(measures)
+        else:
+            raise SemanticModelQueryError(
+                "measures must be a measure name or a list of measure names."
+            )
+        if not requested:
+            raise SemanticModelQueryError("aggregate() needs at least one measure.")
+        if groupby is not None and not isinstance(groupby, (list, tuple)):
+            raise SemanticModelQueryError(
+                "groupby must be a list of Table[Column] references."
+            )
+        if filters is not None and not isinstance(filters, Mapping):
+            raise SemanticModelQueryError(
+                "filters must be a mapping of Table[Column] -> value or list of values."
+            )
+        if top is not None:
+            top = _positive_int(top, "top")
+
+        catalog = self._catalog_names()
+        resolved_measures: list[str] = []
+        for name in requested:
+            canonical = self._resolve_measure(name, catalog)
+            if canonical not in resolved_measures:
+                resolved_measures.append(canonical)
+        group_columns: list[tuple[str, str]] = []
+        for ref in groupby or ():
+            canonical = self._resolve_column(ref, catalog, "groupby")
+            if canonical not in group_columns:
+                group_columns.append(canonical)
+        resolved_filters: list[tuple[tuple[str, str], tuple[Any, ...]]] = []
+        for ref, value in (filters or {}).items():
+            canonical = self._resolve_column(ref, catalog, "filter")
+            if isinstance(value, (list, tuple, set, frozenset)):
+                values = tuple(value)
+            else:
+                values = (value,)
+            if not values:
+                raise SemanticModelQueryError(
+                    f"Filter on {canonical[0]}[{canonical[1]}] has no values."
+                )
+            resolved_filters.append((canonical, values))
+
+        canonical_order: str | None = None
+        if order_by is not None:
+            text = str(order_by).strip()
+            bare = text[1:-1].strip() if text.startswith("[") and text.endswith("]") else text
+            for name in resolved_measures:
+                if name.lower() == bare.lower():
+                    canonical_order = name
+                    break
+            if canonical_order is None and _COLUMN_REF.match(text):
+                table, column = _split_column_ref(text)
+                for t, c in group_columns:
+                    if (t.lower(), c.lower()) == (table.lower(), column.lower()):
+                        canonical_order = f"{t}[{c}]"
+                        break
+            if canonical_order is None:
+                options = list(resolved_measures) + [f"{t}[{c}]" for t, c in group_columns]
+                raise SemanticModelQueryError(
+                    f"order_by must name one of the requested measures or groupby "
+                    f"columns; got {order_by!r}. Options: {options}"
+                )
+        elif top is not None:
+            canonical_order = resolved_measures[0]
+
+        return _AggregatePlan(
+            measures=tuple(resolved_measures),
+            group_columns=tuple(group_columns),
+            filters=tuple(resolved_filters),
+            order_by=canonical_order,
+            descending=bool(descending),
+            top=top,
+        )
+
+    @staticmethod
+    def _finish_aggregate_frame(
+        frame: Any, plan: _AggregatePlan, normalize_columns: bool
+    ) -> Any:
+        aliases = plan.aliases
+        if normalize_columns:
+            mapping: dict[str, str] = {}
+            for alias, name in aliases.items():
+                normalized = _normalized_column_name(name)
+                mapping[f"[{alias}]"] = normalized
+                mapping[alias] = normalized
+            return _plain_frame(frame, mapping)
+        rename: dict[str, str] = {}
+        for alias, name in aliases.items():
+            rename[f"[{alias}]"] = f"[{name}]"
+            rename[alias] = f"[{name}]"
+        try:
+            return frame.rename(columns=rename)
+        except Exception:
+            return frame
+
+    @staticmethod
+    def _describe_request(plan: _AggregatePlan) -> list[str]:
+        lines = ["Requested grouping:"]
+        if plan.group_columns:
+            lines.extend(f"- {t}[{c}]" for t, c in plan.group_columns)
+        else:
+            lines.append("- (none)")
+        lines.append("")
+        lines.append("Requested measures:")
+        lines.extend(f"- {m}" for m in plan.measures)
+        lines.append("")
+        lines.append("Filters:")
+        if plan.filters:
+            for (t, c), values in plan.filters:
+                shown = ", ".join(str(v) for v in values[:5])
+                if len(values) > 5:
+                    shown += f", ... ({len(values)} values)"
+                lines.append(f"- {t}[{c}] in [{shown}]")
+        else:
+            lines.append("- (none)")
+        return lines
+
+    @staticmethod
+    def _repair_guidance(plan: _AggregatePlan) -> list[str]:
+        widest = plan.group_columns[0] if plan.group_columns else None
+        coarser = (
+            f"1. Use a coarser dimension in place of {widest[0]}[{widest[1]}] "
+            "(a parent level such as a line of business or a region)."
+            if widest else
+            "1. Group by a coarser dimension."
+        )
+        return [
+            "Try one of:",
+            coarser,
+            "2. Remove one grouping dimension.",
+            "3. Add a narrower period, region, or segment filter via filters={...}.",
+            "4. Request TOP N with order_by=... and top=... at a coarser grain.",
+            "5. Query one measure at the coarsest grain first, then drill into "
+            "the highest-impact segments with the other measures.",
+            "",
+            "The model is still available; the full query did not run.",
+        ]
+
+    def _too_broad_message(
+        self, plan: _AggregatePlan, estimated: int, limit: int
+    ) -> str:
+        lines = [
+            f"Estimated result grain: up to ~{estimated:,} groups "
+            "(cross join of the grouping columns after filters).",
+            f"Configured safe limit: {limit:,} groups.",
+            "",
+            *self._describe_request(plan),
+            "",
+            *self._repair_guidance(plan),
+        ]
+        return "\n".join(lines)
+
+    def _risk_unknown_message(self, plan: _AggregatePlan, budget: float) -> str:
+        lines = [
+            f"The grouping cardinality could not be estimated within {budget:g} seconds.",
+            "The requested grain is likely expensive.",
+            "",
+            *self._describe_request(plan),
+            "",
+            "Reduce the grouping grain or apply a narrower filter before retrying.",
+            *self._repair_guidance(plan)[1:],
+        ]
+        return "\n".join(lines)
+
     # -- presentation -----------------------------------------------------
 
     def __rlm_describe__(self) -> str:
@@ -412,9 +1096,11 @@ class SemanticModel:
         where = f" workspace={self.workspace!r}" if self.workspace else ""
         return (
             f"SemanticModel dataset={self.dataset!r}{where} - already connected. "
-            "Call .schema() for formatted text or .metadata() for normalized "
-            "DataFrames; .dax(\"EVALUATE ...\", normalize_columns=True); "
-            ".measure(name, groupby=[...], filters={...}); "
+            ".schema() for text, .metadata() for DataFrames. Prefer "
+            ".aggregate(measures=[...], groupby=[...], filters={...}, "
+            "order_by=..., top=...) for measures by dimensions; it checks "
+            "query size first. .dax(\"EVALUATE ...\", normalize_columns=True) "
+            "for custom DAX; .measure(name, groupby=[...], filters={...}); "
             ".tables() .columns() .measures() .relationships()"
         )
 

@@ -2,7 +2,14 @@
 
 from .artifacts import File, FileDestination, LocalArtifactStore
 from .lakehouse import LakehouseSource
-from .semantic_model import SemanticModel, SemanticModelMetadata, sempy_available
+from .semantic_model import (
+    SemanticModel,
+    SemanticModelMetadata,
+    SemanticModelQueryError,
+    SemanticModelQueryRiskUnknown,
+    SemanticModelQueryTooBroad,
+    sempy_available,
+)
 from .excel_artifacts import (
     ExcelCellValue,
     ExcelTargetRange,
@@ -72,6 +79,9 @@ __all__ = [
     "RunInspector",
     "SemanticModel",
     "SemanticModelMetadata",
+    "SemanticModelQueryError",
+    "SemanticModelQueryRiskUnknown",
+    "SemanticModelQueryTooBroad",
     "replay_trajectory",
     "Skill",
     "SkillLoader",

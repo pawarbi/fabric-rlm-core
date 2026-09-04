@@ -572,6 +572,29 @@ SemPy's bracketed result-column conventions. The raw metadata methods and raw
 groupby=[...], filters={...})` evaluates a model measure without authoring DAX.
 Pass `workspace=` for a model outside the attached workspace.
 
+For measures by dimensions, prefer `arr.aggregate(...)`. It validates measure
+and column names against the model, estimates how many groups the request
+would produce, and refuses to run a query whose estimate exceeds the safe
+limit (10,000 groups by default) or cannot be produced within ten seconds. The
+error names the grouping, the measures, and concrete ways to narrow the query,
+so the model recovers in one turn instead of waiting out the worker timeout.
+
+```python
+arr.aggregate(
+    measures=["ARR $", "New $"],
+    groupby=["Products[Line Of Business]", "Sold To[Sold_To Region]"],
+    filters={"Period[YearQuarter]": "2026/Q2"},
+    order_by="ARR $",
+    top=100,
+)
+```
+
+`SemanticModel("...", max_groups=50_000)` or `FABRIC_RLM_SEMANTIC_MAX_GROUPS`
+raises the ceiling for a model that handles wide grains well, and
+`FABRIC_RLM_SEMANTIC_PREFLIGHT_TIMEOUT` adjusts the estimate budget in seconds.
+`arr.query_telemetry` records the estimate, timing, and outcome of each call.
+`arr.dax(...)` is unchanged and runs whatever it is given.
+
 Bind several at once and the model routes between them:
 
 ```python
