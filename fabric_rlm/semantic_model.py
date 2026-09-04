@@ -473,7 +473,8 @@ class SemanticModel:
     )
     validate: bool | str = field(default="auto", repr=False, compare=False)
     # Host-side ceiling for aggregate(); None means the environment default.
-    # Set at construction so the code the LM writes cannot quietly raise it.
+    # Set by whoever builds the handle. The LM-visible rejection never
+    # mentions raising it, so a wide query gets narrowed rather than waved on.
     max_groups: int | None = field(default=None, repr=False, compare=False)
     _catalog: Any = field(default=None, init=False, repr=False, compare=False)
     _query_telemetry: Any = field(
