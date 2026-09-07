@@ -60,7 +60,7 @@ _KIND_TRIGGERS: dict[str, frozenset[str]] = {
     "metric_equivalence": frozenset({"same", "equivalent", "reconcile", "match"}),
     "metric_non_equivalence": frozenset({"same", "equivalent", "reconcile", "match"}),
     "semantic_fact": frozenset(),
-    "query_behavior": frozenset(),
+    "query_behavior": frozenset({"same", "equivalent", "reconcile", "match", "identical"}),
     "relationship_path": frozenset({"join", "relationship", "related", "link"}),
     "cross_source_mapping": frozenset({"join", "combine", "both", "sources", "compare"}),
 }
@@ -98,10 +98,14 @@ _SECTION_TITLES = {
 }
 _BASIS_TEXT = {
     "source_declared": "source declared",
+    "schema_name_pattern": "inferred from schema names",
+    "boolean_period_flag": "boolean flag in a period table",
     "name_pattern": "name pattern only",
     "preflight_estimate": "preflight estimate",
     "repeated_timeout": "repeated timeouts",
     "single_timeout": "one timeout",
+    "repeated_execution": "executed in several runs",
+    "single_execution": "executed once",
     "verified_success": "verified runs",
     "single_success": "one run",
     "contradicted_by_failure": "contradicted by a failure",
@@ -109,7 +113,9 @@ _BASIS_TEXT = {
     "distinct_when_filtered": "distinct once filtered",
     "repeated_runs": "repeated across runs",
     "verified_runs": "verified runs",
+    "candidate_restriction_observed": "candidate restriction seen in the trajectory",
     "catalog_validation": "catalog validation",
+    "observed_identity": "observed identity of values",
     "reproducible_identity": "reproducible identity",
 }
 
@@ -169,6 +175,9 @@ def retrieve_lessons(
     shown to an agent) whose vocabulary meets the task's are returned, at
     most ``limit`` of them, ordered by score, then by kind so time
     semantics come before query-cost notes at equal relevance.
+    ``source_ids`` restricts the lessons to those depending on the given
+    sources, which is how the registered-operation planner sees only what
+    applies to the sources its operations read.
     """
     if type(limit) is not int or limit < 0:
         raise ValueError("limit must be a non-negative integer")
@@ -249,15 +258,23 @@ def _render_rule(lesson: LearnedLesson) -> str:
             f"No {rule.get('reference_kind', 'reference')} named {rule.get('reference', lesson.subject)} "
             "exists in this model; check the catalog before using a similar name."
         )
+    if kind == "query_behavior" and rule.get("observation") == "identical_in_observed_contexts":
+        measures = " and ".join(str(m) for m in (rule.get("measures") or [lesson.subject]))
+        return (
+            f"{measures} returned identical values in every filtered context observed "
+            f"({int(rule.get('contexts', 0))} contexts). That is an observed coincidence of values, "
+            "not a verified equivalence of definitions; do not substitute one for the other."
+        )
     if kind in {"metric_equivalence", "metric_non_equivalence"}:
         measures = " and ".join(str(m) for m in (rule.get("measures") or [lesson.subject]))
-        relation = "were identical" if kind == "metric_equivalence" else "differed"
-        return (
-            f"{measures} {relation} across every filtered context observed "
-            f"({int(rule.get('contexts', 0))} contexts); this is a reproduced identity, not a definition."
-        )
+        relation = "are equivalent by definition" if kind == "metric_equivalence" else "are not equivalent"
+        return f"{measures} {relation}."
     pairs = ", ".join(f"{key} {value}" for key, value in rule.items() if isinstance(value, (str, int, float)))
     return f"{lesson.subject}: {pairs}."
+
+
+def _source_tag(lesson: LearnedLesson) -> str:
+    return ", ".join(lesson.source_dependencies)
 
 
 def _confidence_note(lesson: LearnedLesson) -> str:
@@ -273,12 +290,15 @@ def render_learned_guidance(lessons: Sequence[LearnedLesson]) -> str:
     sections: dict[str, list[str]] = {}
     for lesson in lessons:
         title = _SECTION_TITLES.get(lesson.kind, "Source facts")
-        sections.setdefault(title, []).append(f"- {_render_rule(lesson)}")
+        # Every line names the source it was learned on, so a rule about one
+        # bound input is never read as a rule about another.
+        sections.setdefault(title, []).append(f"- [{_source_tag(lesson)}] {_render_rule(lesson)}")
     lines = [
         "## Learned source guidance",
         "",
-        "Facts learned from earlier verified runs on these sources. They narrow the",
-        "search; they never replace checking the source when evidence conflicts.",
+        "Facts learned from earlier runs on these sources, each tagged with the",
+        "input it applies to. They narrow the search; they never replace checking",
+        "the source when evidence conflicts.",
     ]
     for title in dict.fromkeys(_SECTION_TITLES[kind] for kind in _KIND_ORDER):
         if title in sections:

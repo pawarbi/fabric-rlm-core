@@ -179,16 +179,30 @@ class KnowledgeBenchmarkReport:
         correctness_ok = value(learned, "numeric_correct_rate") >= value(cold, "numeric_correct_rate")
         failures_ok = value(learned, "mean_failed_source_calls") <= value(cold, "mean_failed_source_calls")
         integrity_ok = value(learned, "integrity_ok_rate") >= value(cold, "integrity_ok_rate")
+        # Per task as well: a gain on one question must not hide a loss on
+        # another, because the rule is that learned is never worse than cold.
+        task_results: dict[str, dict[str, object]] = {}
+        for task_id in sorted({trial.task_id for trial in self.trials}):
+            rates = {}
+            for arm in ("cold", "learned"):
+                outcomes = [trial.numeric_correct for trial in self.trials if trial.task_id == task_id and trial.arm == arm]
+                rates[arm] = _rate(outcomes)
+            cold_rate, learned_rate = rates["cold"], rates["learned"]
+            ok = cold_rate is None or learned_rate is None or learned_rate >= cold_rate
+            task_results[task_id] = {"cold": cold_rate, "learned": learned_rate, "ok": ok}
+        per_task_ok = all(bool(item["ok"]) for item in task_results.values())
         return {
             "cold_correct_rate": cold.get("numeric_correct_rate"),
             "learned_correct_rate": learned.get("numeric_correct_rate"),
             "correctness_ok": correctness_ok,
+            "per_task_correctness_ok": per_task_ok,
+            "task_results": task_results,
             "failed_source_calls_ok": failures_ok,
             "integrity_ok": integrity_ok,
             "turns_delta": value(learned, "mean_turns") - value(cold, "mean_turns"),
             "prompt_tokens_delta": value(learned, "mean_prompt_tokens") - value(cold, "mean_prompt_tokens"),
             "source_calls_delta": value(learned, "mean_source_calls") - value(cold, "mean_source_calls"),
-            "parity": correctness_ok and failures_ok and integrity_ok,
+            "parity": correctness_ok and per_task_ok and failures_ok and integrity_ok,
         }
 
 

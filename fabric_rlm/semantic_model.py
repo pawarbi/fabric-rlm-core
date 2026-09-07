@@ -262,9 +262,11 @@ def _measure_observations(frame: Any, plan: "_AggregatePlan") -> dict[str, Any]:
             elif bool((values == 1).all()):
                 constants[name] = "one"
         identities: list[list[str]] = []
+        compared: list[list[str]] = []
         names = list(numeric)
         for index, left in enumerate(names):
             for right in names[index + 1:]:
+                compared.append([left, right])
                 scale = max(
                     float(numeric[left].abs().max()),
                     float(numeric[right].abs().max()),
@@ -275,6 +277,10 @@ def _measure_observations(frame: Any, plan: "_AggregatePlan") -> dict[str, Any]:
         observations: dict[str, Any] = {}
         if constants:
             observations["constant_measures"] = constants
+        if compared:
+            # Which pairs were actually compared, so a missing identity can
+            # be read as "distinct" only when both measures were present.
+            observations["compared_measure_pairs"] = compared
         if identities:
             observations["measure_identities"] = identities
         return observations

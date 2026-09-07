@@ -71,6 +71,11 @@ _LESSON_KINDS = {
     "cross_source_mapping",
 }
 _CONFIDENCES = {"high", "medium", "low"}
+# What a lesson's validity rests on: the source's schema (a declared time
+# construct, a measure's context requirement, an invalid name), its data
+# snapshot (a grain that was cheap or expensive at one data volume), or the
+# way the source was operated (a strategy that worked).
+_DEPENDENCY_SCOPES = {"schema", "snapshot", "operational"}
 _EVIDENCE_TYPES = {"execution", "structural", "trajectory", "verification"}
 _OBSERVATION_TYPES = {
     "query_execution",
@@ -844,18 +849,34 @@ class EvidenceRecord:
             raise ValueError("turn must be a positive integer")
 
     @property
-    def trusted(self) -> bool:
-        """Whether a success lesson may rest on this record.
+    def execution_trusted(self) -> bool:
+        """The call ran and returned: enough for a fact about the source.
 
-        A strategy is only proven by a run whose answer passed verification
-        and the analytical-integrity screen; typed execution failures teach
-        regardless, because a timeout is a fact about the source.
+        A query that executed, returned rows, was rejected by the preflight
+        or timed out is a fact whatever the answer built on it turned out
+        to be; grain and cost lessons need no more.
+        """
+        return self.execution_status == "success"
+
+    @property
+    def analytically_trusted(self) -> bool:
+        """The run's conclusion was checked and held.
+
+        Required for a lesson about how to analyse (a preferred strategy):
+        the answer must have passed an actual verifier and the
+        analytical-integrity screen. A run with no verifier, or with the
+        screen off, proves nothing about its conclusion.
         """
         return (
             self.execution_status == "success"
-            and self.verifier_status in {"passed", None}
-            and self.analytical_integrity_status in {"passed", "off", None}
+            and self.verifier_status == "passed"
+            and self.analytical_integrity_status == "passed"
         )
+
+    @property
+    def trusted(self) -> bool:
+        """Alias of :attr:`analytically_trusted`."""
+        return self.analytically_trusted
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -918,12 +939,18 @@ class LearnedLesson:
     source_fingerprints: Mapping[str, str] = field(default_factory=dict)
     basis: tuple[str, ...] = ()
     reason_code: str | None = None
+    dependency_scope: str = "schema"
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "lesson_id", _logical_identifier(self.lesson_id, "lesson_id")
         )
         object.__setattr__(self, "kind", _code_choice(self.kind, "kind", _LESSON_KINDS))
+        object.__setattr__(
+            self,
+            "dependency_scope",
+            _code_choice(self.dependency_scope, "dependency_scope", _DEPENDENCY_SCOPES),
+        )
         object.__setattr__(self, "subject", _bounded_name(self.subject, "subject"))
         object.__setattr__(
             self,
@@ -974,6 +1001,7 @@ class LearnedLesson:
             "source_fingerprints": dict(self.source_fingerprints),
             "basis": list(self.basis),
             "reason_code": self.reason_code,
+            "dependency_scope": self.dependency_scope,
         }
 
     @classmethod
@@ -994,6 +1022,7 @@ class LearnedLesson:
                 "source_fingerprints",
                 "basis",
                 "reason_code",
+                "dependency_scope",
             },
         )
         return cls(**payload)

@@ -1,19 +1,30 @@
 """Lesson derivation and promotion: evidence in, structured lessons out.
 
-Two kinds of lesson exist. Structural lessons come straight from what a
-source declares about itself (a semantic model with an explicit
-current-period construct) and are active from the start. Evidence lessons
-are promoted from :class:`~fabric_rlm.knowledge.EvidenceRecord` values by a
-per-kind policy: a query rejected by the cardinality preflight proves an
-expensive grain at once, one timeout only nominates it, a strategy is
-preferred only after verified runs used it, and a measure that equals its
-base under an unfiltered context nominates a context requirement that a
-contrasting filtered observation confirms. Causal or business
-interpretations are never derived here.
+Two kinds of lesson exist. Structural lessons come from what a source's
+schema suggests about itself (a column named like a current-period flag)
+and are active on arrival, labelled as name-inferred. Evidence lessons are
+promoted from :class:`~fabric_rlm.knowledge.EvidenceRecord` values by a
+per-kind policy whose bar is the strength of the evidence, never its
+repetition alone:
 
-Lessons carry the evidence they rest on and the schema fingerprints they
-depend on; evidence captured against a different schema is kept but does
-not promote. Quarantined and retired lessons stay that way.
+* a query rejected by the cardinality preflight proves an expensive grain at
+  once; one timeout only nominates it;
+* a grain that executed and returned rows twice is a valid grain (an
+  execution fact); its confidence rises with analytically verified runs;
+* a derived measure identical to its base under an unfiltered context is a
+  candidate context requirement, and stays one however often it recurs,
+  because a flat business produces the same identity; only the same pair
+  observed distinct under a period filter confirms it;
+* two measures identical across filtered contexts are an observed identity
+  (``query_behavior``), never a semantic equivalence: equal values do not
+  establish equal definitions;
+* a strategy is preferred only when the trajectory proved it (a candidate
+  restriction between the coarse and the fine query) in runs whose answer
+  passed a verifier and the integrity screen.
+
+Lessons carry the evidence they rest on, the fingerprints they depend on
+and a dependency scope (schema, snapshot or operational) that decides what
+kind of drift stales them. Quarantined and retired lessons stay that way.
 """
 
 from __future__ import annotations
@@ -33,15 +44,19 @@ from fabric_rlm.knowledge import (
 )
 
 
+# "IsCurrentQuarter", "CurrentYearQuarter", "current_period", "AsOfDate",
+# "LatestPeriod"; not "concurrent" or "currently".
 _CURRENT_PERIOD = re.compile(
-    r"(?i)(?:^|[^a-z])(?:is[_ ]?)?current(?:[_ ]?(?:year|quarter|month|period|week|date|fy|fq|yq|ym))?"
-    r"(?:$|[^a-z])|(?:^|[^a-z])as[_ ]?of(?:$|[^a-z])|(?:^|[^a-z])latest[_ ]?(?:period|quarter|month|date|week)"
+    r"(?i)(?:^|[^a-z])(?:is[_ ]?)?current(?-i:(?![a-z]{2,}))"
+    r"|(?:^|[^a-z])as[_ ]?of(?:$|[^a-z]|(?-i:(?=[A-Z])))"
+    r"|(?:^|[^a-z])latest[_ ]?(?:period|quarter|month|date|week)"
 )
 _DERIVED_TIME_MEASURE = re.compile(
     r"(?i)previous|prior|(?:^|[^a-z])py(?:$|[^a-z])|(?:^|[^a-z])pp(?:$|[^a-z])|yoy|qoq|mom|growth|"
     r"(?:^|[^a-z])nrr(?:$|[^a-z])|(?:^|[^a-z])grr(?:$|[^a-z])|retention|churn|(?:^|[^a-z])change|"
     r"delta|variance|(?:^|[^a-z])vs(?:$|[^a-z])|last (?:year|quarter|month|period)|ttm|ltm|ytd|qtd|mtd"
 )
+_PERIOD_TABLE = re.compile(r"(?i)period|date|calendar|time|fiscal")
 _MAX_CONSTRUCTS = 10
 _MAX_MEASURES_PER_GRAIN = 10
 _MAX_CONTEXT_CANDIDATES = 40
@@ -53,6 +68,11 @@ def _leaf(name: str) -> str:
     if text.endswith("]") and "[" in text:
         return text[text.rindex("[") + 1:-1].strip() or text
     return text
+
+
+def _table_of(name: str) -> str:
+    text = str(name).strip()
+    return text[: text.index("[")].strip() if "[" in text else ""
 
 
 def _lesson_id(kind: str, source_id: str, subject: str) -> str:
@@ -67,20 +87,21 @@ def _grain_subject(grain: Sequence[str]) -> str:
     return " x ".join(_leaf(item) for item in grain) or "total"
 
 
-def _schema_names(profile: SourceProfile, family: str) -> list[str]:
+def _schema_section(profile: SourceProfile, family: str) -> Mapping[str, object]:
     section = profile.schema.get(family) if isinstance(profile.schema, Mapping) else None
-    if not isinstance(section, Mapping):
-        return []
-    return [str(name) for name in section]
+    return section if isinstance(section, Mapping) else {}
 
 
 def structural_lessons(package: KnowledgePackage) -> tuple[LearnedLesson, ...]:
-    """Lessons a source declares about itself, active on arrival.
+    """Lessons a source's schema suggests about itself, active on arrival.
 
-    A semantic model with a current-period construct (``Period[IsCurrentQuarter]``,
-    ``Calendar[AsOfDate]``) defines "current" itself; an agent must not
-    infer it from the maximum date. Measures whose names mark them as
-    time-relative or derived (previous period, growth, retention) are
+    A semantic model with a column or measure named like a current-period
+    construct (``Period[IsCurrentQuarter]``, ``Calendar[AsOfDate]``) most
+    likely defines "current" itself, and an agent must not infer it from the
+    maximum date. The source did not declare that role; the library read it
+    from the name, so the lesson is labelled ``schema_name_pattern`` with
+    medium confidence, high only when the construct is a boolean column in a
+    period-like table. Measures named as time-relative or derived are
     nominated, as candidates only, for a context requirement that evidence
     can later confirm.
     """
@@ -89,32 +110,41 @@ def structural_lessons(package: KnowledgePackage) -> tuple[LearnedLesson, ...]:
         if profile.family != "semantic_model":
             continue
         fingerprints = {profile.source_id: profile.schema_fingerprint}
-        columns = _schema_names(profile, "columns")
-        measures = _schema_names(profile, "measures")
+        columns = _schema_section(profile, "columns")
+        measures = _schema_section(profile, "measures")
         constructs = [
             name
-            for name in columns + measures
-            if _CURRENT_PERIOD.search(_leaf(name))
+            for name in list(columns) + list(measures)
+            if _CURRENT_PERIOD.search(_leaf(str(name)))
         ]
         if constructs:
+            strong = any(
+                isinstance(columns.get(name), Mapping)
+                and str(columns[name].get("type", "")).lower() in {"boolean", "bool"}
+                and _PERIOD_TABLE.search(_table_of(str(name)))
+                for name in constructs
+                if name in columns
+            )
             lessons.append(
                 LearnedLesson(
                     lesson_id=_lesson_id("time_semantics", profile.source_id, "current period"),
                     kind="time_semantics",
                     subject="current period",
                     structured_rule={
-                        "current_period_constructs": sorted(constructs)[:_MAX_CONSTRUCTS],
+                        "current_period_constructs": sorted(str(c) for c in constructs)[:_MAX_CONSTRUCTS],
                         "rule": "use_declared_current_period",
                         "avoid": "max_date_inference",
+                        "inferred_from": "schema_names",
                     },
-                    confidence="high",
+                    confidence="high" if strong else "medium",
                     status="active",
                     source_dependencies=(profile.source_id,),
                     source_fingerprints=fingerprints,
-                    basis=("source_declared",),
+                    basis=("schema_name_pattern", "boolean_period_flag") if strong else ("schema_name_pattern",),
+                    dependency_scope="schema",
                 )
             )
-        derived = [name for name in measures if _DERIVED_TIME_MEASURE.search(_leaf(name))]
+        derived = [str(name) for name in measures if _DERIVED_TIME_MEASURE.search(_leaf(str(name)))]
         for name in sorted(derived)[:_MAX_CONTEXT_CANDIDATES]:
             measure = _leaf(name)
             lessons.append(
@@ -133,6 +163,7 @@ def structural_lessons(package: KnowledgePackage) -> tuple[LearnedLesson, ...]:
                     source_dependencies=(profile.source_id,),
                     source_fingerprints=fingerprints,
                     basis=("name_pattern",),
+                    dependency_scope="schema",
                 )
             )
     return tuple(lessons)
@@ -167,6 +198,14 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+def _pairs(value: Any) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for pair in value or ():
+        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+            pairs.add(tuple(sorted((str(pair[0]), str(pair[1])))))  # type: ignore[arg-type]
+    return pairs
+
+
 def _expensive_grain_lessons(
     source_id: str,
     fingerprints: Mapping[str, str],
@@ -186,12 +225,8 @@ def _expensive_grain_lessons(
     for grain, group in by_grain.items():
         cardinality = [r for r in group if r.observation.get("reason") == "cardinality_limit"]
         timeouts = [r for r in group if r.execution_status == "timeout"]
-        estimates = [
-            _number(r.observation.get("estimated_groups")) for r in cardinality
-        ]
-        estimates = [e for e in estimates if e is not None]
-        limits = [_number(r.observation.get("max_groups")) for r in group]
-        limits = [l for l in limits if l is not None]
+        estimates = [e for e in (_number(r.observation.get("estimated_groups")) for r in cardinality) if e is not None]
+        limits = [l for l in (_number(r.observation.get("max_groups")) for r in group) if l is not None]
         if cardinality:
             status, confidence, basis = "active", "high", ("preflight_estimate",)
             outcome = "cardinality_limit"
@@ -212,8 +247,7 @@ def _expensive_grain_lessons(
             rule["estimated_groups"] = int(max(estimates))
         if limits:
             rule["max_groups"] = int(max(limits))
-        measure_counts = [_number(r.observation.get("measure_count")) for r in group]
-        measure_counts = [m for m in measure_counts if m is not None]
+        measure_counts = [m for m in (_number(r.observation.get("measure_count")) for r in group) if m is not None]
         if measure_counts:
             rule["measure_count"] = int(max(measure_counts))
         subject = _grain_subject(grain)
@@ -229,6 +263,7 @@ def _expensive_grain_lessons(
             source_dependencies=(source_id,),
             source_fingerprints=fingerprints,
             basis=basis,
+            dependency_scope="snapshot",
         )
     return lessons
 
@@ -239,9 +274,14 @@ def _valid_grain_lessons(
     records: Sequence[EvidenceRecord],
     expensive_grains: set[tuple[str, ...]],
 ) -> dict[str, LearnedLesson]:
+    """A grain that executed and returned rows, twice: an execution fact.
+
+    The answer built on the query does not have to have been verified for
+    the query to have run; verified runs only raise the confidence.
+    """
     by_grain: dict[tuple[str, ...], list[EvidenceRecord]] = {}
     for record in records:
-        if record.observation_type != "query_execution" or record.execution_status != "success":
+        if record.observation_type != "query_execution" or not record.execution_trusted:
             continue
         if record.observation.get("query_type") not in {"aggregate", "measure"}:
             continue
@@ -252,12 +292,16 @@ def _valid_grain_lessons(
         by_grain.setdefault(tuple(sorted(str(item) for item in grain)), []).append(record)
     lessons: dict[str, LearnedLesson] = {}
     for grain, group in by_grain.items():
-        trusted = [r for r in group if r.trusted]
-        if len(group) >= 2 and trusted:
-            status, confidence = "active", ("high" if len(trusted) >= 2 else "medium")
+        verified = [r for r in group if r.analytically_trusted]
+        runs = {r.run_fingerprint for r in group}
+        if len(group) >= 2:
+            status = "active"
+            confidence = "high" if len(verified) >= 2 else "medium"
         else:
             status, confidence = "candidate", "low"
-        basis = ["verified_success"] if trusted else ["single_success"]
+        basis = ["repeated_execution" if len(group) >= 2 else "single_execution"]
+        if verified:
+            basis.append("verified_runs")
         reason_code = None
         if grain in expensive_grains:
             # The same grain also timed out or was rejected: the failure
@@ -280,7 +324,8 @@ def _valid_grain_lessons(
             "grain_size": len(grain),
             "measures": measures[:_MAX_MEASURES_PER_GRAIN],
             "successes": len(group),
-            "verified_successes": len(trusted),
+            "runs": len(runs),
+            "verified_successes": len(verified),
             "advice": "reliable_analysis_grain",
         }
         if any(r is not None for r in rows):
@@ -301,6 +346,7 @@ def _valid_grain_lessons(
             source_fingerprints=fingerprints,
             basis=tuple(basis),
             reason_code=reason_code,
+            dependency_scope="snapshot",
         )
     return lessons
 
@@ -317,54 +363,57 @@ def _context_requirement_lessons(
     """A derived measure that collapses without a period context.
 
     Under an unfiltered context ``ARR $ Previous Period`` returned exactly
-    ``ARR $`` (or a growth rate returned a constant zero); with a period
-    filter the two differ. The first observation nominates, the contrast
-    confirms, and repeated degenerate observations across runs confirm
-    too.
+    ``ARR $`` (or a growth rate a constant zero). That nominates the lesson
+    and nothing more: a business that is flat produces the same identity,
+    however many runs observe it. The lesson becomes active only when the
+    same pair was compared again under a period filter and came out
+    distinct, or a constant derived measure came out non-constant.
     """
     degenerate: dict[str, list[tuple[EvidenceRecord, str | None, str | None]]] = {}
-    distinct: dict[str, list[EvidenceRecord]] = {}
+    filtered_distinct: dict[tuple[str, str], list[EvidenceRecord]] = {}
+    filtered_varying: dict[str, list[EvidenceRecord]] = {}
     for record in records:
-        if record.observation_type != "query_execution" or record.execution_status != "success":
+        if record.observation_type != "query_execution" or not record.execution_trusted:
             continue
         observation = record.observation
         measures = [m for m in (observation.get("measures") or ()) if isinstance(m, str)]
         unfiltered = not observation.get("filter_count")
-        identities = observation.get("measure_identities") or ()
-        identical: dict[str, str] = {}
-        for pair in identities:
-            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
-                continue
-            left, right = str(pair[0]), str(pair[1])
-            if _is_derived_measure(left) and not _is_derived_measure(right):
-                identical[left] = right
-            elif _is_derived_measure(right) and not _is_derived_measure(left):
-                identical[right] = left
+        identities = _pairs(observation.get("measure_identities"))
+        compared = _pairs(observation.get("compared_measure_pairs")) or identities
         constants = observation.get("constant_measures") or {}
         if unfiltered:
-            for measure, base in identical.items():
-                degenerate.setdefault(measure, []).append((record, base, None))
+            for left, right in identities:
+                derived, base = (left, right) if _is_derived_measure(left) and not _is_derived_measure(right) else (
+                    (right, left) if _is_derived_measure(right) and not _is_derived_measure(left) else (None, None)
+                )
+                if derived:
+                    degenerate.setdefault(derived, []).append((record, base, None))
             for measure, constant in constants.items():
                 if _is_derived_measure(str(measure)) and constant in {"zero", "one"}:
                     degenerate.setdefault(str(measure), []).append((record, None, str(constant)))
         else:
+            for pair in compared:
+                if pair not in identities:
+                    filtered_distinct.setdefault(pair, []).append(record)
             for measure in measures:
-                if _is_derived_measure(measure) and measure not in identical and (
-                    constants.get(measure) not in {"zero", "one"}
-                ):
-                    distinct.setdefault(measure, []).append(record)
+                if _is_derived_measure(measure) and constants.get(measure) not in {"zero", "one"}:
+                    filtered_varying.setdefault(measure, []).append(record)
     lessons: dict[str, LearnedLesson] = {}
     for measure, observations in degenerate.items():
-        contrasts = distinct.get(measure, [])
+        bases = sorted({b for _r, b, _c in observations if b})
+        constant_codes = sorted({c for _r, _b, c in observations if c})
+        contrasts: list[EvidenceRecord] = []
+        for base in bases:
+            contrasts.extend(filtered_distinct.get(tuple(sorted((measure, base))), []))  # type: ignore[arg-type]
+        if constant_codes and not bases:
+            contrasts.extend(filtered_varying.get(measure, []))
         runs = {r.run_fingerprint for r, _b, _c in observations}
         if contrasts:
             status, confidence, basis = "active", "high", ("degenerate_unfiltered", "distinct_when_filtered")
         elif len(runs) >= 2:
-            status, confidence, basis = "active", "medium", ("degenerate_unfiltered", "repeated_runs")
+            status, confidence, basis = "candidate", "medium", ("degenerate_unfiltered", "repeated_runs")
         else:
             status, confidence, basis = "candidate", "medium", ("degenerate_unfiltered",)
-        bases = [b for _r, b, _c in observations if b]
-        constant_codes = [c for _r, _b, c in observations if c]
         rule: dict[str, Any] = {
             "measure": measure,
             "requires": ["period_context"],
@@ -374,13 +423,11 @@ def _context_requirement_lessons(
             "contrasting_observations": len(contrasts),
         }
         if bases:
-            rule["base_measure"] = sorted(set(bases))[0]
+            rule["base_measure"] = bases[0]
         if constant_codes:
-            rule["constant"] = sorted(set(constant_codes))[0]
+            rule["constant"] = constant_codes[0]
         lesson_id = _lesson_id("context_requirement", source_id, measure)
-        evidence_ids = sorted(
-            {r.evidence_id for r, _b, _c in observations} | {r.evidence_id for r in contrasts}
-        )
+        evidence_ids = sorted({r.evidence_id for r, _b, _c in observations} | {r.evidence_id for r in contrasts})
         lessons[lesson_id] = LearnedLesson(
             lesson_id=lesson_id,
             kind="context_requirement",
@@ -392,41 +439,39 @@ def _context_requirement_lessons(
             source_dependencies=(source_id,),
             source_fingerprints=fingerprints,
             basis=basis,
+            dependency_scope="schema",
         )
     return lessons
 
 
-def _metric_equivalence_lessons(
+def _observed_identity_lessons(
     source_id: str,
     fingerprints: Mapping[str, str],
     records: Sequence[EvidenceRecord],
 ) -> dict[str, LearnedLesson]:
     """Two measures identical across several filtered contexts, never apart.
 
-    An identity under an unfiltered context does not count: that is the
-    signature of a missing context, not of equivalence.
+    Recorded as ``query_behavior``, an observed identity with
+    ``semantic_equivalence`` false: values that coincide in the observed
+    slices say nothing about definitions, units, populations or
+    aggregation semantics. A ``metric_equivalence`` lesson needs structural
+    evidence this passive path does not produce. An identity under an
+    unfiltered context does not count at all: that is the signature of a
+    missing context.
     """
     identical: dict[tuple[str, str], list[EvidenceRecord]] = {}
     apart: set[tuple[str, str]] = set()
     for record in records:
-        if record.observation_type != "query_execution" or record.execution_status != "success":
+        if record.observation_type != "query_execution" or not record.execution_trusted:
             continue
         observation = record.observation
         if not observation.get("filter_count"):
             continue
-        measures = [m for m in (observation.get("measures") or ()) if isinstance(m, str)]
-        pairs = {
-            tuple(sorted((str(p[0]), str(p[1]))))
-            for p in (observation.get("measure_identities") or ())
-            if isinstance(p, (list, tuple)) and len(p) == 2
-        }
-        for pair in pairs:
+        identities = _pairs(observation.get("measure_identities"))
+        compared = _pairs(observation.get("compared_measure_pairs")) or identities
+        for pair in identities:
             identical.setdefault(pair, []).append(record)
-        for index, left in enumerate(measures):
-            for right in measures[index + 1:]:
-                pair = tuple(sorted((left, right)))
-                if pair not in pairs:
-                    apart.add(pair)
+        apart |= compared - identities
     lessons: dict[str, LearnedLesson] = {}
     for pair, group in identical.items():
         if pair in apart:
@@ -439,24 +484,26 @@ def _metric_equivalence_lessons(
         if len(contexts) < 2:
             continue
         status = "active" if len(contexts) >= 3 else "candidate"
-        subject = f"{pair[0]} = {pair[1]}"
-        lesson_id = _lesson_id("metric_equivalence", source_id, subject)
+        subject = f"{pair[0]} = {pair[1]} observed"
+        lesson_id = _lesson_id("query_behavior", source_id, subject)
         lessons[lesson_id] = LearnedLesson(
             lesson_id=lesson_id,
-            kind="metric_equivalence",
+            kind="query_behavior",
             subject=subject,
             structured_rule={
                 "measures": list(pair),
-                "observed": "identical_across_filtered_contexts",
+                "observation": "identical_in_observed_contexts",
                 "contexts": len(contexts),
-                "caveat": "reproducible_identity_not_definition",
+                "semantic_equivalence": False,
+                "caveat": "values_coincide_definitions_unverified",
             },
             evidence_ids=tuple(sorted(r.evidence_id for r in group)),
-            confidence="medium" if status == "active" else "low",
+            confidence="low",
             status=status,
             source_dependencies=(source_id,),
             source_fingerprints=fingerprints,
-            basis=("reproducible_identity",),
+            basis=("observed_identity",),
+            dependency_scope="snapshot",
         )
     return lessons
 
@@ -468,29 +515,25 @@ def _preferred_strategy_lessons(
 ) -> dict[str, LearnedLesson]:
     """Coarse grain first, candidates restricted, then the drill-down.
 
-    Only verified runs count: a strategy that produced an answer that
-    failed verification or the integrity screen proves nothing.
+    Only a trajectory that demonstrably preserved the candidate identity
+    between the coarse and the fine query counts (the harvester records
+    ``candidate_identity_preserved`` when a ``restrict_to_candidate_tuples``
+    call sits between them); a finer query that merely carried a filter
+    proves nothing. And only runs whose answer passed a verifier and the
+    integrity screen count: a strategy that produced an unverified answer
+    is not a strategy to prefer.
     """
     supporting: list[tuple[EvidenceRecord, list[str], list[str]]] = []
     for record in records:
-        if record.observation_type != "strategy_sequence" or not record.trusted:
+        if record.observation_type != "strategy_sequence" or not record.analytically_trusted:
             continue
-        steps = record.observation.get("steps") or ()
-        grains = [
-            (list(step.get("grain") or []), bool(step.get("filtered")))
-            for step in steps
-            if isinstance(step, Mapping)
-        ]
-        found = None
-        for i, (coarse, _f) in enumerate(grains):
-            for fine, filtered in grains[i + 1:]:
-                if coarse and set(coarse) < set(fine) and filtered:
-                    found = (coarse, fine)
-                    break
-            if found:
-                break
-        if found:
-            supporting.append((record, found[0], found[1]))
+        observation = record.observation
+        if observation.get("strategy") != "candidate_drilldown" or observation.get("candidate_identity_preserved") is not True:
+            continue
+        coarse = [str(c) for c in (observation.get("candidate_source_grain") or ())]
+        fine = [str(c) for c in (observation.get("drilldown_grain") or ())]
+        if coarse and fine and set(coarse) < set(fine):
+            supporting.append((record, coarse, fine))
     if not supporting:
         return {}
     runs = {record.run_fingerprint for record, _c, _f in supporting}
@@ -515,7 +558,8 @@ def _preferred_strategy_lessons(
             status=status,
             source_dependencies=(source_id,),
             source_fingerprints=fingerprints,
-            basis=("verified_runs",),
+            basis=("verified_runs", "candidate_restriction_observed"),
+            dependency_scope="operational",
         )
     }
 
@@ -556,6 +600,7 @@ def _invalid_path_lessons(
             source_dependencies=(source_id,),
             source_fingerprints=fingerprints,
             basis=("catalog_validation",),
+            dependency_scope="schema",
         )
     return lessons
 
@@ -594,7 +639,7 @@ def derive_lessons(
             expensive,
             _valid_grain_lessons(source_id, fingerprints, group, expensive_grains),
             _context_requirement_lessons(source_id, fingerprints, group),
-            _metric_equivalence_lessons(source_id, fingerprints, group),
+            _observed_identity_lessons(source_id, fingerprints, group),
             _preferred_strategy_lessons(source_id, fingerprints, group),
             _invalid_path_lessons(source_id, fingerprints, group),
         ):
@@ -617,6 +662,29 @@ def _transition_event(lesson: LearnedLesson, previous: str | None) -> KnowledgeE
     )
 
 
+def _evict(
+    evidence: Sequence[EvidenceRecord],
+    *,
+    keep_ids: set[str],
+    max_evidence: int,
+) -> list[EvidenceRecord]:
+    """Drop the oldest unreferenced records until the cap is met.
+
+    A record a retained lesson cites is never evicted, whatever its age, so
+    the package's referential integrity survives any number of enrichments.
+    """
+    if len(evidence) <= max_evidence:
+        return list(evidence)
+    excess = len(evidence) - max_evidence
+    kept: list[EvidenceRecord] = []
+    for record in evidence:
+        if excess > 0 and record.evidence_id not in keep_ids:
+            excess -= 1
+            continue
+        kept.append(record)
+    return kept
+
+
 def promote_lessons(
     package: KnowledgePackage,
     evidence: Iterable[EvidenceRecord] = (),
@@ -625,25 +693,31 @@ def promote_lessons(
 ) -> KnowledgePackage:
     """A new package with the evidence appended and lessons re-derived.
 
-    Existing lessons are replaced by their re-derivation when their
+    Incoming evidence is deduplicated against the package and within the
+    call. Existing lessons are replaced by their re-derivation when their
     identity matches; quarantined and retired lessons keep that status
     whatever the evidence says (a person put them there); a lesson the
     evidence no longer supports is retained as it was. Every status change
     is recorded as a lesson event.
     """
     known_ids = {record.evidence_id for record in package.evidence}
-    fresh = [
-        record
-        for record in evidence
-        if isinstance(record, EvidenceRecord) and record.evidence_id not in known_ids
-    ]
-    merged_evidence = list(package.evidence) + fresh
-    if len(merged_evidence) > max_evidence:
-        merged_evidence = merged_evidence[-max_evidence:]
+    fresh: list[EvidenceRecord] = []
+    for record in evidence:
+        if isinstance(record, EvidenceRecord) and record.evidence_id not in known_ids:
+            known_ids.add(record.evidence_id)
+            fresh.append(record)
     source_ids = {source.source_id for source in package.sources}
     merged_evidence = [
-        record for record in merged_evidence if set(record.source_ids) <= source_ids
+        record
+        for record in list(package.evidence) + fresh
+        if set(record.source_ids) <= source_ids
     ]
+    referenced = {
+        evidence_id
+        for lesson in package.lessons
+        for evidence_id in lesson.evidence_ids
+    }
+    merged_evidence = _evict(merged_evidence, keep_ids=referenced, max_evidence=max_evidence)
     staged = KnowledgePackage(
         package_id=package.package_id,
         sources=package.sources,

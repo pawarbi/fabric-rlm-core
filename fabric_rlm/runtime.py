@@ -1807,6 +1807,16 @@ class RLM:
 
         if any(getattr(turn, "source_calls", None) for turn in turns):
             trajectory.metadata["source_call_summary"] = source_call_summary(turns)
+        # Whether anything checked this run's answer. Evidence harvesting
+        # reads it: a submission nobody verified is not a verified success.
+        trajectory.metadata.setdefault(
+            "verifier_configured",
+            bool(
+                self.output_validator is not None
+                or self.output_validator_context is not None
+                or (self.enable_verifier and self._loaded_skills)
+            ),
+        )
         if not self.capture_evidence:
             return result
         options: dict[str, Any] = {}
@@ -1854,14 +1864,19 @@ class RLM:
         )
 
     def _learned_guidance(
-        self, knowledge_metadata: dict[str, Any]
+        self,
+        knowledge_metadata: dict[str, Any],
+        *,
+        source_ids: Iterable[str] | None = None,
     ) -> tuple[str | None, dict[str, Any]]:
         """Retrieved lessons for this task, rendered; nothing when there are none.
 
-        The text goes to the registered-operation planner, so a measure that
-        needs a period context is not planned without one, and then to the
-        agent when the task works against the live source. Candidate
-        lessons are never shown.
+        The text goes to the registered-operation planner, scoped by
+        ``source_ids`` to the sources its operations read, so a measure that
+        needs a period context is not planned without one and a lesson about
+        one input is never applied to another; and then to the agent when
+        the task works against the live source, where every line is tagged
+        with its source. Candidate lessons are never shown.
         """
         if self._knowledge is None:
             return None, {}
@@ -1874,11 +1889,24 @@ class RLM:
         task_text, _ = _task_and_outputs(
             self.signature, self._inline_task, self._inline_outputs
         )
-        lessons = retrieve_lessons(package, task_text, limit=_MAX_INJECTED_LESSONS)
+        lessons = retrieve_lessons(
+            package, task_text, limit=_MAX_INJECTED_LESSONS, source_ids=source_ids
+        )
         text = render_learned_guidance(lessons)
         return text or None, {
             "knowledge_lessons_available": len(active),
             "knowledge_lessons_injected": [lesson.lesson_id for lesson in lessons],
+        }
+
+    def _operation_source_ids(self) -> set[str]:
+        """Sources the supported registered operations read."""
+        if self._knowledge is None:
+            return set()
+        return {
+            source_id
+            for operation in self._knowledge.package.operations
+            if _is_supported_knowledge_operation(operation)
+            for source_id in operation.required_sources
         }
 
     def _run_engine(self, inputs: dict[str, Any] | None = None) -> RLMResult:
@@ -1891,15 +1919,19 @@ class RLM:
         # registered operation may swap the bindings for its result packet.
         self._evidence_sources = dict(bound_inputs)
         learned_guidance, guidance_metadata = self._learned_guidance(knowledge_metadata)
+        planner_guidance, _planner_metadata = self._learned_guidance(
+            knowledge_metadata, source_ids=self._operation_source_ids()
+        )
         bound_inputs, knowledge_metadata = self._prepare_registered_operation(
             bound_inputs,
             knowledge_metadata,
-            learned_guidance=learned_guidance,
+            learned_guidance=planner_guidance,
         )
         if knowledge_metadata.get("knowledge_mode") == "registered_operation":
             # The host executed an operation and the agent only synthesizes
             # its packet; the lessons already shaped the plan.
             learned_guidance = None
+            guidance_metadata = {**guidance_metadata, **_planner_metadata}
         knowledge_metadata = {**knowledge_metadata, **guidance_metadata}
         bound_inputs = resolve_lakehouse_inputs(bound_inputs)
 

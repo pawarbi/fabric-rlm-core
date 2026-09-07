@@ -273,13 +273,17 @@ def preflight_knowledge(
 
     lessons_out: list[LearnedLesson] = []
     for lesson in package.lessons:
-        # A lesson depends on the schema of its sources. Data-only drift
-        # (a refreshed file with the same columns) leaves a time-semantics
-        # or grain lesson standing; a schema change stales it, and only it.
+        # What stales a lesson depends on its scope. A schema-scoped lesson
+        # (a time construct, a measure's context requirement, an invalid
+        # name) survives a data refresh and dies with a schema change; a
+        # snapshot- or operational-scoped lesson (a grain that was cheap or
+        # expensive, a strategy that worked at one data volume) is stale as
+        # soon as the data behind it moved. Inexact snapshots stale all.
         dependencies = {
             source_id
             for source_id in lesson.source_dependencies
-            if source_id in changed_ids and drift[source_id] != "snapshot"
+            if source_id in changed_ids
+            and (drift[source_id] != "snapshot" or lesson.dependency_scope != "schema")
         }
         if not dependencies:
             lessons_out.append(lesson)

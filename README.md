@@ -203,19 +203,34 @@ for lesson in knowledge.package.lessons:
     print(lesson.kind, lesson.status, lesson.confidence, lesson.subject)
 ```
 
-Lesson kinds include `time_semantics` (a semantic model that declares its
-current period is active from `learn()` on), `context_requirement` (a derived
-measure that collapsed to its base measure under an unfiltered context; a
-contrasting filtered observation confirms it), `expensive_grain` (proved by a
-cardinality preflight at once, by a timeout only after repetition),
-`valid_grain` and `preferred_strategy` (only from runs whose answer passed
-verification and the integrity screen), `invalid_path` and
-`metric_equivalence`. Candidates are never shown to the model. When a task
-falls through to the live source, the active lessons relevant to it are
-rendered into a short "Learned source guidance" section after the inputs; the
-source stays bound, so learning narrows the search and never removes the cold
-path. A package with no evidence and no lessons serializes exactly as before,
-and a schema change stales only the lessons that depend on it.
+Lesson kinds include `time_semantics` (a semantic model whose schema names a
+current-period construct, active from `learn()` on and labelled as inferred
+from names), `context_requirement` (a derived measure that collapsed to its
+base measure under an unfiltered context; it stays a candidate, however often
+that recurs, until the same pair is compared under a period filter and comes
+out distinct), `expensive_grain` (proved by a cardinality preflight at once,
+by a timeout only after repetition), `valid_grain` (a grain that executed and
+returned rows twice; verified runs raise its confidence),
+`preferred_strategy` (only when the trajectory shows a
+`restrict_to_candidate_tuples` step between the coarse and the fine query, in
+runs whose answer passed an actual verifier and the integrity screen),
+`invalid_path`, and `query_behavior` for two measures whose values coincided
+across filtered contexts, recorded with `semantic_equivalence: false`: equal
+values never promote a `metric_equivalence` lesson. Candidates are never
+shown to the model. When a task falls through to the live source, the active
+lessons relevant to it are rendered into a short "Learned source guidance"
+section after the inputs, each line tagged with the source it was learned on;
+the registered-operation planner sees only the lessons for the sources its
+operations read. The source stays bound, so learning narrows the search and
+never removes the cold path. A package with no evidence and no lessons
+serializes exactly as before. Each lesson carries a dependency scope: a
+schema change stales the schema-scoped lessons that depend on the changed
+source, and a data-only change stales the snapshot- and operational-scoped
+ones (grains, costs, strategies) while leaving the schema facts. Today the
+typed source-call telemetry that feeds richer lessons comes from
+`SemanticModel` (and Lakehouse SQL timings); file sources contribute run
+outcomes only, so the behavioural learner is not yet equally deep across
+source types.
 
 The development notebook
 `examples/notebooks/development/rlm_knowledge_benchmark_matrix.py` runs seeded,
@@ -225,7 +240,7 @@ host/wall time, provenance, and drift rejection. `KnowledgeBenchmarkReport`
 also records source calls, failed calls, source seconds, the first useful
 query turn, verifier repairs, integrity status and injected lessons, and
 `cold_parity()` states the release rule: learned correctness must not fall
-below cold.
+below cold, overall and on every task.
 
 ```python
 from fabric_rlm import FabricLM, FileDestination, LakehouseSource, RLM

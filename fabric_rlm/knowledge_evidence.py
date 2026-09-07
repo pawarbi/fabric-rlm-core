@@ -180,22 +180,67 @@ def run_fingerprint_for(result: RLMResult) -> str:
 
 
 def verifier_status_for(result: RLMResult) -> str:
-    """What verification said about the run's final answer."""
-    if result.submitted and result.failure_reason is None:
-        return "passed"
-    return "failed"
+    """What verification said about the run's final answer.
+
+    "passed" only when a verifier was actually configured for the run (an
+    output validator or a skill verifier, recorded by the runtime as
+    ``verifier_configured``) and the answer was accepted; a run nobody
+    checked is "none", and it never counts as verified.
+    """
+    metadata = result.trajectory.metadata or {}
+    if not result.submitted or result.failure_reason is not None:
+        return "failed"
+    return "passed" if metadata.get("verifier_configured") is True else "none"
 
 
 def integrity_status_for(result: RLMResult) -> str:
+    """What the analytical-integrity screen said; "off" when it did not run."""
     metadata = result.trajectory.metadata or {}
     mode = metadata.get("analytical_integrity_mode")
-    if mode in {False, None, "off"} and "analytical_integrity_mode" in metadata:
+    if mode not in {"repair", "strict"}:
         return "off"
     if metadata.get("analytical_integrity_unresolved"):
         return "unresolved"
     if not result.submitted:
         return "failed"
     return "passed"
+
+
+_CANDIDATE_RESTRICTION = re.compile(r"\brestrict_to_candidate_tuples\s*\(")
+
+
+def _strategy_observation(
+    steps: Sequence[tuple[int, list[str], bool]],
+    turns: Sequence[TurnRecord],
+) -> dict[str, Any]:
+    """The staged-analysis shape of a run, with what the trajectory proved.
+
+    A coarse query followed by a finer one is only a sequence. It becomes a
+    candidate drill-down when a ``restrict_to_candidate_tuples`` call sits
+    between the two, which is the runtime's own tuple-preserving
+    restriction; a finer query that merely carried a filter proves nothing
+    about how its candidates were chosen.
+    """
+    restriction_turns = {
+        turn.turn for turn in turns if _CANDIDATE_RESTRICTION.search(turn.code or "")
+    }
+    observation: dict[str, Any] = {
+        "steps": [{"turn": t, "grain": grain, "filtered": filtered} for t, grain, filtered in steps][:_MAX_OBSERVATION_LIST],
+        "step_count": len(steps),
+    }
+    for index, (coarse_turn, coarse, _f) in enumerate(steps):
+        for fine_turn, fine, _filtered in steps[index + 1:]:
+            if coarse and set(coarse) < set(fine) and any(
+                coarse_turn <= t <= fine_turn for t in restriction_turns
+            ):
+                observation.update(
+                    strategy="candidate_drilldown",
+                    candidate_source_grain=list(coarse),
+                    drilldown_grain=list(fine),
+                    candidate_identity_preserved=True,
+                )
+                return observation
+    return observation
 
 
 def _evidence_id(payload: Mapping[str, Any]) -> str:
@@ -250,7 +295,7 @@ def harvest_evidence(
             seen_ids.add(record.evidence_id)
             records.append(record)
 
-    successful_grains: list[tuple[str, list[str], bool]] = []
+    successful_grains: list[tuple[str, int, list[str], bool]] = []
     touched_sources: list[str] = []
     for turn in result.trajectory.turns:
         for raw in turn.source_calls or ():
@@ -292,6 +337,7 @@ def harvest_evidence(
                 successful_grains.append(
                     (
                         source_id,
+                        turn.turn,
                         list(observation.get("grain") or []),
                         bool(observation.get("filter_count")),
                     )
@@ -299,13 +345,13 @@ def harvest_evidence(
 
     for source_id in touched_sources:
         steps = [
-            {"grain": grain, "filtered": filtered}
-            for candidate, grain, filtered in successful_grains
+            (turn_number, grain, filtered)
+            for candidate, turn_number, grain, filtered in successful_grains
             if candidate == source_id
         ]
         if len(steps) < 2:
             continue
-        observation = {"steps": steps[:_MAX_OBSERVATION_LIST], "step_count": len(steps)}
+        observation = _strategy_observation(steps, result.trajectory.turns)
         payload = {
             "source_ids": [source_id],
             "observation_type": "strategy_sequence",

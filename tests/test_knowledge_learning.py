@@ -73,6 +73,7 @@ def _package(*profiles: SourceProfile, **fields) -> KnowledgePackage:
 GRAIN_COARSE = ["Products[Product]", "Sold To[Region]"]
 GRAIN_FINE = ["Products[Product]", "Sold To[Customer Group]", "Sold To[Region]"]
 GRAIN_WIDE = ["Period[YearQuarter]", "Products[Product]", "Sold To[Customer Group]", "Sold To[Region]"]
+PAIR = [["ARR $", "ARR $ Previous Period"]]
 
 
 def _evidence(
@@ -103,7 +104,7 @@ def _evidence(
     )
 
 
-def _success(evidence_id: str, grain: list[str], *, rows: int = 44, seconds: float = 4.0, measures=("ARR $",), filters: int = 0, run: str = "run.one", **extra) -> EvidenceRecord:
+def _success(evidence_id: str, grain: list[str], *, rows: int = 44, seconds: float = 4.0, measures=("ARR $",), filters: int = 0, run: str = "run.one", verifier: str = "passed", integrity: str = "passed", **extra) -> EvidenceRecord:
     observation = {
         "query_type": "aggregate",
         "measures": list(measures),
@@ -116,7 +117,25 @@ def _success(evidence_id: str, grain: list[str], *, rows: int = 44, seconds: flo
         "executed": True,
         **extra,
     }
-    return _evidence(evidence_id, observation, run=run, **{k: v for k, v in {}.items()})
+    return _evidence(evidence_id, observation, run=run, verifier=verifier, integrity=integrity)
+
+
+def _sequence(evidence_id: str, *, run: str, preserved: bool = True, verifier: str = "passed", integrity: str = "passed") -> EvidenceRecord:
+    observation = {
+        "steps": [
+            {"turn": 2, "grain": sorted(GRAIN_COARSE), "filtered": False},
+            {"turn": 4, "grain": sorted(GRAIN_FINE), "filtered": True},
+        ],
+        "step_count": 2,
+    }
+    if preserved:
+        observation.update(
+            strategy="candidate_drilldown",
+            candidate_source_grain=sorted(GRAIN_COARSE),
+            drilldown_grain=sorted(GRAIN_FINE),
+            candidate_identity_preserved=True,
+        )
+    return _evidence(evidence_id, observation, observation_type="strategy_sequence", run=run, turn=None, verifier=verifier, integrity=integrity)
 
 
 # -- contracts --------------------------------------------------------------
@@ -132,6 +151,7 @@ def test_lessons_hold_structure_not_prose() -> None:
         source_dependencies=("arr_model",),
     )
     assert lesson.status == "candidate" and lesson.confidence == "low"
+    assert lesson.dependency_scope == "schema"
     assert dict(lesson.structured_rule)["requires"] == ("period_context",)
     with pytest.raises(ValueError, match="single line"):
         LearnedLesson(
@@ -151,6 +171,8 @@ def test_lessons_hold_structure_not_prose() -> None:
         )
     with pytest.raises(ValueError, match="kind is not supported"):
         LearnedLesson(lesson_id="lesson.x", kind="opinion", subject="ARR", structured_rule={"a": 1}, source_dependencies=("m",))
+    with pytest.raises(ValueError, match="dependency_scope is not supported"):
+        LearnedLesson(lesson_id="lesson.x", kind="semantic_fact", subject="ARR", structured_rule={"a": 1}, source_dependencies=("m",), dependency_scope="forever")
     with pytest.raises(ValueError, match="must not be empty"):
         LearnedLesson(lesson_id="lesson.x", kind="semantic_fact", subject="ARR", structured_rule={}, source_dependencies=("m",))
     with pytest.raises(ValueError, match="source_dependencies must not be empty"):
@@ -165,13 +187,20 @@ def test_lessons_hold_structure_not_prose() -> None:
         )
 
 
-def test_evidence_trust_requires_verified_and_integrity_clean() -> None:
+def test_execution_trust_and_analytical_trust_are_separate() -> None:
+    """A query that ran is a fact; a conclusion needs a verifier and the screen."""
     record = _evidence("evidence.a", {"grain": GRAIN_COARSE})
-    assert record.trusted
-    assert not replace(record, verifier_status="failed").trusted
-    assert not replace(record, analytical_integrity_status="unresolved").trusted
-    assert not replace(record, execution_status="timeout").trusted
-    assert replace(record, analytical_integrity_status="off").trusted
+    assert record.execution_trusted and record.analytically_trusted and record.trusted
+    for weaker in (
+        replace(record, verifier_status="failed"),
+        replace(record, verifier_status="none"),
+        replace(record, verifier_status=None),
+        replace(record, analytical_integrity_status="unresolved"),
+        replace(record, analytical_integrity_status="off"),
+        replace(record, analytical_integrity_status=None),
+    ):
+        assert weaker.execution_trusted and not weaker.analytically_trusted
+    assert not replace(record, execution_status="timeout").execution_trusted
     with pytest.raises(ValueError, match="observation_type is not supported"):
         replace(record, observation_type="gossip")
 
@@ -200,7 +229,7 @@ def test_package_with_lessons_round_trips_as_version_2(tmp_path: Path) -> None:
     save_knowledge_package(destination, package)
     assert read_knowledge_package(destination) == package
     text = destination.read_text(encoding="utf-8")
-    assert "IsCurrentQuarter" in text and "\\n" not in json.dumps(payload["lessons"])
+    assert "IsCurrentQuarter" in text and "dependency_scope" in text
 
 
 def test_referential_integrity_covers_evidence_and_lessons() -> None:
@@ -247,20 +276,29 @@ def test_persisted_learning_records_reject_free_text_and_credentials(tmp_path: P
 # -- structural lessons -------------------------------------------------------
 
 
-def test_structural_lessons_declare_time_semantics_and_nominate_derived_measures() -> None:
+def test_structural_lessons_are_name_inferred_and_labelled_so() -> None:
     lessons = structural_lessons(_package())
     by_kind = {}
     for lesson in lessons:
         by_kind.setdefault(lesson.kind, []).append(lesson)
     (time_lesson,) = by_kind["time_semantics"]
-    assert time_lesson.status == "active" and time_lesson.confidence == "high"
+    assert time_lesson.status == "active"
+    # a boolean flag in a period table is the strong form
+    assert time_lesson.confidence == "high"
+    assert time_lesson.basis == ("boolean_period_flag", "schema_name_pattern")
+    assert time_lesson.structured_rule["inferred_from"] == "schema_names"
     assert time_lesson.structured_rule["current_period_constructs"] == ("Period[IsCurrentQuarter]",)
-    assert time_lesson.structured_rule["avoid"] == "max_date_inference"
-    assert time_lesson.source_fingerprints == {"arr_model": "schema-1"}
+    assert time_lesson.dependency_scope == "schema"
+    # a name-only match (a string column) is medium confidence
+    weaker = replace(
+        _model_profile(),
+        schema={**_model_profile().schema, "columns": {"Period[CurrentYearQuarter]": {"type": "string"}}},
+    )
+    (weak_lesson,) = [l for l in structural_lessons(KnowledgePackage(package_id="p", sources=(weaker,))) if l.kind == "time_semantics"]
+    assert weak_lesson.confidence == "medium" and weak_lesson.basis == ("schema_name_pattern",)
     nominated = {lesson.subject: lesson for lesson in by_kind["context_requirement"]}
     assert set(nominated) == {"ARR $ Previous Period", "ARR Growth %"}
     assert all(lesson.status == "candidate" and lesson.confidence == "low" for lesson in nominated.values())
-    # a CSV declares nothing
     csv_profile = replace(_model_profile("orders"), family="csv", locator="local/orders")
     assert structural_lessons(KnowledgePackage(package_id="p", sources=(csv_profile,))) == ()
 
@@ -296,9 +334,10 @@ def test_expensive_grain_needs_proof_or_repetition() -> None:
     assert expensive.structured_rule["estimated_groups"] == 83000
     assert expensive.subject == "YearQuarter x Product x Customer Group x Region"
     assert expensive.evidence_ids == ("evidence.c1",)
+    assert expensive.dependency_scope == "snapshot"
 
 
-def test_valid_grain_needs_repeated_verified_success_and_yields_to_failures() -> None:
+def test_valid_grain_is_an_execution_fact_whose_confidence_needs_verification() -> None:
     package = _package()
     one = _success("evidence.s1", GRAIN_COARSE)
     lessons = {l.kind: l for l in derive_lessons(package, [one])}
@@ -308,17 +347,20 @@ def test_valid_grain_needs_repeated_verified_success_and_yields_to_failures() ->
     lessons = {l.kind: l for l in derive_lessons(package, [one, two])}
     valid = lessons["valid_grain"]
     assert valid.status == "active" and valid.confidence == "high"
+    assert valid.basis == ("repeated_execution", "verified_runs")
     assert valid.structured_rule["max_rows_observed"] == 44
     assert valid.structured_rule["max_seconds_observed"] == 4.0
+    assert valid.dependency_scope == "snapshot"
 
-    # a run whose answer failed the integrity screen proves nothing
+    # the queries ran, so the grain is valid; unverified answers only cap the confidence
     unverified = [
-        replace(one, analytical_integrity_status="unresolved"),
+        replace(one, verifier_status="none", analytical_integrity_status="off"),
         replace(two, analytical_integrity_status="unresolved"),
     ]
     lessons = {l.kind: l for l in derive_lessons(package, unverified)}
-    assert lessons["valid_grain"].status == "candidate"
-    assert lessons["valid_grain"].basis == ("single_success",)
+    assert lessons["valid_grain"].status == "active"
+    assert lessons["valid_grain"].confidence == "medium"
+    assert lessons["valid_grain"].basis == ("repeated_execution",)
 
     # a timeout at the same grain quarantines the success claim
     timeout = _evidence(
@@ -332,7 +374,8 @@ def test_valid_grain_needs_repeated_verified_success_and_yields_to_failures() ->
     assert lessons["expensive_grain"].status == "candidate"
 
 
-def test_context_requirement_is_confirmed_by_contrast_not_by_name() -> None:
+def test_context_requirement_needs_the_same_pair_distinct_under_a_filter() -> None:
+    """Repetition never activates it: a flat business repeats the identity too."""
     package = _package()
     nominated = {l.subject: l for l in derive_lessons(package)}["ARR $ Previous Period"]
     assert nominated.status == "candidate" and nominated.confidence == "low"
@@ -342,7 +385,8 @@ def test_context_requirement_is_confirmed_by_contrast_not_by_name() -> None:
         [],
         measures=("ARR $", "ARR $ Previous Period", "ARR Growth %"),
         rows=1,
-        measure_identities=[["ARR $", "ARR $ Previous Period"]],
+        measure_identities=PAIR,
+        compared_measure_pairs=PAIR,
         constant_measures={"ARR Growth %": "zero"},
     )
     lessons = {l.subject: l for l in derive_lessons(package, [degenerate])}
@@ -351,33 +395,51 @@ def test_context_requirement_is_confirmed_by_contrast_not_by_name() -> None:
     assert previous.structured_rule["observed"] == "identity_under_unfiltered_context"
     assert previous.structured_rule["base_measure"] == "ARR $"
     growth = lessons["ARR Growth %"]
+    assert growth.status == "candidate"
     assert growth.structured_rule["observed"] == "constant_under_unfiltered_context"
     assert growth.structured_rule["constant"] == "zero"
 
+    # the same shape in a second run is still only a hypothesis
+    repeated = replace(degenerate, evidence_id="evidence.d3", run_fingerprint="run.three")
+    lessons = {l.subject: l for l in derive_lessons(package, [degenerate, repeated])}
+    assert lessons["ARR $ Previous Period"].status == "candidate"
+    assert lessons["ARR $ Previous Period"].basis == ("degenerate_unfiltered", "repeated_runs")
+
+    # a filtered query that carried only the derived measure compared nothing
+    alone = _success(
+        "evidence.d4", ["Period[YearQuarter]"], measures=("ARR $ Previous Period",), rows=10, filters=1, run="run.four",
+    )
+    lessons = {l.subject: l for l in derive_lessons(package, [degenerate, alone])}
+    assert lessons["ARR $ Previous Period"].status == "candidate"
+
+    # both measures present, compared, and distinct once a period is pinned
     contrast = _success(
         "evidence.d2",
         ["Period[YearQuarter]"],
-        measures=("ARR $", "ARR $ Previous Period"),
+        measures=("ARR $", "ARR $ Previous Period", "ARR Growth %"),
         rows=10,
         filters=1,
         run="run.two",
+        compared_measure_pairs=PAIR,
     )
     lessons = {l.subject: l for l in derive_lessons(package, [degenerate, contrast])}
     previous = lessons["ARR $ Previous Period"]
     assert previous.status == "active" and previous.confidence == "high"
     assert previous.basis == ("degenerate_unfiltered", "distinct_when_filtered")
     assert set(previous.evidence_ids) == {"evidence.d1", "evidence.d2"}
-
-    repeated = replace(degenerate, evidence_id="evidence.d3", run_fingerprint="run.three")
-    lessons = {l.subject: l for l in derive_lessons(package, [degenerate, repeated])}
-    assert lessons["ARR $ Previous Period"].status == "active"
-    assert lessons["ARR $ Previous Period"].confidence == "medium"
-    # the unfiltered identity is never metric equivalence
+    assert previous.dependency_scope == "schema"
+    # the constant growth was present and non-constant when filtered
+    assert lessons["ARR Growth %"].status == "active"
+    # a filtered identity of the same pair is not a contrast
+    still_identical = replace(contrast, evidence_id="evidence.d5", observation={**dict(contrast.observation), "measure_identities": PAIR})
+    lessons = {l.subject: l for l in derive_lessons(package, [degenerate, still_identical])}
+    assert lessons["ARR $ Previous Period"].status == "candidate"
     assert "metric_equivalence" not in {l.kind for l in lessons.values()}
 
 
-def test_metric_equivalence_needs_identity_across_filtered_contexts() -> None:
+def test_value_identity_is_recorded_as_observed_behavior_never_as_equivalence() -> None:
     package = _package()
+    pair = [["ARR $", "Active Customers #"]]
     identical = [
         _success(
             f"evidence.e{i}",
@@ -385,7 +447,8 @@ def test_metric_equivalence_needs_identity_across_filtered_contexts() -> None:
             measures=("ARR $", "Active Customers #"),
             filters=1,
             run=f"run.{i}",
-            measure_identities=[["ARR $", "Active Customers #"]],
+            measure_identities=pair,
+            compared_measure_pairs=pair,
             filter_columns=[column],
         )
         for i, (grain, column) in enumerate(
@@ -393,33 +456,45 @@ def test_metric_equivalence_needs_identity_across_filtered_contexts() -> None:
         )
     ]
     two = {l.kind: l for l in derive_lessons(package, identical[:2])}
-    assert two["metric_equivalence"].status == "candidate"
+    assert "metric_equivalence" not in two
+    assert two["query_behavior"].status == "candidate"
     three = {l.kind: l for l in derive_lessons(package, identical)}
-    assert three["metric_equivalence"].status == "active"
-    assert three["metric_equivalence"].structured_rule["caveat"] == "reproducible_identity_not_definition"
-    apart = _success("evidence.apart", GRAIN_COARSE, measures=("ARR $", "Active Customers #"), filters=1, run="run.x")
-    assert "metric_equivalence" not in {l.kind for l in derive_lessons(package, identical + [apart])}
+    observed = three["query_behavior"]
+    assert observed.status == "active" and observed.confidence == "low"
+    assert observed.structured_rule["semantic_equivalence"] is False
+    assert observed.structured_rule["observation"] == "identical_in_observed_contexts"
+    assert observed.dependency_scope == "snapshot"
+    assert "metric_equivalence" not in three
+    apart = _success("evidence.apart", GRAIN_COARSE, measures=("ARR $", "Active Customers #"), filters=1, run="run.x", compared_measure_pairs=pair)
+    assert "query_behavior" not in {l.kind for l in derive_lessons(package, identical + [apart])}
+    # an unfiltered identity never counts
+    unfiltered = [replace(r, observation={**dict(r.observation), "filter_count": 0}) for r in identical]
+    assert "query_behavior" not in {l.kind for l in derive_lessons(package, unfiltered)}
 
 
-def test_preferred_strategy_comes_only_from_verified_runs() -> None:
+def test_preferred_strategy_needs_an_observed_candidate_restriction_in_verified_runs() -> None:
     package = _package()
-    sequence = _evidence(
-        "evidence.seq1",
-        {"steps": [{"grain": sorted(GRAIN_COARSE), "filtered": False}, {"grain": sorted(GRAIN_FINE), "filtered": True}], "step_count": 2},
-        observation_type="strategy_sequence",
-        run="run.a",
-        turn=None,
-    )
-    lessons = {l.kind: l for l in derive_lessons(package, [sequence])}
+    # a finer, filtered query after a coarse one is only a sequence
+    merely_filtered = _sequence("evidence.seq0", run="run.z", preserved=False)
+    assert "preferred_strategy" not in {l.kind for l in derive_lessons(package, [merely_filtered])}
+
+    proven = _sequence("evidence.seq1", run="run.a")
+    lessons = {l.kind: l for l in derive_lessons(package, [proven])}
     strategy = lessons["preferred_strategy"]
     assert strategy.status == "candidate" and strategy.confidence == "medium"
     assert strategy.structured_rule["strategy"] == "coarse_to_candidate_drilldown"
-    second = replace(sequence, evidence_id="evidence.seq2", run_fingerprint="run.b")
-    lessons = {l.kind: l for l in derive_lessons(package, [sequence, second])}
+    assert strategy.basis == ("candidate_restriction_observed", "verified_runs")
+    assert strategy.dependency_scope == "operational"
+    second = _sequence("evidence.seq2", run="run.b")
+    lessons = {l.kind: l for l in derive_lessons(package, [proven, second])}
     assert lessons["preferred_strategy"].status == "active"
-    # the bad cold answer: same sequence, integrity unresolved; teaches nothing
-    bad = replace(sequence, evidence_id="evidence.bad", analytical_integrity_status="unresolved", run_fingerprint="run.bad")
-    assert "preferred_strategy" not in {l.kind for l in derive_lessons(package, [bad])}
+    # a run nobody verified, or one the screen did not clear, teaches no strategy
+    for untrusted in (
+        _sequence("evidence.bad1", run="run.bad", verifier="none"),
+        _sequence("evidence.bad2", run="run.bad", integrity="off"),
+        _sequence("evidence.bad3", run="run.bad", integrity="unresolved"),
+    ):
+        assert "preferred_strategy" not in {l.kind for l in derive_lessons(package, [untrusted])}
     # but its typed timeout still teaches
     timeout = _evidence(
         "evidence.badt",
@@ -428,7 +503,7 @@ def test_preferred_strategy_comes_only_from_verified_runs() -> None:
         integrity="unresolved",
         run="run.bad",
     )
-    kinds = {l.kind for l in derive_lessons(package, [bad, timeout])}
+    kinds = {l.kind for l in derive_lessons(package, [_sequence("evidence.bad4", run="run.bad", integrity="unresolved"), timeout])}
     assert "expensive_grain" in kinds and "preferred_strategy" not in kinds
 
 
@@ -471,13 +546,37 @@ def test_promotion_records_transitions_keeps_quarantine_and_ignores_stale_eviden
     kept = next(l for l in second.lessons if l.lesson_id == expensive.lesson_id)
     assert kept.status == "quarantined" and kept.reason_code == "reviewed"
     assert len(second.evidence) == 2
-    # the same evidence again is not appended twice
+    # the same evidence again is not appended twice, nor twice within one call
     assert len(promote_lessons(second, [timeout]).evidence) == 2
+    duplicate = replace(timeout, evidence_id="evidence.t9", run_fingerprint="run.c")
+    assert len(promote_lessons(second, [duplicate, duplicate]).evidence) == 3
 
     stale = replace(timeout, evidence_id="evidence.old", run_fingerprint="run.old", source_fingerprints={"arr_model": "schema-0"})
     third = promote_lessons(package, [stale])
     assert "expensive_grain" not in {l.kind for l in third.lessons}
     assert len(third.evidence) == 1
+
+
+def test_evidence_eviction_never_orphans_a_lesson() -> None:
+    package = _package()
+    proof = _evidence(
+        "evidence.c1",
+        {"query_type": "aggregate", "grain": GRAIN_WIDE, "reason": "cardinality_limit", "estimated_groups": 83000, "max_groups": 10000, "executed": False},
+        status="rejected",
+        run="run.a",
+    )
+    learned = promote_lessons(package, [proof], max_evidence=3)
+    cited = next(l for l in learned.lessons if l.kind == "expensive_grain").evidence_ids
+    assert cited == ("evidence.c1",)
+    filler = [
+        _evidence(f"evidence.f{i}", {"query_type": "dax", "returned_rows": 1}, run=f"run.f{i}")
+        for i in range(6)
+    ]
+    grown = promote_lessons(learned, filler, max_evidence=3)
+    ids = [record.evidence_id for record in grown.evidence]
+    assert len(ids) == 3 and "evidence.c1" in ids
+    assert ids[-1] == "evidence.f5"
+    assert next(l for l in grown.lessons if l.kind == "expensive_grain").status == "active"
 
 
 # -- retrieval and rendering --------------------------------------------------
@@ -492,20 +591,14 @@ def _learned_package() -> KnowledgePackage:
     )
     degenerate = _success(
         "evidence.d1", [], measures=("ARR $", "ARR $ Previous Period"), rows=1,
-        measure_identities=[["ARR $", "ARR $ Previous Period"]],
+        measure_identities=PAIR, compared_measure_pairs=PAIR,
     )
     contrast = _success(
         "evidence.d2", ["Period[YearQuarter]"], measures=("ARR $", "ARR $ Previous Period"), rows=10, filters=1, run="run.two",
+        compared_measure_pairs=PAIR,
     )
     coarse = [_success(f"evidence.s{i}", GRAIN_COARSE, run=f"run.{i}") for i in range(2)]
-    sequences = [
-        _evidence(
-            f"evidence.seq{i}",
-            {"steps": [{"grain": sorted(GRAIN_COARSE), "filtered": False}, {"grain": sorted(GRAIN_FINE), "filtered": True}], "step_count": 2},
-            observation_type="strategy_sequence", run=f"run.{i}", turn=None,
-        )
-        for i in range(2)
-    ]
+    sequences = [_sequence(f"evidence.seq{i}", run=f"run.{i}") for i in range(2)]
     return promote_lessons(package, [proof, degenerate, contrast, *coarse, *sequences])
 
 
@@ -524,33 +617,54 @@ def test_retrieval_is_scoped_to_the_task_and_never_shows_candidates() -> None:
     )
     kinds = [l.kind for l in trend]
     assert "expensive_grain" in kinds and "preferred_strategy" in kinds and "context_requirement" in kinds
+    # a task that names its own window gets no current-period rule
+    assert "time_semantics" not in kinds
     assert retrieve_lessons(package, "How many rows does the file have?") == ()
     assert len(retrieve_lessons(package, "current quarter ARR by product and region trend growth", limit=2)) == 2
     candidates = retrieve_lessons(package, "ARR Growth % this quarter", statuses=("candidate",))
     assert all(l.status == "candidate" for l in candidates)
+    # scoped to a source: the planner sees only what applies to its operation's sources
+    assert retrieve_lessons(package, "current quarter ARR", source_ids=["other_source"]) == ()
+    assert retrieve_lessons(package, "current quarter ARR", source_ids=["arr_model"])
     with pytest.raises(ValueError):
         retrieve_lessons(package, "x", limit=-1)
 
 
-def test_rendering_states_rules_and_confidence_without_values() -> None:
+def test_rendering_tags_every_line_with_its_source_and_states_confidence() -> None:
     package = _learned_package()
     lessons = retrieve_lessons(package, "ARR growth by product and region for the current quarter")
     text = render_learned_guidance(lessons)
     assert text.startswith("## Learned source guidance")
+    assert "- [arr_model] \"Current\" is defined" in text
     assert "Period[IsCurrentQuarter]" in text and "MAX(Date)" in text
-    assert "ARR $ Previous Period requires an explicit period context" in text
+    assert "- [arr_model] ARR $ Previous Period requires an explicit period context" in text
     assert "83,000 groups, limit 10,000" in text
     assert "restrict to the candidate tuples" in text
-    assert "Confidence:" in text and "source declared" in text
+    assert "Confidence:" in text and "inferred from schema names" in text
     assert "926" not in text and "run." not in text and "evidence." not in text
     assert render_learned_guidance(()) == ""
     assert lesson_score(lessons[0], set()) == 0.0
 
 
+def test_observed_identity_renders_as_a_coincidence_of_values() -> None:
+    package = _package()
+    pair = [["ARR $", "Active Customers #"]]
+    identical = [
+        _success(f"evidence.e{i}", GRAIN_COARSE, measures=("ARR $", "Active Customers #"), filters=1, run=f"run.{i}",
+                 measure_identities=pair, compared_measure_pairs=pair, filter_columns=[column])
+        for i, column in enumerate(["Period[YearQuarter]", "Sold To[Region]", "Products[Product]"])
+    ]
+    learned = promote_lessons(package, identical)
+    lessons = retrieve_lessons(learned, "Are ARR and active customers the same metric?")
+    text = render_learned_guidance(lessons)
+    assert "returned identical values" in text and "not a verified equivalence" in text
+    assert "equivalent by definition" not in text
+
+
 # -- staleness ----------------------------------------------------------------
 
 
-def test_schema_drift_stales_only_dependent_lessons(tmp_path: Path) -> None:
+def test_drift_stales_lessons_by_their_dependency_scope(tmp_path: Path) -> None:
     orders = tmp_path / "orders.csv"
     orders.write_text("order_id,amount\n1,10\n", encoding="utf-8")
     customers = tmp_path / "customers.csv"
@@ -558,30 +672,47 @@ def test_schema_drift_stales_only_dependent_lessons(tmp_path: Path) -> None:
     sources = {"orders": orders, "customers": customers}
     profiles = tuple(replace(p, status="active") for p in profile_sources(sources))
     package = KnowledgePackage(package_id="p", sources=profiles)
-    lessons = tuple(
-        LearnedLesson(
-            lesson_id=f"lesson.valid_grain.{source_id}",
-            kind="valid_grain",
-            subject=f"{source_id} grain",
+
+    def lesson(source_id: str, kind: str, scope: str) -> LearnedLesson:
+        profile = next(p for p in profiles if p.source_id == source_id)
+        return LearnedLesson(
+            lesson_id=f"lesson.{kind}.{source_id}",
+            kind=kind,
+            subject=f"{source_id} {kind}",
             structured_rule={"grain": ["region"], "advice": "reliable_analysis_grain"},
             status="active",
             confidence="medium",
             source_dependencies=(source_id,),
             source_fingerprints={source_id: profile.schema_fingerprint},
+            dependency_scope=scope,
         )
-        for source_id, profile in zip(("orders", "customers"), profiles)
-    )
-    package = replace(package, lessons=lessons)
 
+    package = replace(package, lessons=(
+        lesson("orders", "valid_grain", "snapshot"),
+        lesson("orders", "semantic_fact", "schema"),
+        lesson("customers", "valid_grain", "snapshot"),
+        lesson("customers", "semantic_fact", "schema"),
+    ))
+
+    # schema drift on customers stales both customer lessons, nothing of orders
     customers.write_text("customer_id,region,tier\n1,west,gold\n", encoding="utf-8")
     result = preflight_knowledge(package, sources)
     assert result.drift == {"customers": "schema"}
     statuses = {l.lesson_id: l.status for l in result.package.lessons}
-    assert statuses == {"lesson.valid_grain.orders": "active", "lesson.valid_grain.customers": "stale"}
+    assert statuses == {
+        "lesson.valid_grain.orders": "active",
+        "lesson.semantic_fact.orders": "active",
+        "lesson.valid_grain.customers": "stale",
+        "lesson.semantic_fact.customers": "stale",
+    }
     assert any(e.subject_type == "lesson" and e.subject_id == "lesson.valid_grain.customers" for e in result.package.events)
 
+    # data-only drift on orders stales the grain lesson and leaves the schema fact
     orders.write_text("order_id,amount\n1,10\n2,20\n", encoding="utf-8")
     customers.write_text("customer_id,region\n1,west\n", encoding="utf-8")
     result = preflight_knowledge(package, sources)
     assert result.drift == {"orders": "snapshot"}
-    assert {l.status for l in result.package.lessons} == {"active"}
+    statuses = {l.lesson_id: l.status for l in result.package.lessons}
+    assert statuses["lesson.valid_grain.orders"] == "stale"
+    assert statuses["lesson.semantic_fact.orders"] == "active"
+    assert statuses["lesson.valid_grain.customers"] == "active"
