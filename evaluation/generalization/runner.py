@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -38,6 +39,74 @@ def _write_json(path: Path, value: object) -> None:
         json.dumps(value, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
     )
+
+
+def _redact_trace_text(value: str) -> str:
+    redacted = value
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if api_key:
+        redacted = redacted.replace(api_key, "[REDACTED]")
+    redacted = re.sub(
+        r"(?i)(authorization\s*[:=]\s*bearer\s+)[A-Za-z0-9._~+/=-]+",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)([\"']?api[_-]?key[\"']?\s*[:=]\s*[\"'])[^\"']+",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(r"\bsk-or-v1-[A-Za-z0-9_-]+\b", "[REDACTED]", redacted)
+    return redacted
+
+
+def write_trial_trace(
+    trace_dir: Path,
+    *,
+    trace_id: str,
+    result: object | None,
+    lm: object | None,
+    error: str | None = None,
+) -> dict[str, str]:
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", trace_id).strip("._")
+    if not safe_id:
+        raise ValueError("trace_id must contain a safe filename character")
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    trajectory_path = trace_dir / f"{safe_id}.trajectory.jsonl"
+    provider_path = trace_dir / f"{safe_id}.provider.json"
+
+    trajectory = getattr(result, "trajectory", None)
+    if trajectory is not None and hasattr(trajectory, "to_jsonl"):
+        trajectory_text = trajectory.to_jsonl()
+    else:
+        trajectory_text = json.dumps(
+            {"metadata": {"trace_status": "unavailable", "error": error}},
+            ensure_ascii=False,
+            default=str,
+        ) + "\n"
+    provider_text = json.dumps(
+        {
+            "trace_id": trace_id,
+            "error": error,
+            "history": list(getattr(lm, "history", ()) or ()),
+        },
+        indent=2,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    ) + "\n"
+    trajectory_path.write_text(
+        _redact_trace_text(trajectory_text),
+        encoding="utf-8",
+    )
+    provider_path.write_text(
+        _redact_trace_text(provider_text),
+        encoding="utf-8",
+    )
+    return {
+        "trajectory": str(trajectory_path),
+        "provider_history": str(provider_path),
+    }
 
 
 def build_schedule(
@@ -303,6 +372,7 @@ def _development_results(
     max_turns: int,
     timeout: float,
     budget: list[int],
+    trace_dir: Path,
 ) -> list[object]:
     prompts = (
         {
@@ -317,10 +387,10 @@ def _development_results(
         },
     )
     results: list[object] = []
-    for prompt in prompts:
+    for index, prompt in enumerate(prompts):
         if budget[0] <= 0:
             break
-        result, _lm, _wall = _run_rlm(
+        result, lm, _wall = _run_rlm(
             model=model,
             question=prompt,
             definitions=definitions,
@@ -329,6 +399,12 @@ def _development_results(
             knowledge=knowledge,
             max_turns=max_turns,
             timeout=timeout,
+        )
+        write_trial_trace(
+            trace_dir,
+            trace_id=f"development__{domain}__{variant}__{index}",
+            result=result,
+            lm=lm,
         )
         budget[0] -= 1
         results.append(result)
@@ -372,6 +448,7 @@ def run_live(
             domain_counts[domain] += 1
     schedule = build_schedule(selected, repetitions=repetitions, seed=seed)
     budget = [max_live_calls]
+    trace_dir = output.parent / "traces"
     packages: dict[tuple[str, str, str], object | None] = {}
     package_summaries: dict[str, object] = {}
     try:
@@ -390,6 +467,7 @@ def run_live(
                     max_turns=max_turns,
                     timeout=timeout,
                     budget=budget,
+                    trace_dir=trace_dir,
                 )
                 enriched = RLM.enrich(learned, development) if development else learned
                 packages[(domain, variant, "C")] = enriched
@@ -426,6 +504,9 @@ def run_live(
         arm = str(trial["arm"])
         knowledge = packages[(domain, variant, arm)]
         inputs = _domain_sources(fixtures, domain, variant) if arm == "A" else None
+        result = None
+        lm = None
+        error = None
         try:
             result, lm, wall = _run_rlm(
                 model=model,
@@ -447,7 +528,6 @@ def run_live(
                 wall_seconds=wall,
                 provider_cost_usd=_provider_cost(lm),
             )
-            error = None
         except Exception as exc:
             answer = {"status": "failed"}
             metrics = {
@@ -458,6 +538,17 @@ def run_live(
                 "verification_outcome": "not_verified",
             }
             error = f"{type(exc).__name__}: {exc}"
+        trace_id = (
+            f"{trial['question_id']}__{variant}__"
+            f"r{trial['repetition']}__{arm}"
+        )
+        trace_files = write_trial_trace(
+            trace_dir,
+            trace_id=trace_id,
+            result=result,
+            lm=lm,
+            error=error,
+        )
         budget[0] -= 1
         expected = references[domain][variant][str(trial["question_id"])]
         grade = grade_answer(answer, expected)
@@ -472,6 +563,7 @@ def run_live(
                 "grade": grade,
                 "metrics": metrics,
                 "error": error,
+                "trace_files": trace_files,
                 "expected": expected,
                 "workbook_correctness": "not_applicable",
                 "evidence_coverage": sum(

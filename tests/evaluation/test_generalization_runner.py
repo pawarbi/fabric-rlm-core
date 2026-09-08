@@ -13,6 +13,7 @@ from evaluation.generalization.runner import (
     normalize_answer,
     result_metrics,
     summarize_trials,
+    write_trial_trace,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -137,6 +138,45 @@ def test_result_metrics_separate_verification_source_calls_and_cost() -> None:
     assert metrics["failed_source_calls"] == 1
     assert metrics["provider_cost_usd"] is None
     assert metrics["lessons_injected"] == 1
+
+
+def test_trial_trace_persists_trajectory_and_provider_history_without_secrets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    secret = "test-openrouter-secret"
+    monkeypatch.setenv("OPENROUTER_API_KEY", secret)
+    trajectory = SimpleNamespace(
+        to_jsonl=lambda: (
+            '{"metadata":{"credential":"test-openrouter-secret"}}\n'
+            '{"turn":1,"stdout":"Authorization: Bearer provider-token"}\n'
+        )
+    )
+    result = SimpleNamespace(trajectory=trajectory)
+    lm = SimpleNamespace(
+        history=[
+            {
+                "request": {"api_key": secret},
+                "response": "Authorization: Bearer provider-token",
+            }
+        ]
+    )
+
+    trace = write_trial_trace(
+        tmp_path,
+        trace_id="inventory_available_units__descriptive__r0__A",
+        result=result,
+        lm=lm,
+    )
+
+    trajectory_text = Path(trace["trajectory"]).read_text(encoding="utf-8")
+    provider_text = Path(trace["provider_history"]).read_text(encoding="utf-8")
+    assert secret not in trajectory_text
+    assert secret not in provider_text
+    assert "provider-token" not in trajectory_text
+    assert "provider-token" not in provider_text
+    assert "[REDACTED]" in trajectory_text
+    assert "[REDACTED]" in provider_text
 
 
 def test_summary_exposes_per_question_regressions_and_learning_harm() -> None:
