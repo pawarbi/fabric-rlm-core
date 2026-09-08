@@ -16,10 +16,11 @@ How it works:
    on the same answer usually means the answer is right (agreement precision
    was 79-85% across the measured runs).
 2. The two answers are compared structurally in code, not by a model: numbers
-   must match exactly, semicolon-separated lists must contain the same item
-   set (a missing member is the classic enumeration failure and must count as
-   disagreement), and prose falls back to normalized containment and token
-   overlap. The comparison deliberately errs toward "disagree", which costs
+   must match exactly, sign included, semicolon-separated lists must contain
+   the same item set (a missing member is the classic enumeration failure and
+   must count as disagreement), and prose falls back to whole-word containment
+   and token overlap. A blank answer never agrees with anything, another blank
+   included. The comparison deliberately errs toward "disagree", which costs
    one reconciliation run, never correctness.
 3. On disagreement a reconciler runs in a third fresh context. It receives the
    task, the data, and both candidate answers, and is instructed to find the
@@ -82,20 +83,52 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip()
 
 
+# Signed numbers. A hyphen glued to a preceding word character is a range or
+# date separator ("2024-2025", "Q1-2024"), not a minus. A currency symbol may
+# sit between the minus and the digits ("-$5"). A number wrapped in
+# parentheses with nothing else inside is the accounting form of a negative.
+_NUMBER = re.compile(
+    r"\(\s*[$€£¥]?(?P<paren>\d+(?:\.\d+)?)\s*%?\s*\)"
+    r"|(?P<sign>(?<!\w)-)?[$€£¥]?(?P<num>\d+(?:\.\d+)?)"
+)
+
+
+def _numbers(text: str) -> list[str]:
+    """Every number in ``text`` with its sign, as canonical strings, sorted."""
+    found = []
+    for match in _NUMBER.finditer(text):
+        digits = match.group("paren") or match.group("num")
+        negative = match.group("paren") is not None or match.group("sign") is not None
+        found.append(("-" if negative else "") + digits)
+    return sorted(found)
+
+
 def answers_agree(a: str, b: str) -> bool:
     """Structural agreement between two answers.
 
     Errs toward disagreement: a false "disagree" costs one reconciliation run,
-    a false "agree" costs correctness.
+    a false "agree" costs correctness. Checks run in this order:
+
+    1. A blank answer never agrees, not even with another blank: two solves
+       that produced nothing are not evidence for anything.
+    2. The signed numbers on both sides must be the same multiset. This runs
+       before any text normalization because normalization strips the minus
+       sign along with the rest of the punctuation, so "10" and "-10" would
+       otherwise look identical.
+    3. Normalized text equality.
+    4. Semicolon lists agree only on the same item set.
+    5. Whole-word containment for short-vs-verbose phrasings, then token
+       overlap.
     """
-    a, b = str(a), str(b)
+    a = "" if a is None else str(a)
+    b = "" if b is None else str(b)
     na, nb = _norm(a), _norm(b)
+    if not na or not nb:
+        return False
+    if _numbers(a) != _numbers(b):
+        return False
     if na == nb:
         return True
-    nums_a = sorted(re.findall(r"-?\d+(?:\.\d+)?", a))
-    nums_b = sorted(re.findall(r"-?\d+(?:\.\d+)?", b))
-    if nums_a != nums_b:
-        return False
     # Numbers identical from here. Semicolon lists agree only on the same item
     # set: a missing member is THE enumeration failure mode, and a substring or
     # overlap test would wave it through.
@@ -103,8 +136,9 @@ def answers_agree(a: str, b: str) -> bool:
         items_a = {_norm(x) for x in a.split(";") if _norm(x)}
         items_b = {_norm(x) for x in b.split(";") if _norm(x)}
         return items_a == items_b
-    # Short-vs-verbose phrasings of the same single answer.
-    if na and nb and (na in nb or nb in na):
+    # Short-vs-verbose phrasings of the same single answer. Whole words only:
+    # "Mark" is not "Denmark".
+    if f" {na} " in f" {nb} " or f" {nb} " in f" {na} ":
         return True
     toks_a = {w for w in na.split() if len(w) > 3}
     toks_b = {w for w in nb.split() if len(w) > 3}
@@ -172,7 +206,8 @@ def verified_task(
 
     reconcile_task = (
         f"{task}{reconcile_guidance}\n"
-        f"Analyst 1 answered: {ans_a}\n\nAnalyst 2 answered: {ans_b}\n"
+        f"Analyst 1 answered: {ans_a.strip() or '(no answer)'}\n\n"
+        f"Analyst 2 answered: {ans_b.strip() or '(no answer)'}\n"
     )
     res_c, ans_c = solve(reconcile_task)
     attempts.append(res_c)
