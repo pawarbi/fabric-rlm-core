@@ -1,16 +1,792 @@
 {
   "baseline_sha": "b5226712a9aa41c3173d5f427e81244c333c0179",
-  "error_type": "AuthenticationError",
+  "development_calls_included_in_budget": true,
+  "grading_revision": "answered-success-ok-statuses",
   "max_live_calls": 15,
-  "message": "litellm.AuthenticationError: AuthenticationError: OpenrouterException - {\"error\":{\"message\":\"API key expired.\",\"code\":401,\"metadata\":{\"headers\":{\"WWW-Authenticate\":\"Bearer error=\\\"invalid_token\\\", error_description=\\\"API key expired\\\"\"}}}}",
   "model": "openai/gpt-4.1-mini",
-  "packages": {},
-  "reason_code": "authentication",
-  "remaining_live_calls": 15,
+  "packages": {
+    "inventory:descriptive": {
+      "B_fingerprint": "060b057a7dd9816a49d82aac40337dd1704c9054bb2c34df8b064315b7adf9ed",
+      "C_fingerprint": "997d45929b4ab1551e24fc2b13cb8cdd3162cf04257ee1f931b808257613953f",
+      "development_runs": 2,
+      "enriched_lessons": 0,
+      "learn_only_lessons": 0
+    },
+    "manufacturing:descriptive": {
+      "B_fingerprint": "d73adbb27be3f772ddf14d213cba9216547a2efd8976638bac795016ca6cecab",
+      "C_fingerprint": "47c0fba717db4286e1dc8d8ff31f50c47a88791f0a510722a64e93b2176160f9",
+      "development_runs": 2,
+      "enriched_lessons": 0,
+      "learn_only_lessons": 0
+    },
+    "service:descriptive": {
+      "B_fingerprint": "15e95c7538fb096863a6041f2ef7586229883f873cd0c968a11a11910c1e5ee0",
+      "C_fingerprint": "11cd8dac7d53f28acb2346793445def1c1cef57f9843d07a44407860be932273",
+      "development_runs": 2,
+      "enriched_lessons": 0,
+      "learn_only_lessons": 0
+    }
+  },
+  "planned_trials": 9,
+  "remaining_live_calls": 0,
   "repetitions": 1,
   "seed": 20260908,
-  "status": "unmeasured",
-  "trials": [],
+  "source_artifact": "live-smoke-valid.json",
+  "status": "complete",
+  "summary": {
+    "learning_hurts": [],
+    "per_domain": {
+      "inventory": {
+        "A": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        },
+        "B": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        },
+        "C": {
+          "confident_wrong": 0,
+          "correct": 0,
+          "incomplete": 1,
+          "unsupported_claim": 0
+        }
+      },
+      "manufacturing": {
+        "A": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        },
+        "B": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        },
+        "C": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        }
+      },
+      "service": {
+        "A": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        },
+        "B": {
+          "confident_wrong": 0,
+          "correct": 0,
+          "incomplete": 1,
+          "unsupported_claim": 0
+        },
+        "C": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        }
+      }
+    },
+    "per_question": {
+      "inventory_available_units": {
+        "A": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        },
+        "B": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        },
+        "C": {
+          "confident_wrong": 0,
+          "correct": 0,
+          "incomplete": 1,
+          "unsupported_claim": 0
+        }
+      },
+      "manufacturing_complete_units": {
+        "A": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        },
+        "B": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        },
+        "C": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        }
+      },
+      "service_first_response_sla_rate": {
+        "A": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        },
+        "B": {
+          "confident_wrong": 0,
+          "correct": 0,
+          "incomplete": 1,
+          "unsupported_claim": 0
+        },
+        "C": {
+          "confident_wrong": 1,
+          "correct": 0,
+          "incomplete": 0,
+          "unsupported_claim": 0
+        }
+      }
+    },
+    "trials": 9
+  },
+  "trials": [
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Produced units in complete reporting periods (rows with reporting_complete=true) sum to 1800.0."
+          }
+        ],
+        "entity_ids": null,
+        "grain": "production rows",
+        "period": "complete reporting periods",
+        "status": "success",
+        "units": "units",
+        "value": 1800.0
+      },
+      "arm": "C",
+      "cache": false,
+      "domain": "manufacturing",
+      "error": null,
+      "evidence_coverage": 1,
+      "expected": {
+        "expected_status": "answered",
+        "grain": "complete production periods",
+        "period": "2026-01",
+        "units": "units",
+        "value": 1800
+      },
+      "grade": {
+        "checks": {
+          "grain": false,
+          "period": false,
+          "units": true,
+          "value": true
+        },
+        "correct": false,
+        "outcome": "confident_wrong"
+      },
+      "max_turns": 6,
+      "metrics": {
+        "cached_tokens": 5504,
+        "completion_tokens": 667,
+        "failed_source_calls": 0,
+        "failure_reason": null,
+        "integrity_ok": true,
+        "knowledge_fingerprint": "47c0fba717db4286e1dc8d8ff31f50c47a88791f0a510722a64e93b2176160f9",
+        "knowledge_mode": "registered_operation",
+        "lessons_injected": 0,
+        "lm_seconds": 15.422000000020489,
+        "max_turns": 6,
+        "operation_audit_status": "passed",
+        "operation_id": "production.tabular.aggregate.v1",
+        "prompt_tokens": 8449,
+        "provider_cost_usd": 0.002767644,
+        "reasoning_tokens": 0,
+        "source_calls": 0,
+        "source_seconds": 0.0,
+        "submitted": true,
+        "turns": 5,
+        "verification_outcome": "not_verified",
+        "wall_seconds": 16.114880499982974,
+        "worker_seconds": 0.0
+      },
+      "model": "openai/gpt-4.1-mini",
+      "question_id": "manufacturing_complete_units",
+      "repetition": 0,
+      "timeout": 120.0,
+      "variant": "descriptive",
+      "workbook_correctness": "not_applicable"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Total units produced in complete reporting periods where defects are matched was calculated by filtering production data on reporting_complete, merging with defects on line and period, and summing produced_units."
+          }
+        ],
+        "entity_ids": [
+          {
+            "line_id": "LN-A",
+            "reporting_period": "2026-01"
+          },
+          {
+            "line_id": "LN-B",
+            "reporting_period": "2026-01"
+          }
+        ],
+        "grain": "line_id, reporting_period",
+        "period": "complete reporting periods",
+        "status": "success",
+        "units": "units",
+        "value": {
+          "__repr__": "np.int64(3600)",
+          "__serializable__": false,
+          "__type__": "int64"
+        }
+      },
+      "arm": "A",
+      "cache": false,
+      "domain": "manufacturing",
+      "error": null,
+      "evidence_coverage": 1,
+      "expected": {
+        "expected_status": "answered",
+        "grain": "complete production periods",
+        "period": "2026-01",
+        "units": "units",
+        "value": 1800
+      },
+      "grade": {
+        "checks": {
+          "grain": false,
+          "period": false,
+          "units": true,
+          "value": false
+        },
+        "correct": false,
+        "outcome": "confident_wrong"
+      },
+      "max_turns": 6,
+      "metrics": {
+        "cached_tokens": 5888,
+        "completion_tokens": 740,
+        "failed_source_calls": 0,
+        "failure_reason": null,
+        "integrity_ok": true,
+        "knowledge_fingerprint": null,
+        "knowledge_mode": null,
+        "lessons_injected": 0,
+        "lm_seconds": 17.392000000021653,
+        "max_turns": 6,
+        "operation_audit_status": null,
+        "operation_id": null,
+        "prompt_tokens": 7899,
+        "provider_cost_usd": 0.002551428,
+        "reasoning_tokens": 0,
+        "source_calls": 0,
+        "source_seconds": 0.0,
+        "submitted": true,
+        "turns": 5,
+        "verification_outcome": "not_verified",
+        "wall_seconds": 19.128752200020244,
+        "worker_seconds": 0.8889999999664724
+      },
+      "model": "openai/gpt-4.1-mini",
+      "question_id": "manufacturing_complete_units",
+      "repetition": 0,
+      "timeout": 120.0,
+      "variant": "descriptive",
+      "workbook_correctness": "not_applicable"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Sum of produced_units in complete reporting periods where reporting_complete is true is 1800.0."
+          }
+        ],
+        "entity_ids": null,
+        "grain": "production rows",
+        "period": "complete reporting periods",
+        "status": "success",
+        "units": "units",
+        "value": 1800.0
+      },
+      "arm": "B",
+      "cache": false,
+      "domain": "manufacturing",
+      "error": null,
+      "evidence_coverage": 1,
+      "expected": {
+        "expected_status": "answered",
+        "grain": "complete production periods",
+        "period": "2026-01",
+        "units": "units",
+        "value": 1800
+      },
+      "grade": {
+        "checks": {
+          "grain": false,
+          "period": false,
+          "units": true,
+          "value": true
+        },
+        "correct": false,
+        "outcome": "confident_wrong"
+      },
+      "max_turns": 6,
+      "metrics": {
+        "cached_tokens": 8960,
+        "completion_tokens": 597,
+        "failed_source_calls": 0,
+        "failure_reason": null,
+        "integrity_ok": true,
+        "knowledge_fingerprint": "d73adbb27be3f772ddf14d213cba9216547a2efd8976638bac795016ca6cecab",
+        "knowledge_mode": "registered_operation",
+        "lessons_injected": 0,
+        "lm_seconds": 20.25,
+        "max_turns": 6,
+        "operation_audit_status": "passed",
+        "operation_id": "production.tabular.aggregate.v1",
+        "prompt_tokens": 11073,
+        "provider_cost_usd": 0.002669436,
+        "reasoning_tokens": 0,
+        "source_calls": 0,
+        "source_seconds": 0.0,
+        "submitted": true,
+        "turns": 6,
+        "verification_outcome": "not_verified",
+        "wall_seconds": 22.660694799997145,
+        "worker_seconds": 0.01600000000325963
+      },
+      "model": "openai/gpt-4.1-mini",
+      "question_id": "manufacturing_complete_units",
+      "repetition": 0,
+      "timeout": 120.0,
+      "variant": "descriptive",
+      "workbook_correctness": "not_applicable"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Out of 3 tickets, 2 met their first-response SLA, resulting in a share of 0.6667."
+          }
+        ],
+        "entity_id": null,
+        "grain": "ticket",
+        "period": null,
+        "status": "ok",
+        "units": "ratio",
+        "value": 0.6666666666666666
+      },
+      "arm": "C",
+      "cache": false,
+      "domain": "service",
+      "error": null,
+      "evidence_coverage": 1,
+      "expected": {
+        "expected_status": "answered",
+        "grain": "ticket",
+        "period": "2026-03-01 through 2026-03-03",
+        "units": "ratio",
+        "value": 0.6666666666666666
+      },
+      "grade": {
+        "checks": {
+          "grain": true,
+          "period": false,
+          "units": true,
+          "value": true
+        },
+        "correct": false,
+        "outcome": "confident_wrong"
+      },
+      "max_turns": 6,
+      "metrics": {
+        "cached_tokens": 11008,
+        "completion_tokens": 944,
+        "failed_source_calls": 0,
+        "failure_reason": null,
+        "integrity_ok": true,
+        "knowledge_fingerprint": "11cd8dac7d53f28acb2346793445def1c1cef57f9843d07a44407860be932273",
+        "knowledge_mode": "fallback_operation_plan_rejected",
+        "lessons_injected": 0,
+        "lm_seconds": 27.07799999997951,
+        "max_turns": 6,
+        "operation_audit_status": null,
+        "operation_id": null,
+        "prompt_tokens": 14037,
+        "provider_cost_usd": 0.003784572,
+        "reasoning_tokens": 0,
+        "source_calls": 0,
+        "source_seconds": 0.0,
+        "submitted": true,
+        "turns": 6,
+        "verification_outcome": "not_verified",
+        "wall_seconds": 39.70631290000165,
+        "worker_seconds": 11.047000000020489
+      },
+      "model": "openai/gpt-4.1-mini",
+      "question_id": "service_first_response_sla_rate",
+      "repetition": 0,
+      "timeout": 120.0,
+      "variant": "descriptive",
+      "workbook_correctness": "not_applicable"
+    },
+    {
+      "answer": {
+        "status": "failed"
+      },
+      "arm": "B",
+      "cache": false,
+      "domain": "service",
+      "error": null,
+      "evidence_coverage": 0,
+      "expected": {
+        "expected_status": "answered",
+        "grain": "ticket",
+        "period": "2026-03-01 through 2026-03-03",
+        "units": "ratio",
+        "value": 0.6666666666666666
+      },
+      "grade": {
+        "correct": false,
+        "outcome": "incomplete"
+      },
+      "max_turns": 6,
+      "metrics": {
+        "cached_tokens": 9600,
+        "completion_tokens": 1890,
+        "failed_source_calls": 0,
+        "failure_reason": "max_turns",
+        "integrity_ok": true,
+        "knowledge_fingerprint": "15e95c7538fb096863a6041f2ef7586229883f873cd0c968a11a11910c1e5ee0",
+        "knowledge_mode": "fallback_operation_plan_rejected",
+        "lessons_injected": 0,
+        "lm_seconds": 38.78200000009383,
+        "max_turns": 6,
+        "operation_audit_status": null,
+        "operation_id": null,
+        "prompt_tokens": 13264,
+        "provider_cost_usd": 0.0053951039999999995,
+        "reasoning_tokens": 0,
+        "source_calls": 0,
+        "source_seconds": 0.0,
+        "submitted": false,
+        "turns": 6,
+        "verification_outcome": "not_verified",
+        "wall_seconds": 47.875754399981815,
+        "worker_seconds": 7.263999999937369
+      },
+      "model": "openai/gpt-4.1-mini",
+      "question_id": "service_first_response_sla_rate",
+      "repetition": 0,
+      "timeout": 120.0,
+      "variant": "descriptive",
+      "workbook_correctness": "not_applicable"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "66.7% of tickets met their first-response SLA."
+          }
+        ],
+        "entity_ids": [
+          "T-001",
+          "T-002",
+          "T-003"
+        ],
+        "grain": "ticket",
+        "period": null,
+        "status": "success",
+        "units": "ratio",
+        "value": 0.6666666666666666
+      },
+      "arm": "A",
+      "cache": false,
+      "domain": "service",
+      "error": null,
+      "evidence_coverage": 1,
+      "expected": {
+        "expected_status": "answered",
+        "grain": "ticket",
+        "period": "2026-03-01 through 2026-03-03",
+        "units": "ratio",
+        "value": 0.6666666666666666
+      },
+      "grade": {
+        "checks": {
+          "grain": true,
+          "period": false,
+          "units": true,
+          "value": true
+        },
+        "correct": false,
+        "outcome": "confident_wrong"
+      },
+      "max_turns": 6,
+      "metrics": {
+        "cached_tokens": 11392,
+        "completion_tokens": 719,
+        "failed_source_calls": 0,
+        "failure_reason": null,
+        "integrity_ok": true,
+        "knowledge_fingerprint": null,
+        "knowledge_mode": null,
+        "lessons_injected": 0,
+        "lm_seconds": 20.21799999999348,
+        "max_turns": 6,
+        "operation_audit_status": null,
+        "operation_id": null,
+        "prompt_tokens": 12473,
+        "provider_cost_usd": 0.00269478,
+        "reasoning_tokens": 0,
+        "source_calls": 0,
+        "source_seconds": 0.0,
+        "submitted": true,
+        "turns": 6,
+        "verification_outcome": "not_verified",
+        "wall_seconds": 23.213726599991787,
+        "worker_seconds": 2.047000000020489
+      },
+      "model": "openai/gpt-4.1-mini",
+      "question_id": "service_first_response_sla_rate",
+      "repetition": 0,
+      "timeout": 120.0,
+      "variant": "descriptive",
+      "workbook_correctness": "not_applicable"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Available units at latest snapshot date 2026-03-31 is the sum of on_hand_units minus allocated_units at product-warehouse level."
+          }
+        ],
+        "entity_id": null,
+        "grain": "latest snapshot inventory (product-warehouse level)",
+        "period": "2026-03-31",
+        "status": "success",
+        "units": "units",
+        "value": 186
+      },
+      "arm": "A",
+      "cache": false,
+      "domain": "inventory",
+      "error": null,
+      "evidence_coverage": 1,
+      "expected": {
+        "expected_status": "answered",
+        "grain": "latest warehouse-product snapshot rows",
+        "period": "2026-03-31",
+        "units": "units",
+        "value": 186
+      },
+      "grade": {
+        "checks": {
+          "grain": false,
+          "period": true,
+          "units": true,
+          "value": true
+        },
+        "correct": false,
+        "outcome": "confident_wrong"
+      },
+      "max_turns": 6,
+      "metrics": {
+        "cached_tokens": 3968,
+        "completion_tokens": 118,
+        "failed_source_calls": 0,
+        "failure_reason": null,
+        "integrity_ok": true,
+        "knowledge_fingerprint": null,
+        "knowledge_mode": null,
+        "lessons_injected": 0,
+        "lm_seconds": 6.063000000023749,
+        "max_turns": 6,
+        "operation_audit_status": null,
+        "operation_id": null,
+        "prompt_tokens": 4445,
+        "provider_cost_usd": 0.0007686360000000001,
+        "reasoning_tokens": 0,
+        "source_calls": 0,
+        "source_seconds": 0.0,
+        "submitted": true,
+        "turns": 3,
+        "verification_outcome": "not_verified",
+        "wall_seconds": 17.450716599996667,
+        "worker_seconds": 7.780999999959022
+      },
+      "model": "openai/gpt-4.1-mini",
+      "question_id": "inventory_available_units",
+      "repetition": 0,
+      "timeout": 120.0,
+      "variant": "descriptive",
+      "workbook_correctness": "not_applicable"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": false,
+            "text": "No data available on on_hand_units or allocated_units at latest snapshot."
+          }
+        ],
+        "entity_id": null,
+        "grain": null,
+        "period": null,
+        "status": "abstain",
+        "units": null,
+        "value": null
+      },
+      "arm": "C",
+      "cache": false,
+      "domain": "inventory",
+      "error": null,
+      "evidence_coverage": 0,
+      "expected": {
+        "expected_status": "answered",
+        "grain": "latest warehouse-product snapshot rows",
+        "period": "2026-03-31",
+        "units": "units",
+        "value": 186
+      },
+      "grade": {
+        "correct": false,
+        "outcome": "incomplete"
+      },
+      "max_turns": 6,
+      "metrics": {
+        "cached_tokens": 2560,
+        "completion_tokens": 199,
+        "failed_source_calls": 0,
+        "failure_reason": null,
+        "integrity_ok": true,
+        "knowledge_fingerprint": "997d45929b4ab1551e24fc2b13cb8cdd3162cf04257ee1f931b808257613953f",
+        "knowledge_mode": "registered_operation",
+        "lessons_injected": 0,
+        "lm_seconds": 7.486000000004424,
+        "max_turns": 6,
+        "operation_audit_status": "passed",
+        "operation_id": "inventory_snapshots.tabular.aggregate.v1",
+        "prompt_tokens": 4241,
+        "provider_cost_usd": 0.0012343319999999999,
+        "reasoning_tokens": 0,
+        "source_calls": 0,
+        "source_seconds": 0.0,
+        "submitted": true,
+        "turns": 2,
+        "verification_outcome": "not_verified",
+        "wall_seconds": 9.03496340001584,
+        "worker_seconds": 0.014999999984866008
+      },
+      "model": "openai/gpt-4.1-mini",
+      "question_id": "inventory_available_units",
+      "repetition": 0,
+      "timeout": 120.0,
+      "variant": "descriptive",
+      "workbook_correctness": "not_applicable"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "The total available units at the latest inventory snapshot date 2026-03-31 is calculated as the sum of on_hand_units minus allocated_units."
+          }
+        ],
+        "entity_ids": {
+          "product_id": [
+            "P-001",
+            "P-002"
+          ],
+          "warehouse_id": [
+            "W-01",
+            "W-02"
+          ]
+        },
+        "grain": "warehouse_id, product_id",
+        "period": "2026-03-31",
+        "status": "success",
+        "units": "units",
+        "value": 186
+      },
+      "arm": "B",
+      "cache": false,
+      "domain": "inventory",
+      "error": null,
+      "evidence_coverage": 1,
+      "expected": {
+        "expected_status": "answered",
+        "grain": "latest warehouse-product snapshot rows",
+        "period": "2026-03-31",
+        "units": "units",
+        "value": 186
+      },
+      "grade": {
+        "checks": {
+          "grain": false,
+          "period": true,
+          "units": true,
+          "value": true
+        },
+        "correct": false,
+        "outcome": "confident_wrong"
+      },
+      "max_turns": 6,
+      "metrics": {
+        "cached_tokens": 4736,
+        "completion_tokens": 694,
+        "failed_source_calls": 0,
+        "failure_reason": null,
+        "integrity_ok": true,
+        "knowledge_fingerprint": "060b057a7dd9816a49d82aac40337dd1704c9054bb2c34df8b064315b7adf9ed",
+        "knowledge_mode": "fallback_operation_plan_rejected",
+        "lessons_injected": 0,
+        "lm_seconds": 14.623999999981606,
+        "max_turns": 6,
+        "operation_audit_status": null,
+        "operation_id": null,
+        "prompt_tokens": 8237,
+        "provider_cost_usd": 0.002954556,
+        "reasoning_tokens": 0,
+        "source_calls": 0,
+        "source_seconds": 0.0,
+        "submitted": true,
+        "turns": 4,
+        "verification_outcome": "not_verified",
+        "wall_seconds": 38.95248320000246,
+        "worker_seconds": 23.345000000001164
+      },
+      "model": "openai/gpt-4.1-mini",
+      "question_id": "inventory_available_units",
+      "repetition": 0,
+      "timeout": 120.0,
+      "variant": "descriptive",
+      "workbook_correctness": "not_applicable"
+    }
+  ],
   "variants": [
     "descriptive"
   ]

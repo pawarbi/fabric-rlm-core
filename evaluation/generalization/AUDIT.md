@@ -5,14 +5,45 @@
 **Core/skill freeze:** no mismatches  
 **Generated large fixture:** 250,000 rows, 30,000,049 bytes  
 **Offline reliability suite:** 197 passed, 1 skipped  
-**Live A/B/C accuracy, speed, tokens, and cost:** unmeasured; OpenRouter
-authentication returned 401 before a trial executed.
+**Live smoke:** OpenRouter authentication succeeded. The 15-call budget
+completed six development calls and nine evaluation trials.
+
+## Live smoke results
+
+The smoke used `openai/gpt-4.1-mini`, descriptive names, one unseen question
+per domain, one repetition, six turns, a 120-second timeout, disabled caching,
+and the same settings for A/B/C.
+
+| Metric | Result |
+|---|---:|
+| Fully correct | 0 / 9 |
+| Reference value correct | 6 / 9 |
+| Confident wrong | 7 / 9 |
+| Incomplete | 2 / 9 |
+| Evaluation-trial provider cost | $0.024820488 |
+| Evaluation-trial prompt tokens | 84,118 |
+| Evaluation-trial completion tokens | 6,568 |
+| Evaluation-trial cached tokens reported by provider | 63,616 |
+| Evaluation-trial wall time | 234.14 seconds |
+| Mean evaluation-trial wall time | 26.02 seconds |
+
+A averaged 19.93 seconds per evaluation trial, B 36.50 seconds, and C 21.62
+seconds. Development-call tokens, cost, and latency were not retained by this
+harness version and are excluded from those totals.
+
+Six answers had the correct reference value but failed required reporting
+metadata: inventory A/B did not match the declared grain, manufacturing B/C
+did not identify the exact reporting period or expected grain, and service A/C
+omitted the reporting period. Manufacturing A doubled production from 1,800 to
+3,600 through a join. Service B exhausted six turns. Inventory C abstained
+despite sufficient metadata, while A and B returned the correct value.
 
 ## Findings
 
 | Finding | Reproduction | Expected | Actual | Affected code | Proposed fix |
 |---|---|---|---|---|---|
 | No executable ARR specialization found | `runner offline`; inspect `audit.arr_mentions` | Examples and comments must not count as runtime specialization | 12 ARR mentions were documentation/comments; 0 were executable | Documentation in `analytical_integrity.py`, `knowledge_lessons.py`, `semantic_model.py`, and `trajectory.py` | None. Preserve the executable/documentation distinction in future audits. |
+| Live answer status aliases initially produced false incompletes | Regrade a correct answer with `status="success"` or `"ok"` | Successful structured answers should reach correctness checks | The grader initially accepted only `"answered"` | `evaluation/generalization/grader.py`; regression test in `tests/evaluation/test_generalization_fixtures.py` | **Evaluation mechanism:** canonicalize successful status aliases before grading. Original answers and metrics were preserved and regraded without additional model calls. |
 | Semantic structural learning depends on English date naming patterns | The offline probe creates equivalent semantic profiles with `Period[IsCurrentQuarter]` and `prd[icq]` | Equivalent metadata mappings should yield equivalent lessons | Descriptive profile created 1 current-period lesson; abbreviated profile created 0 | `fabric_rlm/knowledge_lessons.py:49-59`, `:110-151`, `:375-380` | **Universal:** add declared semantic-role fields to the lesson mechanism. **Source metadata:** adapters should map columns/measures to roles such as current-period and period-dimension. **Optional skill:** keep English regexes only as fallback hints. |
 | Lesson retrieval has English and business-vocabulary triggers | Offline score probe compares `customer` with unfamiliar `acct` | Equivalent mapped concepts should retrieve the same lesson | `customer` scored 0.7; `acct` scored 0 | `fabric_rlm/knowledge_retrieval.py:20-52`, `:124-152` | **Universal:** retrieve by stable semantic tags plus lexical overlap. **Source metadata:** provide concept aliases. **Optional language/domain skill:** supply English or domain trigger vocabulary; do not hard-code it in core. |
 | Large files cannot use learned registered operations and are rejected on reuse | Generate the 30 MB CSV; run offline audit; bind the learned package | Large sources should retain an exact stable identity or explicitly use a source version | `snapshot_exact=false`, 0 operations; preflight classifies every later observation as `inexact`, and runtime refuses stale bindings | `fabric_rlm/knowledge_sources.py` bounded head/tail snapshot; `knowledge_operations.py:150-155`; `knowledge_preflight.py:29,107-108,168-169`; `runtime.py:1264` | **Universal:** stream a full digest without placing contents in prompts, or accept an adapter-supplied immutable version identity. **Source metadata:** remote adapters should expose ETag/version/table snapshot IDs. |
@@ -41,16 +72,18 @@ abstention or a request for a missing definition.
 ## Conclusions
 
 **General execution capability:** The frozen code has broad Python execution
-and strong deterministic lifecycle safeguards. The new non-ARR fixtures,
-references, graders, freeze checks, and reliability probes run locally.
-End-to-end model answer correctness and efficiency remain unmeasured because
-the available OpenRouter credential was rejected before execution.
+and strong deterministic lifecycle safeguards. In the smoke, six of nine
+answers reached the correct numeric value, but none preserved every required
+period, grain, unit, and identity field. One unconstrained execution multiplied
+production through a join, one run exhausted its turn budget, and one
+knowledge-enabled run abstained despite sufficient metadata.
 
 **Generalization of learned behavior:** Not established. File `learn()` produced
-an operation catalog but no lessons; semantic structural lessons and retrieval
-are observably sensitive to English/date/business vocabulary. No claim can be
-made that configuration B or C improves unseen-domain answers, and the harness
-will report per-question cases where learning hurts once live trials run.
+an operation catalog but no lessons, and all six B/C packages reported zero
+lessons. B and C did not produce a fully correct answer. Inventory C regressed
+from numerically correct A/B answers to an abstention. Semantic structural
+lessons and retrieval remain observably sensitive to English, date, and
+business vocabulary.
 
 **Portability across tested sources:** Real CSV profiling and a real Fabric SQL
 endpoint query succeeded. Mocked Lakehouse/semantic-model adapter tests passed.
@@ -60,10 +93,10 @@ notebook-runtime credential/discovery providers. Generic SQL is unsupported as
 a knowledge source. Equivalent synthetic semantics were therefore not proven
 across files, Lakehouse, and semantic models.
 
-**Remaining unsupported claims:** Accuracy, learning gain, naming robustness of
-final answers, three-run reliability, tokens, provider cost, latency, workbook
-correctness, and cross-source answer equivalence are not measured. Real
-synthetic Lakehouse/semantic-model evaluation, data refresh/schema-change
-end-to-end runs, and confident-wrong versus abstention rates remain pending a
-working model credential and a Fabric execution path that can load the fixtures
-without changing the frozen implementation.
+**Remaining unsupported claims:** The smoke measures only three descriptive-name
+questions with one repetition. Full 15-question accuracy, abbreviated and
+camel-case naming robustness, three-run reliability, stable A/B/C learning
+gain, development-call efficiency, workbook correctness, and cross-source
+answer equivalence remain unmeasured. Real synthetic Lakehouse/semantic-model
+evaluation and end-to-end refresh/schema-change trials still require a Fabric
+execution path that can load the fixtures without changing the frozen core.

@@ -78,7 +78,9 @@ are never passed to the agent.
 - `audit.py`: executable-vs-documentation ARR scan and behavioral dependency
   probes.
 - `frozen-baseline.json`: SHA-256 freeze manifest for core code and skills.
-- `evidence/`: captured raw offline, live-smoke, and Fabric adapter results.
+- `evidence/`: captured offline, live-smoke, and Fabric adapter results. The
+  live smoke preserves the original answers and metrics and records the
+  grading revision applied after the first live run exposed status aliases.
 - `generated/`: ignored generated fixtures and private references.
 
 The generated definitions document is `generated\definitions.json`. Private

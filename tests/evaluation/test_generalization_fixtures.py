@@ -109,6 +109,27 @@ def test_grader_separates_wrong_incomplete_and_unsupported_claims() -> None:
     assert unsupported["outcome"] == "unsupported_claim"
 
 
+def test_grader_accepts_success_statuses_returned_by_live_models() -> None:
+    expected = {
+        "value": 186,
+        "units": "units",
+        "grain": "latest warehouse-product snapshot rows",
+        "period": "2026-03-31",
+        "expected_status": "answered",
+    }
+    for status in ("success", "ok"):
+        answer = {
+            "status": status,
+            "value": 186,
+            "units": "units",
+            "grain": "latest warehouse-product snapshot rows",
+            "period": "2026-03-31",
+            "claims": [],
+        }
+
+        assert grade_answer(answer, expected)["outcome"] == "correct"
+
+
 def test_definitions_include_mappings_and_insufficient_metadata_case(
     tmp_path: Path,
 ) -> None:

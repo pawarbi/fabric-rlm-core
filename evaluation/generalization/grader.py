@@ -12,6 +12,8 @@ def _equal(actual: object, expected: object) -> bool:
 
 def grade_answer(answer: Mapping[str, Any], expected: Mapping[str, Any]) -> dict[str, Any]:
     status = answer.get("status")
+    if isinstance(status, str):
+        status = status.strip().lower()
     if status in {"timeout", "failed", "incomplete"} or not status:
         return {"outcome": "incomplete", "correct": False}
     expected_status = expected.get("expected_status", "answered")
@@ -21,7 +23,7 @@ def grade_answer(answer: Mapping[str, Any], expected: Mapping[str, Any]) -> dict
             "outcome": "correct" if correct else "confident_wrong",
             "correct": correct,
         }
-    if status != "answered":
+    if status not in {"answered", "success", "ok"}:
         return {"outcome": "incomplete", "correct": False}
     unsupported = [
         claim
