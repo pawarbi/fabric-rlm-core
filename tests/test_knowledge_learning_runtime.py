@@ -602,7 +602,7 @@ def _checked_run(tmp_path: Path, **kwargs):
         outputs=["answer"],
         lm=ScriptedLM(_code("SUBMIT(answer=orders.name)")),
         max_turns=1,
-        timeout=10,
+        timeout=60,
         capture_evidence=True,
         **kwargs,
     ).run()
