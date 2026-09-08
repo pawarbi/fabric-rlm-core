@@ -7,6 +7,7 @@ import pytest
 from fabric_rlm import RLM, load_knowledge
 from fabric_rlm.knowledge_execution import (
     OperationPlan,
+    OperationPlanError,
     OperationPlanFallback,
     execute_registered_operation,
     parse_operation_plan,
@@ -679,3 +680,101 @@ def test_parse_operation_plan_accepts_exact_plan_and_fallback_shapes() -> None:
 def test_parse_operation_plan_rejects_non_contract_responses(response) -> None:
     with pytest.raises(ValueError):
         parse_operation_plan(response)
+
+
+# -- registered measures run through the aggregate guardrail -------------------
+
+
+def _stubbed_sempy(monkeypatch, *, group_count: int):
+    """A real SemanticModel over a fake sempy that records every DAX query."""
+    import sys
+    import types
+
+    pandas = pytest.importorskip("pandas")
+
+    queries: list[str] = []
+
+    def evaluate_dax(dataset, query, **kwargs):
+        queries.append(query)
+        if "group_count" in query:
+            return pandas.DataFrame({"[group_count]": [group_count]})
+        return pandas.DataFrame(
+            {"Geography[Region]": ["East", "West"], "[__m0]": [125.0, 75.0]}
+        )
+
+    fabric = types.ModuleType("sempy.fabric")
+    fabric.list_tables = lambda *a, **k: pandas.DataFrame(
+        [{"Name": "Geography", "Description": ""}, {"Name": "Measures", "Description": ""}]
+    )
+    fabric.list_columns = lambda *a, **k: pandas.DataFrame(
+        [
+            {"Table Name": "Geography", "Column Name": "Region", "Data Type": "String"},
+            {"Table Name": "Geography", "Column Name": "Country", "Data Type": "String"},
+        ]
+    )
+    fabric.list_measures = lambda *a, **k: pandas.DataFrame(
+        [
+            {"Table Name": "Measures", "Measure Name": "Net Revenue", "Measure Expression": "SUM(Sales[Amount])"},
+        ]
+    )
+    fabric.list_relationships = lambda *a, **k: pandas.DataFrame(
+        columns=["From Table", "From Column", "To Table", "To Column"]
+    )
+    fabric.evaluate_dax = evaluate_dax
+    fabric.evaluate_measure = lambda *a, **k: pytest.fail("evaluate_measure must not be called")
+    sempy = types.ModuleType("sempy")
+    sempy.fabric = fabric
+    monkeypatch.setitem(sys.modules, "sempy", sempy)
+    monkeypatch.setitem(sys.modules, "sempy.fabric", fabric)
+    from fabric_rlm.semantic_model import SemanticModel as RealSemanticModel
+
+    return RealSemanticModel("Sales Model", workspace="Analytics", validate=False), queries
+
+
+def test_registered_measure_runs_the_cardinality_preflight_before_evaluating(monkeypatch) -> None:
+    model, queries = _stubbed_sempy(monkeypatch, group_count=2)
+    knowledge = RLM.learn(sources={"sales": model})
+    operation = next(op for op in knowledge.package.operations if op.operation == "semantic_model.measure")
+
+    result = execute_registered_operation(
+        knowledge,
+        operation_id=operation.operation_id,
+        parameters={"measure": "Net Revenue", "groupby": "Geography[Region]"},
+    )
+
+    # the preflight counted the groups first, then the measure was evaluated
+    assert [("group_count" in query) for query in queries] == [True, False]
+    assert "COUNTROWS(" in queries[0]
+    # the packet keeps the shape evaluate_measure produces: the measure
+    # column carries the measure name, without DAX brackets
+    assert result.to_packet()["rows"] == [
+        {"Geography[Region]": "East", "Net Revenue": 125.0},
+        {"Geography[Region]": "West", "Net Revenue": 75.0},
+    ]
+    assert result.audit_status == "passed"
+
+
+def test_registered_measure_too_broad_for_the_operation_is_refused_before_execution(monkeypatch) -> None:
+    model, queries = _stubbed_sempy(monkeypatch, group_count=10_000)
+    knowledge = RLM.learn(sources={"sales": model})
+    operation = next(op for op in knowledge.package.operations if op.operation == "semantic_model.measure")
+    assert operation.max_output_rows == 1_000
+
+    with pytest.raises(OperationPlanError, match="refused before execution"):
+        execute_registered_operation(
+            knowledge,
+            operation_id=operation.operation_id,
+            parameters={"measure": "Net Revenue", "groupby": "Geography[Region]"},
+        )
+    # only the preflight ran; the engine never evaluated the grouping
+    assert queries and all("group_count" in query for query in queries)
+
+
+def test_a_source_that_customizes_measure_keeps_its_own_path() -> None:
+    # FakeSemanticModel overrides measure() only; aggregate() is inherited
+    # and would not work against the fake, so the executor must not pick it.
+    from fabric_rlm.knowledge_execution import _guarded_measure_path
+    from fabric_rlm.semantic_model import SemanticModel as RealSemanticModel
+
+    assert _guarded_measure_path(FakeSemanticModel()) is False
+    assert _guarded_measure_path(RealSemanticModel("Sales Model", validate=False)) is True

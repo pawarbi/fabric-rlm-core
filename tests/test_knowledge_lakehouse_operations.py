@@ -266,3 +266,167 @@ def test_truncated_lakehouse_result_fails_audit(
                 "measure": "amount",
             },
         )
+
+
+# --------------------------------------------------- latest scope semantics --
+def _two_fact_lakehouse(tmp_path: Path, *, regions_in_latest: int = 2) -> LakehouseSource:
+    deltalake = pytest.importorskip("deltalake")
+    pyarrow = pytest.importorskip("pyarrow")
+    latest_regions = (
+        ["A", "B"]
+        if regions_in_latest == 2
+        else [f"R{index:03d}" for index in range(regions_in_latest)]
+    )
+    months = ["2025-01"] + ["2026-09"] * len(latest_regions)
+    regions = ["Z"] + latest_regions
+    years = [month[:4] for month in months]
+    indoor = tmp_path / "indoor"
+    outdoor = tmp_path / "outdoor"
+    deltalake.write_deltalake(
+        str(indoor),
+        pyarrow.table(
+            {
+                "month": months,
+                "region": regions,
+                "year": years,
+                "visits": [100] + [10 * (index + 1) for index in range(len(latest_regions))],
+            }
+        ),
+    )
+    deltalake.write_deltalake(
+        str(outdoor),
+        pyarrow.table(
+            {
+                "month": months,
+                "region": regions,
+                "year": years,
+                "visits": [1] + [index + 1 for index in range(len(latest_regions))],
+            }
+        ),
+    )
+    columns = [
+        ["month", "VARCHAR"],
+        ["region", "VARCHAR"],
+        ["year", "VARCHAR"],
+        ["visits", "BIGINT"],
+    ]
+    entries = []
+    for name, path in (("indoor", indoor), ("outdoor", outdoor)):
+        table = deltalake.DeltaTable(str(path), without_files=True)
+        entries.append(
+            {
+                "kind": "delta",
+                "name": name,
+                "path": str(path),
+                "version": table.version(),
+                "table_id": table.metadata().id,
+                "columns": columns,
+            }
+        )
+    return LakehouseSource("file:///tourism-lakehouse", catalog=entries)
+
+
+def _join_parameters(**overrides):
+    parameters = {
+        "left_catalog_source": "indoor",
+        "right_catalog_source": "outdoor",
+        "left_measure": "visits",
+        "right_measure": "visits",
+        "scope": "latest",
+    }
+    parameters.update(overrides)
+    return parameters
+
+
+def test_latest_scope_returns_every_group_of_the_latest_period(tmp_path: Path) -> None:
+    # Rows: Z in 2025-01, A and B in 2026-09. "Latest" is the latest period,
+    # whichever position the period key was given in, and every group in it.
+    knowledge = RLM.learn(sources={"tourism": _two_fact_lakehouse(tmp_path)})
+    operation = next(
+        op for op in knowledge.package.operations if op.operation == "lakehouse.preaggregate_join"
+    )
+    expected = [
+        {"month": "2026-09", "region": "A", "left_value": 10, "right_value": 1},
+        {"month": "2026-09", "region": "B", "left_value": 20, "right_value": 2},
+    ]
+    for keys in (
+        {"join_key": "month", "join_key_2": "region"},
+        {"join_key": "region", "join_key_2": "month"},
+    ):
+        result = execute_registered_operation(
+            knowledge, operation_id=operation.operation_id, parameters=_join_parameters(**keys)
+        )
+        rows = [
+            {name: row[name] for name in ("month", "region", "left_value", "right_value")}
+            for row in result.to_packet()["rows"]
+        ]
+        assert rows == expected, keys
+        assert result.audit_status == "passed"
+
+    # "all" is untouched: every period, ordered as before
+    everything = execute_registered_operation(
+        knowledge,
+        operation_id=operation.operation_id,
+        parameters=_join_parameters(join_key="month", join_key_2="region", scope="all"),
+    )
+    assert [row["month"] for row in everything.to_packet()["rows"]] == ["2026-09", "2026-09", "2025-01"]
+
+    # no period key, or two of them, cannot define "latest"
+    with pytest.raises(OperationPlanError, match="latest scope requires a temporal"):
+        execute_registered_operation(
+            knowledge, operation_id=operation.operation_id, parameters=_join_parameters(join_key="region")
+        )
+    with pytest.raises(OperationPlanError, match="exactly one"):
+        execute_registered_operation(
+            knowledge,
+            operation_id=operation.operation_id,
+            parameters=_join_parameters(join_key="month", join_key_2="year"),
+        )
+
+
+def test_latest_period_with_too_many_groups_fails_the_row_bound(tmp_path: Path) -> None:
+    knowledge = RLM.learn(sources={"tourism": _two_fact_lakehouse(tmp_path, regions_in_latest=101)})
+    operation = next(
+        op for op in knowledge.package.operations if op.operation == "lakehouse.preaggregate_join"
+    )
+    assert operation.max_output_rows == 100
+    with pytest.raises(ValueError, match="exceeds row bound"):
+        execute_registered_operation(
+            knowledge,
+            operation_id=operation.operation_id,
+            parameters=_join_parameters(join_key="month", join_key_2="region"),
+        )
+
+
+# ------------------------------------------------ typed lakehouse filters --
+def test_lakehouse_aggregate_filters_bind_the_declared_column_type(tmp_path: Path) -> None:
+    knowledge = RLM.learn(sources={"sales": _lakehouse(tmp_path)})
+    operation = knowledge.package.operations[0]
+
+    def total(column: str, value: str, measure: str = "amount") -> object:
+        result = execute_registered_operation(
+            knowledge,
+            operation_id=operation.operation_id,
+            parameters={
+                "catalog_source": "orders",
+                "aggregate": "sum",
+                "measure": measure,
+                "filter_column": column,
+                "filter_value": value,
+            },
+        )
+        return result.to_packet()["rows"][0]["value"]
+
+    # DOUBLE column: both spellings are the same number
+    assert total("amount", "20") == 20.0
+    assert total("amount", "20.0") == 20.0
+    # BIGINT column: a decimal spelling of an integer is that integer
+    assert total("order_id", "1") == 10.5
+    assert total("order_id", "1.0") == 10.5
+    # VARCHAR column: unchanged text comparison
+    assert total("region", "North") == 10.5
+    # a value that is not of the column's type is refused before any query
+    with pytest.raises(OperationPlanError, match="not an integer for column order_id"):
+        total("order_id", "1.5")
+    with pytest.raises(OperationPlanError, match="not a number for column amount"):
+        total("amount", "twenty")

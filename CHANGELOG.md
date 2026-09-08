@@ -92,6 +92,63 @@
   Sign variants are normalized before number extraction, and comma-separated
   lists are compared as item sets like semicolon lists (thousands separators
   and an Oxford "and" are not list structure).
+- **Evidence was relabelled with the destination package's schema.**
+  `RLM.enrich` re-harvested every result with the fingerprints of the
+  package it was enriching into and never read `result.evidence`, so
+  evidence observed under one schema became "current" evidence for a
+  later one, and an active lesson could name a column that no longer
+  exists. The runtime now records the schema and snapshot fingerprints a
+  run executed against on the trajectory (`knowledge_source_fingerprints`,
+  `knowledge_snapshot_fingerprints`, written whenever a package is bound),
+  and `enrich` uses that identity, or the stamps already on
+  `result.evidence`, never the destination's. Records whose fingerprints
+  do not match the package are dropped and noted as an
+  `evidence.incompatible` event on the source; a result that recorded no
+  identity at all (a run with no package bound) is skipped and noted as
+  `evidence.unattributed` on the package. A record with no fingerprint for
+  one of its sources no longer counts as current.
+- **A stale lesson reactivated itself from the evidence that went stale.**
+  `promote_lessons` kept only quarantined and retired lessons sticky, so
+  re-deriving a package after preflight marked a lesson stale flipped it
+  back to active from the retained records. Stale now lifts only when a
+  record from the same call, matching the package's current fingerprints,
+  supports the re-derivation.
+- **`scope="latest"` on `lakehouse.preaggregate_join` returned one row,
+  ordered by whichever key came first.** The SQL ended in
+  `ORDER BY <join_key> DESC, <join_key_2> DESC LIMIT 1`, so with
+  `join_key=region, join_key_2=month` the latest period lost to the
+  lexicographically last region, and with the period first every other
+  group in that period was dropped, with no truncation signal because the
+  limit sat inside the query. Latest now means every group of the maximum
+  period: the period key is the one temporal join key in either position
+  (none, or two, is a plan error), rows are filtered to its maximum and
+  ordered by the remaining keys, and the row bound is the operation's
+  over-fetch so an oversize period fails the audit instead of being
+  trimmed. `scope="all"` is unchanged.
+- **Numeric filters on registered aggregates depended on spelling.** Both
+  the tabular and the Lakehouse aggregate compared
+  `CAST(column AS VARCHAR)` with the filter text, so `"1"` matched nothing
+  in a DOUBLE column that renders `1.0`, and `"100.0"` nothing in a BIGINT
+  column, and the aggregate came back empty without a word. The filter
+  value now takes the column's profiled type (integer, number, boolean;
+  text columns are compared as before) and a value that does not fit the
+  type is refused as a plan error before any query runs. CSV numeric
+  filters compare through a tolerant cast, since the profile and DuckDB
+  each infer types from their own sample. The packet still echoes the
+  parameter as given.
+
+### Changed
+
+- **Registered `semantic_model.measure` operations run through the
+  guardrail.** The host executed them with `SemanticModel.measure`, which
+  has no cardinality preflight and no deadline, so an oversize grouping was
+  fully evaluated and materialized before the row bound rejected it. They
+  now run through `aggregate` with `max_groups` set to the operation's row
+  bound, so a too-broad grouping is refused before the engine evaluates it
+  (a plan error, which falls back like any rejected plan). The packet
+  keeps the `measure()` shape: grouping columns as `Table[Column]`, the
+  measure column named by the measure. A handle that overrides `measure`
+  without overriding `aggregate` keeps its own path.
 
 ## 0.6.0 — 2026-09-04 — analytical integrity guardrails and bounded semantic-model aggregation
 
