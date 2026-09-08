@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Evidence and lessons in knowledge packages.** Each turn now records its
+  source calls as typed telemetry in `TurnRecord.source_calls` (semantic-model
+  `aggregate`, `measure` and `dax` records with grain, counts, estimated
+  groups, timings, outcome codes and value-free measure observations such as
+  identical or constant measure columns; parent-side Lakehouse SQL timings).
+  `RLM(capture_evidence=True)` harvests that telemetry and the run's
+  verification and analytical-integrity status into `result.evidence`
+  (`EvidenceRecord`); `RLM.enrich(knowledge, results)` promotes evidence into
+  `LearnedLesson` records by a per-kind policy (time semantics inferred from
+  schema names, active from `learn()` only for a boolean current-period flag
+  in a period-like table and a candidate for a name match there; expensive
+  grain proved by a cardinality preflight or timeouts in two separate runs;
+  a context requirement nominated by a degenerate unfiltered identity and
+  activated only when the same measure pair is compared under a period
+  filter or grouping and comes out distinct, never by repetition or by a
+  non-period filter; valid grain as an execution fact after two separate
+  runs, with confidence from verified runs; preferred strategy only when the
+  trajectory's lineage shows the coarse result flowing through
+  `restrict_to_candidate_tuples` into the fine query, in runs that passed an
+  actual verifier and the integrity screen; invalid references after
+  repetition; coinciding measure values recorded as `query_behavior` with
+  `semantic_equivalence: false`, never as `metric_equivalence`) and
+  returns a new package, saving it only when asked. Evidence carries
+  execution trust and analytical trust separately; a submission nobody
+  verified is never a verified success. Active lessons relevant to a task are
+  rendered into a "Learned source guidance" prompt section, each line tagged
+  with its source, when the task runs against the live source; the
+  registered-operation planner receives only the lessons for the sources its
+  operations read; candidates are never shown and the source stays bound.
+  Packages without learning records keep format 1 and their fingerprints;
+  packages with them use format 2. Lessons carry a dependency scope: schema
+  drift stales schema-scoped lessons, data-only drift stales snapshot- and
+  operational-scoped ones. Evidence eviction never drops a record a lesson
+  cites. `KnowledgeBenchmarkTrial` gains reasoning tokens, source calls,
+  failed calls, source seconds, first useful query turn, verifier repairs,
+  integrity status and injected lessons, and the report has `cold_parity()`,
+  which requires learned correctness at or above cold overall and per task
+  and fails closed when a task lacks either arm. The registered-operation
+  planner's operation descriptors now carry `required_sources`.
+
 ## 0.6.0 — 2026-09-04 — analytical integrity guardrails and bounded semantic-model aggregation
 
 ### Added

@@ -33,7 +33,10 @@ from .interpreter import (
     WorkerTimeout,
 )
 from .inspector import RunInspector
+from .knowledge import EvidenceRecord, LearnedLesson
 from .knowledge_api import Knowledge, load_knowledge
+from .knowledge_evidence import harvest_evidence
+from .knowledge_retrieval import retrieve_lessons
 from .lm import AnthropicLM, FabricLM, OpenAILM, register_backend, resolve_lm
 from .metrics import ValidationCheck, ValidationReport
 from .replay_lm import (
@@ -73,6 +76,7 @@ __all__ = [
     "AnthropicLM",
     "DivergenceError",
     "ExecResult",
+    "EvidenceRecord",
     "ExcelCellValue",
     "ExcelTargetRange",
     "FabricLM",
@@ -80,6 +84,7 @@ __all__ = [
     "FileDestination",
     "Interpreter",
     "Knowledge",
+    "LearnedLesson",
     "LocalArtifactStore",
     "LakehouseSource",
     "OpenAILM",
@@ -126,6 +131,7 @@ __all__ = [
     "add_excel_workbook_context",
     "chain",
     "compose_skills",
+    "harvest_evidence",
     "iter_target_cells",
     "list_skills",
     "load_knowledge",
@@ -133,6 +139,7 @@ __all__ = [
     "parse_target_ranges",
     "register_backend",
     "resolve_lm",
+    "retrieve_lessons",
     "signature_validator",
     "summarize_workbook_structure_context",
     "summarize_workbook_context",

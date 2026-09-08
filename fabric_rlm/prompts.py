@@ -53,7 +53,7 @@ Use instructions for task-specific guidance, pydantic_schemas for typed outputs,
 ## Inputs available in namespace
 
 {input_listing}
-
+{learned_guidance_section}
 ## Required output fields for SUBMIT()
 
 {output_listing}
@@ -83,6 +83,7 @@ def build_system_prompt(
     preloaded_skills: str | None = None,
     skill_cards: str | None = None,
     router_active: bool = False,
+    learned_guidance: str | None = None,
 ) -> str:
     inputs = inputs or {}
     task_description, outputs = _task_and_outputs(signature, inline_task, inline_outputs)
@@ -92,6 +93,10 @@ def build_system_prompt(
         f"  - {name}: {output_types[name].__name__}" if name in output_types else f"  - {name}"
         for name in outputs
     )
+    # Learned guidance (retrieved lessons from a knowledge package) sits
+    # right after the inputs it describes. Absent, the prompt is byte for
+    # byte what it was before learning existed.
+    guidance = (learned_guidance or "").strip()
     return SYSTEM_PROMPT_TEMPLATE.format(
         task_description=task_description or "(no task description)",
         input_listing=input_listing or "  (none)",
@@ -100,6 +105,7 @@ def build_system_prompt(
             skill_index, preloaded_skills, skill_cards=skill_cards, router_active=router_active
         ),
         cross_source_section=_cross_source_section(inputs),
+        learned_guidance_section=f"\n{guidance}\n" if guidance else "",
     )
 
 

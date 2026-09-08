@@ -184,11 +184,66 @@ selects only typed scalar parameters; it never supplies SQL or file-reader
 expressions. Inexact Lakehouse file catalogs and stale source snapshots fail
 closed rather than entering registered execution.
 
+A package can also carry what earlier runs learned about a source. Every turn
+records its source calls as typed telemetry (the grain a semantic-model query
+asked for, the estimated group count, whether it ran, was rejected or timed
+out, how long it took, which measures came back identical) and never the data
+values. `capture_evidence=True` turns that telemetry, together with the run's
+verification and analytical-integrity status, into `result.evidence`;
+`RLM.enrich` promotes evidence into structured lessons by a per-kind policy and
+returns a new package without touching the saved one:
+
+```python
+knowledge = RLM.learn(sources={"arr_model": model}, store=store)
+
+result = RLM.task(question, knowledge=knowledge, lm=lm, capture_evidence=True).run()
+knowledge = RLM.enrich(knowledge, [result], store=store, overwrite=True)
+
+for lesson in knowledge.package.lessons:
+    print(lesson.kind, lesson.status, lesson.confidence, lesson.subject)
+```
+
+Lesson kinds include `time_semantics` (a boolean current-period flag in a
+period-like table of a semantic model is active from `learn()` on, labelled
+as inferred from schema names; a name match alone in such a table is only a
+candidate, and "current" elsewhere in the schema produces nothing),
+`context_requirement` (a derived measure that collapsed to its base measure
+under an unfiltered context; it stays a candidate, however often that
+recurs, until the same pair is compared under a period filter or a period
+grouping and comes out distinct), `expensive_grain` (proved by a cardinality
+preflight at once, by timeouts only in two separate runs), `valid_grain` (a
+grain that executed and returned rows in two separate runs, rendered as an
+observed feasible query grain; verified runs raise its confidence),
+`preferred_strategy` (only when the trajectory shows a
+`restrict_to_candidate_tuples` step between the coarse and the fine query, in
+runs whose answer passed an actual verifier and the integrity screen),
+`invalid_path`, and `query_behavior` for two measures whose values coincided
+across filtered contexts, recorded with `semantic_equivalence: false`: equal
+values never promote a `metric_equivalence` lesson. Candidates are never
+shown to the model. When a task falls through to the live source, the active
+lessons relevant to it are rendered into a short "Learned source guidance"
+section after the inputs, each line tagged with the source it was learned on;
+the registered-operation planner sees only the lessons for the sources its
+operations read. The source stays bound, so learning narrows the search and
+never removes the cold path. A package with no evidence and no lessons
+serializes exactly as before. Each lesson carries a dependency scope: a
+schema change stales the schema-scoped lessons that depend on the changed
+source, and a data-only change stales the snapshot- and operational-scoped
+ones (grains, costs, strategies) while leaving the schema facts. Today the
+typed source-call telemetry that feeds richer lessons comes from
+`SemanticModel` (and Lakehouse SQL timings); file sources contribute run
+outcomes only, so the behavioural learner is not yet equally deep across
+source types.
+
 The development notebook
 `examples/notebooks/development/rlm_knowledge_benchmark_matrix.py` runs seeded,
 cache-disabled cold-versus-learned trials across these paths and records
 correctness, operation selection, audit status, turns, token usage, LM/worker/
-host/wall time, provenance, and drift rejection.
+host/wall time, provenance, and drift rejection. `KnowledgeBenchmarkReport`
+also records source calls, failed calls, source seconds, the first useful
+query turn, verifier repairs, integrity status and injected lessons, and
+`cold_parity()` states the release rule: learned correctness must not fall
+below cold, overall and on every task.
 
 ```python
 from fabric_rlm import FabricLM, FileDestination, LakehouseSource, RLM

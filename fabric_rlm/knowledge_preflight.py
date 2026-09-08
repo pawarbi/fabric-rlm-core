@@ -10,6 +10,7 @@ from typing import Literal
 from fabric_rlm.knowledge import (
     KnowledgeEvent,
     KnowledgePackage,
+    LearnedLesson,
     RegisteredOperation,
     Relationship,
     SourceProfile,
@@ -270,12 +271,47 @@ def preflight_knowledge(
                 )
             )
 
+    lessons_out: list[LearnedLesson] = []
+    for lesson in package.lessons:
+        # What stales a lesson depends on its scope. A schema-scoped lesson
+        # (a time construct, a measure's context requirement, an invalid
+        # name) survives a data refresh and dies with a schema change; a
+        # snapshot- or operational-scoped lesson (a grain that was cheap or
+        # expensive, a strategy that worked at one data volume) is stale as
+        # soon as the data behind it moved. Inexact snapshots stale all.
+        dependencies = {
+            source_id
+            for source_id in lesson.source_dependencies
+            if source_id in changed_ids
+            and (drift[source_id] != "snapshot" or lesson.dependency_scope != "schema")
+        }
+        if not dependencies:
+            lessons_out.append(lesson)
+            continue
+        reason_code = _reason_code(dependencies, drift)
+        updated_lesson = (
+            lesson
+            if lesson.status in {"quarantined", "retired", "stale"}
+            else replace(lesson, status="stale", reason_code=reason_code)
+        )
+        lessons_out.append(updated_lesson)
+        if updated_lesson.status == "stale" and lesson.status != "stale":
+            add_event(
+                _event(
+                    subject_type="lesson",
+                    subject_id=lesson.lesson_id,
+                    reason_code=reason_code,
+                )
+            )
+
     updated_package = KnowledgePackage(
         package_id=package.package_id,
         sources=tuple(sources_out),
         relationships=tuple(relationships_out),
         operations=tuple(operations_out),
         events=tuple(events),
+        evidence=package.evidence,
+        lessons=tuple(lessons_out),
     )
     return KnowledgePreflightResult(
         package=updated_package,

@@ -317,7 +317,8 @@ def test_rejected_query_does_not_poison_the_handle(engine):
     assert isinstance(raw, pd.DataFrame)
     assert not getattr(m, "_source_access_failed", False)
     reasons = [r.get("reason") for r in m.query_telemetry]
-    assert reasons == ["cardinality_limit", None]
+    assert reasons == ["cardinality_limit", None, None]
+    assert [r["query_type"] for r in m.query_telemetry] == ["aggregate", "aggregate", "dax"]
 
 
 def test_rejection_telemetry_records_why_nothing_ran(engine):
@@ -618,11 +619,16 @@ def test_wire_format_is_unchanged_when_max_groups_is_unset():
 
 
 def test_dax_is_unchanged_and_unguarded(engine):
+    """dax() runs what it is given with no preflight; it only records that it ran."""
     m = model()
     m.dax("EVALUATE 1")
 
     assert engine.queries == ["EVALUATE 1"]
-    assert m.query_telemetry == ()
+    (record,) = m.query_telemetry
+    assert record["query_type"] == "dax" and record["executed"] is True
+    assert "query" not in record and "preflight" not in record
+    assert record["query_chars"] == len("EVALUATE 1")
+    assert len(record["query_fingerprint"]) == 16
 
 
 def test_prompt_listing_prefers_aggregate_over_dax():

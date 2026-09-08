@@ -23,6 +23,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -218,9 +219,14 @@ class ExecResult:
     # tracking state across turns must not overwrite their last good
     # snapshot with it.
     reached_worker: bool = True
+    # Typed records of the source calls the turn made (worker-side semantic
+    # model telemetry plus parent-side Lakehouse queries). ``None`` when the
+    # turn reported none.
+    source_calls: list[dict[str, Any]] | None = None
 
     @classmethod
     def from_response(cls, raw: dict[str, Any]) -> "ExecResult":
+        reported = raw.get("source_calls")
         return cls(
             ok=bool(raw.get("ok")),
             submitted=bool(raw.get("submitted", False)),
@@ -229,6 +235,11 @@ class ExecResult:
             state=dict(raw.get("state", {})),
             error=raw.get("error"),
             submit_payload=raw.get("submit_payload"),
+            source_calls=(
+                [dict(item) for item in reported if isinstance(item, dict)]
+                if isinstance(reported, list)
+                else None
+            ),
         )
 
 
@@ -358,12 +369,20 @@ class Interpreter:
         self._send(
             {"op": "exec", "code": code, "max_submit_bytes": self.max_submit_bytes}
         )
+        self._pending_source_calls: list[dict[str, Any]] = []
         while True:
             raw = self._recv(timeout=timeout)
             if raw.get("method") == "tool_call":
                 self._handle_internal_tool_call(raw)
                 continue
-            return ExecResult.from_response(raw)
+            result = ExecResult.from_response(raw)
+            # Parent-side calls (Lakehouse SQL) join the worker-reported ones
+            # so a turn's source calls are one list wherever they ran.
+            pending = self._pending_source_calls
+            self._pending_source_calls = []
+            if pending:
+                result.source_calls = list(result.source_calls or []) + pending
+            return result
 
     def configure_lm(self, spec: Any) -> dict[str, Any]:
         return self._request({"op": "configure_lm", "spec": encode_for_worker(spec)})
@@ -374,6 +393,47 @@ class Interpreter:
         encoded = {name: encode_for_worker(value) for name, value in inputs.items()}
         return self._request({"op": "set_inputs", "inputs": encoded})
 
+    def _timed_lakehouse_query(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Run a bound Lakehouse query and record its typed telemetry.
+
+        The record names the source by its root and carries the SQL only as
+        a fingerprint and a length: enough to recognise a repeated query
+        shape, nothing that could carry data or a path into durable
+        knowledge.
+        """
+        from hashlib import sha256
+
+        sql = str(kwargs.get("sql", ""))
+        started = time.monotonic()
+        record: dict[str, Any] = {
+            "query_type": "lakehouse_sql",
+            "source_root": str(kwargs.get("root", "")),
+            "query_fingerprint": sha256(sql.encode("utf-8")).hexdigest()[:16],
+            "query_chars": len(sql),
+            "source_count": len(kwargs.get("sources", {}) or {}),
+            "max_rows": kwargs.get("max_rows", 1_000),
+            "executed": True,
+        }
+        try:
+            result = _execute_bound_lakehouse_query(self._lakehouse_sources, kwargs)
+        except Exception as exc:
+            record.update(
+                execution_seconds=round(time.monotonic() - started, 3),
+                reason="execution_error",
+                error=f"{type(exc).__name__}: {exc}"[:300],
+            )
+            self._pending_source_calls.append(record)
+            raise
+        rows = result.get("rows") if isinstance(result, dict) else None
+        record.update(
+            execution_seconds=round(time.monotonic() - started, 3),
+            returned_rows=len(rows) if isinstance(rows, list) else None,
+            truncated=bool(result.get("truncated")) if isinstance(result, dict) else None,
+            total_seconds=round(time.monotonic() - started, 3),
+        )
+        self._pending_source_calls.append(record)
+        return result
+
     def _handle_internal_tool_call(self, request: dict[str, Any]) -> None:
         request_id = request.get("id")
         params = request.get("params", {}) or {}
@@ -381,10 +441,7 @@ class Interpreter:
         kwargs = params.get("kwargs", {}) or {}
         try:
             if name == _LAKEHOUSE_QUERY_TOOL:
-                result = _execute_bound_lakehouse_query(
-                    self._lakehouse_sources,
-                    kwargs,
-                )
+                result = self._timed_lakehouse_query(kwargs)
             elif name == _FILE_PUBLISH_TOOL:
                 result = _execute_bound_file_publish(
                     self._file_destinations,

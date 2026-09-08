@@ -294,10 +294,61 @@ def _validate_source_schema(value: object, path: str) -> None:
         _validate_schema_descriptor(descriptor, f"{path}.{column_name}")
 
 
+_MAX_EVIDENCE_RECORDS = 5_000
+_MAX_LESSONS = 1_000
+_MAX_LEARNING_TEXT = 256
+
+
+def _validate_learning_record(value: object, path: str) -> None:
+    """Evidence and lessons hold names, codes and numbers: no prose, no secrets.
+
+    Every string must be a single bounded line that passes the same secret
+    and locator screens as the rest of the package, and no field may carry a
+    credential-shaped name. The contract classes enforce the same rule on
+    construction; this re-check guards the persisted bytes.
+    """
+    if isinstance(value, Mapping):
+        for name, item in value.items():
+            if not isinstance(name, str):
+                raise ValueError(f"{path} must have string keys")
+            if _is_forbidden_field(name):
+                raise ValueError(
+                    f"{path}.{name} is a privacy-forbidden persisted field"
+                )
+            _validate_learning_record(item, f"{path}.{name}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _validate_learning_record(item, f"{path}[{index}]")
+        return
+    if isinstance(value, str):
+        _validate_string_value(value, path)
+        if len(value) > _MAX_LEARNING_TEXT or any(
+            ord(character) < 32 for character in value
+        ):
+            raise ValueError(
+                f"{path} must be a bounded single-line name or code, not free text"
+            )
+    elif value is not None and type(value) not in {bool, int, float}:
+        raise ValueError(f"{path} must contain bounded structured values")
+
+
 def _validate_persisted_package(payload: object) -> None:
     if not isinstance(payload, Mapping):
         raise ValueError("package must be an object")
     _validate_contract_strings(payload)
+    evidence = payload.get("evidence", ())
+    if isinstance(evidence, (list, tuple)):
+        if len(evidence) > _MAX_EVIDENCE_RECORDS:
+            raise ValueError("package.evidence exceeds the persisted record limit")
+        for index, record in enumerate(evidence):
+            _validate_learning_record(record, f"package.evidence[{index}]")
+    lessons = payload.get("lessons", ())
+    if isinstance(lessons, (list, tuple)):
+        if len(lessons) > _MAX_LESSONS:
+            raise ValueError("package.lessons exceeds the persisted record limit")
+        for index, lesson in enumerate(lessons):
+            _validate_learning_record(lesson, f"package.lessons[{index}]")
     sources = payload.get("sources", ())
     if isinstance(sources, (list, tuple)):
         for index, source in enumerate(sources):
