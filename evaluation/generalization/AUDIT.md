@@ -7,6 +7,8 @@
 **Offline reliability suite:** 197 passed, 1 skipped  
 **Live smoke:** OpenRouter authentication succeeded. The 15-call budget
 completed six development calls and nine evaluation trials.
+**Real Fabric verification:** Ten Delta tables, a dedicated Direct Lake model,
+and both frozen Fabric adapters were exercised in `sandeep_ws`.
 
 ## Live smoke results
 
@@ -50,7 +52,10 @@ despite sufficient metadata, while A and B returned the correct value.
 | `learn()` on ordinary files adds operations but no lessons | Learn the small inventory CSV in the offline audit | Configuration B should have a measurable learned-behavior delta or clearly disclose that it is only an operation catalog | 1 registered aggregate operation, 0 lessons | `fabric_rlm/knowledge_api.py:185+`; `fabric_rlm/knowledge_lessons.py:110` limits structural lessons to semantic models | **Universal:** capture typed telemetry for file operations and promote source-agnostic grain, failure, and strategy lessons. Domain definitions remain metadata/skills. |
 | Registered operations cover only a narrow analytical algebra | Inspect discovered operations and run inventory/service questions requiring joins, deduplication, earliest-event logic, and weighted ratios | Supported tasks should execute equivalently across supported sources or fall back explicitly | Core supports semantic measure, sum/avg/count aggregates, Lakehouse aggregate, and Lakehouse pre-aggregate join; local multi-file joins and weighted-ratio/event semantics require unconstrained Python fallback | `fabric_rlm/knowledge_operations.py:113-198,204-393`; `knowledge_execution.py:140-147,416-840` | **Universal:** add typed relational operators for join cardinality, distinct entities, first/last event, ratio-of-sums, and snapshot selection. **Source metadata:** relationships, keys, event time, completeness flags. **Optional skill:** domain metric definitions. |
 | Generic SQL is not a knowledge source | Inspect the registry and execution implementation set | SQL should be tested only if a supported adapter exists | Registry supports CSV, JSON, JSONL, Parquet, Delta, Lakehouse, semantic model, and opaque files; no generic SQL adapter exists | `knowledge_sources.py:137-140`; `knowledge_lakehouse_sources.py:496-510`; `knowledge_execution.py:140-147` | **Universal:** define a read-only SQL source contract with schema/version identity and bounded execution. **Source metadata:** dialect, endpoint, credentials, table contracts. Do not put business rules in the adapter. |
-| Real Fabric access is environment-dependent beyond Azure CLI auth | `az login`; SQL endpoint discovery/query succeeded; run `fabric-probe.json` | A locally authenticated user should be able to profile supported Fabric handles, or the required runtime should be explicit | REST and `sqlcmd -G` worked. `LakehouseSource` automatic discovery failed outside notebookutils; SemPy failed without `FabricAnalyticsTokenCredentialProvider` | `fabric_rlm/lakehouse.py` discovery path; `fabric_rlm/semantic_model.py`; `knowledge_lakehouse_sources.py`; `knowledge_semantic_model.py` | **Universal:** accept injectable credential/discovery providers. **Source metadata:** explicit catalogs and immutable paths. Keep notebookutils/SemPy as optional Fabric-runtime integrations, not the only real-auth path. |
+| Real Fabric access works, but local and Fabric-runtime credential paths differ | Create the ten `rlm_eval_*` Delta tables; run the explicit-catalog Lakehouse adapter locally; run the frozen wheel in `fabric_rlm_generalization_adapter_eval` | Supported handles should query real Fabric data with documented credentials and paths | The frozen Lakehouse adapter passed locally with an explicit catalog and a process-local storage-token shim. The frozen semantic adapter passed in Fabric with `credential_provider="notebookutils"`. Local automatic discovery still requires notebookutils, and local SemPy 0.14.1 failed through both its default provider and an injected Azure CLI credential/XMLA path | `fabric_rlm/lakehouse.py:321-419,704-813`; `fabric_rlm/semantic_model.py:532-667,785-817`; `knowledge_lakehouse_sources.py`; `knowledge_semantic_model.py` | **Universal:** accept typed injectable credentials and discovery providers for both adapters. **Source metadata:** explicit schema-aware catalogs and immutable item paths. **Runtime integration:** retain notebookutils as the supported in-Fabric provider, but do not make it the only real-auth path. |
+| Schema-enabled Lakehouse paths require the schema segment | Run the explicit catalog first with `Tables/<table>`, then with `Tables/dbo/<table>` | The catalog path must address the physical Delta table | The first form returned `No files in log segment`; `Tables/dbo/<table>` returned 186, 1,800, and 2/3 | Caller-supplied `LakehouseSource.catalog`; schema discovery in `fabric_rlm/lakehouse.py:930-1135` | **Source metadata:** include schema in catalog identities and paths. **Universal:** improve the Delta-reader error so a missing schema path is reported as path/catalog mismatch rather than a generic Delta log failure. |
+| A newly deployed Direct Lake definition requires initialization before DAX use | Deploy the TMDL model, query `INFO.VIEW.TABLES()` and `INFO.VIEW.MEASURES()`, trigger one dataset refresh, then repeat | A deployment harness should not claim readiness until metadata is queryable | Before refresh, both metadata views were empty and measure references failed. Refresh request `9048468c-cdff-4182-9748-9958e67f55ab` completed, after which all three measures returned their reference values | Evaluation deployment workflow; no frozen core code involved | **Evaluation mechanism:** trigger and poll initial refresh, then assert table/measure metadata and reference DAX before adapter evaluation. |
+| Equivalent aggregate semantics pass across real Delta and Direct Lake adapters | Compare independent Python references, Lakehouse SQL, frozen `LakehouseSource.query`, Power BI DAX, and frozen `SemanticModel.aggregate` | Equivalent source semantics should produce equivalent answers | All five paths returned 186 available units, 1,800 complete produced units, and a 2/3 SLA rate. The semantic adapter reported 3 tables, 16 columns, 3 measures, and 3.768 seconds total query time | Real Fabric artifacts recorded in `evidence/fabric-probe.json` | No domain-specific core patch. Retain cross-source reference assertions as an integration gate. |
 | Lifecycle and verifier safety behavior is covered by offline tests | Run `runner offline` | Stale evidence must stay stale; incompatible knowledge must be rejected; failed/skipped verifiers must not claim verification; failures must be bounded | Targeted suite completed with 197 passed and 1 skipped. It covers snapshot/schema drift, stale package rejection, invalid operation fallback, timeout capture, verifier repair, verifier crash logging, and disabled verifier behavior | `knowledge_preflight.py`, `knowledge_api.py`, `knowledge_operations.py`, `runtime.py`, `knowledge_evidence.py` | No domain patch. Retain these as universal invariants and add live end-to-end cases when credentials are available. |
 
 ## Dataset coverage
@@ -85,18 +90,22 @@ from numerically correct A/B answers to an abstention. Semantic structural
 lessons and retrieval remain observably sensitive to English, date, and
 business vocabulary.
 
-**Portability across tested sources:** Real CSV profiling and a real Fabric SQL
-endpoint query succeeded. Mocked Lakehouse/semantic-model adapter tests passed.
-The library's real Lakehouse and semantic-model profiling did not run locally
-despite Azure CLI authentication because those paths required Fabric
-notebook-runtime credential/discovery providers. Generic SQL is unsupported as
-a knowledge source. Equivalent synthetic semantics were therefore not proven
-across files, Lakehouse, and semantic models.
+**Portability across tested sources:** Established for the three tested
+aggregate semantics. Independent Python references, the Lakehouse SQL endpoint,
+the frozen explicit-catalog Lakehouse adapter, Direct Lake DAX, and the frozen
+semantic-model adapter all returned 186, 1,800, and 2/3. The semantic adapter
+ran from an exact frozen wheel in Fabric with notebookutils credentials; the
+Lakehouse adapter ran locally against real OneLake Delta files with an explicit
+schema-aware catalog and a process-local credential shim. Local automatic
+Lakehouse discovery and local SemPy/XMLA authentication remain unsupported.
+Generic SQL remains unsupported as a knowledge source.
 
 **Remaining unsupported claims:** The smoke measures only three descriptive-name
 questions with one repetition. Full 15-question accuracy, abbreviated and
 camel-case naming robustness, three-run reliability, stable A/B/C learning
 gain, development-call efficiency, workbook correctness, and cross-source
-answer equivalence remain unmeasured. Real synthetic Lakehouse/semantic-model
-evaluation and end-to-end refresh/schema-change trials still require a Fabric
-execution path that can load the fixtures without changing the frozen core.
+answer equivalence across all 15 questions remain unmeasured. Cross-source
+equivalence is proven only for three aggregate tasks, not joins, weighted
+ratios, event deduplication, naming variants, insufficient metadata, or learned
+lesson transfer. Live data refresh, schema-change, stale-evidence, and recovery
+trials against the Fabric artifacts remain unmeasured.

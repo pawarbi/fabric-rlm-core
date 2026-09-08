@@ -1,12 +1,119 @@
 {
+  "baseline_commit": "b5226712a9aa41c3173d5f427e81244c333c0179",
+  "workspace": {
+    "display_name": "sandeep_ws",
+    "id": "82ad2591-974a-4ad4-ace6-e24879274a4b"
+  },
   "lakehouse": {
-    "error_type": "LakehouseDiscoveryError",
-    "message": "Automatic Lakehouse discovery requires the Microsoft Fabric notebookutils runtime. Supply catalog= explicitly outside Fabric.",
-    "status": "failed"
+    "display_name": "da_agent_tests",
+    "id": "f13a07da-7f1d-4bc8-9b8c-de25a4961b74",
+    "sql_endpoint_id": "6c81b0da-ce19-4bdc-9b6b-f83ed2a6d9ea",
+    "delta_notebook": {
+      "display_name": "fabric_rlm_generalization_delta_eval",
+      "id": "de3faf13-32f3-484f-ab9e-81b0405c4010",
+      "successful_job_instance_id": "045a7e8d-af4f-4bc1-ba74-b71dc94a3adf"
+    },
+    "tables": [
+      "rlm_eval_inventory_snapshots",
+      "rlm_eval_order_lines",
+      "rlm_eval_products",
+      "rlm_eval_shipment_events",
+      "rlm_eval_defects",
+      "rlm_eval_production",
+      "rlm_eval_sla_policies",
+      "rlm_eval_ticket_events",
+      "rlm_eval_tickets",
+      "rlm_eval_ticket_sla"
+    ],
+    "independent_sql_verification": {
+      "statement_id": "{3750F1E5-A24F-45FC-A35A-7A40555AA771}",
+      "results": {
+        "inventory_available_units": 186.0,
+        "manufacturing_complete_units": 1800.0,
+        "service_first_response_sla_rate": 0.666667
+      },
+      "status": "passed"
+    },
+    "frozen_adapter": {
+      "credential_mode": "Azure CLI storage token exposed through a process-local notebookutils-compatible shim",
+      "catalog_mode": "explicit",
+      "required_table_path_pattern": "Tables/dbo/<table>",
+      "results": {
+        "inventory_available_units": 186,
+        "manufacturing_complete_units": 1800,
+        "service_first_response_sla_rate": 0.6666666666666666
+      },
+      "latency_seconds": {
+        "inventory": 18.328,
+        "manufacturing": 11.485,
+        "service": 6.281
+      },
+      "status": "passed"
+    },
+    "local_automatic_discovery": {
+      "error_type": "LakehouseDiscoveryError",
+      "message": "Automatic Lakehouse discovery requires the Microsoft Fabric notebookutils runtime. Supply catalog= explicitly outside Fabric.",
+      "status": "unsupported_in_local_environment"
+    }
   },
   "semantic_model": {
-    "error_type": "ValueError",
-    "message": "Semantic model 'ecommerce-dataset' in workspace 'sandeep_ws' could not be read: CredentialUnavailableError: lack of valid FabricAnalyticsTokenCredentialProvider. Check the name (it is the model's display name, not the report name) and that you have access.",
-    "status": "failed"
+    "display_name": "fabric_rlm_generalization_semantic_eval",
+    "id": "dd4b37e2-351e-413c-9212-b0f7374d314a",
+    "storage_mode": "DirectLake",
+    "initial_refresh": {
+      "request_id": "9048468c-cdff-4182-9748-9958e67f55ab",
+      "status": "Completed",
+      "behavior_before_refresh": "The definition existed, but DAX INFO.VIEW.TABLES() and INFO.VIEW.MEASURES() returned no rows.",
+      "behavior_after_refresh": "The three tables and measures were queryable."
+    },
+    "independent_dax_verification": {
+      "results": {
+        "inventory_available_units": 186,
+        "manufacturing_complete_units": 1800,
+        "service_first_response_sla_rate": 0.6666666666666666
+      },
+      "status": "passed"
+    },
+    "frozen_adapter_notebook": {
+      "display_name": "fabric_rlm_generalization_adapter_eval",
+      "id": "4994ae48-72af-4b36-8185-ec2812f166b9",
+      "package": "fabric_rlm-0.6.0-py3-none-any.whl",
+      "credential_provider": "notebookutils",
+      "table_count": 3,
+      "column_count": 16,
+      "measure_count": 3,
+      "results": {
+        "available_units_latest_snapshot": 186,
+        "complete_produced_units": 1800,
+        "first_response_sla_rate": 0.6666666666666666
+      },
+      "query_execution_seconds": 3.736,
+      "query_total_seconds": 3.768,
+      "returned_rows": 1,
+      "status": "passed"
+    },
+    "local_frozen_adapter": {
+      "error_type": "CredentialUnavailableError",
+      "message": "lack of valid FabricAnalyticsTokenCredentialProvider",
+      "injected_azure_cli_credential_result": "SemPy reached its XMLA/TOM connection but Microsoft.AnalysisServices rejected authentication. The same user and token audience succeeded through Power BI executeQueries.",
+      "status": "failed_outside_fabric"
+    }
+  },
+  "equivalence": {
+    "tasks": [
+      "latest-snapshot available inventory units",
+      "complete-period produced units",
+      "first-response SLA rate"
+    ],
+    "reference_results": [
+      186,
+      1800,
+      0.6666666666666666
+    ],
+    "lakehouse_sql": "passed",
+    "lakehouse_frozen_adapter": "passed",
+    "direct_lake_dax": "passed",
+    "semantic_model_frozen_adapter": "passed",
+    "status": "passed"
   }
 }

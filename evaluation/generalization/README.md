@@ -86,3 +86,26 @@ are never passed to the agent.
 The generated definitions document is `generated\definitions.json`. Private
 reference answers are in `generated\private\references.json`; the runner never
 binds that path or its contents into an RLM task.
+
+## Real Fabric evidence
+
+`evidence\fabric-probe.json` records the live workspace, Lakehouse, notebook,
+semantic-model, refresh, query, and adapter results. The evaluation created
+temporary artifacts named `fabric_rlm_generalization_*` and `rlm_eval_*` in
+workspace `sandeep_ws`; they remain in place for reproduction.
+
+The real integration verified the same three independently calculated answers
+through the Lakehouse SQL endpoint, frozen `LakehouseSource.query`, Direct Lake
+DAX, and frozen `SemanticModel.aggregate`: 186 latest-snapshot available units,
+1,800 complete-period produced units, and a 2/3 first-response SLA rate.
+
+Important runtime requirements discovered by the test:
+
+- Schema-enabled Lakehouse Delta paths use `Tables/dbo/<table>`.
+- Outside Fabric, `LakehouseSource` needs an explicit catalog and an injectable
+  storage credential; automatic discovery requires notebookutils.
+- `SemanticModel` works in Fabric with
+  `credential_provider="notebookutils"`. Local SemPy/XMLA authentication did
+  not work with the Azure CLI identity even though Power BI REST did.
+- A newly deployed Direct Lake model must be refreshed and its metadata queried
+  successfully before adapter evaluation.
