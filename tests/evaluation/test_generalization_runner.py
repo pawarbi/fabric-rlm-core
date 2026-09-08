@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from evaluation.generalization.runner import (
     build_schedule,
+    classify_live_error,
     make_openrouter_lm,
     normalize_answer,
     result_metrics,
@@ -57,6 +58,19 @@ def test_openrouter_lm_constructor_is_self_contained(monkeypatch) -> None:
             "temperature": 1.0,
         }
     ]
+
+
+def test_live_auth_failure_is_classified_as_unmeasured() -> None:
+    blocked = classify_live_error(
+        RuntimeError("401 Unauthorized: API key expired")
+    )
+
+    assert blocked == {
+        "status": "unmeasured",
+        "reason_code": "authentication",
+        "error_type": "RuntimeError",
+        "message": "401 Unauthorized: API key expired",
+    }
 
 
 def test_normalize_answer_does_not_turn_failures_into_answers() -> None:

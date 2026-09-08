@@ -212,6 +212,28 @@ def make_openrouter_lm(model: str) -> object:
     return dspy.LM(**kwargs)
 
 
+def classify_live_error(error: BaseException) -> dict[str, str]:
+    message = str(error)
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if api_key:
+        message = message.replace(api_key, "[REDACTED]")
+    lowered = message.lower()
+    if any(token in lowered for token in ("401", "403", "unauthorized", "api key", "authentication")):
+        reason_code = "authentication"
+    elif any(token in lowered for token in ("429", "rate limit", "quota")):
+        reason_code = "rate_limit"
+    elif "timeout" in lowered or "timed out" in lowered:
+        reason_code = "timeout"
+    else:
+        reason_code = "integration_error"
+    return {
+        "status": "unmeasured",
+        "reason_code": reason_code,
+        "error_type": type(error).__name__,
+        "message": message,
+    }
+
+
 def _domain_sources(fixtures: Path, domain: str, variant: str) -> dict[str, str]:
     return {
         path.stem: str(path)
@@ -352,31 +374,47 @@ def run_live(
     budget = [max_live_calls]
     packages: dict[tuple[str, str, str], object | None] = {}
     package_summaries: dict[str, object] = {}
-    for variant in variants:
-        for domain in ("inventory", "manufacturing", "service"):
-            sources = _domain_sources(fixtures, domain, variant)
-            learned = RLM.learn(sources=sources)
-            packages[(domain, variant, "A")] = None
-            packages[(domain, variant, "B")] = learned
-            development = _development_results(
-                model=model,
-                domain=domain,
-                variant=variant,
-                definitions=definitions,
-                knowledge=learned,
-                max_turns=max_turns,
-                timeout=timeout,
-                budget=budget,
-            )
-            enriched = RLM.enrich(learned, development) if development else learned
-            packages[(domain, variant, "C")] = enriched
-            package_summaries[f"{domain}:{variant}"] = {
-                "learn_only_lessons": len(learned.package.lessons),
-                "enriched_lessons": len(enriched.package.lessons),
-                "development_runs": len(development),
-                "B_fingerprint": learned.package.fingerprint,
-                "C_fingerprint": enriched.package.fingerprint,
-            }
+    try:
+        for variant in variants:
+            for domain in ("inventory", "manufacturing", "service"):
+                sources = _domain_sources(fixtures, domain, variant)
+                learned = RLM.learn(sources=sources)
+                packages[(domain, variant, "A")] = None
+                packages[(domain, variant, "B")] = learned
+                development = _development_results(
+                    model=model,
+                    domain=domain,
+                    variant=variant,
+                    definitions=definitions,
+                    knowledge=learned,
+                    max_turns=max_turns,
+                    timeout=timeout,
+                    budget=budget,
+                )
+                enriched = RLM.enrich(learned, development) if development else learned
+                packages[(domain, variant, "C")] = enriched
+                package_summaries[f"{domain}:{variant}"] = {
+                    "learn_only_lessons": len(learned.package.lessons),
+                    "enriched_lessons": len(enriched.package.lessons),
+                    "development_runs": len(development),
+                    "B_fingerprint": learned.package.fingerprint,
+                    "C_fingerprint": enriched.package.fingerprint,
+                }
+    except Exception as exc:
+        blocked = {
+            **classify_live_error(exc),
+            "baseline_sha": BASELINE_SHA,
+            "model": model,
+            "seed": seed,
+            "repetitions": repetitions,
+            "variants": list(variants),
+            "max_live_calls": max_live_calls,
+            "remaining_live_calls": budget[0],
+            "packages": package_summaries,
+            "trials": [],
+        }
+        _write_json(output, blocked)
+        return blocked
     trials: list[dict[str, object]] = []
     questions_by_id = {str(question["question_id"]): question for question in selected}
     for trial in schedule:
@@ -582,6 +620,7 @@ if __name__ == "__main__":
 
 __all__ = [
     "build_schedule",
+    "classify_live_error",
     "main",
     "make_openrouter_lm",
     "normalize_answer",
