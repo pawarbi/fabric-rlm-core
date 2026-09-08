@@ -209,7 +209,7 @@ def test_harvest_turns_typed_telemetry_into_evidence_without_data() -> None:
             _turn(4, "keys = candidates[['product', 'region']].drop_duplicates()\nfine = arr_model.aggregate(['ARR $'], groupby=['Products[Product]', 'Sold To[Customer Group]', 'Sold To[Region]'], filters={'Products[Product]': list(keys['product'])})", calls=[{"input": "arr_model", **AGGREGATE_OK, "filter_count": 1, "filter_columns": ["Period[YearQuarter]"], "groupby": ["Products[Product]", "Sold To[Customer Group]", "Sold To[Region]"], "measure_identities": []}]),
             _turn(5, "SUBMIT(answer='x')", submitted=True),
         ],
-        metadata={"analytical_integrity_mode": "repair", "verifier_configured": True},
+        metadata={"analytical_integrity_mode": "repair", "verifier_execution": {"verified": True, "passed": ["output_validator"]}},
     )
 
     class Lakehouse:
@@ -263,7 +263,7 @@ def test_harvest_reflects_run_outcome_and_restricts_to_known_sources() -> None:
         [_turn(1, "m.aggregate(...)", calls=[{"input": "arr_model", **AGGREGATE_OK}], error="ValueError: boom")],
         submitted=False,
         failure_reason="max_turns",
-        metadata={"analytical_integrity_mode": "repair", "analytical_integrity_unresolved": ["x"], "verifier_configured": True},
+        metadata={"analytical_integrity_mode": "repair", "analytical_integrity_unresolved": ["x"], "verifier_execution": {"verified": True, "passed": ["output_validator"]}},
     )
     (query, outcome) = harvest_evidence(failed, sources={"arr_model": object()})
     assert query.verifier_status == "failed" and query.analytical_integrity_status == "unresolved"
@@ -294,7 +294,7 @@ def test_harvest_reflects_run_outcome_and_restricts_to_known_sources() -> None:
             _turn(3, "fine = arr_model.aggregate(['ARR $'], groupby=[...], filters={'Period[YearQuarter]': ['2026/Q2']})", calls=[fine_call]),
         ],
     ):
-        plain = _result(turns, metadata={"analytical_integrity_mode": "repair", "verifier_configured": True})
+        plain = _result(turns, metadata={"analytical_integrity_mode": "repair", "verifier_execution": {"verified": True, "passed": ["output_validator"]}})
         sequence = next(r for r in harvest_evidence(plain, sources={"arr_model": object()}) if r.observation_type == "strategy_sequence")
         assert "strategy" not in sequence.observation and "candidate_identity_preserved" not in sequence.observation
 
@@ -564,3 +564,101 @@ def test_cold_parity_fails_when_any_task_regresses_even_if_the_average_improves(
     partial = KnowledgeBenchmarkReport(seed=1, repetitions=1, trials=tuple(t for t in report.trials if t.arm == "cold"))
     assert partial.cold_parity()["task_results"]["lookup"]["ok"] is False
     assert partial.cold_parity()["parity"] is False
+
+
+# -- verification is execution, not configuration -----------------------------
+
+
+def _skill_loader(tmp_path: Path, name: str, verifier: str | None):
+    import textwrap
+
+    from fabric_rlm.skill_loader import SkillLoader
+
+    body = textwrap.dedent(
+        f"""\
+        ---
+        applies_when:
+          keywords: [{name}]
+        specificity: domain
+        ---
+
+        # {name} skill
+
+        Body.
+        """
+    )
+    if verifier is not None:
+        body += "\n## Required verifier\n\n```python\n" + verifier + "\n```\n"
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / f"{name}.md").write_text(body, encoding="utf-8")
+    return SkillLoader(skill_dir=tmp_path)
+
+
+def _checked_run(tmp_path: Path, **kwargs):
+    source = _csv(tmp_path)
+    return RLM.task(
+        "Return the approved source file name.",
+        inputs={"orders": source},
+        outputs=["answer"],
+        lm=ScriptedLM(_code("SUBMIT(answer=orders.name)")),
+        max_turns=1,
+        timeout=60,
+        capture_evidence=True,
+        **kwargs,
+    ).run()
+
+
+def test_verifier_status_records_what_ran_not_what_was_configured(tmp_path: Path) -> None:
+    # a validator that executed and accepted the answer
+    passed = _checked_run(tmp_path, output_validator=lambda payload: None)
+    execution = passed.trajectory.metadata["verifier_execution"]
+    assert execution["passed"] == ["output_validator"] and execution["verified"] is True
+    assert passed.evidence[0].verifier_status == "passed"
+
+    # a validator that crashed: the runtime accepts the answer (graceful
+    # degrade) but nothing verified it
+    def broken(payload):
+        raise RuntimeError("validator bug")
+
+    degraded = _checked_run(tmp_path, output_validator=broken)
+    assert degraded.submitted and degraded.payload == {"answer": "orders.csv"}
+    execution = degraded.trajectory.metadata["verifier_execution"]
+    assert execution["degraded"] == ["output_validator"] and execution["verified"] is False
+    assert degraded.trajectory.metadata["verifier_configured"] is True
+    assert degraded.evidence[0].verifier_status == "none"
+
+    # a loaded skill without a verifier configures nothing
+    loader = _skill_loader(tmp_path / "plain", "plain", None)
+    unchecked = _checked_run(tmp_path, skills=["plain"], skill_loader=loader, enable_router=False)
+    assert unchecked.submitted
+    assert unchecked.trajectory.metadata["verifier_configured"] is False
+    assert unchecked.trajectory.metadata["verifier_execution"]["checks"] == []
+    assert unchecked.evidence[0].verifier_status == "none"
+
+    # a skill verifier that ran and accepted the answer
+    loader = _skill_loader(
+        tmp_path / "strict",
+        "strict",
+        "def verify(payload):\n    assert payload.get('answer') == 'orders.csv'",
+    )
+    checked = _checked_run(tmp_path, skills=["strict"], skill_loader=loader, enable_router=False)
+    assert checked.submitted
+    execution = checked.trajectory.metadata["verifier_execution"]
+    assert execution["passed"] == ["skill:strict"] and execution["verified"] is True
+    assert checked.evidence[0].verifier_status == "passed"
+
+
+def test_run_ids_keep_identical_executions_apart(tmp_path: Path) -> None:
+    first = _checked_run(tmp_path, output_validator=lambda payload: None)
+    second = _checked_run(tmp_path, output_validator=lambda payload: None)
+    assert [t.code for t in first.turns] == [t.code for t in second.turns]
+    assert first.payload == second.payload
+    assert first.trajectory.metadata["run_id"] != second.trajectory.metadata["run_id"]
+    assert run_fingerprint_for(first) != run_fingerprint_for(second)
+    # harvesting the same execution again is the same observation
+    again = harvest_evidence(first, sources={"orders": object()})
+    assert {r.run_fingerprint for r in again} == {r.run_fingerprint for r in first.evidence}
+    assert {r.evidence_id for r in again} == {r.evidence_id for r in first.evidence}
+    # a result without an id keeps the content fingerprint
+    bare = _result([_turn(1, "x=1")])
+    assert run_fingerprint_for(bare) == run_fingerprint_for(_result([_turn(1, "x=1")]))

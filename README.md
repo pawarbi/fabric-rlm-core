@@ -188,8 +188,10 @@ A package can also carry what earlier runs learned about a source. Every turn
 records its source calls as typed telemetry (the grain a semantic-model query
 asked for, the estimated group count, whether it ran, was rejected or timed
 out, how long it took, which measures came back identical) and never the data
-values. `capture_evidence=True` turns that telemetry, together with the run's
-verification and analytical-integrity status, into `result.evidence`;
+values. `capture_evidence=True` turns that telemetry, together with what actually
+checked the run's answer (a validator or skill verifier that executed and
+accepted it, never configuration alone) and the analytical-integrity
+status, into `result.evidence`;
 `RLM.enrich` promotes evidence into structured lessons by a per-kind policy and
 returns a new package without touching the saved one:
 

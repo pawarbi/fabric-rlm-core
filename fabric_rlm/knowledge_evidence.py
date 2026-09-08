@@ -170,34 +170,47 @@ def _resolve_source_id(
 
 
 def run_fingerprint_for(result: RLMResult) -> str:
-    """A stable identifier for one run, derived from what it executed."""
+    """A stable identifier for one execution of a run.
+
+    The runtime stamps every execution with a ``run_id``; two runs that
+    executed identical code are two observations, and harvesting the same
+    result twice is one. A result without an id (built by hand, or from a
+    trajectory recorded before ids existed) falls back to a content
+    fingerprint, where identical executions collapse into one.
+    """
     turns = [
         {"turn": turn.turn, "code": turn.code, "submitted": turn.submitted}
         for turn in result.trajectory.turns
     ]
     metadata = result.trajectory.metadata or {}
-    return "run." + _domain_fingerprint(
-        "fabric-rlm.knowledge.run.v1",
-        {
-            "turns": turns,
-            "knowledge_fingerprint": metadata.get("knowledge_fingerprint"),
-            "payload": _clean_value(result.payload),
-        },
-    )[:20]
+    material: dict[str, Any] = {
+        "turns": turns,
+        "knowledge_fingerprint": metadata.get("knowledge_fingerprint"),
+        "payload": _clean_value(result.payload),
+    }
+    run_id = metadata.get("run_id")
+    if isinstance(run_id, str) and run_id:
+        material["run_id"] = run_id
+    return "run." + _domain_fingerprint("fabric-rlm.knowledge.run.v1", material)[:20]
 
 
 def verifier_status_for(result: RLMResult) -> str:
     """What verification said about the run's final answer.
 
-    "passed" only when a verifier was actually configured for the run (an
-    output validator or a skill verifier, recorded by the runtime as
-    ``verifier_configured``) and the answer was accepted; a run nobody
-    checked is "none", and it never counts as verified.
+    "passed" only when a check actually executed against the accepted
+    answer and accepted it: the runtime records the checks that ran on the
+    final SUBMIT in ``verifier_execution``, and a check that was skipped,
+    timed out or crashed (the runtime degrades gracefully and accepts the
+    answer) verified nothing. Configuration alone never counts: a loaded
+    skill without a verifier, or a validator that never ran, is "none".
     """
     metadata = result.trajectory.metadata or {}
     if not result.submitted or result.failure_reason is not None:
         return "failed"
-    return "passed" if metadata.get("verifier_configured") is True else "none"
+    execution = metadata.get("verifier_execution")
+    if isinstance(execution, Mapping) and execution.get("verified") is True:
+        return "passed"
+    return "none"
 
 
 def integrity_status_for(result: RLMResult) -> str:
