@@ -1875,9 +1875,10 @@ class RLM:
         The text goes to the registered-operation planner, scoped by
         ``source_ids`` to the sources its operations read, so a measure that
         needs a period context is not planned without one and a lesson about
-        one input is never applied to another; and then to the agent when
-        the task works against the live source, where every line is tagged
-        with its source. Candidate lessons are never shown.
+        one input is never applied to another; and to the agent, whether it
+        works against the live source or interprets an operation's packet,
+        where every line is tagged with its source. Candidate lessons are
+        never shown.
         """
         if self._knowledge is None:
             return None, {}
@@ -1928,11 +1929,11 @@ class RLM:
             knowledge_metadata,
             learned_guidance=planner_guidance,
         )
-        if knowledge_metadata.get("knowledge_mode") == "registered_operation":
-            # The host executed an operation and the agent only synthesizes
-            # its packet; the lessons already shaped the plan.
-            learned_guidance = None
-            guidance_metadata = {**guidance_metadata, **_planner_metadata}
+        # The agent keeps the guidance even when the host executed an
+        # operation: it still interprets the packet (a result grouped by
+        # quarter still has a "current" row to pick), and a live run showed
+        # it labelling the partial quarter as current with the section
+        # withheld. The section costs a few hundred tokens once.
         knowledge_metadata = {**knowledge_metadata, **guidance_metadata}
         bound_inputs = resolve_lakehouse_inputs(bound_inputs)
 

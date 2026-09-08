@@ -396,11 +396,12 @@ def test_active_lessons_are_injected_after_the_inputs_and_the_source_stays_bound
     assert result.trajectory.metadata["knowledge_lessons_available"] == 1
 
 
-def test_lessons_reach_the_operation_planner_but_not_a_synthesis_prompt(tmp_path: Path) -> None:
+def test_lessons_reach_the_operation_planner_and_the_synthesis_prompt(tmp_path: Path) -> None:
     """The planner sees the guidance so it can add the context a measure needs.
 
-    When the host then executes the operation, the agent only synthesizes
-    the packet and gets no guidance section.
+    When the host then executes the operation, the agent that interprets
+    the packet keeps the guidance too: a grouped result still has a
+    "current" row to pick.
     """
     source = _csv(tmp_path)
     knowledge = _knowledge_with_lesson(source, status="active")
@@ -419,7 +420,8 @@ def test_lessons_reach_the_operation_planner_but_not_a_synthesis_prompt(tmp_path
     result = RLM.task("Total amount by region", outputs=["answer"], knowledge=knowledge, lm=lm, max_turns=1, timeout=10).run()
     assert result.trajectory.metadata["knowledge_mode"] == "registered_operation"
     assert "## Learned source guidance" in lm.messages[0][1]["content"]
-    assert "## Learned source guidance" not in _system_prompt(lm)
+    assert "## Learned source guidance" in _system_prompt(lm)
+    assert "knowledge_result" in _system_prompt(lm)
     assert result.trajectory.metadata["knowledge_lessons_injected"] == ["lesson.valid_grain.orders"]
 
 
