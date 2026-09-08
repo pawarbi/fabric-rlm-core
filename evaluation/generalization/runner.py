@@ -26,7 +26,7 @@ RELIABILITY_TESTS = (
     "tests/test_knowledge_api.py",
     "tests/test_knowledge_operations.py",
     "tests/test_knowledge_source_adapters.py",
-    "tests/test_semantic_model_failure_integrity.py",
+    "tests/test_knowledge_semantic_model.py",
     "tests/test_runtime_timeout.py",
     "tests/test_runtime_verifier.py",
 )

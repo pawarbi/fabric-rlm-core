@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import sys
 from types import SimpleNamespace
 
 from evaluation.generalization.runner import (
+    RELIABILITY_TESTS,
     build_schedule,
     classify_live_error,
     make_openrouter_lm,
@@ -12,6 +14,12 @@ from evaluation.generalization.runner import (
     result_metrics,
     summarize_trials,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_reliability_test_selection_exists() -> None:
+    assert [path for path in RELIABILITY_TESTS if not (REPO_ROOT / path).is_file()] == []
 
 
 def test_schedule_is_seeded_balanced_and_keeps_all_three_arms() -> None:
