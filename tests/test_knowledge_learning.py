@@ -289,13 +289,24 @@ def test_structural_lessons_are_name_inferred_and_labelled_so() -> None:
     assert time_lesson.structured_rule["inferred_from"] == "schema_names"
     assert time_lesson.structured_rule["current_period_constructs"] == ("Period[IsCurrentQuarter]",)
     assert time_lesson.dependency_scope == "schema"
-    # a name-only match (a string column) is medium confidence
+    # a name-only match in a period table is a candidate at medium: never injected
     weaker = replace(
         _model_profile(),
         schema={**_model_profile().schema, "columns": {"Period[CurrentYearQuarter]": {"type": "string"}}},
     )
     (weak_lesson,) = [l for l in structural_lessons(KnowledgePackage(package_id="p", sources=(weaker,))) if l.kind == "time_semantics"]
+    assert weak_lesson.status == "candidate"
     assert weak_lesson.confidence == "medium" and weak_lesson.basis == ("schema_name_pattern",)
+    # "current" outside a period-like table says nothing about time
+    elsewhere = replace(
+        _model_profile(),
+        schema={
+            **_model_profile().schema,
+            "columns": {"Accounts[CurrentBalance]": {"type": "number"}, "Customer[IsCurrentCustomer]": {"type": "boolean"}},
+            "measures": {"Revenue[CurrentRevenue]": {"type": "measure"}},
+        },
+    )
+    assert [l for l in structural_lessons(KnowledgePackage(package_id="p", sources=(elsewhere,))) if l.kind == "time_semantics"] == []
     nominated = {lesson.subject: lesson for lesson in by_kind["context_requirement"]}
     assert set(nominated) == {"ARR $ Previous Period", "ARR Growth %"}
     assert all(lesson.status == "candidate" and lesson.confidence == "low" for lesson in nominated.values())
@@ -317,6 +328,11 @@ def test_expensive_grain_needs_proof_or_repetition() -> None:
     lessons = {l.kind: l for l in derive_lessons(package, [timeout])}
     assert lessons["expensive_grain"].status == "candidate"
     assert lessons["expensive_grain"].confidence == "low"
+
+    # a retry inside the same run is the same observation, not a second one
+    retry = replace(timeout, evidence_id="evidence.t1b", turn=2)
+    lessons = {l.kind: l for l in derive_lessons(package, [timeout, retry])}
+    assert lessons["expensive_grain"].status == "candidate"
 
     second = replace(timeout, evidence_id="evidence.t2", run_fingerprint="run.b")
     lessons = {l.kind: l for l in derive_lessons(package, [timeout, second])}
@@ -341,6 +357,10 @@ def test_valid_grain_is_an_execution_fact_whose_confidence_needs_verification() 
     package = _package()
     one = _success("evidence.s1", GRAIN_COARSE)
     lessons = {l.kind: l for l in derive_lessons(package, [one])}
+    assert lessons["valid_grain"].status == "candidate"
+    # two executions in the same run are one observation
+    same_run = _success("evidence.s1b", GRAIN_COARSE, rows=41)
+    lessons = {l.kind: l for l in derive_lessons(package, [one, same_run])}
     assert lessons["valid_grain"].status == "candidate"
 
     two = _success("evidence.s2", GRAIN_COARSE, run="run.two", rows=40, seconds=2.5)
@@ -412,6 +432,21 @@ def test_context_requirement_needs_the_same_pair_distinct_under_a_filter() -> No
     lessons = {l.subject: l for l in derive_lessons(package, [degenerate, alone])}
     assert lessons["ARR $ Previous Period"].status == "candidate"
 
+    # distinct under a region filter is not period evidence
+    by_region = _success(
+        "evidence.d6",
+        ["Products[Product]"],
+        measures=("ARR $", "ARR $ Previous Period", "ARR Growth %"),
+        rows=10,
+        filters=1,
+        run="run.six",
+        compared_measure_pairs=PAIR,
+        filter_columns=["Sold To[Region]"],
+    )
+    lessons = {l.subject: l for l in derive_lessons(package, [degenerate, by_region])}
+    assert lessons["ARR $ Previous Period"].status == "candidate"
+    assert lessons["ARR Growth %"].status == "candidate"
+
     # both measures present, compared, and distinct once a period is pinned
     contrast = _success(
         "evidence.d2",
@@ -421,6 +456,7 @@ def test_context_requirement_needs_the_same_pair_distinct_under_a_filter() -> No
         filters=1,
         run="run.two",
         compared_measure_pairs=PAIR,
+        filter_columns=["Period[YearQuarter]"],
     )
     lessons = {l.subject: l for l in derive_lessons(package, [degenerate, contrast])}
     previous = lessons["ARR $ Previous Period"]
@@ -430,6 +466,13 @@ def test_context_requirement_needs_the_same_pair_distinct_under_a_filter() -> No
     assert previous.dependency_scope == "schema"
     # the constant growth was present and non-constant when filtered
     assert lessons["ARR Growth %"].status == "active"
+    # grouping by a period column pins one period per row and counts too
+    grouped = _success(
+        "evidence.d7", ["Period[YearQuarter]"], measures=("ARR $", "ARR $ Previous Period"), rows=10, run="run.seven",
+        compared_measure_pairs=PAIR,
+    )
+    lessons = {l.subject: l for l in derive_lessons(package, [degenerate, grouped])}
+    assert lessons["ARR $ Previous Period"].status == "active"
     # a filtered identity of the same pair is not a contrast
     still_identical = replace(contrast, evidence_id="evidence.d5", observation={**dict(contrast.observation), "measure_identities": PAIR})
     lessons = {l.subject: l for l in derive_lessons(package, [degenerate, still_identical])}
@@ -595,7 +638,7 @@ def _learned_package() -> KnowledgePackage:
     )
     contrast = _success(
         "evidence.d2", ["Period[YearQuarter]"], measures=("ARR $", "ARR $ Previous Period"), rows=10, filters=1, run="run.two",
-        compared_measure_pairs=PAIR,
+        compared_measure_pairs=PAIR, filter_columns=["Period[YearQuarter]"],
     )
     coarse = [_success(f"evidence.s{i}", GRAIN_COARSE, run=f"run.{i}") for i in range(2)]
     sequences = [_sequence(f"evidence.seq{i}", run=f"run.{i}") for i in range(2)]
@@ -635,11 +678,14 @@ def test_rendering_tags_every_line_with_its_source_and_states_confidence() -> No
     lessons = retrieve_lessons(package, "ARR growth by product and region for the current quarter")
     text = render_learned_guidance(lessons)
     assert text.startswith("## Learned source guidance")
-    assert "- [arr_model] \"Current\" is defined" in text
+    assert "- [arr_model] The schema names a current-period construct" in text
+    assert "is most likely defined there" in text
     assert "Period[IsCurrentQuarter]" in text and "MAX(Date)" in text
     assert "- [arr_model] ARR $ Previous Period requires an explicit period context" in text
     assert "83,000 groups, limit 10,000" in text
     assert "restrict to the candidate tuples" in text
+    assert "executed successfully in prior runs (2 runs, up to 44 rows, 4.0 s): an observed feasible query grain" in text
+    assert "reliable analysis grain" not in text
     assert "Confidence:" in text and "inferred from schema names" in text
     assert "926" not in text and "run." not in text and "evidence." not in text
     assert render_learned_guidance(()) == ""

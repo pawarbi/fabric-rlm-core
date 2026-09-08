@@ -203,10 +203,10 @@ def test_exec_result_and_interpreter_merge_parent_side_lakehouse_calls(monkeypat
 def test_harvest_turns_typed_telemetry_into_evidence_without_data() -> None:
     result = _result(
         [
-            _turn(1, "m.aggregate(...)", calls=[{"input": "arr_model", **AGGREGATE_TOO_BROAD}]),
-            _turn(2, "m.aggregate(...)", calls=[{"input": "arr_model", **AGGREGATE_OK}, {"input": "arr_model", **AGGREGATE_UNKNOWN}]),
-            _turn(3, "candidates = restrict_to_candidate_tuples(hist, worst, keys=['product', 'region'])\nlh.query(...)", calls=[LAKEHOUSE_OK]),
-            _turn(4, "m.aggregate(... filters ...)", calls=[{"input": "arr_model", **AGGREGATE_OK, "filter_count": 1, "filter_columns": ["Period[YearQuarter]"], "groupby": ["Products[Product]", "Sold To[Customer Group]", "Sold To[Region]"], "measure_identities": []}]),
+            _turn(1, "m.aggregate(measures=['ARR $'], groupby=WIDE)", calls=[{"input": "arr_model", **AGGREGATE_TOO_BROAD}]),
+            _turn(2, "coarse = arr_model.aggregate(['ARR $', 'ARR $ Previous Period'], groupby=['Products[Product]', 'Sold To[Region]'])\nbad = arr_model.aggregate(['ARR Growth'])", calls=[{"input": "arr_model", **AGGREGATE_OK}, {"input": "arr_model", **AGGREGATE_UNKNOWN}]),
+            _turn(3, "worst = coarse.sort_values('arr').head(10)\ncandidates = restrict_to_candidate_tuples(hist, worst, keys=['product', 'region'])\nrows = lh.query('select 1')", calls=[LAKEHOUSE_OK]),
+            _turn(4, "keys = candidates[['product', 'region']].drop_duplicates()\nfine = arr_model.aggregate(['ARR $'], groupby=['Products[Product]', 'Sold To[Customer Group]', 'Sold To[Region]'], filters={'Products[Product]': list(keys['product'])})", calls=[{"input": "arr_model", **AGGREGATE_OK, "filter_count": 1, "filter_columns": ["Period[YearQuarter]"], "groupby": ["Products[Product]", "Sold To[Customer Group]", "Sold To[Region]"], "measure_identities": []}]),
             _turn(5, "SUBMIT(answer='x')", submitted=True),
         ],
         metadata={"analytical_integrity_mode": "repair", "verifier_configured": True},
@@ -275,16 +275,28 @@ def test_harvest_reflects_run_outcome_and_restricts_to_known_sources() -> None:
     (query, _outcome) = harvest_evidence(unchecked, sources={"arr_model": object()})
     assert query.verifier_status == "none" and not query.analytically_trusted
 
-    # a finer filtered query without a candidate restriction is only a sequence
-    plain = _result(
+    # a finer filtered query without a candidate restriction is only a sequence,
+    # and so is one with a restriction of something unrelated in between
+    fine_call = {"input": "arr_model", **AGGREGATE_OK, "filter_count": 1, "groupby": ["Products[Product]", "Sold To[Customer Group]", "Sold To[Region]"]}
+    for turns in (
         [
-            _turn(1, "m.aggregate(...)", calls=[{"input": "arr_model", **AGGREGATE_OK}]),
-            _turn(2, "m.aggregate(... filters ...)", calls=[{"input": "arr_model", **AGGREGATE_OK, "filter_count": 1, "groupby": ["Products[Product]", "Sold To[Customer Group]", "Sold To[Region]"]}]),
+            _turn(1, "coarse = arr_model.aggregate(['ARR $'], groupby=['Products[Product]', 'Sold To[Region]'])", calls=[{"input": "arr_model", **AGGREGATE_OK}]),
+            _turn(2, "fine = arr_model.aggregate(['ARR $'], groupby=[...], filters={'Period[YearQuarter]': ['2026/Q2']})", calls=[fine_call]),
         ],
-        metadata={"analytical_integrity_mode": "repair", "verifier_configured": True},
-    )
-    sequence = next(r for r in harvest_evidence(plain, sources={"arr_model": object()}) if r.observation_type == "strategy_sequence")
-    assert "strategy" not in sequence.observation and "candidate_identity_preserved" not in sequence.observation
+        [
+            _turn(1, "coarse = arr_model.aggregate(['ARR $'], groupby=['Products[Product]', 'Sold To[Region]'])", calls=[{"input": "arr_model", **AGGREGATE_OK}]),
+            _turn(2, "other = restrict_to_candidate_tuples(lookup, watchlist, keys=['product'])", calls=[]),
+            _turn(3, "fine = arr_model.aggregate(['ARR $'], groupby=[...], filters={'Products[Product]': list(other['product'])})", calls=[fine_call]),
+        ],
+        [
+            _turn(1, "coarse = arr_model.aggregate(['ARR $'], groupby=['Products[Product]', 'Sold To[Region]'])", calls=[{"input": "arr_model", **AGGREGATE_OK}]),
+            _turn(2, "candidates = restrict_to_candidate_tuples(hist, coarse, keys=['product', 'region'])", calls=[]),
+            _turn(3, "fine = arr_model.aggregate(['ARR $'], groupby=[...], filters={'Period[YearQuarter]': ['2026/Q2']})", calls=[fine_call]),
+        ],
+    ):
+        plain = _result(turns, metadata={"analytical_integrity_mode": "repair", "verifier_configured": True})
+        sequence = next(r for r in harvest_evidence(plain, sources={"arr_model": object()}) if r.observation_type == "strategy_sequence")
+        assert "strategy" not in sequence.observation and "candidate_identity_preserved" not in sequence.observation
 
     off = _result([_turn(1, "x=1", calls=[{"input": "other", **AGGREGATE_OK}])], metadata={"analytical_integrity_mode": "off"})
     records = harvest_evidence(off, sources={"arr_model": object()}, known_source_ids=["arr_model"])
@@ -378,7 +390,7 @@ def test_active_lessons_are_injected_after_the_inputs_and_the_source_stays_bound
     guidance_at = prompt.index("## Learned source guidance")
     outputs_at = prompt.index("## Required output fields for SUBMIT()")
     assert inputs_at < guidance_at < outputs_at
-    assert "- [orders] amount by region is a reliable analysis grain (4 rows)" in prompt
+    assert "- [orders] amount by region executed successfully in prior runs (up to 4 rows): an observed feasible query grain" in prompt
     assert "  orders:" in prompt
     assert result.trajectory.metadata["knowledge_lessons_injected"] == ["lesson.valid_grain.orders"]
     assert result.trajectory.metadata["knowledge_lessons_available"] == 1
@@ -396,7 +408,8 @@ def test_lessons_reach_the_operation_planner_but_not_a_synthesis_prompt(tmp_path
     result = RLM.task("Total amount by region", outputs=["answer"], knowledge=knowledge, lm=lm, max_turns=1, timeout=10).run()
     planner = lm.messages[0][1]["content"]
     assert "Registered operations:" in planner
-    assert "## Learned source guidance" in planner and "reliable analysis grain" in planner
+    assert '"required_sources":["orders"]' in planner
+    assert "## Learned source guidance" in planner and "observed feasible query grain" in planner
     assert "Apply this guidance" in planner
     assert result.trajectory.metadata["knowledge_mode"] == "fallback_no_compatible_operation"
     assert "## Learned source guidance" in _system_prompt(lm)
@@ -542,3 +555,10 @@ def test_cold_parity_fails_when_any_task_regresses_even_if_the_average_improves(
     assert parity["correctness_ok"] is True
     assert parity["task_results"]["decline"] == {"cold": 1.0, "learned": 0.0, "ok": False}
     assert parity["per_task_correctness_ok"] is False and parity["parity"] is False
+
+    # a task missing one arm is not proven either
+    from fabric_rlm.knowledge_benchmark import KnowledgeBenchmarkReport
+
+    partial = KnowledgeBenchmarkReport(seed=1, repetitions=1, trials=tuple(t for t in report.trials if t.arm == "cold"))
+    assert partial.cold_parity()["task_results"]["lookup"]["ok"] is False
+    assert partial.cold_parity()["parity"] is False

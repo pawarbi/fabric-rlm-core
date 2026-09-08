@@ -20,11 +20,18 @@ the same run with capture on or off produces the same answer.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import ast
 import re
 from typing import TYPE_CHECKING, Any
 
 from fabric_rlm.knowledge import EvidenceRecord, _domain_fingerprint
-from fabric_rlm.trajectory import TurnRecord
+from fabric_rlm.trajectory import (
+    TurnRecord,
+    _call_name,
+    _referenced_names,
+    _statements,
+    _written_names,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from fabric_rlm.runtime import RLMResult
@@ -206,7 +213,54 @@ def integrity_status_for(result: RLMResult) -> str:
     return "passed"
 
 
-_CANDIDATE_RESTRICTION = re.compile(r"\brestrict_to_candidate_tuples\s*\(")
+_SOURCE_QUERY_CALLS = frozenset({"aggregate", "measure"})
+
+
+def _has_call(statement: ast.stmt, names: frozenset[str] | set[str]) -> bool:
+    return any(
+        isinstance(node, ast.Call) and _call_name(node) in names
+        for node in ast.walk(statement)
+    )
+
+
+def _candidate_drilldown_proven(
+    statements: Sequence[tuple[int, ast.stmt]],
+    coarse_turn: int,
+    fine_turn: int,
+) -> bool:
+    """Whether the fine query was built from candidates restricted out of the coarse result.
+
+    The same lineage walk the tuple-repair detector uses: the coarse query's
+    output variables (and aliases derived from them) must feed a
+    ``restrict_to_candidate_tuples`` call, and the fine query's statement
+    must read that call's output (or something derived from it). A
+    restriction that reads something else, or whose result the fine query
+    never touches, proves nothing.
+    """
+    outputs: set[str] = set()
+    for turn, statement in statements:
+        if turn == coarse_turn and _has_call(statement, _SOURCE_QUERY_CALLS):
+            outputs |= _written_names(statement)
+    if not outputs:
+        return False
+    lineage = set(outputs)
+    candidates: set[str] = set()
+    for turn, statement in statements:
+        if turn < coarse_turn:
+            continue
+        if turn > fine_turn:
+            break
+        reads = _referenced_names(statement)
+        writes = _written_names(statement)
+        if _has_call(statement, {"restrict_to_candidate_tuples"}) and reads & lineage:
+            candidates |= writes
+        elif candidates and reads & candidates and writes:
+            candidates |= writes
+        elif reads & lineage and writes:
+            lineage |= writes
+        if turn == fine_turn and _has_call(statement, _SOURCE_QUERY_CALLS) and reads & candidates:
+            return True
+    return False
 
 
 def _strategy_observation(
@@ -216,22 +270,21 @@ def _strategy_observation(
     """The staged-analysis shape of a run, with what the trajectory proved.
 
     A coarse query followed by a finer one is only a sequence. It becomes a
-    candidate drill-down when a ``restrict_to_candidate_tuples`` call sits
-    between the two, which is the runtime's own tuple-preserving
-    restriction; a finer query that merely carried a filter proves nothing
-    about how its candidates were chosen.
+    candidate drill-down when the trajectory shows the coarse result
+    flowing through ``restrict_to_candidate_tuples`` into the fine query
+    (see :func:`_candidate_drilldown_proven`); a finer query that merely
+    carried a filter, or a restriction of something else in between,
+    proves nothing about how its candidates were chosen.
     """
-    restriction_turns = {
-        turn.turn for turn in turns if _CANDIDATE_RESTRICTION.search(turn.code or "")
-    }
+    statements = _statements(turns)
     observation: dict[str, Any] = {
         "steps": [{"turn": t, "grain": grain, "filtered": filtered} for t, grain, filtered in steps][:_MAX_OBSERVATION_LIST],
         "step_count": len(steps),
     }
     for index, (coarse_turn, coarse, _f) in enumerate(steps):
         for fine_turn, fine, _filtered in steps[index + 1:]:
-            if coarse and set(coarse) < set(fine) and any(
-                coarse_turn <= t <= fine_turn for t in restriction_turns
+            if coarse and set(coarse) < set(fine) and _candidate_drilldown_proven(
+                statements, coarse_turn, fine_turn
             ):
                 observation.update(
                     strategy="candidate_drilldown",

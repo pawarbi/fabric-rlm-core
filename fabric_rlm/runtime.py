@@ -1299,6 +1299,7 @@ class RLM:
             {
                 "operation_id": operation.operation_id,
                 "operation": operation.operation,
+                "required_sources": list(operation.required_sources),
                 "parameter_schema": operation.to_dict()["parameter_schema"],
                 "parameter_defaults": operation.to_dict()["parameter_defaults"],
                 "grain": operation.grain,

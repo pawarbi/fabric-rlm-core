@@ -112,35 +112,39 @@ def structural_lessons(package: KnowledgePackage) -> tuple[LearnedLesson, ...]:
         fingerprints = {profile.source_id: profile.schema_fingerprint}
         columns = _schema_section(profile, "columns")
         measures = _schema_section(profile, "measures")
+        # Only names inside a period-like table count at all: a
+        # CurrentBalance on an accounts table says nothing about time. A
+        # boolean flag there is the strong form and goes active; a name
+        # match alone is a candidate that a probe can later confirm.
         constructs = [
-            name
+            str(name)
             for name in list(columns) + list(measures)
-            if _CURRENT_PERIOD.search(_leaf(str(name)))
+            if _CURRENT_PERIOD.search(_leaf(str(name))) and _PERIOD_TABLE.search(_table_of(str(name)))
+        ]
+        flags = [
+            name
+            for name in constructs
+            if name in columns
+            and isinstance(columns.get(name), Mapping)
+            and str(columns[name].get("type", "")).lower() in {"boolean", "bool"}
         ]
         if constructs:
-            strong = any(
-                isinstance(columns.get(name), Mapping)
-                and str(columns[name].get("type", "")).lower() in {"boolean", "bool"}
-                and _PERIOD_TABLE.search(_table_of(str(name)))
-                for name in constructs
-                if name in columns
-            )
             lessons.append(
                 LearnedLesson(
                     lesson_id=_lesson_id("time_semantics", profile.source_id, "current period"),
                     kind="time_semantics",
                     subject="current period",
                     structured_rule={
-                        "current_period_constructs": sorted(str(c) for c in constructs)[:_MAX_CONSTRUCTS],
+                        "current_period_constructs": sorted(constructs)[:_MAX_CONSTRUCTS],
                         "rule": "use_declared_current_period",
                         "avoid": "max_date_inference",
                         "inferred_from": "schema_names",
                     },
-                    confidence="high" if strong else "medium",
-                    status="active",
+                    confidence="high" if flags else "medium",
+                    status="active" if flags else "candidate",
                     source_dependencies=(profile.source_id,),
                     source_fingerprints=fingerprints,
-                    basis=("schema_name_pattern", "boolean_period_flag") if strong else ("schema_name_pattern",),
+                    basis=("schema_name_pattern", "boolean_period_flag") if flags else ("schema_name_pattern",),
                     dependency_scope="schema",
                 )
             )
@@ -227,10 +231,13 @@ def _expensive_grain_lessons(
         timeouts = [r for r in group if r.execution_status == "timeout"]
         estimates = [e for e in (_number(r.observation.get("estimated_groups")) for r in cardinality) if e is not None]
         limits = [l for l in (_number(r.observation.get("max_groups")) for r in group) if l is not None]
+        # Repetition means independent runs: a retry inside one run is the
+        # same observation, not a second one.
+        timeout_runs = {r.run_fingerprint for r in timeouts}
         if cardinality:
             status, confidence, basis = "active", "high", ("preflight_estimate",)
             outcome = "cardinality_limit"
-        elif len(timeouts) >= 2:
+        elif len(timeout_runs) >= 2:
             status, confidence, basis = "active", "medium", ("repeated_timeout",)
             outcome = "preflight_timeout"
         else:
@@ -294,12 +301,13 @@ def _valid_grain_lessons(
     for grain, group in by_grain.items():
         verified = [r for r in group if r.analytically_trusted]
         runs = {r.run_fingerprint for r in group}
-        if len(group) >= 2:
+        verified_runs = {r.run_fingerprint for r in verified}
+        if len(runs) >= 2:
             status = "active"
-            confidence = "high" if len(verified) >= 2 else "medium"
+            confidence = "high" if len(verified_runs) >= 2 else "medium"
         else:
             status, confidence = "candidate", "low"
-        basis = ["repeated_execution" if len(group) >= 2 else "single_execution"]
+        basis = ["repeated_execution" if len(runs) >= 2 else "single_execution"]
         if verified:
             basis.append("verified_runs")
         reason_code = None
@@ -355,6 +363,29 @@ def _is_derived_measure(name: str) -> bool:
     return bool(_DERIVED_TIME_MEASURE.search(_leaf(name)))
 
 
+_PERIOD_COLUMN = re.compile(r"(?i)period|quarter|month|year|date|week|fiscal|day")
+
+
+def _is_period_column(column: object) -> bool:
+    return bool(
+        _PERIOD_TABLE.search(_table_of(str(column))) or _PERIOD_COLUMN.search(_leaf(str(column)))
+    )
+
+
+def _has_period_context(observation: Mapping[str, Any]) -> bool:
+    """Whether the query pinned a period, by filter or by grouping.
+
+    Telemetry keeps filter values out, so a period filter is a filter on a
+    column whose table or name is period-like; a query grouped by such a
+    column pins one period per row just as well. A region filter that
+    happens to separate two measures says nothing about period context.
+    """
+    return any(
+        _is_period_column(column)
+        for column in list(observation.get("filter_columns") or ()) + list(observation.get("grain") or ())
+    )
+
+
 def _context_requirement_lessons(
     source_id: str,
     fingerprints: Mapping[str, str],
@@ -366,8 +397,10 @@ def _context_requirement_lessons(
     ``ARR $`` (or a growth rate a constant zero). That nominates the lesson
     and nothing more: a business that is flat produces the same identity,
     however many runs observe it. The lesson becomes active only when the
-    same pair was compared again under a period filter and came out
-    distinct, or a constant derived measure came out non-constant.
+    same pair was compared again under a filter on a period dimension and
+    came out distinct, or a constant derived measure came out non-constant
+    there. A contrast under some other filter (a region, a product) is not
+    period evidence and does not count.
     """
     degenerate: dict[str, list[tuple[EvidenceRecord, str | None, str | None]]] = {}
     filtered_distinct: dict[tuple[str, str], list[EvidenceRecord]] = {}
@@ -377,7 +410,8 @@ def _context_requirement_lessons(
             continue
         observation = record.observation
         measures = [m for m in (observation.get("measures") or ()) if isinstance(m, str)]
-        unfiltered = not observation.get("filter_count")
+        period_context = _has_period_context(observation)
+        unfiltered = not observation.get("filter_count") and not period_context
         identities = _pairs(observation.get("measure_identities"))
         compared = _pairs(observation.get("compared_measure_pairs")) or identities
         constants = observation.get("constant_measures") or {}
@@ -391,7 +425,7 @@ def _context_requirement_lessons(
             for measure, constant in constants.items():
                 if _is_derived_measure(str(measure)) and constant in {"zero", "one"}:
                     degenerate.setdefault(str(measure), []).append((record, None, str(constant)))
-        else:
+        elif period_context:
             for pair in compared:
                 if pair not in identities:
                     filtered_distinct.setdefault(pair, []).append(record)

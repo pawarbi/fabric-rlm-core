@@ -203,14 +203,17 @@ for lesson in knowledge.package.lessons:
     print(lesson.kind, lesson.status, lesson.confidence, lesson.subject)
 ```
 
-Lesson kinds include `time_semantics` (a semantic model whose schema names a
-current-period construct, active from `learn()` on and labelled as inferred
-from names), `context_requirement` (a derived measure that collapsed to its
-base measure under an unfiltered context; it stays a candidate, however often
-that recurs, until the same pair is compared under a period filter and comes
-out distinct), `expensive_grain` (proved by a cardinality preflight at once,
-by a timeout only after repetition), `valid_grain` (a grain that executed and
-returned rows twice; verified runs raise its confidence),
+Lesson kinds include `time_semantics` (a boolean current-period flag in a
+period-like table of a semantic model is active from `learn()` on, labelled
+as inferred from schema names; a name match alone in such a table is only a
+candidate, and "current" elsewhere in the schema produces nothing),
+`context_requirement` (a derived measure that collapsed to its base measure
+under an unfiltered context; it stays a candidate, however often that
+recurs, until the same pair is compared under a period filter or a period
+grouping and comes out distinct), `expensive_grain` (proved by a cardinality
+preflight at once, by timeouts only in two separate runs), `valid_grain` (a
+grain that executed and returned rows in two separate runs, rendered as an
+observed feasible query grain; verified runs raise its confidence),
 `preferred_strategy` (only when the trajectory shows a
 `restrict_to_candidate_tuples` step between the coarse and the fine query, in
 runs whose answer passed an actual verifier and the integrity screen),

@@ -212,8 +212,8 @@ def _render_rule(lesson: LearnedLesson) -> str:
         constructs = rule.get("current_period_constructs") or ()
         listed = ", ".join(str(c) for c in list(constructs)[:4])
         return (
-            f"\"Current\" is defined by an explicit model construct ({listed}). "
-            "Do not infer the current period from MAX(Date)."
+            f"The schema names a current-period construct ({listed}); \"current\" is most "
+            "likely defined there. Use it, and do not infer the current period from MAX(Date)."
         )
     if kind == "context_requirement":
         measure = rule.get("measure", lesson.subject)
@@ -240,12 +240,18 @@ def _render_rule(lesson: LearnedLesson) -> str:
     if kind == "valid_grain":
         measures = ", ".join(str(m) for m in list(rule.get("measures") or [])[:3]) or "measures"
         detail = []
+        runs = rule.get("runs")
+        if runs is not None:
+            detail.append(f"{int(runs)} run{'s' if int(runs) != 1 else ''}")
         if rule.get("max_rows_observed") is not None:
-            detail.append(f"{int(rule['max_rows_observed']):,} rows")
+            detail.append(f"up to {int(rule['max_rows_observed']):,} rows")
         if rule.get("max_seconds_observed") is not None:
             detail.append(f"{float(rule['max_seconds_observed']):.1f} s")
         suffix = f" ({', '.join(detail)})" if detail else ""
-        return f"{measures} by {_grain_text(rule.get('grain'))} is a reliable analysis grain{suffix}."
+        return (
+            f"{measures} by {_grain_text(rule.get('grain'))} executed successfully in prior "
+            f"runs{suffix}: an observed feasible query grain, not a validated analysis."
+        )
     if kind == "preferred_strategy":
         coarse = _grain_text(rule.get("coarse_grain"))
         fine = _grain_text(rule.get("drilldown_grain"))

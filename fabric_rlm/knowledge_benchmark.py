@@ -188,7 +188,8 @@ class KnowledgeBenchmarkReport:
                 outcomes = [trial.numeric_correct for trial in self.trials if trial.task_id == task_id and trial.arm == arm]
                 rates[arm] = _rate(outcomes)
             cold_rate, learned_rate = rates["cold"], rates["learned"]
-            ok = cold_rate is None or learned_rate is None or learned_rate >= cold_rate
+            # Fail closed: a task without both arms is not proven.
+            ok = cold_rate is not None and learned_rate is not None and learned_rate >= cold_rate
             task_results[task_id] = {"cold": cold_rate, "learned": learned_rate, "ok": ok}
         per_task_ok = all(bool(item["ok"]) for item in task_results.values())
         return {
