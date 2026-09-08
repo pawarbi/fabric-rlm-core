@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
+from types import SimpleNamespace
 
 from evaluation.generalization.runner import (
     build_schedule,
+    make_openrouter_lm,
     normalize_answer,
     result_metrics,
     summarize_trials,
@@ -30,6 +33,30 @@ def test_schedule_is_seeded_balanced_and_keeps_all_three_arms() -> None:
         for repetition in range(3)
         for arm in ("A", "B", "C")
     }
+
+
+def test_openrouter_lm_constructor_is_self_contained(monkeypatch) -> None:
+    calls = []
+
+    class FakeLM:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setitem(sys.modules, "dspy", SimpleNamespace(LM=FakeLM))
+
+    make_openrouter_lm("openai/gpt-4.1-mini")
+
+    assert calls == [
+        {
+            "model": "openrouter/openai/gpt-4.1-mini",
+            "api_base": "https://openrouter.ai/api/v1",
+            "api_key": "test-key",
+            "max_tokens": 4096,
+            "cache": False,
+            "temperature": 1.0,
+        }
+    ]
 
 
 def test_normalize_answer_does_not_turn_failures_into_answers() -> None:

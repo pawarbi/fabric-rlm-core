@@ -191,6 +191,27 @@ def _provider_cost(lm: object) -> float | None:
     return sum(costs) if costs else None
 
 
+def make_openrouter_lm(model: str) -> object:
+    import dspy
+
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is not available")
+    reasoning = model.lower().startswith(
+        ("openai/gpt-5", "openai/o1", "openai/o3", "openai/o4")
+    )
+    kwargs: dict[str, object] = {
+        "model": f"openrouter/{model}",
+        "api_base": "https://openrouter.ai/api/v1",
+        "api_key": api_key,
+        "max_tokens": 16_000 if reasoning else 4_096,
+        "cache": False,
+    }
+    if not reasoning:
+        kwargs["temperature"] = 1.0
+    return dspy.LM(**kwargs)
+
+
 def _domain_sources(fixtures: Path, domain: str, variant: str) -> dict[str, str]:
     return {
         path.stem: str(path)
@@ -231,9 +252,8 @@ def _run_rlm(
     timeout: float,
 ) -> tuple[object, object, float]:
     from fabric_rlm import RLM
-    from tests.behavior.runner import make_lm
 
-    lm = make_lm(model)
+    lm = make_openrouter_lm(model)
     rlm = RLM.from_task(
         task=_task_text(question, definitions, variant),
         inputs=dict(inputs or {}),
@@ -563,6 +583,7 @@ if __name__ == "__main__":
 __all__ = [
     "build_schedule",
     "main",
+    "make_openrouter_lm",
     "normalize_answer",
     "result_metrics",
     "run_live",
