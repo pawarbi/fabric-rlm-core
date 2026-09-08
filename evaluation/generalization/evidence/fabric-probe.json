@@ -1,0 +1,12 @@
+{
+  "lakehouse": {
+    "error_type": "LakehouseDiscoveryError",
+    "message": "Automatic Lakehouse discovery requires the Microsoft Fabric notebookutils runtime. Supply catalog= explicitly outside Fabric.",
+    "status": "failed"
+  },
+  "semantic_model": {
+    "error_type": "ValueError",
+    "message": "Semantic model 'ecommerce-dataset' in workspace 'sandeep_ws' could not be read: CredentialUnavailableError: lack of valid FabricAnalyticsTokenCredentialProvider. Check the name (it is the model's display name, not the report name) and that you have access.",
+    "status": "failed"
+  }
+}

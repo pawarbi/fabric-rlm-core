@@ -1,0 +1,17 @@
+{
+  "baseline_sha": "b5226712a9aa41c3173d5f427e81244c333c0179",
+  "error_type": "AuthenticationError",
+  "max_live_calls": 15,
+  "message": "litellm.AuthenticationError: AuthenticationError: OpenrouterException - {\"error\":{\"message\":\"API key expired.\",\"code\":401,\"metadata\":{\"headers\":{\"WWW-Authenticate\":\"Bearer error=\\\"invalid_token\\\", error_description=\\\"API key expired\\\"\"}}}}",
+  "model": "openai/gpt-4.1-mini",
+  "packages": {},
+  "reason_code": "authentication",
+  "remaining_live_calls": 15,
+  "repetitions": 1,
+  "seed": 20260908,
+  "status": "unmeasured",
+  "trials": [],
+  "variants": [
+    "descriptive"
+  ]
+}

@@ -1,0 +1,125 @@
+{
+  "audit": {
+    "arr_mentions": {
+      "documentation_or_comments": [
+        {
+          "line": 12,
+          "path": "fabric_rlm/analytical_integrity.py",
+          "text": "current ARR. It selected Product x Region x Customer Group candidates, then"
+        },
+        {
+          "line": 587,
+          "path": "fabric_rlm/analytical_integrity.py",
+          "text": "The declaration is read without its qualifiers (\"absolute ARR loss in"
+        },
+        {
+          "line": 588,
+          "path": "fabric_rlm/analytical_integrity.py",
+          "text": "USD (arr_2025Q4 - arr_2026Q2)\" is \"absolute ARR loss\") and its last"
+        },
+        {
+          "line": 673,
+          "path": "fabric_rlm/analytical_integrity.py",
+          "text": "# absolute ARR loss in USD\"; the declaration is where the reader"
+        },
+        {
+          "line": 674,
+          "path": "fabric_rlm/analytical_integrity.py",
+          "text": "# audits the choice. \"ranked by current ARR\" is not covered by it."
+        },
+        {
+          "line": 689,
+          "path": "fabric_rlm/analytical_integrity.py",
+          "text": "# \"Change: $-0 (-0.0%)\", \"Change in ARR: $0\", \"abs drop = $0\", \"impact metric (ARR drop): $0\""
+        },
+        {
+          "line": 405,
+          "path": "fabric_rlm/knowledge_lessons.py",
+          "text": "Under an unfiltered context ``ARR $ Previous Period`` returned exactly"
+        },
+        {
+          "line": 406,
+          "path": "fabric_rlm/knowledge_lessons.py",
+          "text": "``ARR $`` (or a growth rate a constant zero). That nominates the lesson"
+        },
+        {
+          "line": 6,
+          "path": "fabric_rlm/semantic_model.py",
+          "text": "task=\"Which product line has the highest ARR?\","
+        },
+        {
+          "line": 7,
+          "path": "fabric_rlm/semantic_model.py",
+          "text": "inputs={\"arr\": SemanticModel(\"ARR Model SF (79)\")},"
+        },
+        {
+          "line": 644,
+          "path": "fabric_rlm/semantic_model.py",
+          "text": "Generated code reaches for ``columns(\"ARR Data\")`` unprompted, and"
+        },
+        {
+          "line": 1033,
+          "path": "fabric_rlm/trajectory.py",
+          "text": "ranking metric (\"Ranking metric: absolute ARR loss\" covers a sort by"
+        }
+      ],
+      "executable": []
+    },
+    "large_file": {
+      "path": "service/descriptive/ticket_event_history_large.csv",
+      "registered_operations": 0,
+      "size_bytes": 30000049,
+      "snapshot_exact": false
+    },
+    "learn_only": {
+      "file_lessons": 0,
+      "small_csv_operations": 1
+    },
+    "naming_effects": {
+      "abbreviated_time_construct_lessons": 0,
+      "descriptive_time_construct_lessons": 1,
+      "english_customer_trigger_score": 0.7,
+      "unfamiliar_account_trigger_score": 0.0
+    },
+    "sources": {
+      "mocked_adapter_tests": [
+        "lakehouse",
+        "semantic_model"
+      ],
+      "real_file_profiles": [
+        "csv"
+      ],
+      "unsupported_or_unavailable": [
+        "generic_sql",
+        "real_lakehouse_no_credentials",
+        "real_semantic_model_no_credentials"
+      ]
+    }
+  },
+  "baseline_sha": "b5226712a9aa41c3173d5f427e81244c333c0179",
+  "freeze_mismatches": [],
+  "real_integrations": {
+    "files": "tested",
+    "lakehouse": "unavailable_no_credentials",
+    "semantic_model": "unavailable_no_credentials"
+  },
+  "reliability_tests": {
+    "command": [
+      "C:\\Users\\sandeeppawar\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\\python.exe",
+      "-m",
+      "pytest",
+      "tests/test_knowledge_preflight.py",
+      "tests/test_knowledge_api.py",
+      "tests/test_knowledge_operations.py",
+      "tests/test_knowledge_source_adapters.py",
+      "tests/test_knowledge_semantic_model.py",
+      "tests/test_runtime_timeout.py",
+      "tests/test_runtime_verifier.py",
+      "-q"
+    ],
+    "elapsed_seconds": 25.41132149999612,
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "........................................................................ [ 36%]\n............................................s........................... [ 72%]\n......................................................                   [100%]\n"
+  }
+}
