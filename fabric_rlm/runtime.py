@@ -1835,6 +1835,21 @@ class RLM:
         # One id per execution. Two runs that executed the same code are two
         # observations; harvesting the same result twice is one.
         trajectory.metadata.setdefault("run_id", uuid.uuid4().hex)
+        if self._knowledge is not None:
+            # The identity of the sources this run actually executed against,
+            # keyed by the alias it bound. RLM.enrich reads it so evidence
+            # keeps the schema it was observed under, whatever package it is
+            # later enriched into. Recorded whether or not evidence is
+            # captured now: enrich can harvest a plain result later.
+            bound_sources = self._knowledge.package.sources
+            trajectory.metadata.setdefault(
+                "knowledge_source_fingerprints",
+                {source.source_id: source.schema_fingerprint for source in bound_sources},
+            )
+            trajectory.metadata.setdefault(
+                "knowledge_snapshot_fingerprints",
+                {source.source_id: source.snapshot_fingerprint for source in bound_sources},
+            )
         if not self.capture_evidence:
             return result
         options: dict[str, Any] = {}

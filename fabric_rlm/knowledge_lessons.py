@@ -180,20 +180,29 @@ def _current_evidence(
     """Evidence whose stamped schema fingerprints match the package's sources.
 
     A record captured against an older schema is not thrown away, but it
-    does not promote anything against the schema that replaced it.
+    does not promote anything against the schema that replaced it. A record
+    with no fingerprint for one of its sources is unknown, not current: it
+    promotes nothing either.
     """
     current = {source.source_id: source.schema_fingerprint for source in package.sources}
     kept: list[EvidenceRecord] = []
     for record in evidence:
         if any(source_id not in current for source_id in record.source_ids):
             continue
-        stale = any(
-            record.source_fingerprints.get(source_id) not in {None, current[source_id]}
+        if all(
+            record.source_fingerprints.get(source_id) == current[source_id]
             for source_id in record.source_ids
-        )
-        if not stale:
+        ):
             kept.append(record)
     return kept
+
+
+def current_evidence(
+    package: KnowledgePackage,
+    evidence: Iterable[EvidenceRecord],
+) -> list[EvidenceRecord]:
+    """The records in ``evidence`` whose fingerprints match ``package``."""
+    return _current_evidence(package, evidence)
 
 
 def _number(value: Any) -> float | None:
@@ -730,9 +739,12 @@ def promote_lessons(
     Incoming evidence is deduplicated against the package and within the
     call. Existing lessons are replaced by their re-derivation when their
     identity matches; quarantined and retired lessons keep that status
-    whatever the evidence says (a person put them there); a lesson the
-    evidence no longer supports is retained as it was. Every status change
-    is recorded as a lesson event.
+    whatever the evidence says (a person put them there); a stale lesson
+    stays stale until a record from this call, matching the package's
+    current fingerprints, supports its re-derivation (the evidence already
+    in the package is what went stale, so re-reading it proves nothing); a
+    lesson the evidence no longer supports is retained as it was. Every
+    status change is recorded as a lesson event.
     """
     known_ids = {record.evidence_id for record in package.evidence}
     fresh: list[EvidenceRecord] = []
@@ -741,6 +753,7 @@ def promote_lessons(
             known_ids.add(record.evidence_id)
             fresh.append(record)
     source_ids = {source.source_id for source in package.sources}
+    fresh_current_ids = {record.evidence_id for record in _current_evidence(package, fresh)}
     merged_evidence = [
         record
         for record in list(package.evidence) + fresh
@@ -774,6 +787,12 @@ def promote_lessons(
             continue
         if before is not None and before.status in {"quarantined", "retired"}:
             after = replace(after, status=before.status, reason_code=before.reason_code)
+        elif (
+            before is not None
+            and before.status == "stale"
+            and not (set(after.evidence_ids) & fresh_current_ids)
+        ):
+            after = replace(after, status="stale", reason_code=before.reason_code)
         final[lesson_id] = after
         previous = before.status if before is not None else None
         if previous != after.status:
@@ -792,4 +811,4 @@ def promote_lessons(
     )
 
 
-__all__ = ["derive_lessons", "promote_lessons", "structural_lessons"]
+__all__ = ["current_evidence", "derive_lessons", "promote_lessons", "structural_lessons"]

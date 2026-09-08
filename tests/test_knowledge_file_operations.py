@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from fabric_rlm import File, RLM
-from fabric_rlm.knowledge_execution import execute_registered_operation
+from fabric_rlm.knowledge_execution import OperationPlanError, execute_registered_operation
 
 
 def _orders_csv(tmp_path: Path) -> Path:
@@ -218,3 +218,71 @@ def test_delta_aggregate_reads_only_current_table_state(tmp_path: Path) -> None:
     assert result.to_packet()["rows"] == [
         {"region": "Current", "value": 99.0},
     ]
+
+
+# ------------------------------------------------------- typed filters --
+def _ratings_csv(tmp_path: Path) -> Path:
+    path = tmp_path / "ratings.csv"
+    path.write_text(
+        "product,rating,revenue,active\n"
+        "A,1.0,100,true\n"
+        "B,2.5,50,false\n"
+        "C,1.0,25,true\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _total(knowledge, *, measure: str, column: str, value: str) -> object:
+    result = execute_registered_operation(
+        knowledge,
+        operation_id="ratings.tabular.aggregate.v1",
+        parameters={
+            "aggregate": "sum",
+            "measure": measure,
+            "filter_column": column,
+            "filter_value": value,
+        },
+    )
+    return result.to_packet()["rows"][0]["value"]
+
+
+def test_csv_filters_compare_numbers_as_numbers(tmp_path: Path) -> None:
+    # rating is 1.0 in the file: "1" and "1.0" are the same number, and the
+    # aggregate must not depend on which spelling the planner chose.
+    knowledge = RLM.learn(sources={"ratings": _ratings_csv(tmp_path)})
+    assert _total(knowledge, measure="revenue", column="rating", value="1") == 125
+    assert _total(knowledge, measure="revenue", column="rating", value="1.0") == 125
+    assert _total(knowledge, measure="rating", column="revenue", value="100") == 1.0
+    assert _total(knowledge, measure="rating", column="revenue", value="100.0") == 1.0
+    assert _total(knowledge, measure="revenue", column="active", value="true") == 125
+    assert _total(knowledge, measure="revenue", column="product", value="B") == 50
+    # a value that does not fit the column is refused before any query runs
+    with pytest.raises(OperationPlanError, match="not an integer for column revenue"):
+        _total(knowledge, measure="rating", column="revenue", value="abc")
+    with pytest.raises(OperationPlanError, match="not a number for column rating"):
+        _total(knowledge, measure="revenue", column="rating", value="high")
+    with pytest.raises(OperationPlanError, match="not a boolean for column active"):
+        _total(knowledge, measure="revenue", column="active", value="yes")
+    # the packet echoes the parameter as given; the typed value is binding-only
+    result = execute_registered_operation(
+        knowledge,
+        operation_id="ratings.tabular.aggregate.v1",
+        parameters={"aggregate": "sum", "measure": "revenue", "filter_column": "rating", "filter_value": "1"},
+    )
+    assert result.to_packet()["parameters"]["filter_value"] == "1"
+
+
+def test_parquet_filters_bind_the_declared_column_type(tmp_path: Path) -> None:
+    pandas = pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+    path = tmp_path / "ratings.parquet"
+    pandas.DataFrame(
+        {"product": ["A", "B"], "rating": [1.0, 2.5], "revenue": [100, 50]}
+    ).to_parquet(path, index=False)
+    knowledge = RLM.learn(sources={"ratings": path})
+    assert _total(knowledge, measure="revenue", column="rating", value="1") == 100
+    assert _total(knowledge, measure="revenue", column="rating", value="1.0") == 100
+    assert _total(knowledge, measure="rating", column="revenue", value="100.0") == 1.0
+    with pytest.raises(OperationPlanError, match="not an integer for column revenue"):
+        _total(knowledge, measure="rating", column="revenue", value="1.5")

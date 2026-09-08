@@ -6,16 +6,19 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import os
 
+from dataclasses import replace
+
 from fabric_rlm.knowledge import (
     EvidenceRecord,
+    KnowledgeEvent,
     KnowledgePackage,
     SourceProfile,
     SourceRole,
     _domain_fingerprint,
 )
-from fabric_rlm.knowledge_evidence import harvest_evidence
+from fabric_rlm.knowledge_evidence import harvest_evidence, run_fingerprint_for
 from fabric_rlm.knowledge_lakehouse_sources import fabric_source_registry
-from fabric_rlm.knowledge_lessons import promote_lessons, structural_lessons
+from fabric_rlm.knowledge_lessons import current_evidence, promote_lessons, structural_lessons
 from fabric_rlm.knowledge_operations import discover_registered_operations
 from fabric_rlm.knowledge_sources import (
     ProfileLimits,
@@ -228,6 +231,99 @@ def learn(
     )
 
 
+def _observed_fingerprints(result: object, alias_map: Mapping[str, str]) -> dict[str, str]:
+    """Schema fingerprints the run executed against, keyed by package source id.
+
+    The runtime records them on the trajectory when a package is bound;
+    evidence harvested at run time carries the same stamp. Either is the
+    execution-time identity. An empty mapping means the run recorded none.
+    """
+    metadata = getattr(getattr(result, "trajectory", None), "metadata", None) or {}
+    recorded = metadata.get("knowledge_source_fingerprints")
+    observed: dict[str, str] = {}
+    if isinstance(recorded, Mapping):
+        for source_id, fingerprint in recorded.items():
+            if isinstance(source_id, str) and isinstance(fingerprint, str) and fingerprint:
+                observed[alias_map.get(source_id, source_id)] = fingerprint
+    if observed:
+        return observed
+    for record in getattr(result, "evidence", ()) or ():
+        if not isinstance(record, EvidenceRecord):
+            continue
+        for source_id, fingerprint in record.source_fingerprints.items():
+            mapped = alias_map.get(source_id, source_id)
+            if observed.get(mapped, fingerprint) != fingerprint:
+                return {}  # one run, two identities for a source: unusable
+            observed[mapped] = fingerprint
+    return observed
+
+
+def _reusable_evidence(result: object, observed: Mapping[str, str]) -> list[EvidenceRecord]:
+    """``result.evidence`` when every record carries the run's own stamps."""
+    records = [
+        record
+        for record in getattr(result, "evidence", ()) or ()
+        if isinstance(record, EvidenceRecord)
+    ]
+    for record in records:
+        for source_id in record.source_ids:
+            if record.source_fingerprints.get(source_id) != observed.get(source_id):
+                return []
+    return records
+
+
+def _with_provenance_events(
+    package: KnowledgePackage,
+    incompatible: Mapping[str, Sequence[str]],
+    unattributed: Sequence[str],
+) -> KnowledgePackage:
+    """The package with one event per rejected source and per skipped run."""
+    if not incompatible and not unattributed:
+        return package
+    events = list(package.events)
+    event_ids = {event.event_id for event in events}
+    status_by_source = {source.source_id: source.status for source in package.sources}
+
+    def add(event: KnowledgeEvent) -> None:
+        if event.event_id not in event_ids:
+            events.append(event)
+            event_ids.add(event.event_id)
+
+    for source_id, runs in sorted(incompatible.items()):
+        if source_id not in status_by_source:
+            continue
+        suffix = _domain_fingerprint(
+            "fabric-rlm.knowledge.provenance-event.v1",
+            {"source": source_id, "runs": sorted(runs)},
+        )[:16]
+        add(
+            KnowledgeEvent(
+                event_id=f"evidence.incompatible.{source_id}.{suffix}",
+                event_type="evidence.incompatible",
+                subject_type="source",
+                subject_id=source_id,
+                status=status_by_source[source_id],
+                reason_code="schema_fingerprint_mismatch",
+            )
+        )
+    for run in unattributed:
+        suffix = _domain_fingerprint(
+            "fabric-rlm.knowledge.provenance-event.v1",
+            {"package": package.package_id, "run": run},
+        )[:16]
+        add(
+            KnowledgeEvent(
+                event_id=f"evidence.unattributed.{package.package_id}.{suffix}",
+                event_type="evidence.unattributed",
+                subject_type="package",
+                subject_id=package.package_id,
+                status="candidate",
+                reason_code="no_recorded_source_fingerprints",
+            )
+        )
+    return replace(package, events=tuple(events))
+
+
 def _persist(
     store: KnowledgeStore,
     package: KnowledgePackage,
@@ -267,27 +363,52 @@ def enrich_knowledge(
     promoted into lessons by the per-kind policy. Nothing is written
     unless ``store`` is given, and the input ``knowledge`` is untouched;
     the caller decides when a learned package replaces a saved one.
+
+    Evidence keeps the identity of the sources the run executed against
+    (the schema fingerprints the runtime recorded on the trajectory, or
+    the ones already on ``result.evidence``); it is never restamped with
+    this package's. A record whose fingerprints do not match the package
+    is dropped and noted as an ``evidence.incompatible`` event on its
+    source; a result that carries no fingerprints at all (a run without a
+    knowledge package bound) is skipped and noted as
+    ``evidence.unattributed`` on the package.
     """
     if not isinstance(knowledge, Knowledge):
         raise TypeError("knowledge must be a Knowledge instance")
     package = knowledge.package
     known = [source.source_id for source in package.sources]
-    fingerprints = {
-        source.source_id: source.schema_fingerprint for source in package.sources
-    }
+    alias_map = {str(key): str(value) for key, value in (aliases or {}).items()}
     harvested: list[EvidenceRecord] = []
+    incompatible: dict[str, list[str]] = {}
+    unattributed: list[str] = []
     for result in results:
         if not hasattr(getattr(result, "trajectory", None), "turns"):
             raise TypeError("results must contain RLMResult values")
-        harvested.extend(
-            harvest_evidence(
-                result,
-                sources=knowledge.bindings,
-                known_source_ids=known,
-                source_fingerprints=fingerprints,
-                aliases=aliases,
+        observed = _observed_fingerprints(result, alias_map)
+        if not observed:
+            unattributed.append(run_fingerprint_for(result))
+            continue
+        records = _reusable_evidence(result, observed) if not alias_map else []
+        if not records:
+            records = list(
+                harvest_evidence(
+                    result,
+                    sources=knowledge.bindings,
+                    known_source_ids=known,
+                    source_fingerprints=observed,
+                    aliases=aliases,
+                )
             )
-        )
+        current = {record.evidence_id for record in current_evidence(package, records)}
+        for record in records:
+            if record.evidence_id in current:
+                harvested.append(record)
+                continue
+            for source_id in record.source_ids:
+                runs = incompatible.setdefault(source_id, [])
+                if record.run_fingerprint and record.run_fingerprint not in runs:
+                    runs.append(record.run_fingerprint)
+    package = _with_provenance_events(package, incompatible, unattributed)
     promoted = promote_lessons(package, harvested)
     if store is not None:
         _persist(store, promoted, transport=transport, overwrite=overwrite)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import json
 import math
 import os
@@ -318,6 +318,69 @@ def _quoted_identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
+def _column_type(columns: object, column: str) -> str:
+    """The profiled type of ``column`` ("integer", "number", "boolean", ...)."""
+    entry = columns.get(column) if isinstance(columns, Mapping) else None
+    if isinstance(entry, Mapping):
+        declared = entry.get("type")
+        if isinstance(declared, str) and declared:
+            return declared
+    return "string"
+
+
+def _typed_filter(column: str, text: str, column_type: str) -> object:
+    """``text`` as the column's declared type, or an :class:`OperationPlanError`.
+
+    Filter parameters arrive as text. Comparing them against a column
+    rendered as text made the answer depend on spelling: a DOUBLE renders
+    ``1.0`` and a BIGINT ``100``, so ``"1"`` matched nothing in the first
+    column and ``"100.0"`` nothing in the second, and the aggregate came
+    back empty without a word. The parameter takes the column's type
+    instead, and a value that does not fit it is rejected before any query.
+    """
+    stripped = text.strip()
+    if column_type == "integer":
+        try:
+            number = Decimal(stripped)
+        except (InvalidOperation, ValueError):
+            number = None
+        if number is None or not number.is_finite() or number != number.to_integral_value():
+            raise OperationPlanError(
+                f"filter value {text!r} is not an integer for column {column}"
+            )
+        return int(number)
+    if column_type == "number":
+        try:
+            value = float(stripped)
+        except ValueError:
+            value = math.nan
+        if not math.isfinite(value):
+            raise OperationPlanError(
+                f"filter value {text!r} is not a number for column {column}"
+            )
+        return value
+    if column_type == "boolean":
+        lowered = stripped.casefold()
+        if lowered in {"true", "1"}:
+            return True
+        if lowered in {"false", "0"}:
+            return False
+        raise OperationPlanError(
+            f"filter value {text!r} is not a boolean for column {column}"
+        )
+    return text
+
+
+def _sql_literal(value: object) -> str:
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    return _sql_string_literal(str(value))
+
+
 def _bound_path(value: object) -> str:
     path = getattr(value, "path", value)
     try:
@@ -368,8 +431,16 @@ def _execute_tabular_aggregate(
         for name in ("groupby", "groupby_2")
         if normalized[name]
     ]
+    columns = getattr(profile, "schema", None)
     filter_pairs = [
-        (str(normalized[column]), str(normalized[value]))
+        (
+            str(normalized[column]),
+            _typed_filter(
+                str(normalized[column]),
+                str(normalized[value]),
+                _column_type(columns, str(normalized[column])),
+            ),
+        )
         for column, value in (
             ("filter_column", "filter_value"),
             ("filter_column_2", "filter_value_2"),
@@ -387,10 +458,26 @@ def _execute_tabular_aggregate(
         *(_quoted_identifier(column) for column in groupby),
         f"{expression} AS value",
     ]
-    where = " AND ".join(
-        f"CAST({_quoted_identifier(column)} AS VARCHAR) = ?"
-        for column, _value in filter_pairs
-    )
+    # A text column is compared as text, as before. A typed column takes the
+    # typed parameter DuckDB binds natively. CSV is the exception: the
+    # profile and DuckDB each infer types from their own sample, so a
+    # numeric comparison goes through a tolerant cast that accepts "1" and
+    # "1.0" alike and never errors on a column DuckDB read as text.
+    csv_family = getattr(profile, "family", None) == "csv"
+    predicates: list[str] = []
+    bound: list[object] = []
+    for column, value in filter_pairs:
+        identifier = _quoted_identifier(column)
+        if isinstance(value, str):
+            predicates.append(f"CAST({identifier} AS VARCHAR) = ?")
+            bound.append(value)
+        elif csv_family and isinstance(value, (int, float)) and not isinstance(value, bool):
+            predicates.append(f"TRY_CAST({identifier} AS DOUBLE) = ?")
+            bound.append(float(value))
+        else:
+            predicates.append(f"{identifier} = ?")
+            bound.append(value)
+    where = " AND ".join(predicates)
     connection = duckdb.connect(database=":memory:")
     try:
         connection.execute("SET memory_limit = '256MB'")
@@ -415,7 +502,7 @@ def _execute_tabular_aggregate(
         query += f" LIMIT {operation.max_output_rows + 1}"
         return connection.execute(
             query,
-            [*relation_parameters, *(value for _column, value in filter_pairs)],
+            [*relation_parameters, *bound],
         ).fetchdf()
     except Exception as exc:
         if isinstance(exc, ValueError):
@@ -423,6 +510,30 @@ def _execute_tabular_aggregate(
         raise ValueError("registered tabular aggregate execution failed") from exc
     finally:
         connection.close()
+
+
+def _guarded_measure_path(source: object) -> bool:
+    """Whether ``aggregate`` may stand in for ``measure`` on this handle.
+
+    True for a handle whose ``measure`` and ``aggregate`` are defined by the
+    same class (the library's own, or a double that overrides both). A
+    subclass that customizes ``measure`` alone keeps its own path.
+    """
+    measure_owner = aggregate_owner = None
+    for klass in type(source).__mro__:
+        if measure_owner is None and "measure" in vars(klass):
+            measure_owner = klass
+        if aggregate_owner is None and "aggregate" in vars(klass):
+            aggregate_owner = klass
+    return measure_owner is not None and measure_owner is aggregate_owner
+
+
+def _unbracket_measure(frame: object, measure_name: str) -> object:
+    """Name the measure column as ``measure()`` does, without DAX brackets."""
+    try:
+        return frame.rename(columns={f"[{measure_name}]": measure_name})
+    except Exception:
+        return frame
 
 
 def _sql_string_literal(value: str) -> str:
@@ -435,10 +546,15 @@ def _execute_lakehouse_aggregate(
     operation: RegisteredOperation,
     source: object,
     normalized: Mapping[str, object],
+    profile: object = None,
 ) -> object:
     query = getattr(source, "query", None)
     if not callable(query):
         raise TypeError("registered Lakehouse source cannot execute queries")
+    catalog_source = str(normalized["catalog_source"])
+    schema = getattr(profile, "schema", None)
+    entry = schema.get(catalog_source) if isinstance(schema, Mapping) else None
+    columns = entry.get("columns") if isinstance(entry, Mapping) else None
     groupby = [
         str(normalized[name])
         for name in ("groupby", "groupby_2")
@@ -458,7 +574,11 @@ def _execute_lakehouse_aggregate(
     filters = [
         (
             str(normalized[column_name]),
-            str(normalized[value_name]),
+            _typed_filter(
+                str(normalized[column_name]),
+                str(normalized[value_name]),
+                _column_type(columns, str(normalized[column_name])),
+            ),
         )
         for column_name, value_name in (
             ("filter_column", "filter_value"),
@@ -469,7 +589,9 @@ def _execute_lakehouse_aggregate(
     sql = f"SELECT {', '.join(selected)} FROM data"
     if filters:
         sql += " WHERE " + " AND ".join(
-            f"CAST({_quoted_identifier(column)} AS VARCHAR) = "
+            f"{_quoted_identifier(column)} = {_sql_literal(value)}"
+            if not isinstance(value, str)
+            else f"CAST({_quoted_identifier(column)} AS VARCHAR) = "
             f"{_sql_string_literal(value)}"
             for column, value in filters
         )
@@ -480,7 +602,6 @@ def _execute_lakehouse_aggregate(
         sql += " ORDER BY " + ", ".join(
             _quoted_identifier(column) for column in groupby
         )
-    catalog_source = str(normalized["catalog_source"])
     return query(
         sql,
         sources={"data": catalog_source},
@@ -505,14 +626,25 @@ def _execute_lakehouse_preaggregate_join(
         ),
     ]
     temporal_tokens = ("date", "month", "quarter", "period", "time", "year")
-    if normalized["scope"] == "latest" and not any(
-        token in key.casefold()
+    temporal_keys = [
+        key
         for key in join_keys
-        for token in temporal_tokens
-    ):
-        raise OperationPlanError(
-            "latest scope requires a temporal or period join key"
-        )
+        if any(token in key.casefold() for token in temporal_tokens)
+    ]
+    period_key: str | None = None
+    if normalized["scope"] == "latest":
+        # "Latest" is defined by the period key alone, whichever position
+        # it was given in. Two temporal keys leave the period ambiguous.
+        if len(temporal_keys) != 1:
+            raise OperationPlanError(
+                "latest scope requires a temporal or period join key"
+                + (
+                    f"; exactly one, got {', '.join(temporal_keys)}"
+                    if temporal_keys
+                    else ""
+                )
+            )
+        period_key = temporal_keys[0]
     left_keys = ", ".join(_quoted_identifier(key) for key in join_keys)
     right_keys = left_keys
     join_predicate = " AND ".join(
@@ -525,12 +657,34 @@ def _execute_lakehouse_preaggregate_join(
         f"right_agg.{_quoted_identifier(key)}) AS {_quoted_identifier(key)}"
         for key in join_keys
     )
-    order_keys = ", ".join(
-        f"{_quoted_identifier(key)} DESC" for key in join_keys
+    # The row bound stays an over-fetch so a period with more groups than
+    # the operation may return is reported as truncated, never trimmed.
+    row_limit = operation.max_output_rows + 1
+    joined = (
+        f"SELECT {result_keys}, left_value, right_value "
+        "FROM left_agg FULL OUTER JOIN right_agg ON "
+        f"{join_predicate}"
     )
-    row_limit = 1 if normalized["scope"] == "latest" else (
-        operation.max_output_rows + 1
-    )
+    if period_key is None:
+        order_keys = ", ".join(
+            f"{_quoted_identifier(key)} DESC" for key in join_keys
+        )
+        tail = f"{joined} ORDER BY {order_keys} LIMIT {row_limit}"
+    else:
+        period = _quoted_identifier(period_key)
+        order_keys = ", ".join(
+            [f"{period} DESC"]
+            + [
+                f"{_quoted_identifier(key)} ASC"
+                for key in join_keys
+                if key != period_key
+            ]
+        )
+        tail = (
+            f"SELECT * FROM joined WHERE {period} = "
+            f"(SELECT MAX({period}) FROM joined) "
+            f"ORDER BY {order_keys} LIMIT {row_limit}"
+        )
     sql = (
         "WITH left_agg AS ("
         f"SELECT {left_keys}, "
@@ -542,10 +696,9 @@ def _execute_lakehouse_preaggregate_join(
         f"SUM({_quoted_identifier(str(normalized['right_measure']))}) "
         "AS right_value FROM right_data "
         f"GROUP BY {right_keys}"
-        ") "
-        f"SELECT {result_keys}, left_value, right_value "
-        "FROM left_agg FULL OUTER JOIN right_agg ON "
-        f"{join_predicate} ORDER BY {order_keys} LIMIT {row_limit}"
+        ")"
+        + (f", joined AS ({joined}) " if period_key is not None else " ")
+        + tail
     )
     return query(
         sql,
@@ -648,11 +801,34 @@ def execute_registered_operation(
             )
             if normalized[column_name]
         }
-        raw_result = measure(
-            str(normalized["measure"]),
-            groupby=groupby or None,
-            filters=filters or None,
-        )
+        measure_name = str(normalized["measure"])
+        aggregate = getattr(source, "aggregate", None)
+        if callable(aggregate) and _guarded_measure_path(source):
+            # The guarded path: a cardinality preflight and a deadline run
+            # before the engine evaluates anything, so a grouping the
+            # operation could never return is refused instead of being
+            # materialized and then failing the row bound.
+            from fabric_rlm.semantic_model import SemanticModelQueryError
+
+            try:
+                raw_result = aggregate(
+                    [measure_name],
+                    groupby=groupby or None,
+                    filters=filters or None,
+                    max_groups=operation.max_output_rows,
+                    normalize_columns=False,
+                )
+            except SemanticModelQueryError as exc:
+                raise OperationPlanError(
+                    f"registered measure was refused before execution: {exc}"
+                ) from exc
+            raw_result = _unbracket_measure(raw_result, measure_name)
+        else:
+            raw_result = measure(
+                measure_name,
+                groupby=groupby or None,
+                filters=filters or None,
+            )
     elif operation.operation == "tabular.aggregate":
         raw_result = _execute_tabular_aggregate(
             operation,
@@ -665,6 +841,7 @@ def execute_registered_operation(
             operation,
             source,
             normalized,
+            profile,
         )
     else:
         raw_result = _execute_lakehouse_preaggregate_join(

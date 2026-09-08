@@ -193,7 +193,10 @@ checked the run's answer (a validator or skill verifier that executed and
 accepted it, never configuration alone) and the analytical-integrity
 status, into `result.evidence`;
 `RLM.enrich` promotes evidence into structured lessons by a per-kind policy and
-returns a new package without touching the saved one:
+returns a new package without touching the saved one. Evidence keeps the
+schema fingerprints the run executed against; a record that does not match
+the package it is enriched into is dropped and noted as an event, never
+relabelled:
 
 ```python
 knowledge = RLM.learn(sources={"arr_model": model}, store=store)

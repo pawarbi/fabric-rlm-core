@@ -762,3 +762,58 @@ def test_drift_stales_lessons_by_their_dependency_scope(tmp_path: Path) -> None:
     assert statuses["lesson.valid_grain.orders"] == "stale"
     assert statuses["lesson.semantic_fact.orders"] == "active"
     assert statuses["lesson.valid_grain.customers"] == "active"
+
+
+# -- stale lessons need fresh, matching evidence ------------------------------
+
+
+def test_stale_lesson_stays_stale_until_fresh_matching_evidence_supports_it() -> None:
+    learned = _learned_package()
+    grain_lesson = next(l for l in learned.lessons if l.kind == "valid_grain")
+    assert grain_lesson.status == "active"
+    stale = replace(
+        learned,
+        lessons=tuple(
+            replace(l, status="stale", reason_code="schema_drift") if l.lesson_id == grain_lesson.lesson_id else l
+            for l in learned.lessons
+        ),
+    )
+
+    # re-reading the evidence already in the package proves nothing
+    unchanged = promote_lessons(stale, [])
+    assert {l.lesson_id: l.status for l in unchanged.lessons}[grain_lesson.lesson_id] == "stale"
+    assert not any(
+        e.subject_id == grain_lesson.lesson_id and e.status == "active" for e in unchanged.events[len(stale.events):]
+    )
+
+    # fresh evidence stamped with another schema does not lift it either
+    mismatched = replace(
+        _success("evidence.s9", GRAIN_COARSE, run="run.9"),
+        source_fingerprints={"arr_model": "schema-0"},
+    )
+    still = promote_lessons(stale, [mismatched])
+    assert {l.lesson_id: l.status for l in still.lessons}[grain_lesson.lesson_id] == "stale"
+
+    # fresh evidence matching the package's current fingerprint reactivates it
+    fresh = _success("evidence.s9", GRAIN_COARSE, run="run.9")
+    revived = promote_lessons(stale, [fresh])
+    revived_lesson = {l.lesson_id: l for l in revived.lessons}[grain_lesson.lesson_id]
+    assert revived_lesson.status == "active"
+    assert "evidence.s9" in revived_lesson.evidence_ids
+    assert any(
+        e.subject_id == grain_lesson.lesson_id and e.event_type == "lesson.active"
+        for e in revived.events[len(stale.events):]
+    )
+
+
+def test_evidence_without_a_fingerprint_is_unknown_not_current() -> None:
+    package = _package()
+    unstamped = [
+        replace(_success(f"evidence.u{i}", GRAIN_COARSE, run=f"run.{i}"), source_fingerprints={})
+        for i in range(2)
+    ]
+    promoted = promote_lessons(package, unstamped)
+    assert not any(l.kind == "valid_grain" for l in promoted.lessons)
+    stamped = [_success(f"evidence.s{i}", GRAIN_COARSE, run=f"run.{i}") for i in range(2)]
+    promoted = promote_lessons(package, stamped)
+    assert any(l.kind == "valid_grain" and l.status == "active" for l in promoted.lessons)

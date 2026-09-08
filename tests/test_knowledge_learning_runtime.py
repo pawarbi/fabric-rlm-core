@@ -662,3 +662,101 @@ def test_run_ids_keep_identical_executions_apart(tmp_path: Path) -> None:
     # a result without an id keeps the content fingerprint
     bare = _result([_turn(1, "x=1")])
     assert run_fingerprint_for(bare) == run_fingerprint_for(_result([_turn(1, "x=1")]))
+
+
+# -- evidence keeps the identity it was observed under --------------------------
+
+
+def _moved(knowledge: Knowledge, fingerprint: str) -> Knowledge:
+    """The same package with its source profiled under another schema."""
+    sources = tuple(replace(s, schema_fingerprint=fingerprint) for s in knowledge.package.sources)
+    return Knowledge(
+        package=replace(knowledge.package, sources=sources),
+        bindings=knowledge.bindings,
+        _registry=knowledge._registry,
+        _limits=knowledge._limits,
+    )
+
+
+def test_enrich_never_restamps_evidence_with_the_destination_schema(tmp_path: Path) -> None:
+    source = _csv(tmp_path)
+    knowledge = RLM.learn(sources={"orders": source})
+    original = knowledge.package.sources[0].schema_fingerprint
+    result = RLM.task(
+        "Return the approved source file name.",
+        outputs=["answer"],
+        knowledge=knowledge,
+        lm=ScriptedLM(_code("SUBMIT(answer=orders.name)")),
+        max_turns=1,
+        timeout=60,
+        capture_evidence=True,
+    ).run()
+    assert result.trajectory.metadata["knowledge_source_fingerprints"] == {"orders": original}
+    assert "orders" in result.trajectory.metadata["knowledge_snapshot_fingerprints"]
+    assert all(r.source_fingerprints == {"orders": original} for r in result.evidence)
+
+    # into the package it ran against: the run's own records, stamps intact
+    same = RLM.enrich(knowledge, [result])
+    assert {r.evidence_id for r in same.package.evidence} == {r.evidence_id for r in result.evidence}
+    assert all(r.source_fingerprints == {"orders": original} for r in same.package.evidence)
+    assert not any(e.event_type.startswith("evidence.") for e in same.package.events)
+
+    # into a package whose source has moved on: nothing is relabelled, the
+    # records are rejected and the rejection is on the record
+    moved = _moved(knowledge, "schema-moved")
+    rejected = RLM.enrich(moved, [result])
+    assert rejected.package.evidence == ()
+    assert rejected.package.lessons == moved.package.lessons
+    events = [e for e in rejected.package.events if e.event_type == "evidence.incompatible"]
+    assert [(e.subject_type, e.subject_id, e.reason_code) for e in events] == [
+        ("source", "orders", "schema_fingerprint_mismatch")
+    ]
+    # enriching the same run again does not repeat the event
+    again = RLM.enrich(
+        Knowledge(package=rejected.package, bindings=moved.bindings, _registry=moved._registry, _limits=moved._limits),
+        [result],
+    )
+    assert len([e for e in again.package.events if e.event_type == "evidence.incompatible"]) == 1
+
+
+def test_enrich_harvests_an_uncaptured_run_from_its_recorded_identity(tmp_path: Path) -> None:
+    source = _csv(tmp_path)
+    knowledge = RLM.learn(sources={"orders": source})
+    original = knowledge.package.sources[0].schema_fingerprint
+    plain = RLM.task(
+        "Return the approved source file name.",
+        outputs=["answer"],
+        knowledge=knowledge,
+        lm=ScriptedLM(_code("SUBMIT(answer=orders.name)")),
+        max_turns=1,
+        timeout=60,
+    ).run()
+    assert plain.evidence == ()
+    assert plain.trajectory.metadata["knowledge_source_fingerprints"] == {"orders": original}
+    enriched = RLM.enrich(knowledge, [plain])
+    assert enriched.package.evidence
+    assert all(r.source_fingerprints == {"orders": original} for r in enriched.package.evidence)
+    # the recorded identity, not the destination, decides
+    assert RLM.enrich(_moved(knowledge, "schema-moved"), [plain]).package.evidence == ()
+
+
+def test_enrich_skips_a_run_that_recorded_no_source_identity(tmp_path: Path) -> None:
+    source = _csv(tmp_path)
+    knowledge = RLM.learn(sources={"orders": source})
+    unbound = RLM.task(
+        "Return the approved source file name.",
+        inputs={"orders": source},
+        outputs=["answer"],
+        lm=ScriptedLM(_code("SUBMIT(answer=orders.name)")),
+        max_turns=1,
+        timeout=60,
+        capture_evidence=True,
+    ).run()
+    assert unbound.evidence and all(r.source_fingerprints == {} for r in unbound.evidence)
+    assert "knowledge_source_fingerprints" not in unbound.trajectory.metadata
+    enriched = RLM.enrich(knowledge, [unbound])
+    assert enriched.package.evidence == ()
+    events = [e for e in enriched.package.events if e.event_type == "evidence.unattributed"]
+    assert [(e.subject_type, e.subject_id, e.reason_code) for e in events] == [
+        ("package", knowledge.package.package_id, "no_recorded_source_fingerprints")
+    ]
