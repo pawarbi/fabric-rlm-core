@@ -16,18 +16,22 @@ How it works:
    on the same answer usually means the answer is right (agreement precision
    was 79-85% across the measured runs).
 2. The two answers are compared structurally in code, not by a model: numbers
-   must match exactly, sign included, semicolon-separated lists must contain
-   the same item set (a missing member is the classic enumeration failure and
-   must count as disagreement), and prose falls back to whole-word containment
-   and token overlap. A blank answer never agrees with anything, another blank
-   included. The comparison deliberately errs toward "disagree", which costs
-   one reconciliation run, never correctness.
+   must match exactly, sign included, lists (semicolon- or comma-separated)
+   must contain the same item set (a missing member is the classic
+   enumeration failure and must count as disagreement), and prose falls back
+   to whole-word containment and token overlap. A blank answer never agrees
+   with anything, another blank included, and a solve that did not submit is
+   never a candidate. The comparison deliberately errs toward "disagree",
+   which costs one reconciliation run, never correctness.
 3. On disagreement a reconciler runs in a third fresh context. It receives the
    task, the data, and both candidate answers, and is instructed to find the
    exact point of divergence and re-derive rather than pick or average. On
    decisive pairs (exactly one candidate correct) the reconciler chose the
    right one 68-77% of the time depending on model, and re-derivation rescued
    20-39% of pairs where both candidates were wrong.
+4. When no solve produced an answer, not even the reconciler, the verdict is
+   "failed" and the result is the last attempt, with its failure reason. An
+   ensemble of failures is not a reconciled answer.
 
 Where NOT to use this, stated plainly:
 
@@ -56,7 +60,7 @@ Usage:
         lm={"model": "...", "api_key": "..."},
     )
     vr.result.payload["answer"]   # the winning answer
-    vr.verdict                    # "agree" or "reconciled"
+    vr.verdict                    # "agree", "reconciled" or "failed"
 """
 from __future__ import annotations
 
@@ -81,6 +85,24 @@ was wrong.
 
 def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip()
+
+
+# Unicode minus, en dash and figure dash all read as a minus sign in answers.
+_SIGN_VARIANTS = str.maketrans({"\u2212": "-", "\u2013": "-", "\u2012": "-"})
+
+# List separators: a semicolon, or a comma that is not a thousands separator.
+_LIST_SPLIT = re.compile(r";|(?<!\d),(?!\d)")
+_LEADING_CONJUNCTION = re.compile(r"^\s*(?:and|&)\s+", re.IGNORECASE)
+
+
+def _items(text: str) -> list[str]:
+    """The normalized members of a list answer; one member for plain prose."""
+    items = []
+    for part in _LIST_SPLIT.split(text):
+        item = _norm(_LEADING_CONJUNCTION.sub("", part))
+        if item:
+            items.append(item)
+    return items
 
 
 # Signed numbers. A hyphen glued to a preceding word character is a range or
@@ -116,12 +138,13 @@ def answers_agree(a: str, b: str) -> bool:
        sign along with the rest of the punctuation, so "10" and "-10" would
        otherwise look identical.
     3. Normalized text equality.
-    4. Semicolon lists agree only on the same item set.
+    4. Lists (semicolon- or comma-separated) agree only on the same item
+       set; whole-word containment must not wave a missing member through.
     5. Whole-word containment for short-vs-verbose phrasings, then token
        overlap.
     """
-    a = "" if a is None else str(a)
-    b = "" if b is None else str(b)
+    a = ("" if a is None else str(a)).translate(_SIGN_VARIANTS)
+    b = ("" if b is None else str(b)).translate(_SIGN_VARIANTS)
     na, nb = _norm(a), _norm(b)
     if not na or not nb:
         return False
@@ -129,13 +152,12 @@ def answers_agree(a: str, b: str) -> bool:
         return False
     if na == nb:
         return True
-    # Numbers identical from here. Semicolon lists agree only on the same item
-    # set: a missing member is THE enumeration failure mode, and a substring or
+    # Numbers identical from here. Lists agree only on the same item set: a
+    # missing member is THE enumeration failure mode, and a substring or
     # overlap test would wave it through.
-    if ";" in a or ";" in b:
-        items_a = {_norm(x) for x in a.split(";") if _norm(x)}
-        items_b = {_norm(x) for x in b.split(";") if _norm(x)}
-        return items_a == items_b
+    items_a, items_b = _items(a), _items(b)
+    if len(items_a) > 1 or len(items_b) > 1:
+        return set(items_a) == set(items_b)
     # Short-vs-verbose phrasings of the same single answer. Whole words only:
     # "Mark" is not "Denmark".
     if f" {na} " in f" {nb} " or f" {nb} " in f" {na} ":
@@ -150,15 +172,21 @@ class VerifiedResult:
     """Outcome of a verified run.
 
     ``result`` is the winning :class:`RLMResult`; ``attempts`` holds every
-    solve that ran (two on agreement, three on reconciliation) so token
-    accounting and trajectories stay auditable.
+    solve that ran (two on agreement, three on reconciliation or failure) so
+    token accounting and trajectories stay auditable. A ``"failed"`` verdict
+    means no solve produced an answer; ``result`` is then the last attempt
+    and carries its ``failure_reason``.
     """
 
     result: RLMResult
-    verdict: str                      # "agree" | "reconciled"
+    verdict: str                      # "agree" | "reconciled" | "failed"
     answer_a: str
     answer_b: str
     attempts: list[RLMResult] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return self.verdict != "failed"
 
     @property
     def total_prompt_tokens(self) -> int:
@@ -199,8 +227,10 @@ def verified_task(
     res_b, ans_b = solve(task)
     attempts = [res_a, res_b]
 
-    if check(ans_a, ans_b):
-        winner = res_a if ans_a.strip() or not ans_b.strip() else res_b
+    # Only a submitted, non-blank answer is a candidate. A custom ``agree``
+    # is never asked about a solve that failed.
+    if _usable(res_a, ans_a) and _usable(res_b, ans_b) and check(ans_a, ans_b):
+        winner = _prefer(res_a, ans_a, res_b, ans_b)
         return VerifiedResult(result=winner, verdict="agree",
                               answer_a=ans_a, answer_b=ans_b, attempts=attempts)
 
@@ -211,11 +241,36 @@ def verified_task(
     )
     res_c, ans_c = solve(reconcile_task)
     attempts.append(res_c)
-    if ans_c.strip():
-        winner = res_c
-    elif ans_a.strip():
-        winner = res_a
+    if _usable(res_c, ans_c):
+        winner, verdict = res_c, "reconciled"
+    elif _usable(res_a, ans_a) or _usable(res_b, ans_b):
+        winner, verdict = _prefer(res_a, ans_a, res_b, ans_b), "reconciled"
     else:
-        winner = res_b
-    return VerifiedResult(result=winner, verdict="reconciled",
+        winner, verdict = res_c, "failed"
+    return VerifiedResult(result=winner, verdict=verdict,
                           answer_a=ans_a, answer_b=ans_b, attempts=attempts)
+
+
+def _usable(res: RLMResult, answer: str) -> bool:
+    """A solve counts only if it submitted, did not fail, and answered."""
+    return bool(
+        getattr(res, "submitted", False)
+        and getattr(res, "failure_reason", None) is None
+        and answer.strip()
+    )
+
+
+def _prefer(res_a: RLMResult, ans_a: str, res_b: RLMResult, ans_b: str) -> RLMResult:
+    """Pick between two candidates: usable first, then clean integrity, then A.
+
+    Two answers that agree are interchangeable in value, so the one the
+    analytical-integrity screen accepted without unresolved findings wins.
+    """
+    usable_a, usable_b = _usable(res_a, ans_a), _usable(res_b, ans_b)
+    if usable_a != usable_b:
+        return res_a if usable_a else res_b
+    clean_a = getattr(res_a, "integrity_ok", True)
+    clean_b = getattr(res_b, "integrity_ok", True)
+    if clean_b and not clean_a:
+        return res_b
+    return res_a

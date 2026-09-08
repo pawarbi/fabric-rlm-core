@@ -59,6 +59,39 @@
   (the reconciler runs and is told neither analyst answered), and the
   short-versus-verbose containment test now matches whole words only, so
   `"Mark"` no longer agrees with `"Denmark"`.
+- **Evidence counted configuration as verification.** Loading any skill set
+  `verifier_configured`, and evidence harvesting reported the answer as
+  `"passed"` from that flag alone, even when the skill had no verifier or
+  the verifier was skipped, timed out or crashed under graceful degrade.
+  The runtime now records what actually ran against the accepted SUBMIT in
+  `trajectory.metadata["verifier_execution"]` (each check with its outcome,
+  and `verified`, which is true only when at least one check executed and
+  accepted the answer and none degraded). `verifier_status_for` reads that
+  record; `verifier_configured` stays as information and now means a
+  verifier actually exists for the run.
+- **Identical runs collapsed into one observation.** The run fingerprint
+  hashed only code, submission flags, knowledge fingerprint and payload, so
+  two separate executions with the same code counted as one run for the
+  distinct-run thresholds in lesson promotion. Every execution now carries a
+  `run_id` in trajectory metadata and the fingerprint includes it; harvesting
+  the same result twice keeps the same ids, and a result without an id
+  (built by hand, or recorded before ids existed) keeps the content
+  fingerprint.
+- **`verified_task` reported a reconciled answer when every solve failed,**
+  and chose the first of two agreeing answers even when only the second was
+  clean of unresolved integrity findings. A solve that did not submit, failed
+  or answered blank is never a candidate, not even for a custom `agree`;
+  when nothing produced an answer the verdict is `"failed"` and the result
+  is the last attempt with its failure reason (`VerifiedResult.ok`); between
+  two agreeing answers the one the integrity screen accepted without
+  findings wins.
+- **`answers_agree` still accepted meaningfully different answers.** A
+  Unicode minus (U+2212) or a dash used as a minus was stripped by
+  normalization, so `"−10"` agreed with `"10"`; a comma list with a missing
+  member (`"A, B"` vs `"A, B, C"`) slipped through whole-word containment.
+  Sign variants are normalized before number extraction, and comma-separated
+  lists are compared as item sets like semicolon lists (thousands separators
+  and an Oxford "and" are not list structure).
 
 ## 0.6.0 — 2026-09-04 — analytical integrity guardrails and bounded semantic-model aggregation
 

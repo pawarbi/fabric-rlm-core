@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import time
+import uuid
 import warnings
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -1094,6 +1095,9 @@ class RLM:
             self.halve_max_iter_on_retry = bool(halve_max_iter_on_retry)
             self._loaded_skills: list[Skill] = []
             self._activated_skills: set[str] = set()
+            # What actually checked the most recent SUBMIT payload; reset per
+            # attempt, summarized into trajectory metadata by _finalize_result.
+            self._verifier_log: list[dict[str, Any]] = []
             self._inline_task: str | None = None
             self._inline_outputs: list[str] | None = None
             self._inline_output_types: dict[str, type] = {}
@@ -1180,6 +1184,9 @@ class RLM:
             else []
         )
         self._activated_skills: set[str] = set()
+        # What actually checked the most recent SUBMIT payload; reset per
+        # attempt, summarized into trajectory metadata by _finalize_result.
+        self._verifier_log: list[dict[str, Any]] = []
         self._inline_task: str | None = None
         self._inline_outputs: list[str] | None = None
         self._inline_output_types: dict[str, type] = {}
@@ -1790,6 +1797,7 @@ class RLM:
 
     def run(self, inputs: dict[str, Any] | None = None) -> RLMResult:
         self._evidence_sources: dict[str, Any] = {}
+        self._verifier_log = []
         result = self._run_engine(inputs)
         return self._finalize_result(result)
 
@@ -1808,16 +1816,25 @@ class RLM:
 
         if any(getattr(turn, "source_calls", None) for turn in turns):
             trajectory.metadata["source_call_summary"] = source_call_summary(turns)
-        # Whether anything checked this run's answer. Evidence harvesting
-        # reads it: a submission nobody verified is not a verified success.
+        # Whether a check existed for this run, and, separately, what
+        # actually ran against the accepted answer. Evidence harvesting reads
+        # the execution record only: a configured verifier that was skipped,
+        # timed out or crashed did not verify anything.
         trajectory.metadata.setdefault(
             "verifier_configured",
             bool(
                 self.output_validator is not None
                 or self.output_validator_context is not None
-                or (self.enable_verifier and self._loaded_skills)
+                or self._applicable_skill_verifiers()
             ),
         )
+        if result.submitted:
+            trajectory.metadata.setdefault(
+                "verifier_execution", self._verifier_execution_summary()
+            )
+        # One id per execution. Two runs that executed the same code are two
+        # observations; harvesting the same result twice is one.
+        trajectory.metadata.setdefault("run_id", uuid.uuid4().hex)
         if not self.capture_evidence:
             return result
         options: dict[str, Any] = {}
@@ -2477,6 +2494,7 @@ class RLM:
                             reached_max = True
                         continue
 
+                    self._reset_verifier_log()
                     verifier_feedback = self._run_skill_verifiers(interpreter, result.submit_payload)
                     if verifier_feedback is not None:
                         feedback_text, history_entry = verifier_feedback
@@ -2693,6 +2711,50 @@ class RLM:
         if changed:
             messages[0] = {"role": "system", "content": sys_content}
 
+    def _applicable_skill_verifiers(self) -> list[Skill]:
+        """Loaded skills whose verifier would run against a SUBMIT payload."""
+        if not self.enable_verifier:
+            return []
+        return [
+            skill
+            for skill in self._loaded_skills
+            if skill.verifier_source
+            and not (self.enable_router and skill.name not in self._activated_skills)
+        ]
+
+    def _reset_verifier_log(self) -> None:
+        self._verifier_log = []
+
+    def _log_verifier(self, check: str, outcome: str, reason: str | None = None) -> None:
+        entry: dict[str, Any] = {"check": check, "outcome": outcome}
+        if reason:
+            entry["reason"] = reason
+        self._verifier_log.append(entry)
+
+    def _verifier_execution_summary(self) -> dict[str, Any]:
+        """What checked the last SUBMIT payload and how each check ended.
+
+        ``verified`` is True only when at least one check executed and
+        accepted the payload and none was skipped, timed out, crashed or
+        rejected it. Configuration is not execution: a skill without a
+        verifier, or a verifier that degraded gracefully, verifies nothing.
+        """
+        checks = [dict(entry) for entry in getattr(self, "_verifier_log", [])]
+        passed = [entry["check"] for entry in checks if entry["outcome"] == "passed"]
+        rejected = [entry["check"] for entry in checks if entry["outcome"] == "rejected"]
+        degraded = [
+            entry["check"]
+            for entry in checks
+            if entry["outcome"] not in {"passed", "rejected"}
+        ]
+        return {
+            "checks": checks,
+            "passed": passed,
+            "rejected": rejected,
+            "degraded": degraded,
+            "verified": bool(passed) and not rejected and not degraded,
+        }
+
     def _run_skill_verifiers(
         self, interpreter: Interpreter, payload: Mapping[str, Any] | None
     ) -> tuple[str, dict[str, Any] | None] | None:
@@ -2709,9 +2771,8 @@ class RLM:
         and skipped to avoid blocking valid answers behind a buggy verifier.
         """
 
-        if not self.enable_verifier:
-            return None
-        if not self._loaded_skills:
+        applicable = self._applicable_skill_verifiers()
+        if not applicable:
             return None
 
         try:
@@ -2721,13 +2782,13 @@ class RLM:
                 "Skipping skill verifiers: SUBMIT payload is not JSON-serializable (%s).",
                 exc,
             )
+            for skill in applicable:
+                self._log_verifier(
+                    f"skill:{skill.name}", "skipped", "payload not JSON-serializable"
+                )
             return None
 
-        for skill in self._loaded_skills:
-            if not skill.verifier_source:
-                continue
-            if self.enable_router and skill.name not in self._activated_skills:
-                continue
+        for skill in applicable:
             verifier_code = (
                 f"{skill.verifier_source}\n\n"
                 "import json as _fabric_rlm_json\n"
@@ -2741,6 +2802,7 @@ class RLM:
                     "Skill %r verifier timed out; accepting payload (graceful degrade).",
                     skill.name,
                 )
+                self._log_verifier(f"skill:{skill.name}", "timeout")
                 continue
             except Exception as exc:  # noqa: BLE001 - any host-side failure means a buggy verifier
                 logger.warning(
@@ -2749,9 +2811,11 @@ class RLM:
                     type(exc).__name__,
                     exc,
                 )
+                self._log_verifier(f"skill:{skill.name}", "error", type(exc).__name__)
                 continue
 
             if exec_result.ok:
+                self._log_verifier(f"skill:{skill.name}", "passed")
                 continue
 
             error_text = exec_result.error or ""
@@ -2769,6 +2833,7 @@ class RLM:
                     "rejected_payload": dict(payload) if isinstance(payload, Mapping) else payload,
                     "assertion": message,
                 }
+                self._log_verifier(f"skill:{skill.name}", "rejected", message)
                 return feedback, history_entry
             logger.warning(
                 "Skill %r verifier raised non-AssertionError; accepting payload anyway. "
@@ -2776,6 +2841,7 @@ class RLM:
                 skill.name,
                 error_text[-500:],
             )
+            self._log_verifier(f"skill:{skill.name}", "error", "verifier raised")
         return None
 
     def _run_output_validator(
@@ -2798,6 +2864,7 @@ class RLM:
             self.output_validator(payload or {})
         except AssertionError as exc:
             message = str(exc) or "output validator rejected the SUBMIT payload."
+            self._log_verifier("output_validator", "rejected", message)
             feedback = (
                 "Your SUBMIT was rejected by the output-format validator:\n\n"
                 f"AssertionError: {message}\n\n"
@@ -2818,6 +2885,9 @@ class RLM:
                 type(exc).__name__,
                 exc,
             )
+            self._log_verifier("output_validator", "error", type(exc).__name__)
+            return None
+        self._log_verifier("output_validator", "passed")
         return None
 
     # Two rejections per run is the repair budget for the heuristic screens
@@ -2946,6 +3016,7 @@ class RLM:
             self.output_validator_context(payload or {}, context)
         except AssertionError as exc:
             message = str(exc) or "context validator rejected the submitted artifact/state."
+            self._log_verifier("output_validator_context", "rejected", message)
             feedback = (
                 "Your SUBMIT was rejected by the context-aware output validator:\n\n"
                 f"AssertionError: {message}\n\n"
@@ -2968,6 +3039,9 @@ class RLM:
                 type(exc).__name__,
                 exc,
             )
+            self._log_verifier("output_validator_context", "error", type(exc).__name__)
+            return None
+        self._log_verifier("output_validator_context", "passed")
         return None
 
     def _format_feedback(
@@ -3185,6 +3259,7 @@ class RLM:
             # happen to use APIs the policy would block (none in-tree do
             # today, but future contributors get a stable contract) still
             # work as authored.
+            self._reset_verifier_log()
             try:
                 with Interpreter(
                     timeout=self.timeout,
@@ -3201,6 +3276,10 @@ class RLM:
                     "skipping skill verifiers (graceful degrade).",
                     exc,
                 )
+                for skill in self._applicable_skill_verifiers():
+                    self._log_verifier(
+                        f"skill:{skill.name}", "skipped", "verifier interpreter failed to start"
+                    )
                 verifier_feedback = None
 
             if verifier_feedback is None:

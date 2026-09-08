@@ -186,3 +186,94 @@ def test_two_blank_solves_reconcile(monkeypatch):
     assert vr.result.payload["answer"] == "5"
     assert len(vr.attempts) == 3
     assert any("Analyst 1 answered: (no answer)" in text for text in lm.seen)
+
+
+# ------------------------------------------------- sign variants and lists --
+def test_agree_unicode_minus_and_dashes_are_signs():
+    assert not answers_agree("−10", "10")          # U+2212 MINUS SIGN
+    assert not answers_agree("–10%", "10%")        # en dash used as a minus
+    assert answers_agree("−10", "-10")
+    assert answers_agree("2024–2025", "2024 to 2025")  # en dash range, not a sign
+
+
+def test_agree_comma_lists_need_identical_item_sets():
+    assert not answers_agree("A, B", "A, B, C")          # containment must not hide a missing member
+    assert not answers_agree("A, B, C", "A, B")
+    assert answers_agree("A, B, and C", "C; B; A")       # Oxford "and" is not an item
+    assert answers_agree("$1,077", "1,077 dollars")      # thousands separator is not a list
+    assert answers_agree("Denmark", "the answer is Denmark")
+
+
+# ------------------------------------------------------- attempt validity --
+class _Stub:
+    def __init__(self, answer, *, submitted=True, failure_reason=None, integrity_ok=True):
+        self.submitted = submitted
+        self.payload = {"answer": answer} if submitted else None
+        self.failure_reason = failure_reason
+        self.integrity_ok = integrity_ok
+        self.total_prompt_tokens = 1
+        self.total_completion_tokens = 1
+
+
+def _stub_solves(monkeypatch, results):
+    import fabric_rlm.verify as verify_module
+
+    queue = list(results)
+    tasks = []
+
+    class FakeRLM:
+        @staticmethod
+        def from_task(text, **kwargs):
+            tasks.append(text)
+
+            class Runner:
+                @staticmethod
+                def run():
+                    return queue.pop(0)
+
+            return Runner()
+
+    monkeypatch.setattr(verify_module, "RLM", FakeRLM)
+    return tasks
+
+
+def test_all_failed_solves_are_a_failed_verdict(monkeypatch):
+    failed = lambda: _Stub("", submitted=False, failure_reason="max_turns")
+    _stub_solves(monkeypatch, [failed(), failed(), failed()])
+    vr = verified_task("How many?", outputs=["answer"])
+    assert vr.verdict == "failed" and not vr.ok
+    assert vr.result.submitted is False and vr.result.failure_reason == "max_turns"
+    assert len(vr.attempts) == 3
+
+
+def test_failed_solve_is_never_a_candidate_even_with_custom_agree(monkeypatch):
+    tasks = _stub_solves(monkeypatch, [
+        _Stub("", submitted=False, failure_reason="worker_timeout"),
+        _Stub("42"),
+        _Stub("42"),
+    ])
+    vr = verified_task("How many?", outputs=["answer"], agree=lambda a, b: True)
+    assert vr.verdict == "reconciled" and vr.result.payload["answer"] == "42"
+    assert "Analyst 1 answered: (no answer)" in tasks[-1]
+
+
+def test_agreement_prefers_the_integrity_clean_candidate(monkeypatch):
+    unresolved, clean = _Stub("42", integrity_ok=False), _Stub("42", integrity_ok=True)
+    _stub_solves(monkeypatch, [unresolved, clean])
+    assert verified_task("How many?", outputs=["answer"]).result is clean
+    _stub_solves(monkeypatch, [clean, unresolved])
+    assert verified_task("How many?", outputs=["answer"]).result is clean
+    both = [_Stub("42"), _Stub("42")]
+    _stub_solves(monkeypatch, both)
+    assert verified_task("How many?", outputs=["answer"]).result is both[0]
+
+
+def test_reconciler_failure_falls_back_to_a_usable_candidate(monkeypatch):
+    usable = _Stub("9")
+    _stub_solves(monkeypatch, [
+        _Stub("", submitted=False, failure_reason="max_turns"),
+        usable,
+        _Stub("", submitted=False, failure_reason="max_turns"),
+    ])
+    vr = verified_task("How many?", outputs=["answer"])
+    assert vr.verdict == "reconciled" and vr.result is usable
