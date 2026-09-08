@@ -44,6 +44,22 @@
   and fails closed when a task lacks either arm. The registered-operation
   planner's operation descriptors now carry `required_sources`.
 
+### Fixed
+
+- **`answers_agree` waved a sign flip through as agreement.** The text
+  normalization strips punctuation, and the minus sign with it, so `"10"`
+  and `"-10"` (also `"10%"` / `"-10%"`, `"$5"` / `"-$5"`, `"(10)"` / `"10"`)
+  normalized to the same string and returned early as "agree" without ever
+  reaching the numeric comparison, so `verified_task` skipped reconciliation
+  on exactly the disagreement it exists to catch. The signed numeric
+  comparison now runs first. Numbers keep their sign through a currency
+  symbol (`-$5`), a number alone in parentheses is read as an accounting
+  negative, and a hyphen glued to a preceding word character is a range
+  separator (`2024-2025`), not a minus. Two blank answers no longer agree
+  (the reconciler runs and is told neither analyst answered), and the
+  short-versus-verbose containment test now matches whole words only, so
+  `"Mark"` no longer agrees with `"Denmark"`.
+
 ## 0.6.0 — 2026-09-04 — analytical integrity guardrails and bounded semantic-model aggregation
 
 ### Added

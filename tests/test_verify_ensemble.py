@@ -118,3 +118,71 @@ def test_agree_lists_need_identical_item_sets():
 def test_agree_short_vs_verbose_phrasing():
     assert answers_agree("Negotiation", "Negotiation stage")
     assert not answers_agree("MI", "TX")
+
+
+def test_agree_sign_is_part_of_the_number():
+    # Normalization strips punctuation, and the minus sign with it, so the
+    # signed numeric comparison must run before the normalized-equality
+    # shortcut or a sign flip is waved through as agreement.
+    for a, b in [("10", "-10"), ("10%", "-10%"), ("$5", "-$5"), ("+10", "-10"),
+                 ("Growth was 10", "Growth was -10"), ("-10; A", "10; A"),
+                 ("(10)", "10"), ("($5)", "5")]:
+        assert not answers_agree(a, b), (a, b)
+        assert not answers_agree(b, a), (b, a)
+    assert answers_agree("Growth was -3.5%", "-3.5% growth")
+    assert answers_agree("$-5", "-$5")
+
+
+def test_agree_accounting_negative_and_range_hyphen():
+    assert answers_agree("(10)", "-10")            # accounting negative
+    assert answers_agree("($5)", "-5")
+    assert answers_agree("(10 items)", "10 items")  # parentheses around prose, not a sign
+    assert answers_agree("2024-2025", "2024 to 2025")  # hyphen is a range separator
+    assert not answers_agree("FY2024 revenue 10", "FY2025 revenue 10")
+
+
+def test_agree_blank_answers_never_agree():
+    assert not answers_agree("", "")
+    assert not answers_agree("  ", "")
+    assert not answers_agree(None, None)
+    assert not answers_agree("", "42")
+
+
+def test_agree_containment_is_whole_word():
+    assert not answers_agree("Mark", "Denmark")
+    assert not answers_agree("Ann", "Annie")
+    assert answers_agree("Denmark", "the answer is Denmark")
+
+
+def test_sign_flip_reconciles(monkeypatch):
+    _wire(monkeypatch, [{"answer": "10"}, {"answer": "-10"}, {"answer": "-10"}])
+    lm = ScriptedLM([CODE, CODE, CODE])
+    vr = verified_task("Net change?", outputs=["answer"], lm=lm, max_turns=3, timeout=5)
+    assert vr.verdict == "reconciled"
+    assert vr.result.payload["answer"] == "-10"
+    assert len(vr.attempts) == 3
+
+
+class RecordingLM(ScriptedLM):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.seen: list[str] = []
+
+    def __call__(self, *, messages):
+        self.seen.extend(str(m.get("content", "")) for m in messages)
+        return super().__call__(messages=messages)
+
+
+def test_two_blank_solves_reconcile(monkeypatch):
+    # Blank answers trip the runtime's validation retry, so each blank solve
+    # consumes two turns. Two blanks are not agreement: the reconciler runs and
+    # sees that neither analyst answered.
+    _wire(monkeypatch, [{"answer": ""}, {"answer": ""},
+                        {"answer": ""}, {"answer": ""},
+                        {"answer": "5"}])
+    lm = RecordingLM([CODE] * 5)
+    vr = verified_task("How many?", outputs=["answer"], lm=lm, max_turns=2, timeout=5)
+    assert vr.verdict == "reconciled"
+    assert vr.result.payload["answer"] == "5"
+    assert len(vr.attempts) == 3
+    assert any("Analyst 1 answered: (no answer)" in text for text in lm.seen)
