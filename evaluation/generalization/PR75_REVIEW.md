@@ -114,6 +114,19 @@ The split is necessary. Six answers put a composite string in `value`
 reasoning error, and scoring it as a wrong answer overstated the error rate
 and penalised the cold arm hardest. See F9.
 
+**Disclosure — the analytic axis was added post hoc.** `_numbers_in_text` and
+the `analytic` axis were written *after* inspecting the answers to
+`q_service_top_type_share`, the one question where the arms diverged. A
+grading rule invented after seeing the data it grades is a real methodological
+risk, so it is stated plainly rather than buried.
+
+The verdict does not depend on it. On the **contract axis alone**, which was
+defined before the gate ran, learned 32/33 still beats cold 30/33 and the gate
+still passes. The analytic axis changes the size of the gap, not its
+direction. It also moves results *against* the conclusion's favour by
+recovering two cold answers (cold 30 → 32), so it is not a rule that flatters
+the learned arm.
+
 ### Result, library `bd924bc`
 
 | | Arm A (cold) | Arm B (learned) |
@@ -375,6 +388,28 @@ All by failing test first, all committed.
 Forcing the screen on across the runtime suites yields the **same** 26 failures
 before and after these changes, so they add no false positives.
 
+### Suite health on the branch carrying the fixes
+
+Verified on `bd924bc`, the branch head proposed for merge:
+
+| suite | result |
+|---|---|
+| `tests/test_knowledge_file_operations.py` | 41/41 pass, exit 0 |
+| `tests/behavior/test_behavior_baseline.py` | 2/2 pass, exit 0 |
+
+Two earlier reports of failure here were **measurement artifacts, not defects**,
+and both are recorded rather than quietly dropped:
+
+- The two worker timeouts reproduced only under a loaded parallel run. Re-run
+  in isolation the module passes 41/41 with exit 0.
+- The two behavior-baseline failures were HTTP 401. `OPENROUTER_API_KEY` was
+  not set in that shell, because environment variables do not persist between
+  tool invocations here. Re-run with a valid key, both pass.
+
+Neither was a fault in the branch. Both were initially written up as if they
+were, which is exactly the failure mode this report keeps running into: the
+harness breaking and the library getting blamed.
+
 ---
 
 ## F6 — Review findings needing no code change
@@ -458,19 +493,30 @@ proposed fix was a universal grain assertion in the verifier.
 
 ### Why it was withdrawn
 
-Re-running the same question against the fixed library did not reproduce it:
+Only `q_ecom_avg_payment` can exhibit this hazard — it is the payment fan-out —
+so it is the only valid denominator. Counting the other ten questions would
+inflate the sample with trials that could never have hit it.
 
-| batch | library | learned trials | hazards |
-|---|---|---|---|
-| initial 3-rep | `bd924bc` | 3 | 1 |
-| diagnostic 6-rep | `bd924bc` | 6 | 0 |
-| 66-trial gate | `bd924bc` | 33 | **0** |
+| batch | library | learned trials on this question | completed | hazards |
+|---|---|---|---|---|
+| stage 3 matrix | `a736098` (pre-fix) | 3 | 1 | 1 |
+| 3-rep rerun | `bd924bc` | 3 | 3 | **1** |
+| 6-rep diagnostic | `bd924bc` | 6 | 6 | 0 |
+| 66-trial gate | `bd924bc` | 3 | 3 | 0 |
 
-**1 hazard in 42 learned trials (~2.4%)**, all of it in the first batch of
-three. At n=3 a single stochastic event is indistinguishable from a defect.
-Building a core mechanism on it would have been tuning on noise, and would
-have violated the evaluation's own constraint against speculative core
-patches.
+On the fixed library that is **1 hazard in 12 trials (8.3%)** — not the 2.4%
+an all-questions pool would suggest. The withdrawal does **not** rest on a low
+pooled rate. It rests on this: after the batch that produced it, the hazard
+**did not recur in 9 consecutive trials on the same question**, and the single
+observation came from a batch of three.
+
+At n=3, one stochastic event cannot be distinguished from a defect. Building a
+core mechanism on it would have been tuning on noise, against this
+evaluation's own rule about speculative core patches.
+
+An 8.3% rate on one question is not negligible, so this is **withdrawn as a
+diagnosed defect, not closed as a non-issue**. If it recurs, the reproduction
+and the proposed grain assertion are recorded above.
 
 ### What the evidence actually shows
 
