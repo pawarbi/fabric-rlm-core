@@ -266,6 +266,16 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--seed", type=int, default=20260909)
     parser.add_argument("--output", default="stage3_results.json")
+    parser.add_argument(
+        "--only",
+        default=None,
+        help="Comma-separated question_ids to run (default: all).",
+    )
+    parser.add_argument(
+        "--arms",
+        default="A,B",
+        help="Comma-separated arms to run (default: A,B).",
+    )
     args = parser.parse_args()
 
     from fabric_rlm import RLM
@@ -273,6 +283,13 @@ def main() -> None:
     ensure_csv()
     refs = references()
     questions = QUESTIONS[:1] if args.smoke else QUESTIONS
+    if args.only:
+        wanted = {qid.strip() for qid in args.only.split(",") if qid.strip()}
+        unknown = wanted - {q["question_id"] for q in QUESTIONS}
+        if unknown:
+            raise SystemExit(f"unknown question_id(s): {sorted(unknown)}")
+        questions = [q for q in QUESTIONS if q["question_id"] in wanted]
+    arms = tuple(a.strip() for a in args.arms.split(",") if a.strip())
     reps = 1 if args.smoke else args.repetitions
 
     packages: dict[tuple[str, str], object] = {}
@@ -295,7 +312,7 @@ def main() -> None:
     schedule = [
         {"question_id": q["question_id"], "domain": q["domain"], "arm": arm, "rep": rep}
         for q in questions
-        for arm in ("A", "B")
+        for arm in arms
         for rep in range(reps)
     ]
     random.Random(args.seed).shuffle(schedule)

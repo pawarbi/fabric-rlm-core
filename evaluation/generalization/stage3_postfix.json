@@ -1,7 +1,7 @@
 {
  "model": "openai/gpt-4.1-mini",
  "seed": 20260909,
- "repetitions": 1,
+ "repetitions": 3,
  "provenance": {
   "olist_orders": "cbcb3fe8/361097a2/Tables/orders",
   "olist_order_items": "cbcb3fe8/361097a2/Tables/order_items",
@@ -39,10 +39,74 @@
    "fingerprint": "158e61207217d7c1743f814dd14b6dcff9867a4ab117cfebc08381185b6cc0fe"
   }
  },
- "remaining_budget": 22,
+ "remaining_budget": 49,
  "trials": [
   {
-   "question_id": "q_ecom_order_count",
+   "question_id": "q_ecom_avg_payment",
+   "domain": "ecommerce",
+   "arm": "B",
+   "rep": 1,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 4,
+   "prompt_tokens": 8116,
+   "completion_tokens": 255,
+   "wall_seconds": 27.58,
+   "answer": {
+    "status": "OK",
+    "value": 160.99,
+    "units": "BRL",
+    "grain": "per order",
+    "entity": null
+   },
+   "grade": {
+    "status": "ok",
+    "value": 160.99,
+    "reference": 160.99,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "averaged payment rows instead of per order",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_ecom_avg_payment",
+   "domain": "ecommerce",
+   "arm": "B",
+   "rep": 2,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 2,
+   "prompt_tokens": 4845,
+   "completion_tokens": 69,
+   "wall_seconds": 22.57,
+   "answer": {
+    "status": "OK",
+    "value": 154.1,
+    "units": "Brazilian Reais (BRL)",
+    "grain": "per order",
+    "entity": null
+   },
+   "grade": {
+    "status": "ok",
+    "value": 154.1,
+    "reference": 160.99,
+    "correct": false,
+    "hit_hazard": true,
+    "hazard_name": "averaged payment rows instead of per order",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": true
+   }
+  },
+  {
+   "question_id": "q_ecom_avg_payment",
    "domain": "ecommerce",
    "arm": "B",
    "rep": 0,
@@ -50,56 +114,24 @@
    "ok": true,
    "submitted": true,
    "failure_reason": null,
-   "turns": 2,
-   "prompt_tokens": 4977,
-   "completion_tokens": 55,
-   "wall_seconds": 26.23,
+   "turns": 5,
+   "prompt_tokens": 10618,
+   "completion_tokens": 494,
+   "wall_seconds": 31.93,
    "answer": {
     "status": "OK",
-    "value": 98666,
-    "units": "orders",
-    "grain": "order",
+    "value": 160.99,
+    "units": "Brazilian Real",
+    "grain": "one row per order_id",
     "entity": null
    },
    "grade": {
     "status": "ok",
-    "value": 98666.0,
-    "reference": 98666.0,
+    "value": 160.99,
+    "reference": 160.99,
     "correct": true,
     "hit_hazard": false,
-    "hazard_name": "counted item rows instead of distinct orders",
-    "abstained": false,
-    "entity_ok": null,
-    "confidently_wrong": false
-   }
-  },
-  {
-   "question_id": "q_ecom_order_count",
-   "domain": "ecommerce",
-   "arm": "A",
-   "rep": 0,
-   "model": "openai/gpt-4.1-mini",
-   "ok": true,
-   "submitted": true,
-   "failure_reason": null,
-   "turns": 6,
-   "prompt_tokens": 8166,
-   "completion_tokens": 1083,
-   "wall_seconds": 27.24,
-   "answer": {
-    "status": "ok",
-    "value": 98666,
-    "units": "count",
-    "grain": "order",
-    "entity": null
-   },
-   "grade": {
-    "status": "ok",
-    "value": 98666.0,
-    "reference": 98666.0,
-    "correct": true,
-    "hit_hazard": false,
-    "hazard_name": "counted item rows instead of distinct orders",
+    "hazard_name": "averaged payment rows instead of per order",
     "abstained": false,
     "entity_ok": null,
     "confidently_wrong": false

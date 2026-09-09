@@ -1,0 +1,768 @@
+{
+ "model": "openai/gpt-4.1-mini",
+ "seed": 20260909,
+ "repetitions": 3,
+ "provenance": {
+  "olist_orders": "cbcb3fe8/361097a2/Tables/orders",
+  "olist_order_items": "cbcb3fe8/361097a2/Tables/order_items",
+  "olist_order_payments": "cbcb3fe8/361097a2/Tables/order_payments",
+  "bakehouse_sales_transactions": "cbcb3fe8/550a3a96/Tables/sales_transactions",
+  "callcenter_call_log": "ee90374b/b8a38cc5/Tables/call_log"
+ },
+ "references": {
+  "q_ecom_order_count": {
+   "value": 98666.0,
+   "hazard": 112650.0,
+   "hazard_name": "counted item rows instead of distinct orders"
+  },
+  "q_ecom_avg_payment": {
+   "value": 160.99,
+   "hazard": 154.1,
+   "hazard_name": "averaged payment rows instead of per order"
+  },
+  "q_retail_top_product": {
+   "value": 11595.0,
+   "entity": "Golden Gate Ginger",
+   "hazard": 11199.0,
+   "hazard_name": "returned the runner-up product"
+  },
+  "q_service_avg_talk": {
+   "value": 14.9936,
+   "hazard": 14.994,
+   "hazard_name": "mean of per-agent means (unweighted)"
+  }
+ },
+ "packages": {
+  "service_ops": {
+   "declared_lessons": 2,
+   "active_lessons": 2,
+   "fingerprint": "34f4410edf2ce6e7cc0c42b4143eb40009a964e2419ca399ea59847ca613f900"
+  },
+  "food_retail": {
+   "declared_lessons": 2,
+   "active_lessons": 2,
+   "fingerprint": "a07bf6f8c8087f94270fa3a49fea3c098fea9c63a99dbd0eab23dcf225614c16"
+  },
+  "ecommerce": {
+   "declared_lessons": 8,
+   "active_lessons": 8,
+   "fingerprint": "158e61207217d7c1743f814dd14b6dcff9867a4ab117cfebc08381185b6cc0fe"
+  }
+ },
+ "remaining_budget": 316,
+ "trials": [
+  {
+   "question_id": "q_retail_top_product",
+   "domain": "food_retail",
+   "arm": "A",
+   "rep": 0,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 6,
+   "prompt_tokens": 10509,
+   "completion_tokens": 452,
+   "wall_seconds": 23.55,
+   "answer": {
+    "status": "OK",
+    "value": {
+     "__type__": "int64",
+     "__repr__": "np.int64(11595)",
+     "__serializable__": false
+    },
+    "units": "USD",
+    "grain": "product",
+    "entity": "Golden Gate Ginger"
+   },
+   "grade": {
+    "status": "ok",
+    "value": null,
+    "reference": 11595.0,
+    "correct": false,
+    "hit_hazard": false,
+    "hazard_name": "returned the runner-up product",
+    "abstained": false,
+    "entity_ok": true,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_ecom_order_count",
+   "domain": "ecommerce",
+   "arm": "B",
+   "rep": 1,
+   "model": "openai/gpt-4.1-mini",
+   "ok": false,
+   "error": "ValueError: operation result exceeds row bound"
+  },
+  {
+   "question_id": "q_service_avg_talk",
+   "domain": "service_ops",
+   "arm": "A",
+   "rep": 0,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 6,
+   "prompt_tokens": 9298,
+   "completion_tokens": 574,
+   "wall_seconds": 23.43,
+   "answer": {
+    "status": "OK",
+    "value": 14.9936,
+    "units": "minutes",
+    "grain": "all calls",
+    "entity": "all calls"
+   },
+   "grade": {
+    "status": "ok",
+    "value": 14.9936,
+    "reference": 14.9936,
+    "correct": true,
+    "hit_hazard": true,
+    "hazard_name": "mean of per-agent means (unweighted)",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_ecom_avg_payment",
+   "domain": "ecommerce",
+   "arm": "A",
+   "rep": 2,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 4,
+   "prompt_tokens": 5447,
+   "completion_tokens": 360,
+   "wall_seconds": 20.35,
+   "answer": {
+    "status": "ok",
+    "value": 160.99,
+    "units": "currency units (presumably Brazilian Real, BRL)",
+    "grain": "order",
+    "entity": "all orders that appear in the payments data"
+   },
+   "grade": {
+    "status": "ok",
+    "value": 160.99,
+    "reference": 160.99,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "averaged payment rows instead of per order",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_service_avg_talk",
+   "domain": "service_ops",
+   "arm": "B",
+   "rep": 0,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 2,
+   "prompt_tokens": 3897,
+   "completion_tokens": 69,
+   "wall_seconds": 25.85,
+   "answer": {
+    "status": "OK",
+    "value": 14.9936,
+    "units": "seconds",
+    "grain": "one row per Call_ID",
+    "entity": null
+   },
+   "grade": {
+    "status": "ok",
+    "value": 14.9936,
+    "reference": 14.9936,
+    "correct": true,
+    "hit_hazard": true,
+    "hazard_name": "mean of per-agent means (unweighted)",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_service_avg_talk",
+   "domain": "service_ops",
+   "arm": "B",
+   "rep": 1,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 2,
+   "prompt_tokens": 3890,
+   "completion_tokens": 70,
+   "wall_seconds": 26.77,
+   "answer": {
+    "status": "OK",
+    "value": 14.9936,
+    "units": "seconds",
+    "grain": "one row per Call_ID",
+    "entity": "all calls"
+   },
+   "grade": {
+    "status": "ok",
+    "value": 14.9936,
+    "reference": 14.9936,
+    "correct": true,
+    "hit_hazard": true,
+    "hazard_name": "mean of per-agent means (unweighted)",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_ecom_order_count",
+   "domain": "ecommerce",
+   "arm": "A",
+   "rep": 1,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 8,
+   "prompt_tokens": 15360,
+   "completion_tokens": 386,
+   "wall_seconds": 27.73,
+   "answer": {
+    "status": "OK",
+    "value": 98666,
+    "units": "count",
+    "grain": "order",
+    "entity": null
+   },
+   "grade": {
+    "status": "ok",
+    "value": 98666.0,
+    "reference": 98666.0,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "counted item rows instead of distinct orders",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_retail_top_product",
+   "domain": "food_retail",
+   "arm": "A",
+   "rep": 2,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 5,
+   "prompt_tokens": 8641,
+   "completion_tokens": 351,
+   "wall_seconds": 24.26,
+   "answer": {
+    "status": "success",
+    "value": {
+     "product": "Golden Gate Ginger",
+     "revenue": {
+      "__type__": "int64",
+      "__repr__": "np.int64(11595)",
+      "__serializable__": false
+     }
+    },
+    "units": "currency units",
+    "grain": "product",
+    "entity": "Golden Gate Ginger"
+   },
+   "grade": {
+    "status": "success",
+    "value": null,
+    "reference": 11595.0,
+    "correct": false,
+    "hit_hazard": false,
+    "hazard_name": "returned the runner-up product",
+    "abstained": false,
+    "entity_ok": true,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_retail_top_product",
+   "domain": "food_retail",
+   "arm": "A",
+   "rep": 1,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 5,
+   "prompt_tokens": 8469,
+   "completion_tokens": 464,
+   "wall_seconds": 24.6,
+   "answer": {
+    "status": "success",
+    "value": {
+     "product": "Golden Gate Ginger",
+     "total_revenue": 11595
+    },
+    "units": "monetary units (currency not specified)",
+    "grain": "product",
+    "entity": "Golden Gate Ginger"
+   },
+   "grade": {
+    "status": "success",
+    "value": null,
+    "reference": 11595.0,
+    "correct": false,
+    "hit_hazard": false,
+    "hazard_name": "returned the runner-up product",
+    "abstained": false,
+    "entity_ok": true,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_ecom_avg_payment",
+   "domain": "ecommerce",
+   "arm": "A",
+   "rep": 0,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 4,
+   "prompt_tokens": 6317,
+   "completion_tokens": 660,
+   "wall_seconds": 23.37,
+   "answer": {
+    "status": "success",
+    "value": 160.99,
+    "units": "BRL",
+    "grain": "order",
+    "entity": null
+   },
+   "grade": {
+    "status": "success",
+    "value": 160.99,
+    "reference": 160.99,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "averaged payment rows instead of per order",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_ecom_avg_payment",
+   "domain": "ecommerce",
+   "arm": "A",
+   "rep": 1,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 4,
+   "prompt_tokens": 5354,
+   "completion_tokens": 322,
+   "wall_seconds": 22.16,
+   "answer": {
+    "status": "OK",
+    "value": 160.99,
+    "units": "BRL",
+    "grain": "order",
+    "entity": null
+   },
+   "grade": {
+    "status": "ok",
+    "value": 160.99,
+    "reference": 160.99,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "averaged payment rows instead of per order",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_retail_top_product",
+   "domain": "food_retail",
+   "arm": "B",
+   "rep": 1,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 2,
+   "prompt_tokens": 3864,
+   "completion_tokens": 188,
+   "wall_seconds": 12.52,
+   "answer": {
+    "status": "success",
+    "value": 11595.0,
+    "units": "USD",
+    "grain": "product",
+    "entity": "Golden Gate Ginger"
+   },
+   "grade": {
+    "status": "success",
+    "value": 11595.0,
+    "reference": 11595.0,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "returned the runner-up product",
+    "abstained": false,
+    "entity_ok": true,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_ecom_avg_payment",
+   "domain": "ecommerce",
+   "arm": "B",
+   "rep": 2,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 2,
+   "prompt_tokens": 4968,
+   "completion_tokens": 127,
+   "wall_seconds": 24.18,
+   "answer": {
+    "status": "ok",
+    "value": 154.1,
+    "units": "BRL",
+    "grain": "order",
+    "entity": null
+   },
+   "grade": {
+    "status": "ok",
+    "value": 154.1,
+    "reference": 160.99,
+    "correct": false,
+    "hit_hazard": true,
+    "hazard_name": "averaged payment rows instead of per order",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": true
+   }
+  },
+  {
+   "question_id": "q_ecom_avg_payment",
+   "domain": "ecommerce",
+   "arm": "B",
+   "rep": 1,
+   "model": "openai/gpt-4.1-mini",
+   "ok": false,
+   "error": "ValueError: operation result exceeds row bound"
+  },
+  {
+   "question_id": "q_service_avg_talk",
+   "domain": "service_ops",
+   "arm": "A",
+   "rep": 1,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 7,
+   "prompt_tokens": 11309,
+   "completion_tokens": 440,
+   "wall_seconds": 32.39,
+   "answer": {
+    "status": "success",
+    "value": 14.9936,
+    "units": "seconds",
+    "grain": "call",
+    "entity": null
+   },
+   "grade": {
+    "status": "success",
+    "value": 14.9936,
+    "reference": 14.9936,
+    "correct": true,
+    "hit_hazard": true,
+    "hazard_name": "mean of per-agent means (unweighted)",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_service_avg_talk",
+   "domain": "service_ops",
+   "arm": "A",
+   "rep": 2,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 4,
+   "prompt_tokens": 6640,
+   "completion_tokens": 547,
+   "wall_seconds": 25.64,
+   "answer": {
+    "status": "OK",
+    "value": 14.9936,
+    "units": "minutes",
+    "grain": "call",
+    "entity": "all_calls"
+   },
+   "grade": {
+    "status": "ok",
+    "value": 14.9936,
+    "reference": 14.9936,
+    "correct": true,
+    "hit_hazard": true,
+    "hazard_name": "mean of per-agent means (unweighted)",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_ecom_avg_payment",
+   "domain": "ecommerce",
+   "arm": "B",
+   "rep": 0,
+   "model": "openai/gpt-4.1-mini",
+   "ok": false,
+   "error": "ValueError: operation result exceeds row bound"
+  },
+  {
+   "question_id": "q_ecom_order_count",
+   "domain": "ecommerce",
+   "arm": "A",
+   "rep": 0,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 5,
+   "prompt_tokens": 6973,
+   "completion_tokens": 323,
+   "wall_seconds": 24.3,
+   "answer": {
+    "status": "success",
+    "value": 98666,
+    "units": "count",
+    "grain": "order",
+    "entity": null
+   },
+   "grade": {
+    "status": "success",
+    "value": 98666.0,
+    "reference": 98666.0,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "counted item rows instead of distinct orders",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_retail_top_product",
+   "domain": "food_retail",
+   "arm": "B",
+   "rep": 0,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 2,
+   "prompt_tokens": 3569,
+   "completion_tokens": 86,
+   "wall_seconds": 11.74,
+   "answer": {
+    "status": "success",
+    "value": 11595.0,
+    "units": "currency units",
+    "grain": "product",
+    "entity": "Golden Gate Ginger"
+   },
+   "grade": {
+    "status": "success",
+    "value": 11595.0,
+    "reference": 11595.0,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "returned the runner-up product",
+    "abstained": false,
+    "entity_ok": true,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_ecom_order_count",
+   "domain": "ecommerce",
+   "arm": "B",
+   "rep": 0,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 3,
+   "prompt_tokens": 6207,
+   "completion_tokens": 193,
+   "wall_seconds": 34.37,
+   "answer": {
+    "status": "ok",
+    "value": 98666,
+    "units": "count",
+    "grain": "one row per order",
+    "entity": "orders with at least one order item"
+   },
+   "grade": {
+    "status": "ok",
+    "value": 98666.0,
+    "reference": 98666.0,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "counted item rows instead of distinct orders",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_retail_top_product",
+   "domain": "food_retail",
+   "arm": "B",
+   "rep": 2,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 4,
+   "prompt_tokens": 7737,
+   "completion_tokens": 169,
+   "wall_seconds": 13.97,
+   "answer": {
+    "status": "success",
+    "value": 11595.0,
+    "units": "currency units",
+    "grain": "product",
+    "entity": "Golden Gate Ginger"
+   },
+   "grade": {
+    "status": "success",
+    "value": 11595.0,
+    "reference": 11595.0,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "returned the runner-up product",
+    "abstained": false,
+    "entity_ok": true,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_ecom_order_count",
+   "domain": "ecommerce",
+   "arm": "B",
+   "rep": 2,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 2,
+   "prompt_tokens": 4516,
+   "completion_tokens": 125,
+   "wall_seconds": 29.54,
+   "answer": {
+    "status": "ok",
+    "value": 98666,
+    "units": "count",
+    "grain": "one row per order",
+    "entity": null
+   },
+   "grade": {
+    "status": "ok",
+    "value": 98666.0,
+    "reference": 98666.0,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "counted item rows instead of distinct orders",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_service_avg_talk",
+   "domain": "service_ops",
+   "arm": "B",
+   "rep": 2,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 2,
+   "prompt_tokens": 3899,
+   "completion_tokens": 92,
+   "wall_seconds": 22.91,
+   "answer": {
+    "status": "OK",
+    "value": 14.9936,
+    "units": "seconds",
+    "grain": "call",
+    "entity": null
+   },
+   "grade": {
+    "status": "ok",
+    "value": 14.9936,
+    "reference": 14.9936,
+    "correct": true,
+    "hit_hazard": true,
+    "hazard_name": "mean of per-agent means (unweighted)",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  },
+  {
+   "question_id": "q_ecom_order_count",
+   "domain": "ecommerce",
+   "arm": "A",
+   "rep": 2,
+   "model": "openai/gpt-4.1-mini",
+   "ok": true,
+   "submitted": true,
+   "failure_reason": null,
+   "turns": 2,
+   "prompt_tokens": 2389,
+   "completion_tokens": 488,
+   "wall_seconds": 16.27,
+   "answer": {
+    "status": "ok",
+    "value": 98666,
+    "units": "count",
+    "grain": "order",
+    "entity": null
+   },
+   "grade": {
+    "status": "ok",
+    "value": 98666.0,
+    "reference": 98666.0,
+    "correct": true,
+    "hit_hazard": false,
+    "hazard_name": "counted item rows instead of distinct orders",
+    "abstained": false,
+    "entity_ok": null,
+    "confidently_wrong": false
+   }
+  }
+ ]
+}
