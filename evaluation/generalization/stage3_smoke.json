@@ -1,0 +1,63 @@
+{
+ "model": "openai/gpt-4.1-mini",
+ "seed": 20260909,
+ "repetitions": 1,
+ "provenance": {
+  "olist_orders": "cbcb3fe8/361097a2/Tables/orders",
+  "olist_order_items": "cbcb3fe8/361097a2/Tables/order_items",
+  "olist_order_payments": "cbcb3fe8/361097a2/Tables/order_payments",
+  "bakehouse_sales_transactions": "cbcb3fe8/550a3a96/Tables/sales_transactions",
+  "callcenter_call_log": "ee90374b/b8a38cc5/Tables/call_log"
+ },
+ "references": {
+  "q_ecom_order_count": {
+   "value": 98666.0,
+   "hazard": 112650.0,
+   "hazard_name": "counted item rows instead of distinct orders"
+  },
+  "q_ecom_avg_payment": {
+   "value": 160.99,
+   "hazard": 154.1,
+   "hazard_name": "averaged payment rows instead of per order"
+  },
+  "q_retail_top_product": {
+   "value": 11595.0,
+   "entity": "Golden Gate Ginger",
+   "hazard": 11199.0,
+   "hazard_name": "returned the runner-up product"
+  },
+  "q_service_avg_talk": {
+   "value": 14.9936,
+   "hazard": 14.994,
+   "hazard_name": "mean of per-agent means (unweighted)"
+  }
+ },
+ "packages": {
+  "ecommerce": {
+   "declared_lessons": 8,
+   "active_lessons": 8,
+   "fingerprint": "c5fa58ebcb5faf02ce78f4eee2dd4c81a6f4b1bb830c2829a0ec196888711355"
+  }
+ },
+ "remaining_budget": 28,
+ "trials": [
+  {
+   "question_id": "q_ecom_order_count",
+   "domain": "ecommerce",
+   "arm": "B",
+   "rep": 0,
+   "model": "openai/gpt-4.1-mini",
+   "ok": false,
+   "error": "ValueError: stale knowledge sources detected: olist_order_items, olist_order_payments, olist_orders"
+  },
+  {
+   "question_id": "q_ecom_order_count",
+   "domain": "ecommerce",
+   "arm": "A",
+   "rep": 0,
+   "model": "openai/gpt-4.1-mini",
+   "ok": false,
+   "error": "AuthenticationError: litellm.AuthenticationError: AuthenticationError: OpenrouterException - {\"error\":{\"message\":\"API key expired.\",\"code\":401,\"metadata\":{\"headers\":{\"WWW-Authenticate\":\"Bearer error=\\\"invalid_token\\\", error_description=\\\"API key expired\\\"\"}}}}"
+  }
+ ]
+}
