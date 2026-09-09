@@ -170,6 +170,22 @@ def ensure_csv() -> None:
             pd.read_parquet(DATA / f"{name}.parquet").to_csv(target, index=False)
 
 
+def make_limits():
+    """Profiling limits sized for real analytics tables.
+
+    The defaults (1 MB / 1000 records) truncate any realistic table, which
+    makes the profile inexact and causes preflight to reject the package. See
+    PR75_REVIEW.md F1.
+    """
+    from fabric_rlm.knowledge_sources import ProfileLimits
+
+    return ProfileLimits(
+        max_input_bytes=64 * 1024 * 1024,
+        max_records=200_000,
+        read_chunk_bytes=1024 * 1024,
+    )
+
+
 def make_lm():
     import dspy
 
@@ -264,7 +280,7 @@ def main() -> None:
     for domain in {q["domain"] for q in questions}:
         sources = _sources_for(domain)
         declared = {name: DECLARED[name] for name in sources if name in DECLARED}
-        learned = RLM.learn(sources=sources, declared=declared)
+        learned = RLM.learn(sources=sources, declared=declared, limits=make_limits())
         packages[(domain, "A")] = None
         packages[(domain, "B")] = learned
         summaries[domain] = {

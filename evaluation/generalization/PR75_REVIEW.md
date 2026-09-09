@@ -17,7 +17,7 @@ and naming conventions — in real Microsoft Fabric.
 | Synthetic datasets, 3 domains, independent references | measured |
 | Naming robustness | measured |
 | Transfer across sources (file, Lakehouse, semantic model) | measured for binding, profiling, learning |
-| **What learning adds to answers** | **UNMEASURED — see F1 and "Live matrix"** |
+| **What learning adds to answers** | **UNMEASURED — credential expired; harness delivered** |
 | Failure and change handling | partly measured; F1 is the significant result |
 | Correctness vs efficiency | not measured live |
 
@@ -54,9 +54,10 @@ the specific trap rather than merely scored wrong:
 
 ---
 
-## F1 — A learned package cannot be used with any source too large to profile exactly (blocking)
+## F1 — Default profiling limits make learned packages unusable on realistic data
 
-**Severity: high. This is the single most consequential finding.**
+**Severity: medium.** There *is* a supported path; it is undocumented, and the
+error message misdescribes the cause.
 
 ### Reproduction (deterministic, zero model calls)
 
@@ -67,7 +68,7 @@ RLM.from_task(task="...", knowledge=k, lm=lm)
 # ValueError: stale knowledge sources detected: olist_orders
 ```
 
-Observed on the first run, immediately, on unmodified files:
+Observed on the first run, immediately, on files that had just been written:
 
 ```
 olist_orders        snapshot_exact=False  records_inspected=1000  records_truncated=True
@@ -77,43 +78,77 @@ DRIFT: {'olist_orders': 'inexact', 'olist_order_items': 'inexact', 'olist_order_
 A 5 KB control file profiles with `snapshot_exact=True` and shows no drift.
 The trigger is size, not content.
 
+### The fix that exists
+
+`ProfileLimits` defaults to `max_input_bytes=1 MB` and `max_records=1000`
+(`knowledge_sources.py:51`). Raising them resolves the failure completely:
+
+```python
+limits = ProfileLimits(max_input_bytes=64*1024*1024, max_records=200_000,
+                       read_chunk_bytes=1024*1024)
+k = RLM.learn(sources=src, declared=..., limits=limits)
+```
+
+```
+olist_order_items    snapshot_exact=True  records=112650  truncated=False
+olist_order_payments snapshot_exact=True  records=103886  truncated=False
+olist_orders         snapshot_exact=True  records= 99441  truncated=False
+DRIFT: {}  is_current: True
+lessons: Counter({('schema', 'active'): 8})
+```
+
+Learning all three tables took **3.4 seconds** and preflight another 3.4
+seconds for roughly 41 MB. The default is therefore not buying much protection
+on data of this size.
+
 ### Expected vs actual
 
-- Expected: a package learned over a large file is usable against that same,
-  unchanged file.
-- Actual: `learn()` succeeds and promotes 8 active lessons, then **every** run
-  using that package raises `ValueError`. There is no supported path from
-  `learn()` to `run()` for a large file source.
+- Expected: either the defaults accommodate ordinary analytical tables, or the
+  failure explains itself and names the knob.
+- Actual: `learn()` succeeds and promotes 8 active lessons; every subsequent
+  run raises `ValueError: stale knowledge sources detected`. Nothing is stale —
+  the files were never modified. The message describes a data-change condition
+  when the real cause is a profiling budget, and it does not mention `limits=`,
+  which appears in no user-facing documentation of `learn()`.
 
-This directly contradicts the original requirement to include "at least one
-dataset too large to fit practically into a prompt" — that dataset is precisely
-the one for which learning cannot be used. It also explains the earlier
-observation that cold runs worked while learned runs did not.
+This is very likely the cause of the earlier observation that cold runs worked
+while learned runs did not.
 
 ### Affected code
 
-- `fabric_rlm/knowledge_preflight.py:168` — `if observed.diagnostics.get("snapshot_exact") is not True: drift[source_id] = "inexact"`
-- `fabric_rlm/runtime.py:1368` and `fabric_rlm/knowledge_execution.py:764` — any drift raises.
+- `fabric_rlm/knowledge_sources.py:51` — `ProfileLimits` defaults.
+- `fabric_rlm/knowledge_preflight.py:168` — `snapshot_exact is not True` → `"inexact"`.
+- `fabric_rlm/runtime.py:1368`, `fabric_rlm/knowledge_execution.py:764` — any drift raises.
 
-### This is not simply over-strictness
+### Proposed fix — universal mechanism
 
-`tests/test_knowledge_preflight.py:321` deliberately proves the conservative
-case: a middle-only mutation of a large file yields an **identical** sampled
-fingerprint. Comparing sampled fingerprints therefore cannot detect that
-change, so simply relaxing the check to "compare fingerprints anyway" would
-silently reuse stale knowledge. The conservatism is justified.
+1. Raise the defaults to something realistic for analytical tables, or size the
+   record cap from the source rather than a fixed 1000.
+2. Make the error actionable: distinguish "source changed" from "source could
+   not be profiled exactly within the current limits", and name `limits=` in
+   the latter.
+3. Document `limits=` in the `RLM.learn` docstring alongside `declared=`.
 
-### The actual inconsistency
+The conservatism itself is justified and should stay.
+`tests/test_knowledge_preflight.py:321` proves a middle-only mutation of a
+truncated file yields an **identical** sampled fingerprint, so an inexact
+profile genuinely cannot be trusted for staleness. Do not relax that check.
 
-The package already records the dependency scope of each lesson, and the
-declared facts do not depend on the snapshot at all:
+---
+
+## F1b — Snapshot inexactness invalidates schema-scoped declared facts
+
+Independent of F1, and still present whenever a source is genuinely too large
+to profile exactly.
+
+Declared facts record that they depend only on the schema:
 
 ```
 semantic_fact | grain   | scope=schema | basis=('declared',) | status=active
 semantic_fact | note 1  | scope=schema | basis=('declared',) | status=active
 ```
 
-After preflight, on unchanged files:
+After preflight on unchanged, truncated files:
 
 ```
 lesson status after preflight: Counter({('schema', 'stale'): 8})
@@ -127,22 +162,19 @@ not read.
 
 ### Proposed fix — universal mechanism, not a domain rule
 
-1. Scope invalidation by dependency. In `preflight_knowledge`, `inexact` and
-   `snapshot` drift should stale only knowledge whose `dependency_scope`
-   includes the snapshot. `schema`-scoped knowledge should survive, and
-   `schema` drift should continue to stale everything. Keep the current
-   behaviour for relationships and operations, which genuinely depend on row
-   content.
-2. Degrade rather than abort. `runtime.py:1368` should drop staled knowledge,
-   keep what survives, and record the existing `*.stale` event, reserving the
-   hard raise for the case where knowledge required by the run was staled.
-3. Fail early and honestly. `RLM.learn()` should surface at learn time that a
-   source profiled inexactly, so the failure does not surface only at `run()`.
+1. Scope invalidation by dependency: `inexact` and `snapshot` drift should
+   stale only knowledge whose `dependency_scope` includes the snapshot.
+   `schema`-scoped knowledge should survive; `schema` drift should continue to
+   stale everything. Relationships and operations genuinely depend on row
+   content and should keep the current behaviour.
+2. Degrade rather than abort at `runtime.py:1368`: drop staled knowledge, keep
+   what survives, record the existing `*.stale` event, and reserve the hard
+   raise for knowledge actually required by the run.
 
-Pinning tests: a large unchanged file must retain its declared `schema`-scoped
-lessons; a large file whose *schema* changes must still stale everything; and
-`test_same_size_middle_only_large_file_mutation_is_inexact_not_current` must
-keep passing for snapshot-scoped knowledge.
+Pinning tests: a truncated but unchanged file must retain its declared
+`schema`-scoped lessons; a file whose *schema* changes must still stale
+everything; and `test_same_size_middle_only_large_file_mutation_is_inexact_not_current`
+must keep passing for snapshot-scoped knowledge.
 
 Not implemented here: this changes a safety boundary, and the instruction was
 to report proposed fixes separately rather than land them during evaluation.
@@ -252,8 +284,9 @@ before and after these changes, so they add no false positives.
 ### General execution capability
 
 Not established by this evaluation. The live matrix is unmeasured because the
-credential expired, and F1 means the learned arm could not have run against the
-large real-data sources even with a working key. What is established is that
+credential expired. F1 would additionally have blocked the learned arm at the
+default profiling limits; the harness now raises them explicitly. What is
+established is that
 the execution-integrity machinery has real teeth once F5's bypasses are closed:
 the claim-provenance screen now reads negative and exponent-formatted numbers.
 
@@ -294,3 +327,4 @@ exercised. No claim is made about them.
 - Latency, token, and cost comparisons between arms.
 - Failure-handling behaviours beyond staleness: timeouts, invalid joins, empty
   results, and verifier outcomes were not exercised live.
+
