@@ -5,9 +5,18 @@ beyond the ARR models used during development — across domains, source types,
 and naming conventions — in real Microsoft Fabric.
 
 - Baseline: `b5226712a9aa41c3173d5f427e81244c333c0179`
-- Under review: PR #75 head `4466e9b`, plus review fixes `53e6cbb`, `a736098`
-- Live model: `openai/gpt-4.1-mini` via OpenRouter
+- Under review: PR #75 head `4466e9b`, plus review fixes `53e6cbb`, `a736098`, `bd924bc`
+- Live model: `openai/gpt-4.1-mini` via OpenRouter, seed 20260909
 - Real-Fabric evidence: see `FABRIC_FINDINGS.md` (zero model calls)
+
+**Library SHA per result set** — results are not comparable without this:
+
+| Result set | Library SHA | File |
+|---|---|---|
+| Stage 3 full matrix, 24 trials | `a736098` (pre-fix) | `stage3_results.json` |
+| Re-grade of the above | `a736098` | `stage3_regraded.json` |
+| `q_ecom_avg_payment` arm B rerun | `bd924bc` (post-fix) | `stage3_postfix.json` |
+| `q_ecom_order_count` arm B rerun | `bd924bc` (post-fix) | `stage3_postfix_ordercount.json` |
 
 ## Status of each requested measurement
 
@@ -17,27 +26,66 @@ and naming conventions — in real Microsoft Fabric.
 | Synthetic datasets, 3 domains, independent references | measured |
 | Naming robustness | measured |
 | Transfer across sources (file, Lakehouse, semantic model) | measured for binding, profiling, learning |
-| **What learning adds to answers** | **UNMEASURED — credential expired; harness delivered** |
-| Failure and change handling | partly measured; F1 is the significant result |
-| Correctness vs efficiency | not measured live |
+| **What learning adds to answers** | **measured — 24-trial live matrix + post-fix reruns** |
+| Failure and change handling | measured; F1 and F7 are the significant results |
+| Correctness vs efficiency | measured live, reported separately |
 
-## Live matrix: blocked, harness delivered
+## Live matrix: measured
 
-The OpenRouter key supplied for this work is **expired**. The provider returns:
+24 trials, 4 questions x 2 arms x 3 repetitions, on real Fabric Delta data
+materialized locally. Arm A = no knowledge package. Arm B = `RLM.learn()`
+with `declared=`.
 
-```
-AuthenticationError: OpenrouterException - {"error":{"message":"API key expired.","code":401}}
-```
-
-Per the original instruction, those results are marked **unmeasured** rather
-than estimated. The harness is complete and runnable:
+Exact commands:
 
 ```powershell
+$env:OPENROUTER_API_KEY = "<key>"
 $env:PYTHONPATH = "<...>\fabric-rlm-core-pr75"
 cd <...>\fabric-rlm-core-eval\evaluation\generalization
-python stage3_fabric_live.py --smoke                       # 2 trials
+python stage3_fabric_live.py --smoke                          # 2 trials
 python stage3_fabric_live.py --repetitions 3 --max-live-calls 400
+python regrade_stage3.py                                      # offline, no model calls
+# targeted post-fix reruns
+python stage3_fabric_live.py --only q_ecom_avg_payment --arms B --repetitions 3
+python stage3_fabric_live.py --only q_ecom_order_count --arms B --repetitions 3
 ```
+
+### Grading correction
+
+The first-pass grader read `answer["value"]` as a scalar and scored arm A wrong
+when it returned a correct `numpy.int64` (`__serializable__: false`) or nested
+the value in a dict. `regrade_stage3.py` separates **numeric correctness** from
+**machine readability**. Both are reported; conflating them inverted the result.
+
+`q_service_avg_talk` is **excluded from totals**: its reference (14.9936) and
+its hazard value (14.994) fall within tolerance of each other, so it cannot
+discriminate between arms. It was 3/3 in both.
+
+### Results over the 3 discriminating questions
+
+| Question | Arm A (cold) | Arm B pre-fix `a736098` | Arm B post-fix `bd924bc` |
+|---|---|---|---|
+| `q_ecom_avg_payment` | 3/3 | 0/3 (1 hazard, **2 crashes**) | **2/3** (1 hazard, 0 crashes) |
+| `q_ecom_order_count` | 3/3 | 2/3 (**1 crash**) | **3/3** |
+| `q_retail_top_product` | 3/3 (all 3 unreadable) | 3/3 | 3/3 |
+| **Total** | **9/9** | **5/9** | **8/9** |
+
+**The pre-fix 5/9 was almost entirely a library crash, not a learning failure.**
+Three of the four losses were the F7 row-bound abort. Attributing them to
+"learning hurts correctness" would have been wrong. After `bd924bc`, learning
+costs one hazard, not four failures.
+
+### Efficiency (pre-fix matrix, unaffected by F7)
+
+| Question | Arm A turns / prompt tokens | Arm B turns / prompt tokens |
+|---|---|---|
+| `q_ecom_avg_payment` | 4.0 / 5706 | 2.0 / 4968 |
+| `q_ecom_order_count` | 5.0 / 8241 | 2.5 / 5362 |
+| `q_retail_top_product` | 5.3 / 9206 | 2.7 / 5057 |
+
+Learning is consistently **~2x fewer turns and ~40% fewer prompt tokens**.
+Combined with 8/9 vs 9/9 correctness, learning buys substantial efficiency for
+one residual correctness hazard (F8).
 
 It runs 4 unseen questions over **real Fabric data** in 3 unrelated domains,
 2 arms (cold vs declared-learned), 3 repetitions, shuffled under a fixed seed,
@@ -279,16 +327,116 @@ before and after these changes, so they add no false positives.
 
 ---
 
+## F7 — Row-bound overflow aborted the whole run (fixed, `bd924bc`)
+
+Severity: **high**. This is the single largest correctness effect measured, and
+it only reached the learned arm — knowledge made the agent fail *harder* than
+no knowledge at all.
+
+### Reproduction (deterministic, zero model calls)
+
+`tests/test_knowledge_file_operations.py::test_group_by_high_cardinality_key_reports_a_bounded_plan_failure`
+
+1. `declared={"grain": ["order_id"], ...}` promotes a grain lesson.
+2. The lesson steers the model to `groupby=order_id`.
+3. `order_id` is a **legal value in the operation's own `parameter_schema` enum** —
+   the plan is valid by every check the planner applies.
+4. The result frame is 99,440 rows, over `max_output_rows=100`.
+5. `knowledge_execution.py:293` raised a bare `ValueError`.
+6. `runtime.py` recorded telemetry and **re-raised**, aborting `RLM.run()`.
+
+### Expected vs actual
+
+- Expected: degrade to ordinary execution, as every sibling failure in this
+  planner path already does (parse invalid, fallback, plan rejected, no
+  compatible operation).
+- Actual: the entire run raised. 3 of 24 live trials died this way.
+
+### Affected code
+
+- `fabric_rlm/knowledge_execution.py` — row bound
+- `fabric_rlm/runtime.py` — `except ValueError: … raise`
+
+### Fix — universal mechanism
+
+New `OperationResultTooLarge(OperationPlanError)`, so the row bound is
+recoverable and the runtime falls back, recording
+`reason="result_bound_exceeded"`. This is a **universal mechanism**, not a
+domain rule: it encodes "a bound the model's own plan can breach is a plan
+error," with no reference to any column, metric, or business concept.
+
+The **column bound deliberately stays a bare `ValueError`.** Rows follow from
+the model's `groupby` choice (recoverable); columns are the host's own declared
+contract, so an overflow there is a host bug and must fail closed. That
+boundary is pinned by
+`test_failed_host_audit_does_not_fall_back_to_ordinary_execution`.
+
+### Verification on real Fabric data
+
+`q_ecom_avg_payment` arm B went 0/3 with 2 crashes → **2/3 with 0 crashes**;
+`q_ecom_order_count` arm B went 2/3 with 1 crash → **3/3**. No crashes remain.
+
+---
+
+## F8 — A learned package walked into the hazard its own note warns about
+
+Severity: **medium**, and this is the **primary surviving learning defect**
+now that F7 is fixed.
+
+### Reproduction
+
+`python stage3_fabric_live.py --only q_ecom_avg_payment --arms B --repetitions 3`
+(library `bd924bc`) — 1 of 3 repetitions returns **154.1**.
+
+154.1 is the named hazard value: the mean of per-payment rows rather than the
+per-order average, i.e. the fan-out trap created by the order↔payment join. The
+learned package contains an active declared lesson that explicitly warns about
+this exact multiplication.
+
+### Expected vs actual
+
+- Expected: a declared lesson naming a hazard should make that hazard *less*
+  likely than with no knowledge at all.
+- Actual: arm A (no knowledge) hit it **0/3**; arm B (with the warning) hit it
+  **1/3**. The warning is present, retrieved, and active — and still not
+  binding on the answer.
+
+### Affected behaviour
+
+Lesson retrieval places the note in context, but nothing verifies that the
+final aggregation respects it. The lesson is advisory text, not a checked
+constraint.
+
+### Proposed fix — universal mechanism, not a domain rule
+
+Not a patch that knows about payments or orders. The general mechanism is a
+**grain assertion**: when a declared lesson states a grain for a source, the
+verifier should check that a claimed aggregate over that source was computed at
+the declared grain, and mark the claim unverified when it was not. That is
+expressible entirely in terms of grain and row counts.
+
+The alternative — hard-coding a join-fan-out rule for payment tables — belongs
+in **source metadata**, not core, and is explicitly out of scope per the
+evaluation constraint.
+
+---
+
+
 ## Conclusions
 
 ### General execution capability
 
-Not established by this evaluation. The live matrix is unmeasured because the
-credential expired. F1 would additionally have blocked the learned arm at the
-default profiling limits; the harness now raises them explicitly. What is
-established is that
-the execution-integrity machinery has real teeth once F5's bypasses are closed:
-the claim-provenance screen now reads negative and exponent-formatted numbers.
+**Established, with one caveat.** The cold arm answered **9/9** discriminating
+questions correctly across three domains on real Fabric Delta data, in 4–5.3
+turns. The execution-integrity machinery has real teeth once F5's bypasses are
+closed: the claim-provenance screen now reads negative and exponent-formatted
+numbers.
+
+Caveat: correct answers are not always **machine-readable**. Arm A returned the
+right number as a `numpy.int64` with `__serializable__: false`, or nested inside
+a dict, in 3/3 `q_retail_top_product` trials. A caller reading `answer["value"]`
+would treat a correct answer as a failure. Arm B never did this (0/3), so the
+knowledge path already normalizes better than the cold path.
 
 ### Generalization of learned behavior
 
@@ -304,6 +452,12 @@ the claim-provenance screen now reads negative and exponent-formatted numbers.
   achieved through `declared=`, which is explicit source metadata the user must
   write — a reasonable design, but it should be described that way rather than
   as automatic learning.
+- *Does learning help or hurt answers?* **Measured.** On the fixed library,
+  learned = 8/9 vs cold = 9/9, at ~2x fewer turns and ~40% fewer prompt tokens.
+  Learning trades one residual correctness hazard (F8) for a large efficiency
+  gain. Before the F7 fix the same comparison read 5/9 — that gap was a library
+  crash, not a property of learning, and reporting it as such would have been
+  a false finding.
 
 ### Portability across tested sources
 
@@ -319,12 +473,23 @@ exercised. No claim is made about them.
 
 ### Remaining unsupported claims
 
-- That learning improves **answers**. Only lesson counts and package contents
-  were measured. Nothing here shows a learned package changes correctness.
 - That equivalent semantics across source types produce equivalent **answers**.
-  Equivalent binding, profiling, and learning were shown; equivalent answers
-  were not.
-- Latency, token, and cost comparisons between arms.
-- Failure-handling behaviours beyond staleness: timeouts, invalid joins, empty
-  results, and verifier outcomes were not exercised live.
+  Equivalent binding, profiling, and learning were shown across file, Lakehouse
+  and semantic model; the live answer matrix ran against **locally materialized
+  real Fabric data**, not against live `LakehouseSource` bindings, because local
+  binding requires `notebookutils`. Answer-level cross-source equivalence
+  remains untested.
+- **Cost** was not measured; turns and prompt tokens were. End-to-end latency
+  was not isolated from provider variance.
+- Failure-handling breadth: staleness, row-bound overflow, and schema-scoped
+  invalidation were exercised. **Timeouts, invalid joins, empty results, and
+  failed/skipped verifier outcomes were not exercised live.**
+- Configuration **C** from the original request — a package enriched from
+  separate development runs — was **not built or tested**. Only A (no package)
+  and B (`learn()` only) were compared.
+- Only one model (`openai/gpt-4.1-mini`) was used. F8's hazard rate and the
+  efficiency gain may both be model-dependent.
+- The three residual conclusions rest on **3 discriminating questions x 3
+  repetitions**, below the "at least five unseen questions per domain" the
+  request asked for. Directionally clear, but not tightly powered.
 
