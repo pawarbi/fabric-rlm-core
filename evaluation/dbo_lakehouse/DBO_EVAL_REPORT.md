@@ -68,10 +68,12 @@ You **cannot** pass a knowledge package and inputs for the same aliases. Arm B i
 | | Arm A | Arm B |
 |---|---|---|
 | Emitted any SQL | 75/75 | 72/75 |
-| SQL references a real table | 65/75 (**87%**) | 69/75 (**92%**) |
-| Correct *when it reached the data* | 51/65 (**78.5%**) | 51/69 (**73.9%**) |
+| SQL references a real table | 65/75 (87%) | 69/75 (92%) |
+| **Correct *when it reached the data*** | **51/65 (78.5%)** | **51/69 (73.9%)** |
 
-Arm B reached the data **more** often and was still worse. The deficit survives conditioning on access. **It is behavioural.**
+The load-bearing figure is the last row: **conditioned on having reached the data, arm B is still worse (73.9% vs 78.5%).** The deficit survives conditioning on access, so it is **behavioural**.
+
+> *Caveat on the proxy:* the "references a real table" test is a regex over emitted SQL and is noisy — arm A scores 10/10 on trials where it apparently never touched a table, which is not credible and means the regex misses valid access paths. Treat the 87%/92% row as indicative only; the conditioned accuracy row is the one that carries the argument.
 
 ### 2.2 The behaviour
 
@@ -100,12 +102,18 @@ Corroborating: `status` came back as `success`, `ok`, `OK`, `SUCCESS` across tri
 
 I audited every question for the signature that exposed q23: **all trials in both arms converging on the same non-reference value.**
 
-**q23 — WITHDRAWN. My reference was wrong; the library was right.**
-"Mean api_calls per ACTIVE user." My SQL divided *all* `usage_logs.api_calls` by *active-user count* — **mismatched numerator and denominator populations** (ref 11,173.96). The model consistently returned usage *of active users* ÷ active users, the better reading. Excluded from all scoring above.
+**q23 — WITHDRAWN as UNRESOLVED. Not scored either way.**
+"Mean api_calls per ACTIVE user." My SQL divided *all* `usage_logs.api_calls` by *active-user count* — **mismatched numerator and denominator populations** (ref 11,173.96). That reference is defective and I am not defending it.
 
-> **Dual-engine agreement did not protect me.** pandas and DuckDB agreed because *I authored both encodings of the same misreading*. Cross-engine validation catches implementation bugs, not specification errors. **0/6 across both arms is the tell** — when both arms fail every repetition identically, suspect the reference first.
+But this is **not** a clean case of the library being right. The library **did not converge**: the modal answer was 10,374.66 at only **3/6 trials**, and my own `audit_references.py` graded the signature *"weak — library is inconsistent, likely a genuine miss."* So there are two faults stacked — a bad reference *and* an unstable library answer — and this run cannot separate them. **q23 is excluded as unresolved.**
+
+**The gate fails either way:** 81.3% vs 70.7% including q23, 84.7% vs 73.6% excluding it.
+
+> **Dual-engine agreement did not protect me.** pandas and DuckDB agreed because *I authored both encodings of the same misreading*. Cross-engine validation catches implementation bugs, not specification errors. **0/6 across both arms is the tell** — when both arms fail every repetition, suspect the reference before crediting a library failure.
 
 **Audit result: no other reference defects.** Only q20 and q23 were 0/6; the other 23 references were reproduced by at least one trial, so they are demonstrably reachable.
+
+Both are flagged in-place in the workbook (amber rows, `Comments` column) so the workbook and this report agree.
 
 ---
 
@@ -124,7 +132,32 @@ This is exactly the **empty-results failure mode from the original brief**: an e
 
 ---
 
-## 5. What learning did help with
+## 5. Do the learned answers *match* the cold ones?
+
+Distinct from "is each correct" — this is answer-to-answer agreement on matched trial pairs (q23 excluded):
+
+| | |
+|---|---|
+| Comparable trial pairs | 48 |
+| **Identical answer** (within 0.5%) | **38 (79.2%)** |
+| Different answer | 10 (20.8%) |
+| Pairs unusable — one side emitted no parseable value | **24** |
+
+Of the 48 comparable pairs, versus the reference:
+
+| | |
+|---|---|
+| Both correct | 36 |
+| **Cold correct, learned NOT** | **5** — learning broke it |
+| Learned correct, cold NOT | 3 — learning fixed it |
+| Both wrong | 4 |
+
+Two things to take from this:
+
+1. **When both arms produce a readable answer, they usually agree (79%).** Learning does not scramble the analysis wholesale — it perturbs a minority of questions, and it breaks more than it fixes (5 vs 3).
+2. **24 of 72 pairs were unusable because one side emitted nothing parseable**, overwhelmingly arm B's 10 contract violations. That is a third of the comparison lost to formatting rather than to analysis, and it is the single cheapest thing to fix.
+
+## 6. What learning did help with
 
 Not everything regressed. **4 improvements: q09, q11, q21, q24.** And turns fell 4.1%. The package genuinely helps when the requested quantity *matches* a lesson's grain and units — the harm is concentrated in questions needing a **transformation on top of** a package aggregate.
 
@@ -132,7 +165,7 @@ That is the actionable shape of the result: **learning helps on lookup-shaped qu
 
 ---
 
-## 6. Honest status
+## 7. Honest status
 
 | Claim | Status |
 |---|---|
@@ -148,7 +181,7 @@ That is the actionable shape of the result: **learning helps on lookup-shaped qu
 
 ---
 
-## 7. Reproduction
+## 8. Reproduction
 
 ```powershell
 $env:OPENROUTER_API_KEY = "<key>"
@@ -169,7 +202,7 @@ python diagnose.py                       # scale-error + package-citation anatom
 
 ---
 
-## 8. Conclusions
+## 9. Conclusions
 
 **General execution capability.** Solid. 150/150 trials completed against live OneLake Delta with no crashes, 84.7% cold accuracy on questions specifically screened to be non-degenerate and to have a plausible wrong path. The library reads real Fabric data and computes correctly most of the time.
 
