@@ -17,6 +17,9 @@ and naming conventions — in real Microsoft Fabric.
 | Re-grade of the above | `a736098` | `stage3_regraded.json` |
 | `q_ecom_avg_payment` arm B rerun | `bd924bc` (post-fix) | `stage3_postfix.json` |
 | `q_ecom_order_count` arm B rerun | `bd924bc` (post-fix) | `stage3_postfix_ordercount.json` |
+| F8 diagnostic, 6 reps | `bd924bc` | `stage3_f8_diag.json` |
+| Stage 4 smoke, 8 new questions | `bd924bc` | `stage4_smoke.json` |
+| **Stage 4 gate, 66 trials** | `bd924bc` | `stage4_gate.json` |
 
 ## Status of each requested measurement
 
@@ -26,9 +29,9 @@ and naming conventions — in real Microsoft Fabric.
 | Synthetic datasets, 3 domains, independent references | measured |
 | Naming robustness | measured |
 | Transfer across sources (file, Lakehouse, semantic model) | measured for binding, profiling, learning |
-| **What learning adds to answers** | **measured — 24-trial live matrix + post-fix reruns** |
+| **What learning adds to answers** | **measured — 66-trial gate, 11 questions, 3 domains** |
 | Failure and change handling | measured; F1 and F7 are the significant results |
-| Correctness vs efficiency | measured live, reported separately |
+| Correctness vs efficiency | measured live, reported on two separate axes |
 
 ## Live matrix: measured
 
@@ -61,7 +64,7 @@ the value in a dict. `regrade_stage3.py` separates **numeric correctness** from
 its hazard value (14.994) fall within tolerance of each other, so it cannot
 discriminate between arms. It was 3/3 in both.
 
-### Results over the 3 discriminating questions
+### Results over the 3 discriminating questions (superseded — see the gate below)
 
 | Question | Arm A (cold) | Arm B pre-fix `a736098` | Arm B post-fix `bd924bc` |
 |---|---|---|---|
@@ -71,21 +74,84 @@ discriminate between arms. It was 3/3 in both.
 | **Total** | **9/9** | **5/9** | **8/9** |
 
 **The pre-fix 5/9 was almost entirely a library crash, not a learning failure.**
-Three of the four losses were the F7 row-bound abort. Attributing them to
-"learning hurts correctness" would have been wrong. After `bd924bc`, learning
-costs one hazard, not four failures.
+Three of the four losses were the F7 row-bound abort.
 
-### Efficiency (pre-fix matrix, unaffected by F7)
+This 3-question set is **too small to judge the gate**, and its grading was
+still too strict. Both problems are corrected below.
 
-| Question | Arm A turns / prompt tokens | Arm B turns / prompt tokens |
+---
+
+## The gate: 66 trials, 11 questions, 3 domains
+
+The user's gate: **learned accuracy >= cold, in fewer turns, or on novel and
+complex questions.**
+
+Question bank expanded from 3 discriminating questions to **11**, four per
+domain, targeting denominator and roll-up traps: ratio-of-totals vs
+mean-of-ratios, share of orders vs share of rows, per-customer vs
+per-transaction, conditional denominators, and runner-up entities.
+
+Every candidate was screened offline by `check_degeneracy.py` before costing a
+live call. **Four were rejected** because their hazard value was within
+tolerance of the correct answer and so could not discriminate:
+`q_ecom_delivered_avg_items`, `q_retail_repeat_customer_share`,
+`q_service_abandoned_rate`, and `q_service_avg_talk`.
+
+```powershell
+python check_degeneracy.py                       # offline screen
+python stage3_fabric_live.py --only <11 ids> --arms A,B --repetitions 3 \
+    --max-live-calls 600 --output stage4_gate.json
+python analyze_gate.py stage4_gate.json          # offline
+```
+
+### Two axes, reported separately
+
+- **analytic** — the agent computed the right number, anywhere in the answer.
+- **contract** — the number was readable straight off `answer["value"]`.
+
+The split is necessary. Six answers put a composite string in `value`
+(`"Technical Support (30.9%)"`). That is an output-contract violation, not a
+reasoning error, and scoring it as a wrong answer overstated the error rate
+and penalised the cold arm hardest. See F9.
+
+### Result, library `bd924bc`
+
+| | Arm A (cold) | Arm B (learned) |
 |---|---|---|
-| `q_ecom_avg_payment` | 4.0 / 5706 | 2.0 / 4968 |
-| `q_ecom_order_count` | 5.0 / 8241 | 2.5 / 5362 |
-| `q_retail_top_product` | 5.3 / 9206 | 2.7 / 5057 |
+| Analytic correctness | 32/33 (97.0%) | **33/33 (100%)** |
+| Contract compliance | 30/33 (90.9%) | **32/33 (97.0%)** |
+| Named hazards hit | **0** | **0** |
+| Abstentions | 1 | 0 |
+| Errors / crashes | 0 | 0 |
+| Not machine-readable | 9 | **3** |
+| Mean turns | 4.52 | **3.21 (−29%)** |
+| Mean prompt tokens | 6,883 | 6,580 (−4%) |
 
-Learning is consistently **~2x fewer turns and ~40% fewer prompt tokens**.
-Combined with 8/9 vs 9/9 correctness, learning buys substantial efficiency for
-one residual correctness hazard (F8).
+**Gate verdict: PASS.** Learned accuracy is not lower on either axis, in fewer
+turns. **No question regressed under learning.** One question improved
+(`q_service_top_type_share`, 2/3 → 3/3).
+
+### Per domain
+
+| Domain | Arm | Contract | Analytic | Turns |
+|---|---|---|---|---|
+| ecommerce | A | 12/12 | 12/12 | 3.67 |
+| ecommerce | B | 12/12 | 12/12 | 3.00 |
+| food_retail | A | 12/12 | 12/12 | 5.00 |
+| food_retail | B | 12/12 | 12/12 | **2.58** |
+| service_ops | A | 6/9 | 8/9 | 5.00 |
+| service_ops | B | **8/9** | **9/9** | 4.33 |
+
+### Honest limits on this result
+
+- **Wilson 95% intervals overlap** (analytic: cold 84.7–99.5%, learned
+  89.6–100%). The *accuracy* gap is not statistically established; only
+  non-inferiority plus the efficiency gap are.
+- Prompt-token savings largely vanished on the expanded set (−4%, against
+  −33% on the original three). One question, `q_service_satisfied_rate_quality`,
+  cost learning **more** (7.33 turns, 16,660 tokens vs 5.67 and 9,095). The
+  turn reduction is robust; the token reduction is not.
+- One model, one seed, three repetitions.
 
 It runs 4 unseen questions over **real Fabric data** in 3 unrelated domains,
 2 arms (cold vs declared-learned), 3 repetitions, shuffled under a fixed seed,
@@ -378,46 +444,96 @@ boundary is pinned by
 
 ---
 
-## F8 — A learned package walked into the hazard its own note warns about
+## F8 — Withdrawn: the hazard did not survive a properly powered rerun
 
-Severity: **medium**, and this is the **primary surviving learning defect**
-now that F7 is fixed.
+Severity: **withdrawn**. This was reported as the primary surviving
+learning defect. A larger, correctly-graded run does not support that.
+
+### What was originally claimed
+
+One learned trial in three returned **154.1** on `q_ecom_avg_payment` — the
+per-payment-row mean rather than the per-order average — despite an active
+declared note warning about exactly that fan-out. Cold hit it 0/3. The
+proposed fix was a universal grain assertion in the verifier.
+
+### Why it was withdrawn
+
+Re-running the same question against the fixed library did not reproduce it:
+
+| batch | library | learned trials | hazards |
+|---|---|---|---|
+| initial 3-rep | `bd924bc` | 3 | 1 |
+| diagnostic 6-rep | `bd924bc` | 6 | 0 |
+| 66-trial gate | `bd924bc` | 33 | **0** |
+
+**1 hazard in 42 learned trials (~2.4%)**, all of it in the first batch of
+three. At n=3 a single stochastic event is indistinguishable from a defect.
+Building a core mechanism on it would have been tuning on noise, and would
+have violated the evaluation's own constraint against speculative core
+patches.
+
+### What the evidence actually shows
+
+Across the 66-trial gate, **neither arm hit a single named hazard** — 0 of 33
+cold, 0 of 33 learned. The declared notes are doing their job.
+
+### Standing recommendation
+
+No core change. If a grain assertion is ever added it should be justified by
+a reproducible failure rate, not by one trial. The screening tool
+(`check_degeneracy.py`) and the two-axis grader now make such a claim
+falsifiable before it reaches a report.
+
+---
+
+## F9 — Answers violate the requested output contract while being right
+
+Severity: **medium**. This is the largest *real* correctness effect left, and
+it is a serialization and output-shape problem, not a reasoning one.
 
 ### Reproduction
 
-`python stage3_fabric_live.py --only q_ecom_avg_payment --arms B --repetitions 3`
-(library `bd924bc`) — 1 of 3 repetitions returns **154.1**.
+`python analyze_gate.py stage4_gate.json`
 
-154.1 is the named hazard value: the mean of per-payment rows rather than the
-per-order average, i.e. the fan-out trap created by the order↔payment join. The
-learned package contains an active declared lesson that explicitly warns about
-this exact multiplication.
+Two distinct failure modes, both with the correct number present:
+
+1. **Unserializable numpy scalar** — `value` becomes
+   `{"__type__": "int64", "__repr__": "np.int64(6642)", "__serializable__": false}`.
+   A caller reading `answer["value"]` gets a dict, not `6642`.
+2. **Composite string** — `value` becomes `"Technical Support (30.9%)"` or
+   `"Technical Support, 30.9"` when the task asked for a number in `value`
+   and the entity in `entity`.
 
 ### Expected vs actual
 
-- Expected: a declared lesson naming a hazard should make that hazard *less*
-  likely than with no knowledge at all.
-- Actual: arm A (no knowledge) hit it **0/3**; arm B (with the warning) hit it
-  **1/3**. The warning is present, retrieved, and active — and still not
-  binding on the answer.
+- Expected: `answer["value"]` is the number.
+- Actual: 9 of 33 cold answers and 3 of 33 learned answers are not readable
+  that way, though nearly all are analytically correct.
 
-### Affected behaviour
+### Measured effect
 
-Lesson retrieval places the note in context, but nothing verifies that the
-final aggregation respects it. The lesson is advisory text, not a checked
-constraint.
+| axis | cold | learned |
+|---|---|---|
+| analytic correctness | 32/33 | **33/33** |
+| contract compliance | 30/33 | **32/33** |
+| not machine-readable | **9** | 3 |
 
-### Proposed fix — universal mechanism, not a domain rule
+Learning reduces the defect threefold, which is consistent with the package
+normalizing how the agent reports results.
 
-Not a patch that knows about payments or orders. The general mechanism is a
-**grain assertion**: when a declared lesson states a grain for a source, the
-verifier should check that a claimed aggregate over that source was computed at
-the declared grain, and mark the claim unverified when it was not. That is
-expressible entirely in terms of grain and row counts.
+### Proposed fix — universal mechanism
 
-The alternative — hard-coding a join-fan-out rule for payment tables — belongs
-in **source metadata**, not core, and is explicitly out of scope per the
-evaluation constraint.
+Coerce numpy and other non-JSON scalars to plain Python numbers at the
+output-validation boundary rather than emitting a placeholder dict. That is
+a serializer change in `serializers.py` / output validation, with no
+reference to any domain, metric, or column.
+
+The composite-string mode is better addressed by output validation
+rejecting a non-numeric `value` when the task declares a numeric output,
+prompting one repair turn. Neither is a domain rule.
+
+**Not fixed during this evaluation** — core is frozen, and F9 was found by
+the harness rather than by the library's own tests.
 
 ---
 
@@ -426,17 +542,17 @@ evaluation constraint.
 
 ### General execution capability
 
-**Established, with one caveat.** The cold arm answered **9/9** discriminating
-questions correctly across three domains on real Fabric Delta data, in 4–5.3
-turns. The execution-integrity machinery has real teeth once F5's bypasses are
-closed: the claim-provenance screen now reads negative and exponent-formatted
-numbers.
+**Established.** Over 66 trials on 11 questions across three unrelated domains
+on real Fabric data, both arms were near-ceiling analytically (cold 32/33,
+learned 33/33) with **zero crashes, zero named hazards, and one abstention**.
+The execution-integrity machinery has real teeth once F5's bypasses are closed:
+the claim-provenance screen now reads negative and exponent-formatted numbers.
 
-Caveat: correct answers are not always **machine-readable**. Arm A returned the
-right number as a `numpy.int64` with `__serializable__: false`, or nested inside
-a dict, in 3/3 `q_retail_top_product` trials. A caller reading `answer["value"]`
-would treat a correct answer as a failure. Arm B never did this (0/3), so the
-knowledge path already normalizes better than the cold path.
+Caveat: correct answers are not always **machine-readable**. 9 of 33 cold
+answers and 3 of 33 learned answers put something other than a plain number in
+`answer["value"]` — either an unserializable numpy placeholder or a composite
+string. A caller reading `answer["value"]` would treat a correct answer as a
+failure. This is F9, and it is the largest real defect still open.
 
 ### Generalization of learned behavior
 
@@ -452,12 +568,16 @@ knowledge path already normalizes better than the cold path.
   achieved through `declared=`, which is explicit source metadata the user must
   write — a reasonable design, but it should be described that way rather than
   as automatic learning.
-- *Does learning help or hurt answers?* **Measured.** On the fixed library,
-  learned = 8/9 vs cold = 9/9, at ~2x fewer turns and ~40% fewer prompt tokens.
-  Learning trades one residual correctness hazard (F8) for a large efficiency
-  gain. Before the F7 fix the same comparison read 5/9 — that gap was a library
-  crash, not a property of learning, and reporting it as such would have been
-  a false finding.
+- *Does learning help or hurt answers?* **Measured, and the gate passes.**
+  Over 66 trials on 11 questions in 3 domains: learned 33/33 analytic and
+  32/33 contract, cold 32/33 and 30/33, at 3.21 turns against 4.52. No
+  question regressed; one improved. Neither arm hit a single named hazard.
+  The confidence intervals overlap, so the honest claim is
+  **non-inferiority plus a robust ~29% turn reduction**, not "learning is
+  more accurate".
+  Two earlier readings were wrong and are corrected here: the 5/9 that
+  suggested "learning hurts" was mostly the F7 crash, and the residual F8
+  hazard did not reproduce in 42 further trials.
 
 ### Portability across tested sources
 
@@ -487,9 +607,15 @@ exercised. No claim is made about them.
 - Configuration **C** from the original request — a package enriched from
   separate development runs — was **not built or tested**. Only A (no package)
   and B (`learn()` only) were compared.
-- Only one model (`openai/gpt-4.1-mini`) was used. F8's hazard rate and the
-  efficiency gain may both be model-dependent.
-- The three residual conclusions rest on **3 discriminating questions x 3
-  repetitions**, below the "at least five unseen questions per domain" the
-  request asked for. Directionally clear, but not tightly powered.
+- Only one model (`openai/gpt-4.1-mini`) was used, one seed, three repetitions.
+  The efficiency gain and the residual F9 rate may both be model-dependent.
+- The gate's **accuracy** gap is not statistically established: Wilson 95%
+  intervals overlap (cold 84.7–99.5%, learned 89.6–100%). Non-inferiority and
+  the ~29% turn reduction are supported; "learning is more accurate" is not.
+- **Prompt-token savings did not replicate.** −33% on the original three
+  questions became −4% on the eleven. One question cost learning nearly twice
+  the tokens. Only the turn reduction is robust.
+- Both arms sat near ceiling on 9 of 11 questions, so this set has limited
+  power to separate them. A harder bank would be needed to show learning
+  *ahead* rather than merely not behind.
 
