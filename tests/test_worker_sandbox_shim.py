@@ -124,7 +124,7 @@ def test_sandbox_shim_picks_up_dynamic_outputs() -> None:
 def test_sandbox_does_not_pollute_with_private_names() -> None:
     sandbox = sys.modules["sandbox"]
     public = [n for n in dir(sandbox) if not n.startswith("_")]
-    expected = {"File", "SUBMIT", "predict", "predict_sync",
+    expected = {"File", "SUBMIT", "ABSTAIN", "predict", "predict_sync",
                 "load_skill", "activate_skill", "list_skills",
                 "is_material_change", "restrict_to_candidate_tuples",
                 "validate_analysis_integrity"}

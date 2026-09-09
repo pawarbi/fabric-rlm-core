@@ -431,7 +431,11 @@ def test_task_selects_executes_and_synthesizes_registered_measure() -> None:
         message["content"] for message in lm.messages[1]
     )
     assert "knowledge_result" in synthesis_prompt
-    assert "SemanticModel dataset=" not in synthesis_prompt
+    # the raw handle stays bound next to the packet (learning narrows the
+    # search, it never removes the cold path) and the packet says so
+    assert "SemanticModel dataset=" in synthesis_prompt
+    assert "already aggregated result" in synthesis_prompt
+    assert "Raw source(s) sales remain bound" in synthesis_prompt
 
 
 def test_successful_operation_preserves_explicit_task_inputs() -> None:
@@ -467,7 +471,11 @@ def test_successful_operation_preserves_explicit_task_inputs() -> None:
         message["content"] for message in lm.messages[1]
     )
     assert "context_note" in synthesis_prompt
-    assert "SemanticModel dataset=" not in synthesis_prompt
+    # the raw handle stays bound next to the packet (learning narrows the
+    # search, it never removes the cold path) and the packet says so
+    assert "SemanticModel dataset=" in synthesis_prompt
+    assert "already aggregated result" in synthesis_prompt
+    assert "Raw source(s) sales remain bound" in synthesis_prompt
 
 
 def test_registered_operation_reserves_result_input_alias_before_planning() -> None:

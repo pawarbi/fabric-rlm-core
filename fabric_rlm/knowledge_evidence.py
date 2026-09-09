@@ -69,7 +69,7 @@ def _error_class(error: str | None) -> str | None:
 
 def _execution_status(record: Mapping[str, Any]) -> str:
     reason = record.get("reason")
-    if reason in {"cardinality_limit", "validation"}:
+    if reason in {"cardinality_limit", "validation", "audit_failed", "plan_rejected"}:
         return "rejected"
     if reason == "preflight_timeout":
         return "timeout"
@@ -409,6 +409,58 @@ def harvest_evidence(
                     )
                 )
 
+    # Host-side calls: a registered operation the runtime executed for the
+    # run, and the telemetry its handles recorded while doing so. Neither
+    # passes through the worker, so they are read off the trajectory
+    # metadata; they are evidence about the same sources all the same, and
+    # the only evidence a file or Lakehouse source produces at all.
+    metadata = result.trajectory.metadata or {}
+    host_calls: list[Mapping[str, Any]] = [
+        raw for raw in (metadata.get("operation_source_calls") or ()) if isinstance(raw, Mapping)
+    ]
+    execution = metadata.get("operation_execution")
+    if isinstance(execution, Mapping):
+        host_calls.append(execution)
+    for raw in host_calls:
+        if raw.get("query_type") == "registered_operation":
+            targets = [
+                alias_map.get(str(item), str(item))
+                for item in (raw.get("required_sources") or ())
+                if isinstance(item, str) and item
+            ]
+            if known is not None:
+                targets = [item for item in targets if item in known]
+        else:
+            resolved = _resolve_source_id(raw, known_ids=known, aliases=alias_map, roots=roots)
+            targets = [resolved] if resolved else []
+        for source_id in targets:
+            if source_id not in touched_sources:
+                touched_sources.append(source_id)
+            observation = _query_observation(raw)
+            status = _execution_status(raw)
+            payload = {
+                "source_ids": [source_id],
+                "observation_type": "query_execution",
+                "observation": observation,
+                "turn": None,
+                "run": fingerprint,
+                "status": status,
+            }
+            add(
+                EvidenceRecord(
+                    evidence_id=_evidence_id(payload),
+                    evidence_type="execution",
+                    source_ids=(source_id,),
+                    observation_type="query_execution",
+                    observation=observation,
+                    source_fingerprints=stamped([source_id]),
+                    execution_status=status,
+                    verifier_status=verifier,
+                    analytical_integrity_status=integrity,
+                    run_fingerprint=fingerprint,
+                    turn=None,
+                )
+            )
     for source_id in touched_sources:
         steps = [
             (turn_number, grain, filtered)

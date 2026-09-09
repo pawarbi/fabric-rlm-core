@@ -97,6 +97,7 @@ _SECTION_TITLES = {
     "query_behavior": "Query behavior",
 }
 _BASIS_TEXT = {
+    "declared": "declared by the source owner",
     "source_declared": "source declared",
     "schema_name_pattern": "inferred from schema names",
     "boolean_period_flag": "boolean flag in a period table",
@@ -156,6 +157,11 @@ def lesson_score(lesson: LearnedLesson, task_tokens: set[str]) -> float:
         return 0.0
     score = float(len(subject_tokens & task_tokens))
     score += 0.5 * len(triggers & task_tokens)
+    if lesson.kind == "semantic_fact" and "declared" in lesson.basis:
+        # A declaration by the source owner is not a hypothesis to be
+        # matched against the question: it applies to every task on the
+        # source, below whatever the question names explicitly.
+        return 0.5 + score + _CONFIDENCE_WEIGHT.get(lesson.confidence, 0.0)
     if score <= 0:
         return 0.0
     return score + _CONFIDENCE_WEIGHT.get(lesson.confidence, 0.0)
@@ -271,6 +277,22 @@ def _render_rule(lesson: LearnedLesson) -> str:
             f"({int(rule.get('contexts', 0))} contexts). That is an observed coincidence of values, "
             "not a verified equivalence of definitions; do not substitute one for the other."
         )
+    if kind == "semantic_fact" and rule.get("fact"):
+        fact = rule.get("fact")
+        if fact == "grain":
+            grain = " x ".join(str(c) for c in (rule.get("grain") or []))
+            return f"Declared grain: one row per {grain}. Aggregate at this grain, or say why the answer's grain differs."
+        if fact == "period_column":
+            return (
+                f"Declared period column: {rule.get('column')}. Define \"current\", \"latest\" and any "
+                "period comparison by this column, not by the maximum of another field."
+            )
+        if fact == "units":
+            return f"{rule.get('column')} is measured in {rule.get('unit')}; report it with that unit."
+        if fact == "definition":
+            return f"{rule.get('name')}: {rule.get('definition')}"
+        if fact == "note":
+            return str(rule.get("text") or lesson.subject)
     if kind in {"metric_equivalence", "metric_non_equivalence"}:
         measures = " and ".join(str(m) for m in (rule.get("measures") or [lesson.subject]))
         relation = "are equivalent by definition" if kind == "metric_equivalence" else "are not equivalent"

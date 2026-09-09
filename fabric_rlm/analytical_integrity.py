@@ -20,6 +20,7 @@ analysis supplies the materiality rule; this module only applies it.
 
 from __future__ import annotations
 
+import ast
 import math
 import re
 from dataclasses import dataclass, field
@@ -27,6 +28,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 __all__ = [
     "DEFAULT_NOISE_RELATIVE_TOLERANCE",
+    "check_unsupported_literals",
     "AnalyticalIntegrityError",
     "DirectionalClaim",
     "IntegrityReport",
@@ -747,6 +749,141 @@ _REPR_LEAK_RE = re.compile(
     r"dtype: (?:object|float64|int64)\s*$",
     re.MULTILINE,
 )
+
+
+_TEXT_NUMBER = re.compile(r"(?<![A-Za-z_])\d[\d,]*(?:\.\d+)?")
+_LITERAL_CONTAINERS = (ast.Dict, ast.List, ast.Tuple, ast.Set, ast.JoinedStr, ast.FormattedValue)
+_MAX_LITERAL_PROBLEMS = 5
+
+
+def _numbers_in_text(text: str) -> list[float]:
+    found: list[float] = []
+    for match in _TEXT_NUMBER.finditer(text or ""):
+        try:
+            found.append(float(match.group(0).replace(",", "")))
+        except ValueError:
+            continue
+    return found
+
+
+def _decimals(text: str) -> int:
+    if "." in text:
+        return len(text.split(".", 1)[1].rstrip("0"))
+    return 0
+
+
+def _supported(value: float, spelling: str, evidence: Sequence[float]) -> bool:
+    places = _decimals(spelling)
+    for candidate in evidence:
+        if candidate == value:
+            return True
+        if abs(candidate - value) <= 1e-9 * max(1.0, abs(value)):
+            return True
+        # the model rounded a computed figure to the precision it typed
+        if round(candidate, places) == value:
+            return True
+        # or quoted a ratio as a percentage, or the reverse
+        if round(candidate * 100, places) == value or round(candidate / 100, places) == value:
+            return True
+    return False
+
+
+def _submit_literals(code: str) -> list[tuple[float, str]]:
+    """Numbers typed as literals inside SUBMIT(...) arguments.
+
+    Only literals reachable through dict, list, tuple, set and f-string
+    structure count: a number inside an index, a call or an arithmetic
+    expression is part of a computation, not a claim.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    literals: list[tuple[float, str]] = []
+
+    def collect(node: ast.AST) -> None:
+        if isinstance(node, ast.Constant):
+            value = node.value
+            if isinstance(value, bool) or value is None:
+                return
+            if isinstance(value, (int, float)):
+                if math.isfinite(float(value)):
+                    literals.append((float(value), repr(value)))
+                return
+            if isinstance(value, str):
+                for match in _TEXT_NUMBER.finditer(value):
+                    try:
+                        literals.append((float(match.group(0).replace(",", "")), match.group(0)))
+                    except ValueError:
+                        continue
+            return
+        if isinstance(node, ast.Dict):
+            for item in node.values:
+                if item is not None:
+                    collect(item)
+            return
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            for item in node.elts:
+                collect(item)
+            return
+        if isinstance(node, ast.JoinedStr):
+            for item in node.values:
+                collect(item)
+            return
+        if isinstance(node, ast.FormattedValue):
+            collect(node.value)
+            return
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        if name != "SUBMIT":
+            continue
+        for argument in node.args:
+            collect(argument)
+        for keyword in node.keywords:
+            collect(keyword.value)
+    return literals
+
+
+def check_unsupported_literals(
+    code: str | None,
+    payload: Mapping[str, Any] | None,
+    evidence_text: str | None,
+) -> list[str]:
+    """Numbers typed into SUBMIT that no executed output ever showed.
+
+    ``evidence_text`` is everything the run can legitimately cite: the REPL
+    output of every executed turn, the registered-operation packet, and
+    the task text. A number the model typed as a literal inside the SUBMIT
+    call (as a value, or inside a string) that appears nowhere in that text
+    is the model's own claim, and it is reported so the run can compute and
+    print it, or abstain, instead of asserting it.
+    """
+    if not code or payload is None:
+        return []
+    literals = _submit_literals(code)
+    if not literals:
+        return []
+    evidence = _numbers_in_text(evidence_text or "")
+    problems: list[str] = []
+    seen: set[str] = set()
+    for value, spelling in literals:
+        if spelling in seen:
+            continue
+        seen.add(spelling)
+        if _supported(value, spelling, evidence):
+            continue
+        problems.append(
+            f"The value {spelling} was typed into SUBMIT but never appeared in executed "
+            "output: compute it in code and print it before submitting, or leave it out "
+            "and say it is unsupported."
+        )
+        if len(problems) >= _MAX_LITERAL_PROBLEMS:
+            break
+    return problems
 
 
 def check_answer_hygiene(text: str | None) -> list[str]:

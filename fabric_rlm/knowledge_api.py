@@ -18,7 +18,12 @@ from fabric_rlm.knowledge import (
 )
 from fabric_rlm.knowledge_evidence import harvest_evidence, run_fingerprint_for
 from fabric_rlm.knowledge_lakehouse_sources import fabric_source_registry
-from fabric_rlm.knowledge_lessons import current_evidence, promote_lessons, structural_lessons
+from fabric_rlm.knowledge_lessons import (
+    current_evidence,
+    declared_lessons,
+    promote_lessons,
+    structural_lessons,
+)
 from fabric_rlm.knowledge_operations import discover_registered_operations
 from fabric_rlm.knowledge_sources import (
     ProfileLimits,
@@ -192,8 +197,15 @@ def learn(
     registry: SourceAdapterRegistry | None = None,
     transport: OneLakeKnowledgeTransport | None = None,
     overwrite: bool = False,
+    declared: Mapping[str, Mapping[str, object]] | None = None,
 ) -> Knowledge:
-    """Profile approved sources and return an immutable, runtime-bound package."""
+    """Profile approved sources and return an immutable, runtime-bound package.
+
+    ``declared`` carries what the source owner knows and the profile cannot
+    infer: the grain, the period column, units and definitions (see
+    :func:`fabric_rlm.knowledge_lessons.declared_lessons`). Declared facts
+    become active lessons that reach every task on the source.
+    """
 
     active_limits = limits or ProfileLimits()
     active_registry = _active_registry(registry)
@@ -212,13 +224,16 @@ def learn(
     # semantic model's current-period construct). Sources that declare
     # nothing produce no lessons, and the package is then exactly what it
     # was before learning existed.
+    lessons = {lesson.lesson_id: lesson for lesson in structural_lessons(package)}
+    for lesson in declared_lessons(package, declared):
+        lessons[lesson.lesson_id] = lesson
     package = KnowledgePackage(
         package_id=package.package_id,
         sources=package.sources,
         relationships=package.relationships,
         operations=package.operations,
         events=package.events,
-        lessons=structural_lessons(package),
+        lessons=tuple(lessons[key] for key in sorted(lessons)),
     )
     bindings = _bindings_from_profiles(profiles, sources)
     if store is not None:

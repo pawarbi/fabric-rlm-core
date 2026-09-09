@@ -633,6 +633,57 @@ def _validate_catalog_query(
     return normalized
 
 
+def _group_by_columns(node: Any) -> list[str]:
+    """The plain column names a SELECT groups by, outermost query only."""
+    if not isinstance(node, dict):
+        return []
+    node_type = str(node.get("type", ""))
+    if node_type != "SELECT_NODE":
+        return []
+    groups = node.get("group_expressions")
+    columns: list[str] = []
+    if isinstance(groups, list):
+        for expression in groups:
+            if not isinstance(expression, dict):
+                continue
+            if str(expression.get("class", "")) != "COLUMN_REF":
+                continue
+            names = expression.get("column_names")
+            if isinstance(names, list) and names:
+                column = str(names[-1])
+                if column and column not in columns:
+                    columns.append(column)
+    return columns
+
+
+def query_group_by(sql: str) -> list[str]:
+    """The columns a read-only catalog query groups by, or an empty list.
+
+    A telemetry helper: the grain of a Lakehouse query is what a knowledge
+    package can learn from it, and the SQL itself never leaves the run.
+    Returns an empty list for anything DuckDB cannot parse.
+    """
+    try:
+        import duckdb
+
+        con = duckdb.connect()
+        try:
+            payload = con.execute(
+                "SELECT json_serialize_sql(?)", [_normalize_catalog_query(sql)]
+            ).fetchone()
+        finally:
+            con.close()
+        document = json.loads(payload[0]) if payload else None
+    except Exception:  # noqa: BLE001 - telemetry must never fail a query
+        return []
+    if not isinstance(document, dict) or not isinstance(document.get("statements"), list):
+        return []
+    statements = document["statements"]
+    if len(statements) != 1 or not isinstance(statements[0], dict):
+        return []
+    return _group_by_columns(statements[0].get("node"))
+
+
 def _json_value(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -1152,6 +1203,11 @@ def resolve_lakehouse_inputs(value: Any) -> Any:
 
     if isinstance(value, LakehouseSource):
         return value.resolve()
+    if callable(getattr(value, "__rlm_describe__", None)):
+        # A handle that introduces itself (a semantic model, an operation
+        # result packet) is opaque here: it holds no Lakehouse source and
+        # rebuilding it as a plain container would lose its description.
+        return value
     if isinstance(value, dict):
         return {key: resolve_lakehouse_inputs(item) for key, item in value.items()}
     if isinstance(value, list):

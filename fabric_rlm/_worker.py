@@ -104,6 +104,24 @@ class _SubmitSignal(BaseException):
         self.payload = payload
 
 
+class _AbstainSignal(BaseException):
+    def __init__(self, reason: str):
+        self.reason = reason
+
+
+def ABSTAIN(reason: str = "") -> None:
+    """End the run without an answer, on the record.
+
+    For the case where nothing that executed supports an answer: repeated
+    failures, a source that does not hold what the task needs, a
+    contradiction the code could not resolve. An abstention is a failed
+    run with ``failure_reason="abstained"`` and the reason on the
+    trajectory; it is never mistaken for a submitted answer.
+    """
+    text = str(reason if reason is not None else "").strip()
+    raise _AbstainSignal(text[:500])
+
+
 # Output-field names registered by the host (dspy.RLM passes
 # self._get_output_fields_info()). Empty == default kwargs-only SUBMIT.
 _registered_output_fields: list[str] = []
@@ -160,6 +178,7 @@ def _install_runtime_api() -> None:
         {
             "File": File,
             "SUBMIT": SUBMIT,
+            "ABSTAIN": ABSTAIN,
             "predict": predict,
             "predict_sync": predict_sync,
             "load_skill": load_skill,
@@ -181,6 +200,7 @@ def _install_runtime_api() -> None:
 _SANDBOX_PUBLIC_NAMES: tuple[str, ...] = (
     "File",
     "SUBMIT",
+    "ABSTAIN",
     "predict",
     "predict_sync",
     "load_skill",
@@ -699,6 +719,16 @@ def _execute_code(
         return {
             "ok": True,
             "submitted": False,
+            "stdout": stdout.getvalue(),
+            "stderr": stderr.getvalue(),
+            "state": _state(),
+        }
+    except _AbstainSignal as abstain:
+        return {
+            "ok": True,
+            "submitted": False,
+            "abstained": True,
+            "abstain_reason": abstain.reason,
             "stdout": stdout.getvalue(),
             "stderr": stderr.getvalue(),
             "state": _state(),
