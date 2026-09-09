@@ -28,10 +28,33 @@ and naming conventions — in real Microsoft Fabric.
 | Domain-dependency audit | measured |
 | Synthetic datasets, 3 domains, independent references | measured |
 | Naming robustness | measured |
-| Transfer across sources (file, Lakehouse, semantic model) | measured for binding, profiling, learning |
-| **What learning adds to answers** | **measured — 66-trial gate, 11 questions, 3 domains** |
-| Failure and change handling | measured; F1 and F7 are the significant results |
-| Correctness vs efficiency | measured live, reported on two separate axes |
+| Transfer across sources (file, Lakehouse, semantic model) | **partial** — binding, profiling and learning measured; answer-level equivalence **untested** |
+| **What learning adds to answers** | **measured — 66-trial gate, 11 questions, 3 domains.** Configurations A and B only; **configuration C not built** |
+| Failure and change handling | **partial** — F1 and F7 are the significant results; timeouts, invalid joins, empty results and verifier outcomes **not exercised live** |
+| Correctness vs efficiency | measured live, reported on two separate axes; **cost and isolated latency not measured** |
+
+Every "partial" above is itemized under *Remaining unsupported claims*. Nothing
+marked partial is claimed as a result anywhere in this report.
+
+### Freeze verification
+
+Core **and bundled skills** were frozen in the evaluation worktree. Verified,
+not asserted:
+
+```powershell
+git diff --stat b5226712a9aa41c3173d5f427e81244c333c0179 -- fabric_rlm/
+git diff --stat b5226712a9aa41c3173d5f427e81244c333c0179 -- fabric_rlm/skills
+```
+
+Both return empty. The only additions on the eval branch are `evaluation/` and
+new files under `tests/evaluation/`; no existing file was modified.
+
+All proposed fixes live on a separate branch, `pr-75`, and are reported here
+rather than applied to the code under test. That branch does touch
+`fabric_rlm/skills/*.md` (the F3 fix), which is precisely why those edits were
+kept off the evaluation branch. The gate additionally ran with `skills=[]` and
+`enable_skill_autoloading=False` in **both** arms, so bundled skill content
+cannot explain any measured difference.
 
 ## Live matrix: measured
 
@@ -99,8 +122,9 @@ tolerance of the correct answer and so could not discriminate:
 
 ```powershell
 python check_degeneracy.py                       # offline screen
-python stage3_fabric_live.py --only <11 ids> --arms A,B --repetitions 3 \
-    --max-live-calls 600 --output stage4_gate.json
+python stage3_fabric_live.py --arms A,B --repetitions 3 \
+    --max-live-calls 600 --output stage4_gate.json \
+    --only q_ecom_avg_payment,q_ecom_freight_share,q_ecom_multi_installment_share,q_ecom_order_count,q_retail_avg_per_customer,q_retail_top_franchise,q_retail_top_product,q_retail_top_product_qty,q_service_avg_handle_time,q_service_satisfied_rate_quality,q_service_top_type_share
 python analyze_gate.py stage4_gate.json          # offline
 ```
 
