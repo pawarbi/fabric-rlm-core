@@ -751,7 +751,12 @@ _REPR_LEAK_RE = re.compile(
 )
 
 
-_TEXT_NUMBER = re.compile(r"(?<![A-Za-z_])\d[\d,]*(?:\.\d+)?")
+# A sign counts only when nothing runs into it, so "2025-2026" stays two
+# positive years while "impact -500000" is one negative figure. The exponent
+# is part of the number because numpy and pandas print wide floats that way.
+_TEXT_NUMBER = re.compile(
+    r"(?<![A-Za-z0-9_])-?\d[\d,]*(?:\.\d+)?(?:[eE][+-]?\d+)?"
+)
 _LITERAL_CONTAINERS = (ast.Dict, ast.List, ast.Tuple, ast.Set, ast.JoinedStr, ast.FormattedValue)
 _MAX_LITERAL_PROBLEMS = 5
 
@@ -760,9 +765,10 @@ def _numbers_in_text(text: str) -> list[float]:
     found: list[float] = []
     for match in _TEXT_NUMBER.finditer(text or ""):
         try:
-            found.append(float(match.group(0).replace(",", "")))
+            value = float(match.group(0).replace(",", ""))
         except ValueError:
             continue
+        found.append(value)
     return found
 
 
@@ -773,17 +779,27 @@ def _decimals(text: str) -> int:
 
 
 def _supported(value: float, spelling: str, evidence: Sequence[float]) -> bool:
+    """Whether some executed output shows this figure.
+
+    Magnitudes are compared, not signs. The same figure is printed as a
+    magnitude by code (``abs drop = $1,500,000``) and written with its sign
+    in prose (``Change: $-1,500,000``), and neither spelling is more
+    truthful than the other. Whether the direction is stated correctly is a
+    separate question that ``check_directional_claims`` answers; this screen
+    only asks whether the number was ever computed.
+    """
     places = _decimals(spelling)
-    for candidate in evidence:
-        if candidate == value:
+    target = abs(value)
+    for candidate in (abs(item) for item in evidence):
+        if candidate == target:
             return True
-        if abs(candidate - value) <= 1e-9 * max(1.0, abs(value)):
+        if abs(candidate - target) <= 1e-9 * max(1.0, target):
             return True
         # the model rounded a computed figure to the precision it typed
-        if round(candidate, places) == value:
+        if round(candidate, places) == target:
             return True
         # or quoted a ratio as a percentage, or the reverse
-        if round(candidate * 100, places) == value or round(candidate / 100, places) == value:
+        if round(candidate * 100, places) == target or round(candidate / 100, places) == target:
             return True
     return False
 
@@ -816,6 +832,21 @@ def _submit_literals(code: str) -> list[tuple[float, str]]:
                         literals.append((float(match.group(0).replace(",", "")), match.group(0)))
                     except ValueError:
                         continue
+            return
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+            # "-72800" parses as a negation of a constant, not a constant.
+            # A drop, a loss or a decline is typed exactly this way, so
+            # without this branch the sign alone hid a claim from the screen.
+            operand = node.operand
+            if isinstance(operand, ast.Constant) and not isinstance(operand.value, bool):
+                if isinstance(operand.value, (int, float)):
+                    signed = float(operand.value)
+                    if isinstance(node.op, ast.USub):
+                        signed = -signed
+                    if math.isfinite(signed):
+                        literals.append((signed, repr(signed)))
+                    return
+            collect(operand)
             return
         if isinstance(node, ast.Dict):
             for item in node.values:

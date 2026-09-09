@@ -55,8 +55,9 @@ proxy and why it stands in for the concept.
 
 ## Candidate identity
 
-If an earlier step selects multidimensional combinations (Product x Region x
-Customer Group), later steps must keep those combinations as tuples. Do not
+If an earlier step selects multidimensional combinations (three dimensions
+such as category x region x segment), later steps must keep those
+combinations as tuples. Do not
 replace them with independent per-dimension lists and filter by
 `isin(...) & isin(...) & isin(...)`; that admits every cross combination.
 Use `restrict_to_candidate_tuples(frame, candidates, keys=[...])`.
@@ -64,8 +65,8 @@ Use `restrict_to_candidate_tuples(frame, candidates, keys=[...])`.
 ## Grain
 
 The final grain must be the requested or deliberately chosen grain. Do not
-return Product x Region when Product x Region x Customer Group was requested,
-or drop to individual customers, without saying so and why.
+return two dimensions when three were requested, or drop to a finer entity
+level, without saying so and why.
 
 ## Derived metrics and time
 
@@ -100,15 +101,15 @@ in the data.
 - Units: reconcile unit, currency, scale, and aggregation semantics before
   comparing (USD vs EUR, dollars vs thousands, percent vs decimal, monthly vs
   quarterly). Conversions must be explicit.
-- Contradictions: when sources materially disagree (ARR down, usage up,
-  commentary positive), report the conflict as a conflict. Do not force one
-  story.
+- Contradictions: when sources materially disagree (a measure down, a
+  related driver up, commentary positive), report the conflict as a
+  conflict. Do not force one story.
 
 ## Fact, derived, interpretation, cause
 
-Keep the four levels distinguishable: observed ("ARR fell from 4.2M to
-3.9M"), derived ("ARR declined 7.1%"), interpretation ("this indicates
-weakening revenue"), causal ("lower adoption caused the decline"). Causal
+Keep the four levels distinguishable: observed ("the measure fell from 4.2M
+to 3.9M"), derived ("it declined 7.1%"), interpretation ("this indicates
+a weakening position"), causal ("lower adoption caused the decline"). Causal
 wording needs causal evidence; descriptive or associational evidence does not
 become a cause in the write-up.
 

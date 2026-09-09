@@ -41,13 +41,13 @@ usage_candidates = lakehouse.find_sources("usage", kind="delta")
 result = lakehouse.query(
     """
     SELECT c.region,
-           SUM(s.mrr) AS active_mrr,
+           SUM(s.amount) AS active_amount,
            COUNT(DISTINCT c.company_id) AS company_count
     FROM companies AS c
     JOIN subscriptions AS s USING (company_id)
     WHERE s.status = 'active'
     GROUP BY c.region
-    ORDER BY active_mrr DESC
+    ORDER BY active_amount DESC
     LIMIT 1
     """,
     sources={

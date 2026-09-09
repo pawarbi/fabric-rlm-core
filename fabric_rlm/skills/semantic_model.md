@@ -100,8 +100,9 @@ print(fabric.list_relationships(DATASET).to_string()[:2000])
   every combination and every measure at once.
 - For custom DAX that `aggregate` cannot express, use
   `model.dax(query, normalize_columns=True)`. This returns an ordinary pandas
-  DataFrame with snake-case columns rather than SemPy names such as `[ARR]`
-  and `Period[Year]`. It runs whatever it is given, with no size check.
+  DataFrame with snake-case columns rather than SemPy names such as
+  `[Total Sales]` and `Period[Year]`. It runs whatever it is given, with no
+  size check.
 - `fabric.evaluate_measure(DATASET, "Total Sales", groupby_columns=[...],
   filters={...})` for "measure by dimension". No DAX to get wrong.
 - `fabric.evaluate_dax(DATASET, "EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(...),
