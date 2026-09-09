@@ -1404,6 +1404,7 @@ class RLM:
         from .knowledge_execution import (
             OperationPlanError,
             OperationPlanFallback,
+            OperationResultTooLarge,
             execute_registered_operation,
             parse_operation_plan,
         )
@@ -1520,6 +1521,22 @@ class RLM:
                 operation_id=plan.operation_id,
                 parameters=plan.parameters,
             )
+        except OperationResultTooLarge as exc:
+            logger.warning(
+                "Registered operation result exceeded its declared bounds"
+            )
+            metadata["operation_fallback_reason"] = "operation_result_bound_exceeded"
+            metadata["knowledge_mode"] = "fallback_operation_result_too_large"
+            metadata["operation_execution"] = _operation_telemetry(
+                operation,
+                plan.parameters,
+                executed=True,
+                reason="result_bound_exceeded",
+                error=exc,
+                seconds=time.perf_counter() - started,
+            )
+            metadata["operation_source_calls"] = self._handle_telemetry_since(telemetry_before)
+            return bound_inputs, metadata
         except OperationPlanError as exc:
             logger.warning(
                 "Registered operation plan was rejected by the host contract"

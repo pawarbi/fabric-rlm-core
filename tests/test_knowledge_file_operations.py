@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from fabric_rlm import File, RLM
-from fabric_rlm.knowledge_execution import OperationPlanError, execute_registered_operation
+from fabric_rlm.knowledge_execution import (
+    OperationPlanError,
+    OperationResultTooLarge,
+    execute_registered_operation,
+)
 
 
 def _orders_csv(tmp_path: Path) -> Path:
@@ -286,3 +290,88 @@ def test_parquet_filters_bind_the_declared_column_type(tmp_path: Path) -> None:
     assert _total(knowledge, measure="rating", column="revenue", value="100.0") == 1.0
     with pytest.raises(OperationPlanError, match="not an integer for column revenue"):
         _total(knowledge, measure="rating", column="revenue", value="1.5")
+
+
+def _many_orders_csv(tmp_path: Path, rows: int) -> Path:
+    path = tmp_path / "many_orders.csv"
+    lines = ["order_id,region,amount"]
+    for index in range(rows):
+        lines.append(f"{index},R{index % 3},{index}.0")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_group_by_high_cardinality_key_reports_a_bounded_plan_failure(
+    tmp_path: Path,
+) -> None:
+    """A legal plan whose result overflows the row bound is a plan-level
+    rejection, not a host-contract violation.
+
+    ``groupby`` accepts ``order_id`` because it appears in the operation's own
+    enum, and a declared grain lesson actively steers the model toward it. The
+    result then exceeds ``max_output_rows``. That is a recoverable planning
+    mistake, so it must be an OperationPlanError the runtime can fall back
+    from, not a bare ValueError that aborts the whole run.
+    """
+
+    source = _many_orders_csv(tmp_path, rows=150)
+    knowledge = RLM.learn(sources={"orders": source})
+    operation = knowledge.package.operations[0]
+    assert operation.max_output_rows == 100
+    assert "order_id" in operation.parameter_schema["groupby"]["enum"]
+
+    parameters = dict(operation.parameter_defaults)
+    parameters.update({"aggregate": "sum", "measure": "amount", "groupby": "order_id"})
+
+    with pytest.raises(OperationResultTooLarge, match="exceeds row bound"):
+        execute_registered_operation(
+            knowledge,
+            operation_id=operation.operation_id,
+            parameters=parameters,
+        )
+
+
+def test_bounded_group_by_still_executes(tmp_path: Path) -> None:
+    source = _many_orders_csv(tmp_path, rows=150)
+    knowledge = RLM.learn(sources={"orders": source})
+    operation = knowledge.package.operations[0]
+
+    parameters = dict(operation.parameter_defaults)
+    parameters.update({"aggregate": "sum", "measure": "amount", "groupby": "region"})
+
+    result = execute_registered_operation(
+        knowledge,
+        operation_id=operation.operation_id,
+        parameters=parameters,
+    )
+
+    assert result.to_packet()["row_count"] == 3
+
+
+def test_result_bound_error_is_recoverable_and_still_a_value_error() -> None:
+    """The runtime falls back on OperationPlanError, and callers that predate
+    this distinction catch ValueError. The new type must satisfy both."""
+
+    assert issubclass(OperationResultTooLarge, OperationPlanError)
+    assert issubclass(OperationResultTooLarge, ValueError)
+
+
+def test_column_bound_overflow_stays_fatal(tmp_path: Path) -> None:
+    """Column count is chosen by the host, not by the plan, so an overflow is a
+    contract violation that must keep failing closed rather than degrading to
+    ordinary execution."""
+
+    import fabric_rlm.knowledge_execution as execution
+
+    source = _many_orders_csv(tmp_path, rows=5)
+    knowledge = RLM.learn(sources={"orders": source})
+    operation = knowledge.package.operations[0]
+    wide = [{f"column_{index}": index for index in range(operation.max_output_columns + 1)}]
+
+    with pytest.raises(ValueError, match="exceeds column bound") as caught:
+        execution._result_rows(
+            {"columns": list(wide[0]), "rows": [list(wide[0].values())]},
+            operation,
+        )
+
+    assert not isinstance(caught.value, OperationPlanError)
