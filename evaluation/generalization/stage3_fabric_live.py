@@ -98,6 +98,11 @@ def references() -> dict[str, dict]:
     pay, bake, calls = f["olist_order_payments"], f["bakehouse_sales_transactions"], f["callcenter_call_log"]
     top = bake.groupby("product").totalPrice.sum().sort_values(ascending=False)
     per_agent = calls.groupby("Agent_ID").Talk_Time.mean()
+    per_order_rows = pay.groupby("order_id").size()
+    rev_fr = bake.groupby("franchiseID").totalPrice.sum().sort_values(ascending=False)
+    qty_prod = bake.groupby("product").quantity.sum().sort_values(ascending=False)
+    scored = calls[calls.Quality_Scored == 1]
+    call_types = calls.Call_Type.value_counts()
     return {
         "q_ecom_order_count": {
             "value": float(items.order_id.nunique()),
@@ -119,6 +124,71 @@ def references() -> dict[str, dict]:
             "value": round(float(calls.Talk_Time.mean()), 4),
             "hazard": round(float(per_agent.mean()), 4),
             "hazard_name": "mean of per-agent means (unweighted)",
+            "degenerate": True,
+        },
+        "q_ecom_freight_share": {
+            "value": round(
+                float(
+                    items.freight_value.sum()
+                    / (items.price.sum() + items.freight_value.sum())
+                    * 100
+                ),
+                2,
+            ),
+            "hazard": round(
+                float((items.freight_value / (items.price + items.freight_value)).mean() * 100),
+                2,
+            ),
+            "hazard_name": "mean of per-row ratios instead of ratio of totals",
+        },
+        "q_ecom_multi_installment_share": {
+            "value": round(
+                float((per_order_rows > 1).sum() / pay.order_id.nunique() * 100), 2
+            ),
+            "hazard": round(
+                float(
+                    pay.order_id.isin(per_order_rows[per_order_rows > 1].index).sum()
+                    / len(pay)
+                    * 100
+                ),
+                2,
+            ),
+            "hazard_name": "share of payment rows instead of share of orders",
+        },
+        "q_retail_avg_per_customer": {
+            "value": round(float(bake.totalPrice.sum() / bake.customerID.nunique()), 2),
+            "hazard": round(float(bake.totalPrice.mean()), 2),
+            "hazard_name": "mean per transaction instead of per customer",
+        },
+        "q_retail_top_franchise": {
+            "value": round(float(rev_fr.iloc[0]), 2),
+            "entity": str(rev_fr.index[0]),
+            "hazard": round(float(rev_fr.iloc[1]), 2),
+            "hazard_name": "returned the runner-up franchise",
+        },
+        "q_retail_top_product_qty": {
+            "value": round(float(qty_prod.iloc[0]), 2),
+            "entity": str(qty_prod.index[0]),
+            "hazard": round(float(qty_prod.iloc[1]), 2),
+            "hazard_name": "returned the runner-up product by quantity",
+        },
+        "q_service_avg_handle_time": {
+            "value": round(float((calls.Talk_Time + calls.After_Call_Work_Time).mean()), 4),
+            "hazard": round(float(calls.Talk_Time.mean()), 4),
+            "hazard_name": "used talk time only, omitting after-call work",
+        },
+        "q_service_satisfied_rate_quality": {
+            "value": round(float(scored.Customer_Satisfied.sum() / len(scored) * 100), 2),
+            "hazard": round(
+                float(calls.Customer_Satisfied.sum() / len(calls) * 100), 2
+            ),
+            "hazard_name": "denominator was all calls, not quality-scored calls",
+        },
+        "q_service_top_type_share": {
+            "value": round(float(call_types.iloc[0] / len(calls) * 100), 2),
+            "entity": str(call_types.index[0]),
+            "hazard": round(float(call_types.iloc[1] / len(calls) * 100), 2),
+            "hazard_name": "returned the runner-up call type",
         },
     }
 
@@ -149,6 +219,60 @@ QUESTIONS = [
         "text": "What is the overall average talk time across all calls in the "
                 "log? Report one number rounded to four decimals.",
     },
+    {
+        "question_id": "q_ecom_freight_share",
+        "domain": "ecommerce",
+        "text": "Across all order items, what percentage of the combined item "
+                "value (item price plus freight) is freight? Report one "
+                "percentage rounded to two decimals.",
+    },
+    {
+        "question_id": "q_ecom_multi_installment_share",
+        "domain": "ecommerce",
+        "text": "What percentage of orders in the payments data were paid with "
+                "more than one payment record? Report one percentage rounded "
+                "to two decimals.",
+    },
+    {
+        "question_id": "q_retail_avg_per_customer",
+        "domain": "food_retail",
+        "text": "What is the average total revenue per customer? Report one "
+                "number rounded to two decimals.",
+    },
+    {
+        "question_id": "q_retail_top_franchise",
+        "domain": "food_retail",
+        "text": "Which single franchise generated the highest total revenue, "
+                "and what was that revenue? Report the franchise identifier "
+                "and the amount.",
+    },
+    {
+        "question_id": "q_retail_top_product_qty",
+        "domain": "food_retail",
+        "text": "Which single product sold the highest total quantity, and what "
+                "was that quantity? Report the product name and the quantity.",
+    },
+    {
+        "question_id": "q_service_avg_handle_time",
+        "domain": "service_ops",
+        "text": "What is the average total handle time per call, where handle "
+                "time is talk time plus after-call work time? Report one "
+                "number rounded to four decimals.",
+    },
+    {
+        "question_id": "q_service_satisfied_rate_quality",
+        "domain": "service_ops",
+        "text": "Among calls that were quality scored, what percentage had a "
+                "satisfied customer? Report one percentage rounded to two "
+                "decimals.",
+    },
+    {
+        "question_id": "q_service_top_type_share",
+        "domain": "service_ops",
+        "text": "Which call type occurs most often, and what percentage of all "
+                "calls does it represent? Report the call type and the "
+                "percentage rounded to two decimals.",
+    },
 ]
 
 TASK_SUFFIX = (
@@ -157,6 +281,19 @@ TASK_SUFFIX = (
     "Return answer as a dictionary with keys: status, value, units, grain, and "
     "entity when a specific entity is requested."
 )
+
+
+def _turn_code(trajectory) -> list[dict]:
+    """Best-effort extraction of the code executed on each turn."""
+    out = []
+    for i, turn in enumerate(getattr(trajectory, "turns", []) or []):
+        entry = {"turn": i}
+        for attr in ("code", "source", "action", "thought", "observation", "stdout"):
+            value = getattr(turn, attr, None)
+            if isinstance(value, str) and value.strip():
+                entry[attr] = value[:4000]
+        out.append(entry)
+    return out
 
 
 def _sources_for(domain: str) -> dict[str, str]:
@@ -265,6 +402,11 @@ def main() -> None:
     parser.add_argument("--max-turns", type=int, default=12)
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--seed", type=int, default=20260909)
+    parser.add_argument(
+        "--dump-trajectory",
+        action="store_true",
+        help="Record the code executed on each turn, for diagnosing wrong answers.",
+    )
     parser.add_argument("--output", default="stage3_results.json")
     parser.add_argument(
         "--only",
@@ -358,6 +500,8 @@ def main() -> None:
                     "grade": grade(question["question_id"], answer, refs),
                 }
             )
+            if args.dump_trajectory:
+                record["turn_code"] = _turn_code(result.trajectory)
             budget -= max(1, record["turns"])
         except Exception as error:
             message = str(error)
