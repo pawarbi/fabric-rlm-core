@@ -1,0 +1,218 @@
+[
+  {
+    "qid": "q01",
+    "verdict": "PASS",
+    "rlm": "10,582,466.8900",
+    "reference": 10582466.89,
+    "turns": 9,
+    "prompt_tokens": 50696,
+    "rlm_rowcount": 1
+  },
+  {
+    "qid": "q02",
+    "verdict": "PASS",
+    "rlm": "31,166.1700",
+    "reference": 31166.17,
+    "turns": 8,
+    "prompt_tokens": 35729,
+    "rlm_rowcount": 2
+  },
+  {
+    "qid": "q03",
+    "verdict": "PASS",
+    "rlm": "8.1319",
+    "reference": 8.1362,
+    "turns": 10,
+    "prompt_tokens": 56842,
+    "rlm_rowcount": 3
+  },
+  {
+    "qid": "q04",
+    "verdict": "PASS",
+    "rlm": "360.0000",
+    "reference": 360.0,
+    "turns": 9,
+    "prompt_tokens": 43129,
+    "rlm_rowcount": 4
+  },
+  {
+    "qid": "q05",
+    "verdict": "PASS",
+    "rlm": "375,337.2100",
+    "reference": 375337.21,
+    "turns": 4,
+    "prompt_tokens": 29528,
+    "rlm_rowcount": 4
+  },
+  {
+    "qid": "q06",
+    "verdict": "PASS",
+    "rlm": "3.0122",
+    "reference": 3.012237,
+    "turns": 8,
+    "prompt_tokens": 38279,
+    "rlm_rowcount": 6
+  },
+  {
+    "qid": "q07",
+    "verdict": "PASS",
+    "rlm": "83.8263",
+    "reference": 83.8263,
+    "turns": 7,
+    "prompt_tokens": 50525,
+    "rlm_rowcount": 7
+  },
+  {
+    "qid": "q08",
+    "verdict": "PASS",
+    "rlm": "120.4238",
+    "reference": 120.423824,
+    "turns": 8,
+    "prompt_tokens": 40382,
+    "rlm_rowcount": 8
+  },
+  {
+    "qid": "q09",
+    "verdict": "PASS",
+    "rlm": "93,257,855.0000",
+    "reference": 93257855,
+    "turns": 8,
+    "prompt_tokens": 27226,
+    "rlm_rowcount": 9
+  },
+  {
+    "qid": "q10",
+    "verdict": "PASS",
+    "rlm": "Collaboration",
+    "reference": "Collaboration",
+    "turns": 13,
+    "prompt_tokens": 115357,
+    "rlm_rowcount": 10
+  },
+  {
+    "qid": "q11",
+    "verdict": "PASS",
+    "rlm": "Middle East",
+    "reference": "Middle East",
+    "turns": 5,
+    "prompt_tokens": 19715,
+    "rlm_rowcount": 11
+  },
+  {
+    "qid": "q12",
+    "verdict": "PASS",
+    "rlm": "19.7798",
+    "reference": 19.7798,
+    "turns": 6,
+    "prompt_tokens": 24941,
+    "rlm_rowcount": 12
+  },
+  {
+    "qid": "q13",
+    "verdict": "PASS",
+    "rlm": "334.0000",
+    "reference": 334,
+    "turns": 6,
+    "prompt_tokens": 25600,
+    "rlm_rowcount": 13
+  },
+  {
+    "qid": "q14",
+    "verdict": "PASS",
+    "rlm": "2,616.7916",
+    "reference": 2616.79164,
+    "turns": 7,
+    "prompt_tokens": 35133,
+    "rlm_rowcount": 14
+  },
+  {
+    "qid": "q15",
+    "verdict": "PASS",
+    "rlm": "47.0000",
+    "reference": 47,
+    "turns": 8,
+    "prompt_tokens": 34966,
+    "rlm_rowcount": 15
+  },
+  {
+    "qid": "q16",
+    "verdict": "FAIL",
+    "rlm": "3642.94",
+    "reference": "enterprise",
+    "turns": 7,
+    "prompt_tokens": 23830,
+    "rlm_rowcount": 16
+  },
+  {
+    "qid": "q17",
+    "verdict": "PASS",
+    "rlm": "78.2413",
+    "reference": 78.2413,
+    "turns": 5,
+    "prompt_tokens": 23749,
+    "rlm_rowcount": 17
+  },
+  {
+    "qid": "q18",
+    "verdict": "PASS",
+    "rlm": "283,453.2000",
+    "reference": 283453.2,
+    "turns": 9,
+    "prompt_tokens": 34456,
+    "rlm_rowcount": 18
+  },
+  {
+    "qid": "q19",
+    "verdict": "FAIL",
+    "rlm": "1193.8894",
+    "reference": "ach",
+    "turns": 6,
+    "prompt_tokens": 26292,
+    "rlm_rowcount": 19
+  },
+  {
+    "qid": "q20",
+    "verdict": "PASS",
+    "rlm": "20.8027",
+    "reference": 20.8027,
+    "turns": 7,
+    "prompt_tokens": 33137,
+    "rlm_rowcount": 20
+  },
+  {
+    "qid": "q21",
+    "verdict": "PASS",
+    "rlm": "Middle East",
+    "reference": "Middle East",
+    "turns": 13,
+    "prompt_tokens": 56891,
+    "rlm_rowcount": 22
+  },
+  {
+    "qid": "q22",
+    "verdict": "PASS",
+    "rlm": "85.0000",
+    "reference": 85,
+    "turns": 9,
+    "prompt_tokens": 53479,
+    "rlm_rowcount": 22
+  },
+  {
+    "qid": "q24",
+    "verdict": "PASS",
+    "rlm": "38.2957",
+    "reference": 38.2957,
+    "turns": 10,
+    "prompt_tokens": 37936,
+    "rlm_rowcount": 23
+  },
+  {
+    "qid": "q25",
+    "verdict": "PASS",
+    "rlm": "1.2136",
+    "reference": 1.213608,
+    "turns": 7,
+    "prompt_tokens": 49716,
+    "rlm_rowcount": 24
+  }
+]
