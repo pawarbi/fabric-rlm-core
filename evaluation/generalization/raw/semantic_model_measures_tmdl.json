@@ -1,0 +1,78 @@
+{
+ "Manufacturing Ops": {
+  "measure_count": 30,
+  "measures": [
+   "Average Selling Price",
+   "Average Supplier Delay Days",
+   "Downtime %",
+   "Downtime Minutes",
+   "Good Units",
+   "Inventory Below Reorder Qty",
+   "Inventory In Transit Qty",
+   "Inventory Risk SKU Count",
+   "On Time PO Count",
+   "On Time PO Rate",
+   "PO Count",
+   "Production Qty",
+   "Production Yield %",
+   "Profit Margin %",
+   "Profit YTD",
+   "Purchase Order Amount",
+   "Runtime Minutes",
+   "Sales YTD",
+   "Schedule Attainment %",
+   "Scrap Rate %",
+   "Scrap Units",
+   "Total Inventory Qty",
+   "Total Profit",
+   "Total Sales",
+   "Total Sales Qty",
+   "gm2_pct",
+   "inv_rsk_u",
+   "po_ok_flagish",
+   "prd_yld_day",
+   "sls_amt_x"
+  ]
+ },
+ "AdventureWorks Sales": {
+  "measure_count": 1,
+  "measures": [
+   "Sales Amount by Due Date"
+  ]
+ },
+ "bakehouse_semantic_model": {
+  "measure_count": 6,
+  "measures": [
+   "Average Order Value",
+   "Customer Count",
+   "Supplier Count",
+   "Total Quantity Sold",
+   "Total Revenue",
+   "Transaction Count"
+  ]
+ },
+ "banking_semantic_model": {
+  "error": "not found"
+ },
+ "wanderbricks_semantic_model": {
+  "measure_count": 16,
+  "measures": [
+   "Active Host Count",
+   "Amenity Coverage",
+   "Average Booking Value",
+   "Average Rating",
+   "Average Rating (Direct Property)",
+   "Booking Count",
+   "Business User Count",
+   "Gross Booking Value",
+   "Guest Count",
+   "Paid Revenue",
+   "Property Count",
+   "Review Count",
+   "Review Count (Direct Reviewer)",
+   "Total Nights Booked",
+   "Verified Active Host Count",
+   "Verified Host Count"
+  ]
+ }
+}

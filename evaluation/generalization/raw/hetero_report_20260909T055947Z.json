@@ -1,0 +1,663 @@
+{
+  "run_id": "20260909T055947Z-hetero-e7733a0b",
+  "stages_requested": [
+    1,
+    2
+  ],
+  "excluded_dev_model": "ARR Model SF (79)",
+  "runtime": {
+    "fabric_rlm": "0.6.0",
+    "python": "3.10.20"
+  },
+  "source_binding": {
+    "delta": [
+      {
+        "key": "ecommerce_olist",
+        "domain": "e-commerce marketplace",
+        "root": "abfss://cbcb3fe8-0a54-4e1d-a986-69db569e1025@onelake.dfs.fabric.microsoft.com/361097a2-a533-4164-ad05-bbd3d6bbc814",
+        "ok": true
+      },
+      {
+        "key": "food_retail_bakehouse",
+        "domain": "bakery franchise retail",
+        "root": "abfss://cbcb3fe8-0a54-4e1d-a986-69db569e1025@onelake.dfs.fabric.microsoft.com/550a3a96-4822-490c-b401-b5c69fce1c3d",
+        "ok": true
+      },
+      {
+        "key": "service_ops_callcenter",
+        "domain": "call centre service operations",
+        "root": "abfss://ee90374b-f96b-49fa-a986-4e062defd063@onelake.dfs.fabric.microsoft.com/b8a38cc5-2a6d-402f-8d78-93e7887d40cb",
+        "ok": true
+      },
+      {
+        "key": "retail_adventureworks",
+        "domain": "retail",
+        "root": "abfss://c3f4b749-0eac-4bb9-acdc-20a6744c47e6@onelake.dfs.fabric.microsoft.com/93a7e555-9102-4a47-b1bd-518dea83b332",
+        "ok": true
+      }
+    ],
+    "semantic": [
+      {
+        "key": "sm_manufacturing",
+        "domain": "manufacturing operations",
+        "dataset": "Manufacturing Ops",
+        "workspace": "L400",
+        "ok": true
+      },
+      {
+        "key": "sm_adventureworks",
+        "domain": "retail",
+        "dataset": "AdventureWorks Sales",
+        "workspace": "DBRX-Benchmark",
+        "ok": true
+      },
+      {
+        "key": "sm_bakehouse",
+        "domain": "bakery franchise retail",
+        "dataset": "bakehouse_semantic_model",
+        "workspace": "DBRX-Benchmark",
+        "ok": true
+      },
+      {
+        "key": "sm_banking",
+        "domain": "retail banking",
+        "dataset": "banking_semantic_model",
+        "workspace": "[KEEP]AgenticBankingApp",
+        "ok": true
+      },
+      {
+        "key": "sm_wanderbricks",
+        "domain": "travel",
+        "dataset": "wanderbricks_semantic_model",
+        "workspace": "DBRX-Benchmark",
+        "ok": true
+      }
+    ]
+  },
+  "stage1_delta": [
+    {
+      "key": "ecommerce_olist",
+      "plain": {
+        "ok": true,
+        "seconds": 6.81,
+        "lesson_count": 0,
+        "lessons": [],
+        "profiles": [
+          {
+            "source_id": "ecommerce_olist",
+            "family": "lakehouse",
+            "status": "candidate",
+            "locator": "lakehouse/v1/77535e95487cdb591dd3548f46bf6c9da5f56e5ffd1a189edb6762ede1f4e1c8",
+            "schema_fingerprint": "a01f65f9d78d15df7c9548158313b6cb4e19c11bfbf40876cec9662083075ee8",
+            "diagnostics": "{'catalog_entry_count': 6, 'delta_entry_count': 6, 'fields_inspected': 38, 'format_code': 'lakehouse_catalog', 'inexact_entry_count': 0, 'root_identity_fingerprint': '569493d8a5a8f77d326a79a49c85cecabe72f05035f629a47620fd7fa1b164ac', 'snapshot_exact': True}",
+            "schema_families": {}
+          }
+        ]
+      },
+      "declared": {
+        "ok": true,
+        "seconds": 1.86,
+        "lesson_count": 2,
+        "lessons": [
+          {
+            "kind": "semantic_fact",
+            "subject": "note 1",
+            "status": "active",
+            "confidence": "high",
+            "basis": [
+              "declared"
+            ],
+            "rule": {
+              "fact": "note",
+              "text": "order_items has one row per item, so joining it to orders repeats every order-level value once per item"
+            }
+          },
+          {
+            "kind": "semantic_fact",
+            "subject": "grain",
+            "status": "active",
+            "confidence": "high",
+            "basis": [
+              "declared"
+            ],
+            "rule": {
+              "advice": "one_row_per_grain",
+              "fact": "grain",
+              "grain": [
+                "order_id"
+              ]
+            }
+          }
+        ],
+        "profiles": [
+          {
+            "source_id": "ecommerce_olist",
+            "family": "lakehouse",
+            "status": "candidate",
+            "locator": "lakehouse/v1/77535e95487cdb591dd3548f46bf6c9da5f56e5ffd1a189edb6762ede1f4e1c8",
+            "schema_fingerprint": "a01f65f9d78d15df7c9548158313b6cb4e19c11bfbf40876cec9662083075ee8",
+            "diagnostics": "{'catalog_entry_count': 6, 'delta_entry_count': 6, 'fields_inspected': 38, 'format_code': 'lakehouse_catalog', 'inexact_entry_count': 0, 'root_identity_fingerprint': '569493d8a5a8f77d326a79a49c85cecabe72f05035f629a47620fd7fa1b164ac', 'snapshot_exact': True}",
+            "schema_families": {}
+          }
+        ]
+      }
+    },
+    {
+      "key": "food_retail_bakehouse",
+      "plain": {
+        "ok": true,
+        "seconds": 1.24,
+        "lesson_count": 0,
+        "lessons": [],
+        "profiles": [
+          {
+            "source_id": "food_retail_bakehouse",
+            "family": "lakehouse",
+            "status": "candidate",
+            "locator": "lakehouse/v1/c88f7e866b7b9b59c7427c7ffcabd3462b0c3279ee1a31dc2303c8cdbfcd734b",
+            "schema_fingerprint": "e34d300fda7a11f43fbe9741eaa5f2b835d817ffa6f5bac4b3c8027a5f6528dd",
+            "diagnostics": "{'catalog_entry_count': 4, 'delta_entry_count': 4, 'fields_inspected': 42, 'format_code': 'lakehouse_catalog', 'inexact_entry_count': 0, 'root_identity_fingerprint': 'f8fd5e6d7d6a6de15863c782ebf20885180a5a621b133268456040830b2712f5', 'snapshot_exact': True}",
+            "schema_families": {}
+          }
+        ]
+      },
+      "declared": null
+    },
+    {
+      "key": "service_ops_callcenter",
+      "plain": {
+        "ok": true,
+        "seconds": 1.36,
+        "lesson_count": 0,
+        "lessons": [],
+        "profiles": [
+          {
+            "source_id": "service_ops_callcenter",
+            "family": "lakehouse",
+            "status": "candidate",
+            "locator": "lakehouse/v1/8e0e772f54e060c28787ddba414d02d3048519909505873853b95d5ab6d10a1c",
+            "schema_fingerprint": "9fc5f9c27f6b89b261ebe13245fca5100027def2b38fd65b604e50f8fd681547",
+            "diagnostics": "{'catalog_entry_count': 3, 'delta_entry_count': 3, 'fields_inspected': 53, 'format_code': 'lakehouse_catalog', 'inexact_entry_count': 0, 'root_identity_fingerprint': '406ab4cfdcd6668910b45f9fe7559693e81d023123d6facc0e556c955e50d38b', 'snapshot_exact': True}",
+            "schema_families": {}
+          }
+        ]
+      },
+      "declared": null
+    },
+    {
+      "key": "retail_adventureworks",
+      "plain": {
+        "ok": true,
+        "seconds": 2.31,
+        "lesson_count": 0,
+        "lessons": [],
+        "profiles": [
+          {
+            "source_id": "retail_adventureworks",
+            "family": "lakehouse",
+            "status": "candidate",
+            "locator": "lakehouse/v1/b435f9b9befdb93a459e9110c8930286845312fc237d483c5823431162493806",
+            "schema_fingerprint": "85cb5898b4f96253a4da4e0084e9e7b1565814d2ce139d5e192f9764a08d4c1a",
+            "diagnostics": "{'catalog_entry_count': 3, 'delta_entry_count': 3, 'fields_inspected': 15, 'format_code': 'lakehouse_catalog', 'inexact_entry_count': 0, 'root_identity_fingerprint': '7a9caddc5487899fef5e6ff3c10e1c87b4fe734bfaf5a8d2ec8cf92f186e9c26', 'snapshot_exact': True}",
+            "schema_families": {}
+          }
+        ]
+      },
+      "declared": null
+    }
+  ],
+  "stage1_semantic": [
+    {
+      "key": "sm_manufacturing",
+      "plain": {
+        "ok": true,
+        "seconds": 10.1,
+        "lesson_count": 2,
+        "lessons": [
+          {
+            "kind": "context_requirement",
+            "subject": "Profit YTD",
+            "status": "candidate",
+            "confidence": "low",
+            "basis": [
+              "name_pattern"
+            ],
+            "rule": {
+              "fallback_strategy": "explicit_period_base_measure",
+              "measure": "Profit YTD",
+              "observed": "name_pattern",
+              "requires": [
+                "period_context"
+              ]
+            }
+          },
+          {
+            "kind": "context_requirement",
+            "subject": "Sales YTD",
+            "status": "candidate",
+            "confidence": "low",
+            "basis": [
+              "name_pattern"
+            ],
+            "rule": {
+              "fallback_strategy": "explicit_period_base_measure",
+              "measure": "Sales YTD",
+              "observed": "name_pattern",
+              "requires": [
+                "period_context"
+              ]
+            }
+          }
+        ],
+        "profiles": [
+          {
+            "source_id": "sm_manufacturing",
+            "family": "semantic_model",
+            "status": "candidate",
+            "locator": "semantic-model/v1/6023fcd5ffc56b94ca87596fb657e241cfb0243adf7232c83c260f83865fcb6b",
+            "schema_fingerprint": "8df7dcdea039594e8b3d00f88cc85381c84f06433ef611543cb6d6186f8635c7",
+            "diagnostics": "{'complete_metadata_fingerprint': '878ea75fdf3d87a14fbfd80e336cb351fa96e632116ba3af744ec678a3916466', 'description_fingerprint': '478e2ef55931566e7e16d444c64092eff4e25976f1e2f7884f02f9f3dccbcbec', 'expression_fingerprint': '1176a332e4acf082fbabcde2e3d26683a44165fc2d77a970d02ca41645b95a5b', 'fields_truncated': False, 'nesting_truncated': False, 'provider_materialization_bounded': False, 'records_inspected': 156, 'records_truncated': False, 'snapshot_exact': True, 'text_truncated': False}",
+            "schema_families": {}
+          }
+        ]
+      },
+      "declared": null
+    },
+    {
+      "key": "sm_adventureworks",
+      "plain": {
+        "ok": true,
+        "seconds": 2.77,
+        "lesson_count": 0,
+        "lessons": [],
+        "profiles": [
+          {
+            "source_id": "sm_adventureworks",
+            "family": "semantic_model",
+            "status": "candidate",
+            "locator": "semantic-model/v1/0816f20d439bfada3621e087e92ab88689df8f66063135fbc68ea8d664268ff3",
+            "schema_fingerprint": "164c1be576626323064a44b10460a6087fdec4f304a175341158b2fb611ebdbd",
+            "diagnostics": "{'complete_metadata_fingerprint': 'ee9033bf030d35207f01d5868e04836901495bb7b0b1a46c7c39d330947f2228', 'description_fingerprint': '040eb0664fc6e1c1ee1770302cc03e5bebaae97aa2b697c1c8c7bf7ac79924bf', 'expression_fingerprint': 'd02ec0bdbc677825f09aa14db58a6a7d6f76c823d38944a6a567bfd686eb7611', 'fields_truncated': False, 'nesting_truncated': False, 'provider_materialization_bounded': False, 'records_inspected': 78, 'records_truncated': False, 'snapshot_exact': True, 'text_truncated': False}",
+            "schema_families": {}
+          }
+        ]
+      },
+      "declared": null
+    },
+    {
+      "key": "sm_bakehouse",
+      "plain": {
+        "ok": true,
+        "seconds": 0.45,
+        "lesson_count": 0,
+        "lessons": [],
+        "profiles": [
+          {
+            "source_id": "sm_bakehouse",
+            "family": "semantic_model",
+            "status": "candidate",
+            "locator": "semantic-model/v1/f6e9e72d6a6c3edc4facd334cb6ee602b0affccdb2c5fb2d448925fdcb965c4c",
+            "schema_fingerprint": "582ae158f4e08d6134fd9b6eb18a7a90a303d665242088737ac7d5dc546d9146",
+            "diagnostics": "{'complete_metadata_fingerprint': 'e1e0f6ae895df9725fb2dafa4e55aa90f13a4fb46c31f3901716de776f2b1ff1', 'description_fingerprint': '308dc97bcf7051930a95818b30ca7c47bd88a7e6cdec1bd18536c3af96305230', 'expression_fingerprint': '2113871e4160b8f242d75100d0b90514a70c8ebd97202e802ddc2801717104d6', 'fields_truncated': False, 'nesting_truncated': False, 'provider_materialization_bounded': False, 'records_inspected': 68, 'records_truncated': False, 'snapshot_exact': True, 'text_truncated': False}",
+            "schema_families": {}
+          }
+        ]
+      },
+      "declared": null
+    },
+    {
+      "key": "sm_banking",
+      "plain": {
+        "ok": true,
+        "seconds": 3.56,
+        "lesson_count": 0,
+        "lessons": [],
+        "profiles": [
+          {
+            "source_id": "sm_banking",
+            "family": "semantic_model",
+            "status": "candidate",
+            "locator": "semantic-model/v1/8eb6d90d20567b78d7a24b6810ab4f522f1868b102de9c9e6d694ecbb8c20a85",
+            "schema_fingerprint": "4a68c3806ef663603b1ce737e82d396818af8a0c09e7447814c53be49d2d72f2",
+            "diagnostics": "{'complete_metadata_fingerprint': '3fce97509315cdd9438ca21d7f6648f1044ff2e05975813508faf3b48afda0e7', 'description_fingerprint': '9409baac17f79753d648fe20e7ebc193a5fea525735af08d6bd8126c5a392303', 'expression_fingerprint': '3b20c5564de45eaee907b027568d7d0e71a544992d75413201eec8025094d05d', 'fields_truncated': False, 'nesting_truncated': False, 'provider_materialization_bounded': False, 'records_inspected': 160, 'records_truncated': False, 'snapshot_exact': True, 'text_truncated': False}",
+            "schema_families": {}
+          }
+        ]
+      },
+      "declared": null
+    },
+    {
+      "key": "sm_wanderbricks",
+      "plain": {
+        "ok": true,
+        "seconds": 0.39,
+        "lesson_count": 0,
+        "lessons": [],
+        "profiles": [
+          {
+            "source_id": "sm_wanderbricks",
+            "family": "semantic_model",
+            "status": "candidate",
+            "locator": "semantic-model/v1/77b956711bdbdb6d89cb032ba8620b4663ab2cdcab5f2f91a7dd070a2d75e3be",
+            "schema_fingerprint": "a742d95dcc2b4eb0d670882c9e61ba1749fcddf0713ec50b9c034d8911591e0b",
+            "diagnostics": "{'complete_metadata_fingerprint': '045e86ddf3ad5ed445e73c58654908e92f83a1362021853628486e2a23a659b6', 'description_fingerprint': 'a0ac91ad43431182aa43b1c180555d2f2a1f0f5774bd87ffc4a11f3f9ddd14ad', 'expression_fingerprint': '511691e2ec748e6382819fc1ab3300642f7b5a73ae9851a3a5983d3335c8d53a', 'fields_truncated': False, 'nesting_truncated': False, 'provider_materialization_bounded': False, 'records_inspected': 109, 'records_truncated': False, 'snapshot_exact': True, 'text_truncated': False}",
+            "schema_families": {}
+          }
+        ]
+      },
+      "declared": null
+    }
+  ],
+  "frame_binding": [
+    {
+      "frame": "ecommerce_olist__orders",
+      "ok": true,
+      "rows": 99441,
+      "columns": [
+        "order_id",
+        "customer_id",
+        "order_status",
+        "order_purchase_timestamp",
+        "order_approved_at",
+        "order_delivered_carrier_date",
+        "order_delivered_customer_date",
+        "order_estimated_delivery_date"
+      ]
+    },
+    {
+      "frame": "ecommerce_olist__order_items",
+      "ok": true,
+      "rows": 112650,
+      "columns": [
+        "order_id",
+        "order_item_id",
+        "product_id",
+        "seller_id",
+        "shipping_limit_date",
+        "price",
+        "freight_value"
+      ]
+    },
+    {
+      "frame": "ecommerce_olist__order_payments",
+      "ok": true,
+      "rows": 103886,
+      "columns": [
+        "order_id",
+        "payment_sequential",
+        "payment_type",
+        "payment_installments",
+        "payment_value"
+      ]
+    },
+    {
+      "frame": "ecommerce_olist__customers",
+      "ok": true,
+      "rows": 99441,
+      "columns": [
+        "customer_id",
+        "customer_unique_id",
+        "customer_zip_code_prefix",
+        "customer_city",
+        "customer_state"
+      ]
+    },
+    {
+      "frame": "ecommerce_olist__sellers",
+      "ok": true,
+      "rows": 3095,
+      "columns": [
+        "seller_id",
+        "seller_zip_code_prefix",
+        "seller_city",
+        "seller_state"
+      ]
+    },
+    {
+      "frame": "ecommerce_olist__products",
+      "ok": true,
+      "rows": 32951,
+      "columns": [
+        "product_id",
+        "product_category_name",
+        "product_name_lenght",
+        "product_description_lenght",
+        "product_photos_qty",
+        "product_weight_g",
+        "product_length_cm",
+        "product_height_cm",
+        "product_width_cm"
+      ]
+    },
+    {
+      "frame": "food_retail_bakehouse__sales_transactions",
+      "ok": true,
+      "rows": 3333,
+      "columns": [
+        "transactionID",
+        "customerID",
+        "franchiseID",
+        "dateTime",
+        "product",
+        "quantity",
+        "unitPrice",
+        "totalPrice",
+        "paymentMethod",
+        "cardNumber"
+      ]
+    },
+    {
+      "frame": "food_retail_bakehouse__sales_customers",
+      "ok": true,
+      "rows": 300,
+      "columns": [
+        "customerID",
+        "first_name",
+        "last_name",
+        "email_address",
+        "phone_number",
+        "address",
+        "city",
+        "state",
+        "country",
+        "continent",
+        "postal_zip_code",
+        "gender"
+      ]
+    },
+    {
+      "frame": "food_retail_bakehouse__sales_franchises",
+      "ok": true,
+      "rows": 48,
+      "columns": [
+        "franchiseID",
+        "name",
+        "city",
+        "district",
+        "zipcode",
+        "country",
+        "size",
+        "longitude",
+        "latitude",
+        "supplierID"
+      ]
+    },
+    {
+      "frame": "food_retail_bakehouse__sales_suppliers",
+      "ok": true,
+      "rows": 27,
+      "columns": [
+        "supplierID",
+        "name",
+        "ingredient",
+        "continent",
+        "city",
+        "district",
+        "size",
+        "longitude",
+        "latitude",
+        "approved"
+      ]
+    },
+    {
+      "frame": "service_ops_callcenter__call_log",
+      "ok": true,
+      "rows": 100000,
+      "columns": [
+        "Call_ID",
+        "Agent_ID",
+        "Call_Date",
+        "Start_Date_Time",
+        "Start_Time",
+        "End_Date_Time",
+        "End_Time",
+        "Talk_Time",
+        "After_Call_Work_Time",
+        "Queue_Time",
+        "Agent_Comments",
+        "Call_Resolution_ID",
+        "Call_Resolution",
+        "Call_Type_ID",
+        "Call_Type",
+        "Customer_ID",
+        "Plan_ID",
+        "Customer_Satisfied",
+        "Quality_Scored",
+        "Is_Quality_Call",
+        "Is_Abandoned",
+        "Is_Blocked",
+        "Has_Competitor_Mention",
+        "Competitor_Mentioned"
+      ]
+    },
+    {
+      "frame": "service_ops_callcenter__call_enriched",
+      "ok": true,
+      "rows": 15000,
+      "columns": [
+        "Call_ID",
+        "Agent_ID",
+        "Call_Date",
+        "Call_Type",
+        "Plan_ID",
+        "Competitor_Mentioned",
+        "Customer_Satisfied",
+        "Call_Resolution",
+        "switching_reason",
+        "competitor_offer",
+        "Churn_Risk",
+        "Sentiment",
+        "Coaching_Note"
+      ]
+    },
+    {
+      "frame": "service_ops_callcenter__agent_performance_daily",
+      "ok": true,
+      "rows": 21613,
+      "columns": [
+        "Agent_ID",
+        "Call_Date",
+        "Agent_Shift",
+        "Agent_Shift_Cost",
+        "Talk_Time",
+        "After_Call_Work_Time",
+        "Handle_Time",
+        "Queue_Time",
+        "Total_Calls",
+        "Total_Service_Level_Calls",
+        "Total_First_Call_Resolutions",
+        "Total_Abandoned_Calls",
+        "Total_Blocked_Calls",
+        "Total_Customer_Satisfied",
+        "Total_Quality_Scored",
+        "Total_Quality_Calls"
+      ]
+    },
+    {
+      "frame": "retail_adventureworks__code_sales",
+      "ok": true,
+      "rows": 1161250,
+      "columns": [
+        "code",
+        "canonical_name",
+        "entity_type",
+        "SalesAmount",
+        "CalendarYear",
+        "SalesTerritoryGroup",
+        "SalesTerritoryCountry",
+        "Color",
+        "Subcategory",
+        "Category",
+        "Channel"
+      ]
+    },
+    {
+      "frame": "retail_adventureworks__dim_category_aliases",
+      "ok": true,
+      "rows": 4,
+      "columns": [
+        "category_name",
+        "aliases"
+      ]
+    },
+    {
+      "frame": "retail_adventureworks__dim_country_aliases",
+      "ok": true,
+      "rows": 8,
+      "columns": [
+        "country_name",
+        "aliases"
+      ]
+    }
+  ],
+  "stage2_references": [
+    {
+      "key": "olist_orders_distinct",
+      "domain": "e-commerce marketplace",
+      "question": "How many distinct orders are there?",
+      "hazard": "none; the control for the join hazard below",
+      "reference_value": 99441,
+      "ok": true
+    },
+    {
+      "key": "olist_orders_with_items",
+      "domain": "e-commerce marketplace",
+      "question": "How many distinct orders have at least one item?",
+      "hazard": "counting rows of the orders-to-items join counts items, not orders",
+      "reference_value": 98666,
+      "ok": true
+    },
+    {
+      "key": "olist_naive_join_rows",
+      "domain": "e-commerce marketplace",
+      "question": "Rows in the orders-to-items join, the wrong answer to the question above",
+      "hazard": "recorded so a multiplied answer is distinguishable from a correct one",
+      "reference_value": 112650,
+      "ok": true
+    },
+    {
+      "key": "olist_payment_total",
+      "domain": "e-commerce marketplace",
+      "question": "What is the total payment value across all orders?",
+      "hazard": "joining payments to items would multiply this",
+      "reference_value": 16008872.12,
+      "ok": true
+    },
+    {
+      "key": "bakehouse_txn_count",
+      "domain": "bakery franchise retail",
+      "question": "How many sales transactions are recorded?",
+      "hazard": "none",
+      "reference_value": 3333,
+      "ok": true
+    },
+    {
+      "key": "callcenter_call_count",
+      "domain": "call centre service operations",
+      "question": "How many calls are in the call log?",
+      "hazard": "none",
+      "reference_value": 100000,
+      "ok": true
+    }
+  ]
+}
