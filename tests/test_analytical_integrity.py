@@ -881,3 +881,18 @@ def test_magnitude_matching_does_not_excuse_a_figure_never_computed():
     assert check_unsupported_literals(
         "SUBMIT(a='Change: $-72,800')", {"a": 1}, "abs drop = 1,500,000\n"
     )
+
+
+def test_a_sign_flip_is_out_of_scope_for_this_screen():
+    """Pinned so the boundary is a decision, not a surprise.
+
+    The screen asks whether a figure was computed, not whether its
+    direction is right. This behaviour is unchanged from before magnitudes
+    were compared; it is recorded here so a future reader does not mistake
+    it for a guarantee.
+    """
+    assert not check_unsupported_literals(
+        "SUBMIT(value=-500000)", {"a": 1}, "delta 500000\n"
+    )
+    # but a magnitude that was never computed is still caught, sign or not
+    assert check_unsupported_literals("SUBMIT(value=-72800)", {"a": 1}, "delta 500000\n")
