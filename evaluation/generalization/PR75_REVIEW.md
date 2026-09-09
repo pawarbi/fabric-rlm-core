@@ -666,9 +666,26 @@ exercised. No claim is made about them.
 - That equivalent semantics across source types produce equivalent **answers**.
   Equivalent binding, profiling, and learning were shown across file, Lakehouse
   and semantic model; the live answer matrix ran against **locally materialized
-  real Fabric data**, not against live `LakehouseSource` bindings, because local
-  binding requires `notebookutils`. Answer-level cross-source equivalence
-  remains untested.
+  real Fabric data**, not against live `LakehouseSource` bindings.
+
+  The reason is a property of the **harness**, not a defect or a configuration
+  burden. The gate ran on a laptop, outside Fabric, where `notebookutils` is
+  not importable, so automatic discovery raises `LakehouseDiscoveryError` and
+  directs the caller to pass `catalog=` explicitly (`lakehouse.py:404-411`).
+  That is correct off-Fabric behaviour.
+
+  **Inside Fabric no credential configuration is required.** `LakehouseSource`
+  exposes no credential parameter at all — its fields are `root`, `tables`,
+  `files`, `catalog`, `max_sources` — and `_get_fs()` / `_storage_token()`
+  import `notebookutils` implicitly (`lakehouse.py:406,417`). `SemanticModel`
+  defaults to `credential_provider=None`, which passes no `credential` kwarg to
+  sempy, letting it use the notebook's own identity;
+  `credential_provider="notebookutils"` is an explicit override, not a
+  requirement (`semantic_model.py:600-603`).
+
+  Answer-level cross-source equivalence therefore remains untested, and the
+  correct way to close it is to run the gate **as a Fabric notebook job**,
+  where binding needs no extra arguments.
 - **Cost** was not measured; turns and prompt tokens were. End-to-end latency
   was not isolated from provider variance.
 - Failure-handling breadth: staleness, row-bound overflow, and schema-scoped
