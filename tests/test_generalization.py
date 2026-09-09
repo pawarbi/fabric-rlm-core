@@ -367,3 +367,43 @@ def test_lakehouse_queries_record_their_grain_as_evidence(tmp_path: Path) -> Non
     assert query.source_ids == ("service",) and tuple(query.observation["grain"]) == ("region",)
     again = harvest_evidence(result, sources=knowledge.bindings, known_source_ids=["service"], source_fingerprints={"service": knowledge.package.sources[0].schema_fingerprint})
     assert {e.evidence_id for e in again} == {e.evidence_id for e in result.evidence}
+
+
+def test_a_shared_glossary_renders_once_and_never_crowds_out_the_grain(tmp_path: Path) -> None:
+    # The same definitions declared on every table of a domain, as a source
+    # owner would: the agent sees the structural facts first, one line per
+    # definition tagged with every table, and the evidence lessons keep their
+    # own budget.
+    production = _production_csv(tmp_path)
+    lines = tmp_path / "lines.csv"
+    lines.write_text("line,plant\nL1,North\nL2,North\nL3,South\n", encoding="utf-8")
+    glossary = {
+        "defect rate": "defect units divided by produced units in complete periods",
+        "complete period": "only rows where reporting_complete is true",
+        "units": "produced units are finished units, not started units",
+    }
+    knowledge = RLM.learn(
+        sources={"production": production, "lines": lines},
+        declared={
+            "production": {"grain": ["line", "period"], "period_column": "period", "definitions": glossary},
+            "lines": {"grain": ["line"], "definitions": glossary},
+        },
+    )
+    task = "Which units had the worst defect rate in the complete periods?"
+    lessons = retrieve_lessons(knowledge.package, task)
+    facts = [l for l in lessons if l.kind == "semantic_fact"]
+    # grain and period first, then the three definitions once each
+    kinds = [l.structured_rule["fact"] for l in facts]
+    assert sorted(kinds[:3]) == ["grain", "grain", "period_column"] and kinds[3:] == ["definition"] * 3
+    definitions = [l for l in facts if l.structured_rule["fact"] == "definition"]
+    assert all(l.source_dependencies == ("lines", "production") for l in definitions)
+    assert all(set(l.source_fingerprints) == {"lines", "production"} for l in definitions)
+    guidance = render_learned_guidance(lessons)
+    assert guidance.count("defect units divided by produced units") == 1
+    assert "[lines, production] defect rate:" in guidance
+    assert "Declared grain: one row per line x period" in guidance
+    # the declared budget is separate from the evidence budget and keeps the
+    # structural facts first: limit=2 leaves room for four declared lines
+    narrow = [l for l in retrieve_lessons(knowledge.package, task, limit=2) if l.kind == "semantic_fact"]
+    narrow_kinds = [l.structured_rule["fact"] for l in narrow]
+    assert sorted(narrow_kinds[:3]) == ["grain", "grain", "period_column"] and narrow_kinds[3:] == ["definition"]
