@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import random
+import re
 import time
 from pathlib import Path
 
@@ -363,10 +364,75 @@ def _numeric(value):
     return None
 
 
+_NP_REPR = re.compile(r"^\s*np\.\w+\(([-+0-9.eE]+)\)\s*$")
+
+
+def _unwrap_numeric(value):
+    """Recover a number the runtime could not serialize.
+
+    The runtime represents a numpy scalar as
+    ``{"__type__": "int64", "__repr__": "np.int64(6642)",
+    "__serializable__": false}``. The answer is correct; only the
+    encoding is lossy. Grading that as a wrong answer measures the
+    serializer, not the agent.
+    """
+    if isinstance(value, dict) and "__repr__" in value:
+        match = _NP_REPR.match(str(value.get("__repr__", "")))
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def _numeric_leaves(value, depth: int = 0) -> list[float]:
+    """Every number reachable in an answer value, in document order."""
+    if depth > 4:
+        return []
+    unwrapped = _unwrap_numeric(value)
+    if unwrapped is not None:
+        return [unwrapped]
+    direct = _numeric(value)
+    if direct is not None:
+        return [direct]
+    if isinstance(value, dict):
+        out: list[float] = []
+        for item in value.values():
+            out.extend(_numeric_leaves(item, depth + 1))
+        return out
+    if isinstance(value, (list, tuple)):
+        out = []
+        for item in value:
+            out.extend(_numeric_leaves(item, depth + 1))
+        return out
+    return []
+
+
+def _answer_value(answer: dict) -> tuple[float | None, bool, int]:
+    """Return (value, machine_readable, leaf_count).
+
+    ``machine_readable`` is False when the caller could not have read the
+    number straight off ``answer["value"]``. That is reported separately
+    from correctness: an unreadable correct answer is a serialization
+    defect, not a reasoning error.
+    """
+    raw = answer.get("value")
+    direct = _numeric(raw)
+    if direct is not None:
+        return direct, True, 1
+    leaves = _numeric_leaves(raw)
+    if len(leaves) == 1:
+        return leaves[0], False, 1
+    if not leaves:
+        return None, False, 0
+    return None, False, len(leaves)
+
+
 def grade(question_id: str, answer: dict, refs: dict) -> dict:
     ref = refs[question_id]
     status = str(answer.get("status", "")).lower()
-    value = _numeric(answer.get("value"))
+    value, readable, leaf_count = _answer_value(answer)
     abstained = status in {"abstain", "abstained", "needs_definition", "unknown"}
 
     def close(a, b) -> bool:
@@ -390,6 +456,9 @@ def grade(question_id: str, answer: dict, refs: dict) -> dict:
         "hazard_name": ref["hazard_name"],
         "abstained": abstained,
         "entity_ok": entity_ok,
+        "machine_readable": readable,
+        "numeric_leaves": leaf_count,
+        "degenerate": bool(ref.get("degenerate")),
         "confidently_wrong": bool(not correct and not abstained and value is not None),
     }
 
