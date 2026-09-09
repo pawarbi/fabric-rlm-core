@@ -409,6 +409,25 @@ def _numeric_leaves(value, depth: int = 0) -> list[float]:
     return []
 
 
+def _numbers_in_text(value) -> list[float]:
+    """Numbers embedded in a free-text answer such as 'Technical Support (30.9%)'.
+
+    Used only to score analytical correctness separately from contract
+    compliance. A composite string means the agent computed the right
+    thing but ignored the requested output shape; conflating that with a
+    wrong answer overstates the error rate.
+    """
+    if not isinstance(value, str):
+        return []
+    out = []
+    for token in re.findall(r"-?\d[\d,]*\.?\d*", value):
+        try:
+            out.append(float(token.replace(",", "")))
+        except ValueError:
+            continue
+    return out
+
+
 def _answer_value(answer: dict) -> tuple[float | None, bool, int]:
     """Return (value, machine_readable, leaf_count).
 
@@ -442,16 +461,31 @@ def grade(question_id: str, answer: dict, refs: dict) -> dict:
 
     correct = close(value, ref["value"])
     hazard = close(value, ref["hazard"])
+
+    # Analytical correctness, scored independently of the output contract.
+    # Looks anywhere in the answer, including numbers embedded in prose and
+    # sibling keys the agent invented instead of using "value".
+    pool = list(_numeric_leaves(answer.get("value")))
+    pool += _numbers_in_text(answer.get("value"))
+    for key, item in answer.items():
+        if key in {"value", "status", "units", "grain", "entity"}:
+            continue
+        pool.extend(_numeric_leaves(item))
+    analytic = any(close(candidate, ref["value"]) for candidate in pool)
+    analytic_hazard = any(close(candidate, ref["hazard"]) for candidate in pool)
     entity_ok = None
     if "entity" in ref:
         text = f"{answer.get('entity','')} {answer.get('value','')}".lower()
         entity_ok = ref["entity"].lower() in text
         correct = correct and bool(entity_ok)
+        analytic = analytic and bool(entity_ok)
     return {
         "status": status,
         "value": value,
         "reference": ref["value"],
         "correct": bool(correct),
+        "analytic_correct": bool(analytic and not abstained),
+        "analytic_hazard": bool(analytic_hazard),
         "hit_hazard": bool(hazard),
         "hazard_name": ref["hazard_name"],
         "abstained": abstained,

@@ -1,0 +1,83 @@
+Registered operation plan was rejected by the host contract
+Registered operation result exceeded its declared bounds
+Registered operation plan was rejected by the host contract
+Registered operation result exceeded its declared bounds
+Registered operation result exceeded its declared bounds
+Registered operation result exceeded its declared bounds
+Registered operation result exceeded its declared bounds
+Registered operation result exceeded its declared bounds
+Registered operation plan was rejected by the host contract
+Registered operation result exceeded its declared bounds
+Registered operation result exceeded its declared bounds
+Registered operation result exceeded its declared bounds
+[learn] service_ops: {'declared_lessons': 2, 'active_lessons': 2, 'fingerprint': '34f4410edf2ce6e7cc0c42b4143eb40009a964e2419ca399ea59847ca613f900'}
+[learn] ecommerce: {'declared_lessons': 8, 'active_lessons': 8, 'fingerprint': '158e61207217d7c1743f814dd14b6dcff9867a4ab117cfebc08381185b6cc0fe'}
+[learn] food_retail: {'declared_lessons': 2, 'active_lessons': 2, 'fingerprint': 'a07bf6f8c8087f94270fa3a49fea3c098fea9c63a99dbd0eab23dcf225614c16'}
+[1/66] q_ecom_multi_installment_share arm=A rep=1 ok=True correct=True hazard=False value=2.98 budget=595
+[2/66] q_service_top_type_share arm=A rep=1 ok=True correct=False hazard=False value=None budget=591
+[3/66] q_retail_top_franchise arm=B rep=2 ok=True correct=True hazard=False value=6642.0 budget=589
+[4/66] q_ecom_freight_share arm=B rep=1 ok=True correct=True hazard=False value=14.24 budget=586
+[5/66] q_retail_top_product_qty arm=A rep=2 ok=True correct=True hazard=False value=3865.0 budget=582
+[6/66] q_ecom_order_count arm=B rep=0 ok=True correct=True hazard=False value=98666.0 budget=580
+[7/66] q_service_top_type_share arm=B rep=2 ok=True correct=True hazard=False value=30.9 budget=578
+[8/66] q_retail_top_product_qty arm=A rep=0 ok=True correct=True hazard=False value=3865.0 budget=574
+[9/66] q_service_top_type_share arm=B rep=1 ok=True correct=False hazard=False value=None budget=571
+[10/66] q_service_satisfied_rate_quality arm=A rep=1 ok=True correct=True hazard=False value=84.76 budget=566
+[11/66] q_ecom_order_count arm=A rep=2 ok=True correct=True hazard=False value=98666.0 budget=564
+[12/66] q_retail_top_franchise arm=A rep=2 ok=True correct=True hazard=False value=6642.0 budget=560
+[13/66] q_retail_top_product arm=B rep=1 ok=True correct=True hazard=False value=11595.0 budget=558
+[14/66] q_retail_top_product arm=A rep=1 ok=True correct=True hazard=False value=11595.0 budget=550
+[15/66] q_ecom_multi_installment_share arm=B rep=2 ok=True correct=True hazard=False value=2.98 budget=547
+[16/66] q_ecom_order_count arm=B rep=1 ok=True correct=True hazard=False value=98666.0 budget=545
+[17/66] q_service_avg_handle_time arm=A rep=0 ok=True correct=True hazard=False value=19.9917 budget=540
+[18/66] q_retail_top_franchise arm=B rep=1 ok=True correct=True hazard=False value=6642.0 budget=538
+[19/66] q_retail_avg_per_customer arm=B rep=0 ok=True correct=True hazard=False value=221.57 budget=534
+[20/66] q_retail_top_product arm=B rep=2 ok=True correct=True hazard=False value=11595.0 budget=532
+[21/66] q_ecom_freight_share arm=B rep=0 ok=True correct=True hazard=False value=14.24 budget=530
+[22/66] q_ecom_freight_share arm=A rep=1 ok=True correct=True hazard=False value=14.24 budget=526
+[23/66] q_ecom_avg_payment arm=B rep=0 ok=True correct=True hazard=False value=160.99 budget=522
+[24/66] q_retail_top_product arm=A rep=2 ok=True correct=True hazard=False value=11595.0 budget=514
+[25/66] q_ecom_multi_installment_share arm=A rep=2 ok=True correct=True hazard=False value=2.98 budget=511
+[26/66] q_ecom_order_count arm=B rep=2 ok=True correct=True hazard=False value=98666.0 budget=508
+[27/66] q_ecom_order_count arm=A rep=1 ok=True correct=True hazard=False value=98666.0 budget=506
+[28/66] q_service_top_type_share arm=A rep=0 ok=True correct=False hazard=False value=None budget=502
+[29/66] q_service_top_type_share arm=B rep=0 ok=True correct=True hazard=False value=30.9 budget=500
+[30/66] q_retail_avg_per_customer arm=B rep=2 ok=True correct=True hazard=False value=221.57 budget=497
+[31/66] q_ecom_avg_payment arm=A rep=0 ok=True correct=True hazard=False value=160.99 budget=492
+[32/66] q_retail_top_franchise arm=B rep=0 ok=True correct=True hazard=False value=6642.0 budget=490
+[33/66] q_service_top_type_share arm=A rep=2 ok=True correct=False hazard=False value=None budget=485
+[34/66] q_service_avg_handle_time arm=A rep=2 ok=True correct=True hazard=False value=19.9917 budget=480
+[35/66] q_retail_avg_per_customer arm=A rep=2 ok=True correct=True hazard=False value=221.57 budget=474
+[36/66] q_service_avg_handle_time arm=B rep=1 ok=True correct=True hazard=False value=19.9917 budget=472
+[37/66] q_service_avg_handle_time arm=B rep=2 ok=True correct=True hazard=False value=19.9917 budget=467
+[38/66] q_retail_top_franchise arm=A rep=0 ok=True correct=True hazard=False value=6642.0 budget=463
+[39/66] q_service_avg_handle_time arm=B rep=0 ok=True correct=True hazard=False value=19.9917 budget=460
+[40/66] q_retail_avg_per_customer arm=A rep=1 ok=True correct=True hazard=False value=221.57 budget=455
+[41/66] q_service_satisfied_rate_quality arm=A rep=0 ok=True correct=True hazard=False value=84.76 budget=449
+[42/66] q_retail_top_product_qty arm=B rep=1 ok=True correct=True hazard=False value=3865.0 budget=446
+[43/66] q_ecom_multi_installment_share arm=B rep=0 ok=True correct=True hazard=False value=2.98 budget=442
+[44/66] q_ecom_freight_share arm=B rep=2 ok=True correct=True hazard=False value=14.24 budget=439
+[45/66] q_service_satisfied_rate_quality arm=B rep=0 ok=True correct=True hazard=False value=84.76 budget=431
+[46/66] q_ecom_avg_payment arm=B rep=1 ok=True correct=True hazard=False value=160.99 budget=428
+[47/66] q_retail_top_product arm=A rep=0 ok=True correct=True hazard=False value=11595.0 budget=424
+[48/66] q_ecom_multi_installment_share arm=B rep=1 ok=True correct=True hazard=False value=2.98 budget=421
+[49/66] q_ecom_multi_installment_share arm=A rep=0 ok=True correct=True hazard=False value=2.98 budget=418
+[50/66] q_service_satisfied_rate_quality arm=B rep=2 ok=True correct=True hazard=False value=84.76 budget=408
+[51/66] q_retail_top_franchise arm=A rep=1 ok=True correct=True hazard=False value=6642.0 budget=404
+[52/66] q_retail_top_product_qty arm=B rep=2 ok=True correct=True hazard=False value=3865.0 budget=401
+[53/66] q_service_satisfied_rate_quality arm=A rep=2 ok=True correct=True hazard=False value=84.76 budget=395
+[54/66] q_retail_top_product arm=B rep=0 ok=True correct=True hazard=False value=11595.0 budget=392
+[55/66] q_service_satisfied_rate_quality arm=B rep=1 ok=True correct=True hazard=False value=84.76 budget=388
+[56/66] q_retail_top_product_qty arm=B rep=0 ok=True correct=True hazard=False value=3865.0 budget=386
+[57/66] q_retail_top_product_qty arm=A rep=1 ok=True correct=True hazard=False value=3865.0 budget=380
+[58/66] q_ecom_freight_share arm=A rep=0 ok=True correct=True hazard=False value=14.24 budget=374
+[59/66] q_ecom_order_count arm=A rep=0 ok=True correct=True hazard=False value=98666.0 budget=371
+[60/66] q_retail_avg_per_customer arm=A rep=0 ok=True correct=True hazard=False value=221.57 budget=368
+[61/66] q_ecom_avg_payment arm=A rep=1 ok=True correct=True hazard=False value=160.99 budget=365
+[62/66] q_retail_avg_per_customer arm=B rep=1 ok=True correct=True hazard=False value=221.57 budget=362
+[63/66] q_service_avg_handle_time arm=A rep=1 ok=True correct=True hazard=False value=19.9917 budget=357
+[64/66] q_ecom_freight_share arm=A rep=2 ok=True correct=True hazard=False value=14.24 budget=352
+[65/66] q_ecom_avg_payment arm=A rep=2 ok=True correct=True hazard=False value=160.99 budget=349
+[66/66] q_ecom_avg_payment arm=B rep=2 ok=True correct=True hazard=False value=160.99 budget=345
+
+wrote stage4_gate.json; trials=66 remaining_budget=345
