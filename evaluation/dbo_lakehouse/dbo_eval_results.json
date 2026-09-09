@@ -1,0 +1,4363 @@
+{
+  "model": "openai/gpt-4.1-mini",
+  "learn": {
+    "lessons_total": 46,
+    "lessons_active": 46,
+    "fingerprint": "228ece5123c2e82799e1d08130385f6cfeca4a35de7e43e40ecbaa7bf5a34feb",
+    "learn_seconds": 3.0,
+    "sources": 10
+  },
+  "trials": [
+    {
+      "question_id": "q01",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 4442,
+      "completion_tokens": 636,
+      "wall_seconds": 19.23,
+      "answer": {
+        "status": "OK",
+        "value": 10582466.89,
+        "units": "currency units",
+        "grain": "invoices with at least one payment",
+        "sql": "invoices_df[invoices_df['invoice_id'].isin(payments_df['invoice_id'].unique())]['amount_due'].sum()",
+        "reasoning": "Filtered invoices to only those with at least one payment using matching invoice_id from payments table, then summed the amount_due over these filtered invoices."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10582466.89
+      }
+    },
+    {
+      "question_id": "q01",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 20435,
+      "completion_tokens": 588,
+      "wall_seconds": 29.34,
+      "answer": {
+        "status": "missing_execution",
+        "value": null,
+        "units": "currency units",
+        "grain": "invoices with at least one payment",
+        "sql": "\nSELECT\n    ROUND(SUM(invoices.amount_due), 2) AS total_amount_due\nFROM invoices\nWHERE invoice_id IN (\n    SELECT DISTINCT invoice_id\n    FROM payments\n)\n",
+        "reasoning": "Summed amount_due for invoices linked to payments by invoice_id. The SQL query needs to be executed in the environment to get the exact value."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": false,
+        "value": "None"
+      }
+    },
+    {
+      "question_id": "q01",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 8555,
+      "completion_tokens": 133,
+      "wall_seconds": 11.38,
+      "answer": {
+        "status": "success",
+        "value": 10582466.89,
+        "units": "currency units",
+        "grain": "invoice level",
+        "sql": "SELECT SUM(amount_due) FROM invoices WHERE invoice_id IN (SELECT DISTINCT invoice_id FROM payments)",
+        "reasoning": "We found the invoice_ids that have records in payments indicating at least one payment, then summed the amount_due for those invoices per the prompt."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10582466.89
+      }
+    },
+    {
+      "question_id": "q01",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 7600,
+      "completion_tokens": 604,
+      "wall_seconds": 16.03,
+      "answer": {
+        "status": "OK",
+        "value": 10582466.89,
+        "units": "currency",
+        "grain": "invoices with at least one payment",
+        "sql": "SELECT SUM(amount_due) FROM invoices WHERE invoice_id IN (SELECT DISTINCT invoice_id FROM payments)",
+        "reasoning": "Filtered invoices to those with at least one payment by matching invoice_id in payments, then summed their amount_due."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10582466.89
+      }
+    },
+    {
+      "question_id": "q01",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 13735,
+      "completion_tokens": 415,
+      "wall_seconds": 22.03,
+      "answer": {
+        "status": "OK",
+        "value": 10582466.89,
+        "units": "currency units",
+        "grain": "invoice_id",
+        "sql": "SELECT SUM(amount_due) AS total_amount_due FROM invoices WHERE invoice_id IN (SELECT DISTINCT invoice_id FROM payments)",
+        "reasoning": "We identified invoices that have received at least one payment by selecting distinct invoice_ids present in the payments table, then summed their amount_due values from the invoices table. The sum was rounded to two decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10582466.89
+      }
+    },
+    {
+      "question_id": "q01",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 12790,
+      "completion_tokens": 362,
+      "wall_seconds": 20.39,
+      "answer": {
+        "status": "OK",
+        "value": 10582466.89,
+        "units": "currency",
+        "grain": "invoice level",
+        "sql": "SELECT SUM(amount_due) FROM invoices WHERE invoice_id IN (SELECT DISTINCT invoice_id FROM payments)",
+        "reasoning": "Summed amount_due for all invoices that have at least one payment recorded in the payments table."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10582466.89
+      }
+    },
+    {
+      "question_id": "q02",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 10,
+      "prompt_tokens": 40364,
+      "completion_tokens": 1733,
+      "wall_seconds": 65.56,
+      "answer": {
+        "status": "overdue",
+        "value": 71379.94,
+        "units": "currency units",
+        "grain": "one row per invoice_id aggregated",
+        "sql": "\n            -- sum amount_due for overdue invoices\n            SELECT SUM(amount_due) FROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\invoices.csv WHERE status = 'overdue';\n            -- sum amount_paid for overdue invoices joining with payments\n            SELECT SUM(p.amount_paid) \n            FROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\invoices.csv i JOIN C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\payments.csv p ON i.invoice_id = p.invoice_id\n            WHERE i.status = 'overdue';\n        ",
+        "reasoning": "The sum of amount_due for overdue invoices is known to be 71379.94 from the provided knowledge_result. The total amount_paid on these overdue invoices is not accessible with the current environment setup. Assuming no payments have been made, the total outstanding is approximated as 71379.94."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 71379.94
+      }
+    },
+    {
+      "question_id": "q02",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 12433,
+      "completion_tokens": 134,
+      "wall_seconds": 17.48,
+      "answer": {
+        "status": "overdue",
+        "value": 31166.17,
+        "units": "currency units",
+        "grain": "invoice_id",
+        "sql": "SELECT SUM(amount_due - amount_paid) FROM invoices WHERE status = 'overdue'",
+        "reasoning": "Filtered invoices with status 'overdue' and summed the difference between amount_due and amount_paid per invoice_id."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 31166.17
+      }
+    },
+    {
+      "question_id": "q02",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 9660,
+      "completion_tokens": 725,
+      "wall_seconds": 21.44,
+      "answer": {
+        "status": "overdue",
+        "value": 31166.17,
+        "units": "USD",
+        "grain": "invoice",
+        "sql": "SELECT SUM(amount_due - amount_paid) FROM invoices WHERE status = 'overdue'",
+        "reasoning": "Calculated the total outstanding (amount_due minus amount_paid) across invoices with 'overdue' status by filtering invoices_df and summing the difference."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 31166.17
+      }
+    },
+    {
+      "question_id": "q02",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 9547,
+      "completion_tokens": 412,
+      "wall_seconds": 18.23,
+      "answer": {
+        "status": "overdue",
+        "value": 31166.17,
+        "units": "USD",
+        "grain": "invoice",
+        "sql": "SELECT SUM(amount_due - amount_paid) FROM invoices WHERE status = 'overdue'",
+        "reasoning": "Filtered invoices with status 'overdue' and summed the difference of amount_due minus amount_paid, rounded to 2 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 31166.17
+      }
+    },
+    {
+      "question_id": "q02",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 15986,
+      "completion_tokens": 604,
+      "wall_seconds": 26.69,
+      "answer": {
+        "status": "overdue",
+        "value": null,
+        "units": "currency units",
+        "grain": "one row per invoice",
+        "sql": "\nSELECT\n    ROUND(SUM(amount_due - amount_paid), 2) AS total_outstanding\nFROM invoices\nWHERE status = 'overdue'\n",
+        "reasoning": "Computed outstanding as sum of (amount_due - amount_paid) for invoices with status 'overdue'. Rounded result to 2 decimals."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": false,
+        "value": "None"
+      }
+    },
+    {
+      "question_id": "q02",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 6947,
+      "completion_tokens": 718,
+      "wall_seconds": 16.16,
+      "answer": {
+        "status": "overdue",
+        "value": 31166.17,
+        "units": "currency units",
+        "grain": "invoice",
+        "sql": "SELECT ROUND(SUM(amount_due - amount_paid), 2) AS total_outstanding FROM invoices WHERE status = 'overdue'",
+        "reasoning": "Filtered invoices with status 'overdue', computed the difference amount_due minus amount_paid to get outstanding per invoice, then summed and rounded to two decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 31166.17
+      }
+    },
+    {
+      "question_id": "q03",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 9572,
+      "completion_tokens": 877,
+      "wall_seconds": 23.48,
+      "answer": {
+        "status": "OK",
+        "value": 8.1319,
+        "units": "days",
+        "grain": "per invoice",
+        "sql": "SELECT ROUND(AVG(julianday(p.payment_date) - julianday(i.invoice_date)), 4) AS avg_days_elapsed FROM invoices i JOIN (SELECT invoice_id, MIN(payment_date) AS payment_date FROM payments GROUP BY invoice_id) p ON i.invoice_id = p.invoice_id WHERE i.status = 'paid'",
+        "reasoning": "For invoices with status 'paid', the first payment date was identified by taking the minimum payment_date per invoice. The difference in days between invoice_date and this first payment_date was computed per invoice, and the average of these differences was calculated and rounded to 4 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 8.1319
+      }
+    },
+    {
+      "question_id": "q03",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 6683,
+      "completion_tokens": 369,
+      "wall_seconds": 17.55,
+      "answer": {
+        "status": "ok",
+        "value": null,
+        "units": "days",
+        "grain": "invoice",
+        "sql": "\nWITH first_payments AS (\n    SELECT \n        i.invoice_id,\n        i.invoice_date,\n        MIN(p.payment_date) AS first_payment_date,\n        JULIANDAY(MIN(p.payment_date)) - JULIANDAY(i.invoice_date) AS days_to_first_payment\n    FROM invoices i\n    JOIN payments p ON i.invoice_id = p.invoice_id\n    GROUP BY i.invoice_id, i.invoice_date\n    HAVING days_to_first_payment >= 0\n)\nSELECT ROUND(AVG(days_to_first_payment), 4) AS avg_days_to_first_payment\nFROM first_payments\n",
+        "reasoning": "We calculated the difference in days between invoice date and the earliest payment date for each invoice that has been paid, then averaged these differences. We considered only invoices with payments."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": false,
+        "value": "None"
+      }
+    },
+    {
+      "question_id": "q03",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 8,
+      "prompt_tokens": 25890,
+      "completion_tokens": 1106,
+      "wall_seconds": 49.73,
+      "answer": {
+        "status": "could_not_execute_prediction",
+        "value": null,
+        "units": "days",
+        "grain": "invoice",
+        "sql": "\nWITH first_payments AS (\n    SELECT\n        invoice_id,\n        MIN(payment_date) AS first_payment_date\n    FROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\payments.csv\n    GROUP BY invoice_id\n),\ninvoice_payment_diff AS (\n    SELECT\n        i.invoice_id,\n        DATEDIFF(fp.first_payment_date, i.invoice_date) AS days_to_first_payment\n    FROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\invoices.csv AS i\n    JOIN first_payments AS fp\n    ON i.invoice_id = fp.invoice_id\n    WHERE fp.first_payment_date IS NOT NULL\n)\nSELECT\n    ROUND(AVG(days_to_first_payment), 4) AS avg_days_to_first_payment\nFROM invoice_payment_diff\n",
+        "reasoning": "The average days between invoice_date and first payment_date per invoice was computed by joining invoices with the earliest payment per invoice, then averaging the date differences. Unable to run the final prediction to obtain the numeric value."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": false,
+        "value": "None"
+      }
+    },
+    {
+      "question_id": "q03",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 11,
+      "prompt_tokens": 40294,
+      "completion_tokens": 1282,
+      "wall_seconds": 43.19,
+      "answer": {
+        "status": "ok",
+        "value": 8.1319,
+        "units": "days",
+        "grain": "per invoice_id",
+        "sql": "SELECT AVG(days_elapsed) FROM (SELECT invoice_id, MIN(payment_date) - invoice_date AS days_elapsed FROM invoices JOIN payments USING(invoice_id) WHERE LOWER(invoices.status) = 'paid' GROUP BY invoice_id)",
+        "reasoning": "Calculated the average days between invoice_date and the earliest payment_date for each invoice with status 'paid', considering only invoices that have been paid."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 8.1319
+      }
+    },
+    {
+      "question_id": "q03",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": false,
+      "failure_reason": "abstained",
+      "turns": 11,
+      "prompt_tokens": 39282,
+      "completion_tokens": 1154,
+      "wall_seconds": 62.87,
+      "answer": {
+        "value": null
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": false,
+        "value": "None"
+      }
+    },
+    {
+      "question_id": "q03",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 9184,
+      "completion_tokens": 441,
+      "wall_seconds": 21.95,
+      "answer": {
+        "status": "Success",
+        "value": 8.1319,
+        "units": "days",
+        "grain": "per invoice (only those paid)",
+        "sql": "SELECT AVG(days_elapsed) AS average_days_elapsed FROM (   SELECT i.invoice_id, i.invoice_date, MIN(p.payment_date) AS first_payment_date,   JULIANDAY(MIN(p.payment_date)) - JULIANDAY(i.invoice_date) AS days_elapsed   FROM invoices i   JOIN payments p ON i.invoice_id = p.invoice_id   WHERE i.status = 'paid'   GROUP BY i.invoice_id, i.invoice_date ) subquery",
+        "reasoning": "The average number of days between the invoice date and the FIRST payment was calculated by joining paid invoices with the earliest payment date per invoice, then computing the mean of the day differences. This considers only invoices with status 'paid'."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 8.1319
+      }
+    },
+    {
+      "question_id": "q04",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 18810,
+      "completion_tokens": 605,
+      "wall_seconds": 26.15,
+      "answer": {
+        "status": "success",
+        "value": 360.0,
+        "units": "days",
+        "grain": "subscription (sub_id)",
+        "sql": "\nSELECT ROUND(AVG(DATEDIFF(end_date, start_date)), 4) AS mean_tenure_days\nFROM subscriptions\nWHERE annual_contract = 1\n  AND status = 'expired'\n",
+        "reasoning": "Filtered subscriptions to those that ended (status 'expired') with annual contracts (annual_contract=1). Calculated tenure as difference in days between end_date and start_date for each subscription. Averaged these tenures to find the mean tenure in days."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 360.0
+      }
+    },
+    {
+      "question_id": "q04",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 11,
+      "prompt_tokens": 22000,
+      "completion_tokens": 917,
+      "wall_seconds": 30.23,
+      "answer": {
+        "status": "ok",
+        "value": 360.0,
+        "units": "days",
+        "grain": "subscription",
+        "sql": "SELECT ROUND(AVG(DATEDIFF(end_date, start_date)), 4) AS mean_tenure_days\nFROM subscriptions\nWHERE status IN ('expired', 'cancelled') AND annual_contract = 1",
+        "reasoning": "Filtered subscriptions that ended (status 'expired' or 'cancelled') and had annual_contract = 1, then computed the average tenure as the difference in days between end_date and start_date."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 360.0
+      }
+    },
+    {
+      "question_id": "q04",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 8,
+      "prompt_tokens": 13095,
+      "completion_tokens": 624,
+      "wall_seconds": 21.59,
+      "answer": {
+        "status": "ok",
+        "value": 360.0,
+        "units": "days",
+        "grain": "subscription",
+        "sql": "SELECT \n  AVG(DATEDIFF(day, start_date, end_date)) AS mean_tenure_days\nFROM subscriptions\nWHERE status IN ('expired', 'cancelled') \n  AND annual_contract = 1",
+        "reasoning": "Filtered subscriptions to those ended (status 'expired' or 'cancelled') and with annual_contract = 1, then calculated average tenure as the mean of the date difference (end_date - start_date) in days."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 360.0
+      }
+    },
+    {
+      "question_id": "q04",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 8532,
+      "completion_tokens": 90,
+      "wall_seconds": 13.7,
+      "answer": {
+        "status": "success",
+        "value": 360.0,
+        "units": "days",
+        "grain": "subscription",
+        "sql": "SELECT AVG(DATEDIFF(end_date, start_date)) AS mean_tenure_days FROM subscriptions WHERE annual_contract = 1 AND status IN ('expired', 'cancelled')",
+        "reasoning": "Filtered subscriptions to those with annual_contract=1 and ended status (expired or cancelled), calculated tenure as difference in days between end_date and start_date, and averaged the tenure."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 360.0
+      }
+    },
+    {
+      "question_id": "q04",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 8,
+      "prompt_tokens": 24288,
+      "completion_tokens": 822,
+      "wall_seconds": 36.87,
+      "answer": {
+        "status": "success",
+        "value": 360.0,
+        "units": "days",
+        "grain": "one row per subscription",
+        "sql": "\nSELECT \n    ROUND(AVG(DATEDIFF(end_date, start_date)), 4) AS mean_tenure_days\nFROM subscriptions\nWHERE status IN ('cancelled', 'expired')\nAND annual_contract = 1\n",
+        "reasoning": "Filtered subscriptions to those ended (status cancelled or expired) and annual contracts (annual_contract = 1). Calculated tenure as the difference between end_date and start_date in days. Took mean and rounded to 4 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 360.0
+      }
+    },
+    {
+      "question_id": "q04",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 17555,
+      "completion_tokens": 395,
+      "wall_seconds": 24.77,
+      "answer": {
+        "status": "success",
+        "value": 360.0,
+        "units": "days",
+        "grain": "subscription",
+        "sql": "\n    SELECT AVG(DATEDIFF(end_date, start_date)) AS mean_tenure_days\n    FROM subscriptions\n    WHERE end_date IS NOT NULL AND annual_contract = 1\n    ",
+        "reasoning": "Filtered subscriptions that have ended and are annual contracts, then calculated the mean difference between end_date and start_date in days."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 360.0
+      }
+    },
+    {
+      "question_id": "q05",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 2,
+      "prompt_tokens": 8108,
+      "completion_tokens": 124,
+      "wall_seconds": 14.18,
+      "answer": {
+        "status": "active",
+        "value": 375337.21,
+        "units": "USD",
+        "grain": "subscription",
+        "sql": "SELECT SUM(mrr) FROM subscriptions WHERE status = 'active'",
+        "reasoning": "Used the pre-aggregated sum of MRR from 'knowledge_result' for subscriptions where status is 'active'. Rounded the result to 2 decimals as requested."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 375337.21
+      }
+    },
+    {
+      "question_id": "q05",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 10,
+      "prompt_tokens": 25218,
+      "completion_tokens": 1238,
+      "wall_seconds": 53.36,
+      "answer": {
+        "status": "active",
+        "value": 375337.21,
+        "units": "USD",
+        "grain": "subscription",
+        "sql": "\nSELECT SUM(mrr) AS total_mrr\nFROM subscriptions\nWHERE status = 'active'\n",
+        "reasoning": "Calculated total MRR by summing the 'mrr' column in subscriptions dataframe where status is 'active'. Rounded to 2 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 375337.21
+      }
+    },
+    {
+      "question_id": "q05",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 5981,
+      "completion_tokens": 412,
+      "wall_seconds": 13.12,
+      "answer": {
+        "status": "active",
+        "value": 375337.21,
+        "units": "USD",
+        "grain": "subscription",
+        "sql": "SELECT SUM(mrr) FROM subscriptions WHERE status = 'active'",
+        "reasoning": "Summed the monthly recurring revenue (mrr) for all subscriptions with status 'active' to get the total MRR."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 375337.21
+      }
+    },
+    {
+      "question_id": "q05",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 2,
+      "prompt_tokens": 8075,
+      "completion_tokens": 123,
+      "wall_seconds": 12.4,
+      "answer": {
+        "status": "active",
+        "value": 375337.21,
+        "units": "monetary units",
+        "grain": "subscriptions",
+        "sql": "SELECT ROUND(SUM(mrr), 2) FROM subscriptions WHERE status = 'active';",
+        "reasoning": "Used the provided pre-aggregated total MRR for subscriptions with status 'active', rounded to 2 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 375337.21
+      }
+    },
+    {
+      "question_id": "q05",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 2,
+      "prompt_tokens": 7791,
+      "completion_tokens": 139,
+      "wall_seconds": 11.61,
+      "answer": {
+        "status": "active",
+        "value": 375337.21,
+        "units": "currency units per month",
+        "grain": "subscription",
+        "sql": "SELECT SUM(mrr) FROM subscriptions WHERE status = 'active'",
+        "reasoning": "Used the pre-aggregated result from 'knowledge_result' which sums the MRR of all subscriptions with status 'active'."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 375337.21
+      }
+    },
+    {
+      "question_id": "q05",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 10185,
+      "completion_tokens": 355,
+      "wall_seconds": 15.78,
+      "answer": {
+        "status": "success",
+        "value": 375337.21,
+        "units": "USD",
+        "grain": "subscription",
+        "sql": "SELECT ROUND(SUM(mrr), 2) FROM subscriptions WHERE status = 'active';",
+        "reasoning": "Summed the 'mrr' field of subscriptions filtered to those with status 'active' and rounded the total to two decimal places."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 375337.21
+      }
+    },
+    {
+      "question_id": "q06",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 8,
+      "prompt_tokens": 17106,
+      "completion_tokens": 327,
+      "wall_seconds": 19.51,
+      "answer": {
+        "status": "success",
+        "value": 3.012237,
+        "units": "score",
+        "grain": "support_ticket",
+        "sql": "df_support_tickets['satisfaction_score'].mean()",
+        "reasoning": "Computed the mean satisfaction_score by taking the average of the satisfaction_score column across all support tickets, ignoring missing values"
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 3.012237
+      }
+    },
+    {
+      "question_id": "q06",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 2,
+      "prompt_tokens": 7766,
+      "completion_tokens": 168,
+      "wall_seconds": 15.61,
+      "answer": {
+        "status": "ok",
+        "value": 3.012237,
+        "units": "points",
+        "grain": "one row per ticket_id (support tickets)",
+        "sql": "SELECT AVG(satisfaction_score) FROM support_tickets;",
+        "reasoning": "The average satisfaction_score was directly obtained from the host-provided knowledge_result, which is an aggregated result computed on the support_tickets source at the ticket_id grain."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 3.012237
+      }
+    },
+    {
+      "question_id": "q06",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 10146,
+      "completion_tokens": 69,
+      "wall_seconds": 14.24,
+      "answer": {
+        "status": "success",
+        "value": 3.012237,
+        "units": "score",
+        "grain": "support_ticket",
+        "sql": "SELECT AVG(satisfaction_score) FROM support_tickets",
+        "reasoning": "The mean satisfaction_score was directly provided by the host-verified aggregation knowledge_result, computed at the support_ticket grain."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 3.012237
+      }
+    },
+    {
+      "question_id": "q06",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 7440,
+      "completion_tokens": 670,
+      "wall_seconds": 18.51,
+      "answer": {
+        "status": "success",
+        "value": 3.012237,
+        "units": "score (unitless rating)",
+        "grain": "individual support tickets",
+        "sql": "support_tickets_df['satisfaction_score'].mean()",
+        "reasoning": "The mean satisfaction_score was computed by taking the average of the support_tickets 'satisfaction_score' column values, ignoring missing values. The grain is individual support tickets and units are unitless scores."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 3.012237
+      }
+    },
+    {
+      "question_id": "q06",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 2,
+      "prompt_tokens": 7895,
+      "completion_tokens": 109,
+      "wall_seconds": 13.53,
+      "answer": {
+        "status": "OK",
+        "value": 3.012237,
+        "units": "score",
+        "grain": "one row per support ticket",
+        "sql": "SELECT AVG(satisfaction_score) FROM support_tickets;",
+        "reasoning": "The mean satisfaction_score was taken as the average of satisfaction_score across all support tickets, using the source support_tickets table."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 3.012237
+      }
+    },
+    {
+      "question_id": "q06",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 9535,
+      "completion_tokens": 275,
+      "wall_seconds": 27.83,
+      "answer": {
+        "status": "ok",
+        "value": 3.012237,
+        "units": "score",
+        "grain": "per support_ticket",
+        "sql": "SELECT AVG(satisfaction_score) FROM support_tickets WHERE satisfaction_score IS NOT NULL",
+        "reasoning": "Computed mean satisfaction_score across all support tickets ignoring null values."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 3.012237
+      }
+    },
+    {
+      "question_id": "q07",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 12856,
+      "completion_tokens": 509,
+      "wall_seconds": 73.06,
+      "answer": {
+        "status": "success",
+        "value": 83.8263,
+        "units": "percent",
+        "grain": "one row per ticket",
+        "sql": "SELECT COUNT(CASE WHEN resolved_at IS NOT NULL THEN 1 END)*100.0 / COUNT(*) AS pct_resolved FROM support_tickets;",
+        "reasoning": "Computed the percentage of support tickets where 'resolved_at' is not null over the total tickets, which shows how many have ever been resolved."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": true,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 83.8263
+      }
+    },
+    {
+      "question_id": "q07",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 6554,
+      "completion_tokens": 609,
+      "wall_seconds": 33.01,
+      "answer": {
+        "status": "success",
+        "value": 83.8263,
+        "units": "percent",
+        "grain": "support ticket",
+        "sql": "SELECT (COUNT(resolved_at) * 100.0 / COUNT(*)) AS resolved_percentage FROM support_tickets WHERE resolved_at IS NOT NULL;",
+        "reasoning": "Calculated as the count of tickets with non-null resolved_at timestamps divided by total tickets, indicating the share of support tickets ever resolved."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": true,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 83.8263
+      }
+    },
+    {
+      "question_id": "q07",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 16354,
+      "completion_tokens": 409,
+      "wall_seconds": 76.1,
+      "answer": {
+        "status": "success",
+        "value": 83.8263,
+        "units": "percent",
+        "grain": "one row per ticket_id",
+        "sql": "SELECT COUNT(*) FILTER (WHERE resolved_at IS NOT NULL)::float / COUNT(*) * 100 AS resolved_percent FROM support_tickets;",
+        "reasoning": "Calculated the ratio of support tickets with a non-null 'resolved_at' timestamp to the total tickets, indicating the percentage ever resolved."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": true,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 83.8263
+      }
+    },
+    {
+      "question_id": "q07",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 6140,
+      "completion_tokens": 497,
+      "wall_seconds": 22.85,
+      "answer": {
+        "status": "ok",
+        "value": 83.8263,
+        "units": "percent",
+        "grain": "individual support tickets",
+        "sql": "SELECT COUNT(*) as total_tickets, COUNT(resolved_at) as resolved_tickets FROM support_tickets;",
+        "reasoning": "Percentage of tickets with a non-null resolved_at date over total tickets."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 83.8263
+      }
+    },
+    {
+      "question_id": "q07",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": false,
+      "failure_reason": "abstained",
+      "turns": 6,
+      "prompt_tokens": 19425,
+      "completion_tokens": 619,
+      "wall_seconds": 78.22,
+      "answer": {
+        "value": null
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": false,
+        "value": "None"
+      }
+    },
+    {
+      "question_id": "q07",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 12220,
+      "completion_tokens": 315,
+      "wall_seconds": 19.41,
+      "answer": {
+        "status": "OK",
+        "value": 83.8263,
+        "units": "percent",
+        "grain": "support ticket",
+        "sql": "support_tickets_df['resolved_at'].notnull().mean() * 100",
+        "reasoning": "Calculated percentage of support tickets with non-null 'resolved_at' timestamps indicating resolution."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": true,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 83.8263
+      }
+    },
+    {
+      "question_id": "q08",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 12262,
+      "completion_tokens": 563,
+      "wall_seconds": 29.68,
+      "answer": {
+        "status": "success",
+        "value": 120.423824,
+        "units": "hours",
+        "grain": "ticket",
+        "sql": "support_tickets_df['resolved_at'].notna() filtered -> (resolved_at - created_at) in hours -> mean()",
+        "reasoning": "Calculated time difference in hours between creation and resolution for resolved tickets and took the mean."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 120.423824
+      }
+    },
+    {
+      "question_id": "q08",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": false,
+      "failure_reason": "output_validation_failed",
+      "turns": 12,
+      "prompt_tokens": 36827,
+      "completion_tokens": 744,
+      "wall_seconds": 73.42,
+      "answer": {
+        "value": null
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": false,
+        "value": "None"
+      }
+    },
+    {
+      "question_id": "q08",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 12148,
+      "completion_tokens": 790,
+      "wall_seconds": 23.75,
+      "answer": {
+        "status": "success",
+        "value": 120.423824,
+        "units": "hours",
+        "grain": "ticket",
+        "sql": "Filtered support_tickets for resolved tickets and computed mean of (resolved_at - created_at) in hours.",
+        "reasoning": "Filtered tickets with non-null resolved_at dates, computed time difference in hours between created_at and resolved_at for each ticket, then averaged."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 120.423824
+      }
+    },
+    {
+      "question_id": "q08",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 8704,
+      "completion_tokens": 632,
+      "wall_seconds": 19.32,
+      "answer": {
+        "status": "success",
+        "value": 120.42382359451084,
+        "units": "hours",
+        "grain": "ticket",
+        "sql": "SELECT AVG(TIMESTAMPDIFF(SECOND, created_at, resolved_at)) / 3600 AS mean_hours_to_resolution FROM support_tickets WHERE resolved_at IS NOT NULL",
+        "reasoning": "For tickets that were resolved (resolved_at is not null), the time difference between created_at and resolved_at was calculated in hours, and the mean was computed to find the average duration from creation to resolution."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 120.42382359451084
+      }
+    },
+    {
+      "question_id": "q08",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 13980,
+      "completion_tokens": 489,
+      "wall_seconds": 48.63,
+      "answer": {
+        "status": "success",
+        "value": 120.423824,
+        "units": "hours",
+        "grain": "one row per ticket_id (only resolved tickets)",
+        "sql": "SELECT AVG(EXTRACT(EPOCH FROM (resolved_at - created_at))/3600) AS mean_hours FROM support_tickets WHERE resolved_at IS NOT NULL",
+        "reasoning": "Calculated the mean time difference in hours between created_at and resolved_at among tickets with a resolution date."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 120.423824
+      }
+    },
+    {
+      "question_id": "q08",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 15526,
+      "completion_tokens": 479,
+      "wall_seconds": 65.48,
+      "answer": {
+        "status": "success",
+        "value": 120.423824,
+        "units": "hours",
+        "grain": "per resolved ticket",
+        "sql": "SELECT\n  ROUND(AVG(EXTRACT(EPOCH FROM (resolved_at - created_at))/3600), 6) AS avg_hours_to_resolve\nFROM support_tickets\nWHERE resolved_at IS NOT NULL",
+        "reasoning": "Computed the average of the difference between resolved_at and created_at in hours, filtering to only resolved tickets."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 120.423824
+      }
+    },
+    {
+      "question_id": "q09",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 10022,
+      "completion_tokens": 150,
+      "wall_seconds": 58.4,
+      "answer": {
+        "status": "success",
+        "value": 93257855,
+        "units": "count",
+        "grain": "all usage logs aggregated",
+        "sql": "SELECT SUM(api_calls) AS value FROM usage_logs",
+        "reasoning": "The total number of api_calls is directly obtained from the pre-aggregated knowledge_result for usage_logs.sum(api_calls). The grain is over all usage logs combined."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 93257855
+      }
+    },
+    {
+      "question_id": "q09",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 10178,
+      "completion_tokens": 66,
+      "wall_seconds": 46.11,
+      "answer": {
+        "status": "OK",
+        "value": 93257855.0,
+        "units": "count",
+        "grain": "all usage_logs aggregated",
+        "sql": "sum(api_calls) from usage_logs",
+        "reasoning": "The total api_calls value was taken from the knowledge_result with sum aggregation on api_calls column from usage_logs, representing the total api_calls across all usage logs."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 93257855.0
+      }
+    },
+    {
+      "question_id": "q09",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 5919,
+      "completion_tokens": 295,
+      "wall_seconds": 18.91,
+      "answer": {
+        "status": "OK",
+        "value": {
+          "__type__": "int64",
+          "__repr__": "np.int64(93257855)",
+          "__serializable__": false
+        },
+        "units": "calls",
+        "grain": "all usage log records cumulatively",
+        "sql": "SELECT SUM(api_calls) FROM usage_logs",
+        "reasoning": "Summed the 'api_calls' column from all records in usage_logs to get total API calls."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 64.0
+      }
+    },
+    {
+      "question_id": "q09",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 5786,
+      "completion_tokens": 80,
+      "wall_seconds": 11.8,
+      "answer": {
+        "status": "OK",
+        "value": {
+          "__type__": "int64",
+          "__repr__": "np.int64(93257855)",
+          "__serializable__": false
+        },
+        "units": "count",
+        "grain": "all usage logs aggregated",
+        "sql": "SELECT SUM(api_calls) FROM usage_logs",
+        "reasoning": "Summed the 'api_calls' column across all records in the usage_logs dataset to get the total number of API calls."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 64.0
+      }
+    },
+    {
+      "question_id": "q09",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 7932,
+      "completion_tokens": 195,
+      "wall_seconds": 17.66,
+      "answer": {
+        "status": "OK",
+        "value": 93257855,
+        "units": "calls",
+        "grain": "all usage logs combined",
+        "sql": "SELECT SUM(api_calls) FROM usage_logs",
+        "reasoning": "Summed the 'api_calls' column from the usage_logs dataset to get the total number of API calls recorded."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 93257855
+      }
+    },
+    {
+      "question_id": "q09",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 2,
+      "prompt_tokens": 7995,
+      "completion_tokens": 126,
+      "wall_seconds": 27.58,
+      "answer": {
+        "status": "ok",
+        "value": 93257855.0,
+        "units": "count",
+        "grain": "all usage logs aggregated",
+        "sql": "SELECT SUM(api_calls) AS total_api_calls FROM usage_logs",
+        "reasoning": "Used the precomputed aggregate sum of api_calls from usage_logs as provided by knowledge_result."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 93257855.0
+      }
+    },
+    {
+      "question_id": "q10",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 26110,
+      "completion_tokens": 478,
+      "wall_seconds": 51.63,
+      "answer": {
+        "status": "OK",
+        "value": "Collaboration",
+        "units": "compute_minutes per usage event",
+        "grain": "feature module",
+        "sql": "knowledge_result joined with features table on feature_id to find the module with highest mean compute_minutes per usage event",
+        "reasoning": "Identified the module of the feature with the highest mean compute_minutes per usage event by joining the aggregated compute data with features metadata and selecting the corresponding module."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Collaboration"
+      }
+    },
+    {
+      "question_id": "q10",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 15134,
+      "completion_tokens": 394,
+      "wall_seconds": 27.19,
+      "answer": {
+        "status": "OK",
+        "value": "Collaboration",
+        "units": "compute_minutes per usage event",
+        "grain": "feature module",
+        "sql": "\n    SELECT f.module, AVG(u.compute_minutes) AS mean_compute_minutes\n    FROM usage_logs u\n    JOIN features f ON u.feature_id = f.feature_id\n    GROUP BY f.module\n    ORDER BY mean_compute_minutes DESC\n    LIMIT 1;\n    ",
+        "reasoning": "Joined usage_logs with features on feature_id, grouped by feature module, and calculated the mean compute_minutes per usage event. The module with the highest mean is reported."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Collaboration"
+      }
+    },
+    {
+      "question_id": "q10",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 2,
+      "prompt_tokens": 8395,
+      "completion_tokens": 177,
+      "wall_seconds": 42.04,
+      "answer": {
+        "status": "OK",
+        "value": "Collaboration",
+        "units": "mean compute_minutes per usage event",
+        "grain": "feature module",
+        "sql": "SELECT f.module, avg(u.compute_minutes) as mean_compute_minutes FROM usage_logs u JOIN features f ON u.feature_id = f.feature_id GROUP BY f.module ORDER BY mean_compute_minutes DESC LIMIT 1",
+        "reasoning": "We used the pre-aggregated average compute_minutes per feature_id from knowledge_result and identified the feature_id with the highest average compute_minutes per usage event. Then we joined with the features table to get the corresponding module name for that feature."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Collaboration"
+      }
+    },
+    {
+      "question_id": "q10",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 13129,
+      "completion_tokens": 564,
+      "wall_seconds": 28.99,
+      "answer": {
+        "status": "success",
+        "value": "Collaboration",
+        "units": "compute_minutes per usage event",
+        "grain": "feature module",
+        "sql": "\n        SELECT f.module, AVG(u.compute_minutes) AS mean_compute_minutes\n        FROM usage_logs u\n        JOIN features f ON u.feature_id = f.feature_id\n        GROUP BY f.module\n        ORDER BY mean_compute_minutes DESC\n        LIMIT 1\n        ",
+        "reasoning": "Joined usage_logs with features on feature_id to get module names, then grouped by module and computed the mean of compute_minutes per usage event. Sorted descending to find the module with the highest mean compute_minutes."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Collaboration"
+      }
+    },
+    {
+      "question_id": "q10",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 7354,
+      "completion_tokens": 393,
+      "wall_seconds": 35.39,
+      "answer": {
+        "status": "success",
+        "value": "Collaboration",
+        "units": "compute_minutes per usage event",
+        "grain": "feature module",
+        "sql": "SELECT f.module, AVG(ul.compute_minutes) AS mean_compute_per_usage FROM usage_logs ul JOIN features f ON ul.feature_id = f.feature_id GROUP BY f.module ORDER BY mean_compute_per_usage DESC LIMIT 1",
+        "reasoning": "Computed the mean compute_minutes per usage event grouped by feature_id, then associated features with their modules, finally averaged usage-weighted means per module to find the module with the highest mean compute_minutes per usage event."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Collaboration"
+      }
+    },
+    {
+      "question_id": "q10",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 14446,
+      "completion_tokens": 634,
+      "wall_seconds": 43.64,
+      "answer": {
+        "status": "success",
+        "value": "Collaboration",
+        "units": "minutes per usage event",
+        "grain": "feature module",
+        "sql": "-- Using knowledge_result aggregate avg(compute_minutes) grouped by feature_id\nSELECT f.module, kr.value\nFROM knowledge_result kr\nJOIN features f ON kr.feature_id = f.feature_id\nORDER BY kr.value DESC\nLIMIT 1",
+        "reasoning": "We used the aggregated average compute minutes per usage event by feature_id from knowledge_result and joined it with the features table to get feature modules. Then we found which feature module has the highest mean compute_minutes per usage event."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Collaboration"
+      }
+    },
+    {
+      "question_id": "q11",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 8,
+      "prompt_tokens": 25627,
+      "completion_tokens": 800,
+      "wall_seconds": 39.1,
+      "answer": {
+        "status": "OK",
+        "value": "Middle East",
+        "units": "api_calls per user (mean)",
+        "grain": "region",
+        "sql": "SELECT c.region, AVG(user_calls.api_calls) AS mean_api_calls_per_user FROM users u JOIN companies c ON u.company_id = c.company_id JOIN (SELECT user_id, SUM(api_calls) AS api_calls FROM usage_logs GROUP BY user_id) user_calls ON u.user_id = user_calls.user_id GROUP BY c.region ORDER BY mean_api_calls_per_user DESC LIMIT 1",
+        "reasoning": "Aggregated total api_calls per user from usage_logs, joined with users and companies to get each user's region, then computed mean api_calls per user grouped by region. The region with highest mean was selected."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Middle East"
+      }
+    },
+    {
+      "question_id": "q11",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 18987,
+      "completion_tokens": 696,
+      "wall_seconds": 38.4,
+      "answer": {
+        "status": "OK",
+        "value": "Middle East",
+        "units": "api_calls per user",
+        "grain": "region",
+        "sql": "SELECT c.region, AVG(uac.api_calls) AS mean_api_calls FROM (SELECT user_id, SUM(api_calls) AS api_calls FROM usage_logs GROUP BY user_id) uac JOIN users u ON uac.user_id = u.user_id JOIN companies c ON u.company_id = c.company_id GROUP BY c.region ORDER BY mean_api_calls DESC LIMIT 1",
+        "reasoning": "Computed each user's total api_calls by summing usage_logs grouped by user_id, then joined with users and companies to get region. Finally, averaged api_calls per user within each region and selected the region with the highest mean."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Middle East"
+      }
+    },
+    {
+      "question_id": "q11",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 12713,
+      "completion_tokens": 182,
+      "wall_seconds": 21.31,
+      "answer": {
+        "status": "OK",
+        "value": "Middle East",
+        "units": "api_calls per user",
+        "grain": "region",
+        "sql": "SELECT c.region, AVG(user_api.total_api_calls) AS mean_api_calls_per_user FROM (SELECT user_id, SUM(api_calls) AS total_api_calls FROM usage_logs GROUP BY user_id) user_api JOIN users u ON user_api.user_id = u.user_id JOIN companies c ON u.company_id = c.company_id GROUP BY c.region",
+        "reasoning": "Computed total api_calls per user first, joined with users and companies to map regions, then calculated mean api_calls per user by region and picked the region with the highest mean."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Middle East"
+      }
+    },
+    {
+      "question_id": "q11",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 6024,
+      "completion_tokens": 374,
+      "wall_seconds": 20.26,
+      "answer": {
+        "status": "Final",
+        "value": "Unknown",
+        "units": "api_calls per user (mean)",
+        "grain": "region",
+        "sql": "\nWITH user_api_calls AS (\n    SELECT user_id, SUM(api_calls) AS total_api_calls\n    FROM usage_logs\n    GROUP BY user_id\n),\nuser_regions AS (\n    SELECT user_id, region\n    FROM users\n)\nSELECT region, AVG(total_api_calls) AS mean_api_calls_per_user\nFROM user_api_calls uac\nJOIN user_regions ur ON uac.user_id = ur.user_id\nGROUP BY region\nORDER BY mean_api_calls_per_user DESC\nLIMIT 1;\n",
+        "reasoning": "Computed total api_calls for each user from usage_logs, then joined with users table to get region. Computed mean api_calls per user grouped by region and selected the region with the highest mean."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Unknown"
+      }
+    },
+    {
+      "question_id": "q11",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 14974,
+      "completion_tokens": 828,
+      "wall_seconds": 36.97,
+      "answer": {
+        "status": "final",
+        "value": null,
+        "units": "api_calls per user (mean)",
+        "grain": "region",
+        "sql": "\nWITH user_api_calls AS (\n    SELECT user_id, SUM(api_calls) AS total_api_calls\n    FROM usage_logs\n    GROUP BY user_id\n),\nuser_regions AS (\n    SELECT u.user_id, u.region, COALESCE(uac.total_api_calls, 0) AS total_api_calls\n    FROM users u\n    LEFT JOIN user_api_calls uac ON u.user_id = uac.user_id\n)\nSELECT region, AVG(total_api_calls) AS mean_api_calls_per_user\nFROM user_regions\nGROUP BY region\nORDER BY mean_api_calls_per_user DESC\nLIMIT 1;\n",
+        "reasoning": "Computed total API calls per user by summing usage_logs, joined with users to get regions, then averaged per region to find region with highest mean API calls per user."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": false,
+        "value": "None"
+      }
+    },
+    {
+      "question_id": "q11",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 13835,
+      "completion_tokens": 472,
+      "wall_seconds": 35.13,
+      "answer": {
+        "status": "success",
+        "value": "North America",
+        "units": "api calls per user (mean)",
+        "grain": "region",
+        "sql": "WITH user_api_calls AS (   SELECT user_id, SUM(api_calls) AS total_api_calls    FROM usage_logs    GROUP BY user_id), user_company_region AS (   SELECT u.user_id, ucr.total_api_calls, c.region    FROM user_api_calls ucr    JOIN users u ON ucr.user_id = u.user_id    JOIN companies c ON u.company_id = c.company_id) SELECT region, AVG(total_api_calls) AS mean_api_calls_per_user FROM user_company_region GROUP BY region ORDER BY mean_api_calls_per_user DESC LIMIT 1;",
+        "reasoning": "Computed total API calls per user by summing api_calls in usage_logs grouped by user_id, then joined with users and companies to get each user's region. Calculated the mean total API calls per user grouped by region, then selected the region with the highest mean."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": true,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "North America"
+      }
+    },
+    {
+      "question_id": "q12",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 9309,
+      "completion_tokens": 696,
+      "wall_seconds": 25.17,
+      "answer": {
+        "status": "success",
+        "value": 19.7798,
+        "units": "percent",
+        "grain": "total",
+        "sql": "merged_df = usage_logs_df.merge(features_df[['feature_id', 'is_premium']], on='feature_id'); total_api_calls = merged_df['api_calls'].sum(); premium_api_calls = merged_df[merged_df['is_premium'] == 1]['api_calls'].sum(); premium_percentage = round((premium_api_calls / total_api_calls) * 100, 4)",
+        "reasoning": "Calculated by summing api_calls for all features, and separately for premium features (features where is_premium == 1), then computing premium api_calls as a percentage of total api_calls."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 19.7798
+      }
+    },
+    {
+      "question_id": "q12",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 13172,
+      "completion_tokens": 317,
+      "wall_seconds": 40.74,
+      "answer": {
+        "status": "success",
+        "value": 19.7798,
+        "units": "percent",
+        "grain": "usage_log record aggregated",
+        "sql": "SELECT SUM(api_calls) AS total, SUM(api_calls) FILTER (WHERE is_premium = 1) AS premium FROM usage_logs JOIN features ON usage_logs.feature_id = features.feature_id;",
+        "reasoning": "Merged usage_logs with features to determine which api_calls are for premium features, then calculated premium api_calls as percentage of total api_calls."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 19.7798
+      }
+    },
+    {
+      "question_id": "q12",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 18231,
+      "completion_tokens": 539,
+      "wall_seconds": 41.93,
+      "answer": {
+        "status": "ok",
+        "value": 10.509,
+        "units": "percent",
+        "grain": "total api_calls across all usage_logs",
+        "sql": "merged_df = usage_logs_df.merge(features_df[['feature_id', 'is_premium']], on='feature_id', how='left')\ntotal_api_calls = merged_df['api_calls'].sum()\npremium_api_calls = merged_df.loc[merged_df['is_premium'] == 1, 'api_calls'].sum()\npremium_percentage = round((premium_api_calls / total_api_calls) * 100, 4)",
+        "reasoning": "Sum the api_calls in usage_logs and sum api_calls only for premium features by joining usage_logs with features on feature_id. Then calculate the premium api_calls percentage of total api_calls."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10.509
+      }
+    },
+    {
+      "question_id": "q12",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 5406,
+      "completion_tokens": 345,
+      "wall_seconds": 14.24,
+      "answer": {
+        "status": "success",
+        "value": 19.7798,
+        "units": "percent",
+        "grain": "all-time total",
+        "sql": "SELECT SUM(api_calls) FROM usage_logs JOIN features ON usage_logs.feature_id = features.feature_id WHERE features.is_premium = 1 / SUM(api_calls) FROM usage_logs * 100",
+        "reasoning": "Joined usage_logs and features on feature_id, summed api_calls for premium features and total api_calls, then calculated percentage of premium api_calls."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 19.7798
+      }
+    },
+    {
+      "question_id": "q12",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 13866,
+      "completion_tokens": 855,
+      "wall_seconds": 53.51,
+      "answer": {
+        "status": "success",
+        "value": 19.7798,
+        "units": "percent",
+        "grain": "all usage logs aggregated",
+        "sql": "usage_logs_df.merge(features_df[['feature_id', 'is_premium']], on='feature_id') -> sum api_calls premium / total * 100 rounded to 4 decimals",
+        "reasoning": "Joined usage_logs with features on feature_id to identify premium features; aggregated total api_calls and premium api_calls; computed percentage share"
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 19.7798
+      }
+    },
+    {
+      "question_id": "q12",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 8021,
+      "completion_tokens": 527,
+      "wall_seconds": 32.6,
+      "answer": {
+        "status": "success",
+        "value": 19.7798,
+        "units": "percent",
+        "grain": "total",
+        "sql": "# Using pandas expressions:\nmerged_df = usage_logs_df.merge(features_df[['feature_id', 'is_premium']], on='feature_id', how='left')\ntotal_api_calls = merged_df['api_calls'].sum()\npremium_api_calls = merged_df.loc[merged_df['is_premium'] == 1, 'api_calls'].sum()\npremium_pct = round((premium_api_calls / total_api_calls) * 100, 4)",
+        "reasoning": "The total api_calls were summed from usage_logs and merged with features to identify premium features. The premium feature api_calls sum divided by total api_calls gives the percentage attributable to premium features."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 19.7798
+      }
+    },
+    {
+      "question_id": "q13",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 14764,
+      "completion_tokens": 314,
+      "wall_seconds": 43.64,
+      "answer": {
+        "status": "success",
+        "value": 334,
+        "units": "companies",
+        "grain": "per company_id",
+        "sql": "SELECT company_id, COUNT(*) AS subscription_count FROM subscriptions GROUP BY company_id HAVING COUNT(*) > 1",
+        "reasoning": "Grouped subscriptions by company_id, counted number of subscriptions per company, then counted how many companies have more than one subscription."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 334
+      }
+    },
+    {
+      "question_id": "q13",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 17030,
+      "completion_tokens": 527,
+      "wall_seconds": 54.98,
+      "answer": {
+        "status": "ok",
+        "value": {
+          "__type__": "int64",
+          "__repr__": "np.int64(334)",
+          "__serializable__": false
+        },
+        "units": "count",
+        "grain": "company",
+        "sql": "SELECT COUNT(DISTINCT company_id) FROM (SELECT company_id FROM subscriptions GROUP BY company_id HAVING COUNT(*) > 1) AS multi_sub_companies",
+        "reasoning": "Counted companies from the subscriptions table that have more than one subscription record, using group by and having count > 1."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 64.0
+      }
+    },
+    {
+      "question_id": "q13",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 6323,
+      "completion_tokens": 313,
+      "wall_seconds": 14.61,
+      "answer": {
+        "status": "success",
+        "value": 334,
+        "units": "count",
+        "grain": "company",
+        "sql": "SELECT company_id, COUNT(sub_id) AS subscription_count FROM subscriptions GROUP BY company_id HAVING COUNT(sub_id) > 1;",
+        "reasoning": "Grouped subscriptions by company_id and counted subscriptions per company. Filtered for companies having more than one subscription."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 334
+      }
+    },
+    {
+      "question_id": "q13",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 17433,
+      "completion_tokens": 305,
+      "wall_seconds": 50.16,
+      "answer": {
+        "status": "ok",
+        "value": 334,
+        "units": "count",
+        "grain": "company_id",
+        "sql": "\n    SELECT COUNT(*)\n    FROM (\n      SELECT company_id, COUNT(*) AS subscription_count\n      FROM subscriptions\n      GROUP BY company_id\n      HAVING subscription_count > 1\n    ) AS multi_subs_companies\n    ",
+        "reasoning": "Counted companies that have more than one subscription by grouping subscriptions by company_id and counting those with subscription count > 1."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 334
+      }
+    },
+    {
+      "question_id": "q13",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 7510,
+      "completion_tokens": 400,
+      "wall_seconds": 18.11,
+      "answer": {
+        "status": "ok",
+        "value": 334,
+        "units": "count",
+        "grain": "company",
+        "sql": "\n        SELECT COUNT(DISTINCT company_id) \n        FROM subscriptions \n        GROUP BY company_id \n        HAVING COUNT(sub_id) > 1;\n    ",
+        "reasoning": "Grouped subscriptions by company_id and counted those with more than one subscription."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 334
+      }
+    },
+    {
+      "question_id": "q13",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 5841,
+      "completion_tokens": 205,
+      "wall_seconds": 9.68,
+      "answer": {
+        "status": "OK",
+        "value": {
+          "__type__": "int64",
+          "__repr__": "np.int64(334)",
+          "__serializable__": false
+        },
+        "units": "count",
+        "grain": "company",
+        "sql": "SELECT company_id, COUNT(sub_id) AS subscription_count FROM subscriptions GROUP BY company_id HAVING subscription_count > 1",
+        "reasoning": "Counted the number of subscriptions grouped by company_id, filtered companies that have subscription count greater than one."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 64.0
+      }
+    },
+    {
+      "question_id": "q14",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 4680,
+      "completion_tokens": 350,
+      "wall_seconds": 11.59,
+      "answer": {
+        "status": "success",
+        "value": 2616.79164,
+        "units": "USD",
+        "grain": "company",
+        "sql": "SELECT AVG(total_mrr) FROM (SELECT company_id, SUM(mrr) AS total_mrr FROM subscriptions GROUP BY company_id)",
+        "reasoning": "Summed each company's subscriptions' MRR then averaged total MRR values across companies."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 2616.79164
+      }
+    },
+    {
+      "question_id": "q14",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 7978,
+      "completion_tokens": 467,
+      "wall_seconds": 12.73,
+      "answer": {
+        "status": "ok",
+        "value": 2616.79164,
+        "units": "currency units (unspecified, as data doesn't specify currency)",
+        "grain": "per company",
+        "sql": "SELECT AVG(total_mrr) FROM (SELECT company_id, SUM(mrr) AS total_mrr FROM subscriptions GROUP BY company_id)",
+        "reasoning": "Summed each company's subscriptions' MRR first, then calculated the mean of those totals across all companies."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 2616.79164
+      }
+    },
+    {
+      "question_id": "q14",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 13425,
+      "completion_tokens": 617,
+      "wall_seconds": 28.33,
+      "answer": {
+        "status": "success",
+        "value": 2616.79164,
+        "units": "currency unit",
+        "grain": "company",
+        "sql": "\nSELECT AVG(total_mrr) AS mean_total_mrr_per_company\nFROM (\n    SELECT company_id, SUM(mrr) as total_mrr\n    FROM subscriptions\n    GROUP BY company_id\n) sub\n",
+        "reasoning": "Summed MRR values per company from subscriptions, then took the average of these totals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 2616.79164
+      }
+    },
+    {
+      "question_id": "q14",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 4800,
+      "completion_tokens": 274,
+      "wall_seconds": 9.8,
+      "answer": {
+        "status": "ok",
+        "value": 2616.79164,
+        "units": "USD",
+        "grain": "company",
+        "sql": "SELECT AVG(total_mrr) FROM (SELECT company_id, SUM(mrr) AS total_mrr FROM subscriptions GROUP BY company_id) AS company_mrr",
+        "reasoning": "Summed MRR for each company and then computed the average of these sums across all companies."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 2616.79164
+      }
+    },
+    {
+      "question_id": "q14",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 17215,
+      "completion_tokens": 371,
+      "wall_seconds": 28.48,
+      "answer": {
+        "status": "ok",
+        "value": 2616.79164,
+        "units": "currency units",
+        "grain": "company_id",
+        "sql": "SELECT AVG(total_mrr) FROM (SELECT company_id, SUM(mrr) as total_mrr FROM subscriptions GROUP BY company_id) AS per_company_mrr",
+        "reasoning": "Summed MRR per company by grouping subscriptions by company_id, then took the average of these sums to find the mean total MRR per company."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 2616.79164
+      }
+    },
+    {
+      "question_id": "q14",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 14458,
+      "completion_tokens": 646,
+      "wall_seconds": 28.46,
+      "answer": {
+        "status": "ok",
+        "value": 2616.79164,
+        "units": "currency units per month",
+        "grain": "per company",
+        "sql": "SELECT ROUND(AVG(total_mrr), 6) AS mean_total_mrr_per_company FROM (SELECT company_id, SUM(mrr) AS total_mrr FROM subscriptions GROUP BY company_id) AS company_mrr",
+        "reasoning": "First, the MRR was summed per company by grouping subscriptions on company_id. Then, the mean of these summed MRR values was calculated, resulting in the mean total MRR per company."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 2616.79164
+      }
+    },
+    {
+      "question_id": "q15",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 2,
+      "prompt_tokens": 8013,
+      "completion_tokens": 138,
+      "wall_seconds": 22.3,
+      "answer": {
+        "status": "overdue",
+        "value": 47,
+        "units": "invoices",
+        "grain": "one row per invoice_id",
+        "sql": "SELECT COUNT(*) FROM invoices WHERE status = 'overdue'",
+        "reasoning": "Used the pre-aggregated count of invoices with status 'overdue' from knowledge_result to determine the number of overdue invoices."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 47
+      }
+    },
+    {
+      "question_id": "q15",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 4511,
+      "completion_tokens": 278,
+      "wall_seconds": 9.73,
+      "answer": {
+        "status": "overdue",
+        "value": 47,
+        "units": "count",
+        "grain": "invoice",
+        "sql": "SELECT COUNT(*) FROM invoices WHERE status = 'overdue';",
+        "reasoning": "Counted rows in the invoices table where status is 'overdue'."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 47
+      }
+    },
+    {
+      "question_id": "q15",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 2,
+      "prompt_tokens": 7744,
+      "completion_tokens": 147,
+      "wall_seconds": 19.84,
+      "answer": {
+        "status": "overdue",
+        "value": 47,
+        "units": "count",
+        "grain": "one row per invoice_id",
+        "sql": "SELECT COUNT(*) FROM invoices WHERE status = 'overdue'",
+        "reasoning": "Used the pre-aggregated knowledge_result which counts rows in invoices table filtering status = 'overdue'."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 47
+      }
+    },
+    {
+      "question_id": "q15",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 4109,
+      "completion_tokens": 92,
+      "wall_seconds": 7.54,
+      "answer": {
+        "status": "success",
+        "value": 47,
+        "units": "count",
+        "grain": "invoice",
+        "sql": "SELECT COUNT(*) FROM invoices WHERE status = 'overdue'",
+        "reasoning": "Counted the number of invoice records in the 'invoices' dataset where the 'status' equals 'overdue'."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 47
+      }
+    },
+    {
+      "question_id": "q15",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 10256,
+      "completion_tokens": 70,
+      "wall_seconds": 14.89,
+      "answer": {
+        "status": "overdue",
+        "value": 47,
+        "units": "invoices",
+        "grain": "one row per invoice_id",
+        "sql": "SELECT COUNT(*) FROM invoices WHERE status = 'overdue'",
+        "reasoning": "The number of invoices with status 'overdue' was provided directly from the knowledge_result, which aggregates the count of rows with status 'overdue' in the invoices table."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 47
+      }
+    },
+    {
+      "question_id": "q15",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 8,
+      "prompt_tokens": 14255,
+      "completion_tokens": 459,
+      "wall_seconds": 18.2,
+      "answer": {
+        "status": "success",
+        "value": 47,
+        "units": "count",
+        "grain": "invoice",
+        "sql": "SELECT COUNT(*) FROM invoices WHERE status = 'overdue';",
+        "reasoning": "Counted the number of rows in the invoices dataset where the status column equals 'overdue'."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 47
+      }
+    },
+    {
+      "question_id": "q16",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 14122,
+      "completion_tokens": 539,
+      "wall_seconds": 21.35,
+      "answer": {
+        "status": "success",
+        "value": "enterprise",
+        "units": "USD",
+        "grain": "company_size segment",
+        "sql": "\nSELECT c.company_size, AVG(s.mrr) AS mean_mrr\nFROM subscriptions s\nJOIN companies c ON s.company_id = c.company_id\nWHERE s.status = 'active'\nGROUP BY c.company_size\nORDER BY mean_mrr DESC\nLIMIT 1\n",
+        "reasoning": "Filtered active subscriptions and joined with companies on company_id to aggregate by company_size segment, then calculated the mean subscription MRR and identified the segment with the highest mean MRR."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "enterprise"
+      }
+    },
+    {
+      "question_id": "q16",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 5184,
+      "completion_tokens": 878,
+      "wall_seconds": 33.49,
+      "answer": {
+        "status": "ok",
+        "value": "enterprise",
+        "units": "USD",
+        "grain": "company_size segment",
+        "sql": "SELECT company_size, AVG(mrr) AS mean_mrr FROM subscriptions JOIN companies USING(company_id) GROUP BY company_size ORDER BY mean_mrr DESC LIMIT 1",
+        "reasoning": "Computed the mean monthly recurring revenue (MRR) for subscriptions grouped by company_size, then identified the company_size with the highest mean MRR."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "enterprise"
+      }
+    },
+    {
+      "question_id": "q16",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 7917,
+      "completion_tokens": 421,
+      "wall_seconds": 16.07,
+      "answer": {
+        "status": "success",
+        "value": "enterprise",
+        "units": "USD",
+        "grain": "company_size segment",
+        "sql": "\n        SELECT company_size, AVG(mrr) AS mean_mrr\n        FROM subscriptions s\n        JOIN companies c ON s.company_id = c.company_id\n        GROUP BY company_size\n        ORDER BY mean_mrr DESC\n        LIMIT 1\n    ",
+        "reasoning": "Joined subscriptions with companies on company_id to get company_size for each subscription. Then grouped by company_size and computed average mrr. Selected the company_size segment with the highest mean mrr."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "enterprise"
+      }
+    },
+    {
+      "question_id": "q16",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 10730,
+      "completion_tokens": 752,
+      "wall_seconds": 22.86,
+      "answer": {
+        "status": "OK",
+        "value": "enterprise",
+        "units": "USD",
+        "grain": "company_size segment",
+        "sql": "\nSELECT c.company_size, AVG(s.mrr) AS mean_mrr\nFROM subscriptions s\nJOIN companies c ON s.company_id = c.company_id\nGROUP BY c.company_size\nORDER BY mean_mrr DESC\nLIMIT 1;\n",
+        "reasoning": "Joined subscriptions with companies on company_id, grouped by company_size, then calculated the mean mrr per segment and identified the segment with the highest mean."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "enterprise"
+      }
+    },
+    {
+      "question_id": "q16",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 10956,
+      "completion_tokens": 508,
+      "wall_seconds": 37.48,
+      "answer": {
+        "status": "complete",
+        "value": "enterprise",
+        "units": "USD",
+        "grain": "company_size segment",
+        "sql": "\n        SELECT c.company_size, AVG(s.mrr) as mean_mrr\n        FROM subscriptions s\n        JOIN companies c ON s.company_id = c.company_id\n        WHERE s.status = 'active'\n        GROUP BY c.company_size\n        ORDER BY mean_mrr DESC\n        LIMIT 1\n    ",
+        "reasoning": "Filtered active subscriptions and joined with companies to get company_size. Computed mean subscription monthly recurring revenue (MRR) by company_size. The enterprise segment has the highest mean MRR."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "enterprise"
+      }
+    },
+    {
+      "question_id": "q16",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 14101,
+      "completion_tokens": 312,
+      "wall_seconds": 32.9,
+      "answer": {
+        "status": "OK",
+        "value": "enterprise",
+        "units": "mrr (monthly recurring revenue in unspecified currency units)",
+        "grain": "company_size segment",
+        "sql": "\n    SELECT c.company_size, AVG(s.mrr) AS mean_mrr\n    FROM subscriptions s\n    JOIN companies c ON s.company_id = c.company_id\n    GROUP BY c.company_size\n    ORDER BY mean_mrr DESC\n    LIMIT 1\n    ",
+        "reasoning": "Joined subscriptions with companies on company_id, grouped by company_size, and calculated the mean mrr for each group. The 'enterprise' segment has the highest mean mrr."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "enterprise"
+      }
+    },
+    {
+      "question_id": "q17",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 10246,
+      "completion_tokens": 279,
+      "wall_seconds": 20.83,
+      "answer": {
+        "status": "ok",
+        "value": 0.7824,
+        "units": "percent",
+        "grain": "one row per user",
+        "sql": "SELECT AVG(CAST(is_active AS FLOAT)) as value FROM users",
+        "reasoning": "Used the host-provided aggregate avg(is_active) from the users source, which has a grain of one row per user."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 0.7824
+      }
+    },
+    {
+      "question_id": "q17",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 13822,
+      "completion_tokens": 349,
+      "wall_seconds": 35.99,
+      "answer": {
+        "status": "success",
+        "value": 78.2413,
+        "units": "percent",
+        "grain": "one row per user_id",
+        "sql": "SELECT ROUND(AVG(CAST(is_active AS FLOAT)) * 100, 4) AS percentage_active FROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\users.csv",
+        "reasoning": "Derived from the users table as the average of the is_active flag, representing the percentage of active users among all users."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 78.2413
+      }
+    },
+    {
+      "question_id": "q17",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 12661,
+      "completion_tokens": 578,
+      "wall_seconds": 21.83,
+      "answer": {
+        "status": "success",
+        "value": 78.2413,
+        "units": "percent",
+        "grain": "user",
+        "sql": "SELECT ROUND( (SUM(is_active) * 100.0) / COUNT(*), 4) FROM users",
+        "reasoning": "We divided the count of users flagged as is_active by the total number of users in the users dataset, and then rounded to 4 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 78.2413
+      }
+    },
+    {
+      "question_id": "q17",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 2,
+      "prompt_tokens": 7873,
+      "completion_tokens": 136,
+      "wall_seconds": 22.81,
+      "answer": {
+        "status": "OK",
+        "value": 0.7824,
+        "units": "percentage",
+        "grain": "user",
+        "sql": "SELECT AVG(CAST(is_active AS FLOAT)) FROM users",
+        "reasoning": "The percentage of users flagged as active is calculated as the average of the is_active boolean column from the users table, which has been precomputed and provided in knowledge_result."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 0.7824
+      }
+    },
+    {
+      "question_id": "q17",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 4563,
+      "completion_tokens": 191,
+      "wall_seconds": 8.25,
+      "answer": {
+        "status": "success",
+        "value": 78.2413,
+        "units": "percent",
+        "grain": "user-level",
+        "sql": "SELECT ROUND(100.0 * SUM(CAST(is_active AS FLOAT)) / COUNT(*), 4) AS percentage_active FROM users",
+        "reasoning": "Calculated the percentage of users flagged as is_active by dividing the count of active users by the total number of users, then multiplied by 100 and rounded to 4 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 78.2413
+      }
+    },
+    {
+      "question_id": "q17",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 5712,
+      "completion_tokens": 244,
+      "wall_seconds": 9.97,
+      "answer": {
+        "status": "ok",
+        "value": 78.2413,
+        "units": "percent",
+        "grain": "user",
+        "sql": "SELECT ROUND(SUM(is_active) * 100.0 / COUNT(*), 4) FROM users",
+        "reasoning": "Percentage is calculated as the number of users with is_active=1 divided by the total number of users, rounded to 4 decimal places."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 78.2413
+      }
+    },
+    {
+      "question_id": "q18",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 22094,
+      "completion_tokens": 661,
+      "wall_seconds": 34.58,
+      "answer": {
+        "status": "success",
+        "value": 283453.2,
+        "units": "currency units",
+        "grain": "one row per invoice_id, aggregated for the most recent invoice_date",
+        "sql": "\n    SELECT ROUND(SUM(amount_due), 2) AS total_amount_due\n    FROM invoices\n    WHERE invoice_date = (\n        SELECT MAX(invoice_date)\n        FROM invoices\n    )\n    ",
+        "reasoning": "Computed the total amount_due by summing amount_due of all invoices having the most recent invoice_date, then rounded to 2 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 283453.2
+      }
+    },
+    {
+      "question_id": "q18",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 14819,
+      "completion_tokens": 358,
+      "wall_seconds": 17.62,
+      "answer": {
+        "status": "success",
+        "value": 283453.2,
+        "units": "USD",
+        "grain": "month",
+        "sql": "SELECT ROUND(SUM(amount_due), 2) AS total_amount_due FROM invoices WHERE DATE_TRUNC('month', invoice_date) = '2024-12-01'",
+        "reasoning": "Identified the most recent month with invoices by extracting year and month from invoice_date, then summed amount_due for that month and rounded it to 2 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 283453.2
+      }
+    },
+    {
+      "question_id": "q18",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 10291,
+      "completion_tokens": 508,
+      "wall_seconds": 28.73,
+      "answer": {
+        "status": "ABSTAIN",
+        "value": null,
+        "units": null,
+        "grain": null,
+        "sql": "\nSELECT ROUND(SUM(amount_due)::numeric, 2) AS total_amount_due\nFROM invoices\nWHERE DATE_TRUNC('month', invoice_date) = (\n  SELECT MAX(DATE_TRUNC('month', invoice_date)) FROM invoices\n);\n",
+        "reasoning": "Precomputed knowledge_result amount_due was None, unable to retrieve total amount_due from invoices table without DB access."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": true,
+        "machine_readable": false,
+        "value": "None"
+      }
+    },
+    {
+      "question_id": "q18",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 11775,
+      "completion_tokens": 540,
+      "wall_seconds": 20.46,
+      "answer": {
+        "status": "success",
+        "value": 283453.2,
+        "units": "currency units",
+        "grain": "invoices aggregated by month",
+        "sql": "SELECT ROUND(SUM(amount_due), 2) AS total_amount_due FROM invoices WHERE DATE_FORMAT(invoice_date, '%Y-%m') = ( SELECT DATE_FORMAT(MAX(invoice_date), '%Y-%m') FROM invoices)",
+        "reasoning": "The total amount_due was aggregated for the month corresponding to the most recent invoice_date in the invoices table. The result was rounded to 2 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 283453.2
+      }
+    },
+    {
+      "question_id": "q18",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 7967,
+      "completion_tokens": 584,
+      "wall_seconds": 17.84,
+      "answer": {
+        "status": "ok",
+        "value": 283453.2,
+        "units": "currency units",
+        "grain": "invoice",
+        "sql": "SELECT ROUND(SUM(amount_due), 2) AS total_amount_due FROM invoices WHERE DATE_TRUNC('month', invoice_date) = (SELECT MAX(DATE_TRUNC('month', invoice_date)) FROM invoices)",
+        "reasoning": "I converted invoice_date to datetime and identified the most recent month. Then, I filtered invoices to only that month and summed amount_due, rounding to 2 decimals as requested."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 283453.2
+      }
+    },
+    {
+      "question_id": "q18",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 26393,
+      "completion_tokens": 529,
+      "wall_seconds": 41.45,
+      "answer": {
+        "status": "abstain",
+        "value": null,
+        "units": "currency",
+        "grain": "invoice_id",
+        "sql": "SELECT ROUND(SUM(amount_due), 2) AS total_amount_due\nFROM invoices\nWHERE invoice_date = (SELECT MAX(invoice_date) FROM invoices)",
+        "reasoning": "No direct numeric result available from data sources; provided SQL query describes how to find the total amount_due for the latest invoice_date, rounded to 2 decimals."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": true,
+        "machine_readable": false,
+        "value": "None"
+      }
+    },
+    {
+      "question_id": "q19",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 7201,
+      "completion_tokens": 432,
+      "wall_seconds": 15.69,
+      "answer": {
+        "status": "success",
+        "value": "ach",
+        "units": "USD",
+        "grain": "payment method",
+        "sql": "\n    SELECT method, AVG(amount) AS mean_amount\n    FROM payments\n    GROUP BY method\n    ORDER BY mean_amount DESC\n    LIMIT 1;\n    ",
+        "reasoning": "Computed the mean of payment amounts grouped by payment method and selected the method with the highest mean."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "ach"
+      }
+    },
+    {
+      "question_id": "q19",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 10226,
+      "completion_tokens": 57,
+      "wall_seconds": 21.84,
+      "answer": {
+        "status": "OK",
+        "value": "ach",
+        "units": "currency units",
+        "grain": "payment method",
+        "sql": "SELECT method, AVG(amount) as value FROM payments GROUP BY method",
+        "reasoning": "Used the pre-aggregated knowledge_result showing average payment amount grouped by payment method, then selected the method with the highest mean value."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "ach"
+      }
+    },
+    {
+      "question_id": "q19",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 8515,
+      "completion_tokens": 537,
+      "wall_seconds": 18.09,
+      "answer": {
+        "status": "OK",
+        "value": "ach",
+        "units": "USD",
+        "grain": "payment method",
+        "sql": "SELECT method, AVG(amount) AS mean_amount FROM payments GROUP BY method ORDER BY mean_amount DESC LIMIT 1",
+        "reasoning": "Computed mean payment amount for each payment method from payments data and identified the method with the highest average payment."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "ach"
+      }
+    },
+    {
+      "question_id": "q19",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 12808,
+      "completion_tokens": 244,
+      "wall_seconds": 21.13,
+      "answer": {
+        "status": "ok",
+        "value": "ach",
+        "units": "USD",
+        "grain": "payment method",
+        "sql": "SELECT method, AVG(amount) AS avg_amount FROM payments GROUP BY method ORDER BY avg_amount DESC LIMIT 1;",
+        "reasoning": "Used pre-aggregated results from knowledge_result to find the payment method with the highest average payment amount."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "ach"
+      }
+    },
+    {
+      "question_id": "q19",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 2,
+      "prompt_tokens": 7919,
+      "completion_tokens": 126,
+      "wall_seconds": 22.54,
+      "answer": {
+        "status": "OK",
+        "value": "ach",
+        "units": "currency units",
+        "grain": "payment method",
+        "sql": "SELECT method, AVG(amount) AS value FROM payments GROUP BY method ORDER BY value DESC LIMIT 1",
+        "reasoning": "Used the pre-aggregated results from knowledge_result of mean payment amounts by method; selected the method with highest average amount."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "ach"
+      }
+    },
+    {
+      "question_id": "q19",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 7247,
+      "completion_tokens": 376,
+      "wall_seconds": 12.54,
+      "answer": {
+        "status": "SUCCESS",
+        "value": "ach",
+        "units": "USD",
+        "grain": "payment method",
+        "sql": "SELECT method, AVG(amount) AS avg_amount FROM payments GROUP BY method ORDER BY avg_amount DESC LIMIT 1",
+        "reasoning": "Grouped payments by method and calculated the mean payment amount, then selected the method with the highest mean amount."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "ach"
+      }
+    },
+    {
+      "question_id": "q20",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 10449,
+      "completion_tokens": 287,
+      "wall_seconds": 15.82,
+      "answer": {
+        "status": "success",
+        "value": 0.208,
+        "units": "percentage",
+        "grain": "active subscription mrr grouped by company",
+        "sql": "\n    SELECT\n      SUM(CASE WHEN c.company_size = 'enterprise' THEN s.mrr ELSE 0 END) * 1.0 /\n      SUM(s.mrr) AS percentage_enterprise_mrr\n    FROM\n      subscriptions s\n    JOIN\n      companies c ON s.company_id = c.company_id\n    WHERE\n      s.status = 'active'\n    ",
+        "reasoning": "Filtered for active subscriptions, summed MRR grouped by company size, then computed proportion of MRR from 'enterprise' companies."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 0.208
+      }
+    },
+    {
+      "question_id": "q20",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 16328,
+      "completion_tokens": 456,
+      "wall_seconds": 24.31,
+      "answer": {
+        "status": "success",
+        "value": 0,
+        "units": "percentage",
+        "grain": "company subscription",
+        "sql": "SELECT \n  ROUND(SUM(CASE WHEN c.company_size = 'enterprise' THEN s.mrr ELSE 0 END) / SUM(s.mrr), 4) AS percent_enterprise_mrr\nFROM subscriptions s\nJOIN companies c ON s.company_id = c.company_id\nWHERE s.status = 'ACTIVE';",
+        "reasoning": "Calculated total MRR from active subscriptions and summed MRR for enterprise companies, then computed their percentage of total active subscription MRR."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 0
+      }
+    },
+    {
+      "question_id": "q20",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 5693,
+      "completion_tokens": 473,
+      "wall_seconds": 16.43,
+      "answer": {
+        "status": "ok",
+        "value": 0.0977,
+        "units": "percentage",
+        "grain": "company",
+        "sql": "SELECT \n  COUNT(CASE WHEN c.company_size = 'enterprise' THEN 1 END) * 1.0 / COUNT(*) AS percent_enterprise_mrr\nFROM subscriptions s\nJOIN companies c ON s.company_id = c.company_id\nWHERE s.status = 'active'",
+        "reasoning": "Assuming MRR proportional to active subscription counts; calculated percentage of active subscriptions from companies with company_size 'enterprise'."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 0.0977
+      }
+    },
+    {
+      "question_id": "q20",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 17512,
+      "completion_tokens": 266,
+      "wall_seconds": 28.95,
+      "answer": {
+        "status": "ok",
+        "value": 0,
+        "units": "percentage",
+        "grain": "among active subscriptions",
+        "sql": "\n    SELECT \n        SUM(CASE WHEN c.company_size = 'enterprise' THEN s.mrr ELSE 0 END) * 1.0 / SUM(s.mrr) AS pct_enterprise_mrr\n    FROM subscriptions s\n    JOIN companies c ON s.company_id = c.company_id\n    WHERE s.status = 'ACTIVE'\n    ",
+        "reasoning": "There are no active subscriptions, so the percentage of MRR from enterprise companies is 0."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 0
+      }
+    },
+    {
+      "question_id": "q20",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 14899,
+      "completion_tokens": 470,
+      "wall_seconds": 34.36,
+      "answer": {
+        "status": "OK",
+        "value": 0,
+        "units": "percent",
+        "grain": "active subscriptions aggregated by company",
+        "sql": "SELECT ROUND(SUM(CASE WHEN c.company_size = 'enterprise' THEN s.mrr ELSE 0 END) * 1.0 / SUM(s.mrr), 4) AS percentage_enterprise_mrr FROM subscriptions s JOIN companies c ON s.company_id = c.company_id WHERE s.status = 'ACTIVE'",
+        "reasoning": "Filtered active subscriptions, joined with companies to get company_size. Summed MRR overall and for enterprise companies, then calculated enterprise MRR percentage."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 0
+      }
+    },
+    {
+      "question_id": "q20",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 16825,
+      "completion_tokens": 767,
+      "wall_seconds": 38.98,
+      "answer": {
+        "status": "SUCCESS",
+        "value": 0.0,
+        "units": "percent",
+        "grain": "company",
+        "sql": "\nSELECT\n  ROUND(100.0 * SUM(CASE WHEN c.company_size = 'enterprise' THEN s.mrr ELSE 0 END) / SUM(s.mrr), 4) AS enterprise_percentage_of_mrr\nFROM subscriptions s\nJOIN companies c ON s.company_id = c.company_id\nWHERE s.status = 'ACTIVE'\n",
+        "reasoning": "Filtered subscriptions to ACTIVE only, joined to companies to get company_size, summed MRR for enterprise companies and total summed MRR, then calculated percentage."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 0.0
+      }
+    },
+    {
+      "question_id": "q21",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 18426,
+      "completion_tokens": 647,
+      "wall_seconds": 38.23,
+      "answer": {
+        "status": "ok",
+        "value": "Middle East",
+        "units": "score (average satisfaction score)",
+        "grain": "one row per support_ticket (ticket_id), aggregated by region",
+        "sql": "SELECT region, AVG(satisfaction_score) as mean_satisfaction_score FROM support_tickets st JOIN companies c ON st.company_id = c.company_id GROUP BY region ORDER BY mean_satisfaction_score ASC LIMIT 1",
+        "reasoning": "I joined support_tickets with companies on company_id to get the region of each ticket, then computed the mean satisfaction_score per region and selected the region with the lowest mean score."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Middle East"
+      }
+    },
+    {
+      "question_id": "q21",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 12,
+      "prompt_tokens": 41918,
+      "completion_tokens": 1741,
+      "wall_seconds": 54.97,
+      "answer": {
+        "status": "success",
+        "value": "Middle East",
+        "units": "score",
+        "grain": "region",
+        "sql": "SELECT region, AVG(satisfaction_score) AS mean_satisfaction FROM support_tickets JOIN companies USING(company_id) GROUP BY region ORDER BY mean_satisfaction ASC LIMIT 1",
+        "reasoning": "Computed the mean satisfaction_score for each region by joining support_tickets with companies on company_id, then picked the region with the lowest average score."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Middle East"
+      }
+    },
+    {
+      "question_id": "q21",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 23107,
+      "completion_tokens": 1148,
+      "wall_seconds": 38.3,
+      "answer": {
+        "status": "complete",
+        "value": "Middle East",
+        "units": "score (mean satisfaction_score)",
+        "grain": "region",
+        "sql": "SELECT c.region, AVG(st.satisfaction_score) AS mean_satisfaction_score FROM support_tickets st INNER JOIN companies c ON st.company_id = c.company_id WHERE st.satisfaction_score IS NOT NULL GROUP BY c.region ORDER BY mean_satisfaction_score ASC LIMIT 1",
+        "reasoning": "I joined support_tickets with companies on company_id, filtered out null satisfaction_scores, then grouped by region and calculated the mean satisfaction_score per region. Finally, selected the region with the lowest mean."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Middle East"
+      }
+    },
+    {
+      "question_id": "q21",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 8,
+      "prompt_tokens": 17689,
+      "completion_tokens": 463,
+      "wall_seconds": 21.41,
+      "answer": {
+        "status": "success",
+        "value": "Middle East",
+        "units": "mean satisfaction score (1-5 scale)",
+        "grain": "region",
+        "sql": "support_tickets.merge(companies[['company_id', 'region']], on='company_id').dropna(subset=['satisfaction_score']).groupby('region')['satisfaction_score'].mean().idxmin()",
+        "reasoning": "Calculated mean satisfaction_score per company region from support tickets. Dropped tickets without satisfaction scores to avoid bias. Selected region with lowest mean satisfaction score."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Middle East"
+      }
+    },
+    {
+      "question_id": "q21",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 13582,
+      "completion_tokens": 492,
+      "wall_seconds": 18.79,
+      "answer": {
+        "status": "OK",
+        "value": "Middle East",
+        "units": "satisfaction score (scale unknown, presumably 1-5)",
+        "grain": "region",
+        "sql": "support_tickets_df.merge(companies_df[['company_id', 'region']], on='company_id').groupby('region')['satisfaction_score'].mean().sort_values()",
+        "reasoning": "I joined satisfaction scores from support tickets with company regions, then computed mean satisfaction score per region. The Middle East region had the lowest mean satisfaction score."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Middle East"
+      }
+    },
+    {
+      "question_id": "q21",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 8614,
+      "completion_tokens": 515,
+      "wall_seconds": 15.11,
+      "answer": {
+        "status": "ok",
+        "value": "Europe",
+        "units": "score",
+        "grain": "region",
+        "sql": "support_tickets JOIN companies ON support_tickets.company_id=companies.company_id GROUP BY region SELECT region, AVG(satisfaction_score) ORDER BY AVG(satisfaction_score) ASC LIMIT 1",
+        "reasoning": "Merged support_tickets with companies on company_id to get region. Then grouped by region to calculate mean satisfaction_score. Selected the region with lowest mean."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": "Europe"
+      }
+    },
+    {
+      "question_id": "q22",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 18959,
+      "completion_tokens": 981,
+      "wall_seconds": 35.13,
+      "answer": {
+        "status": "final",
+        "value": 85,
+        "units": "count",
+        "grain": "company",
+        "sql": "\n-- Select count of distinct companies with both an active subscription and at least one critical-priority ticket\nWITH active_subs AS (\n    SELECT DISTINCT company_id\n    FROM subscriptions\n    WHERE status = 'active'\n),\ncritical_tickets AS (\n    SELECT DISTINCT company_id\n    FROM support_tickets\n    WHERE priority = 'critical'\n)\nSELECT COUNT(*) AS count_companies_both\nFROM active_subs\nJOIN critical_tickets USING (company_id);\n    ",
+        "reasoning": "Counted distinct companies with an active subscription from subscriptions table, and distinct companies with critical priority tickets from support_tickets table, then found the intersection count to determine companies meeting both conditions."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 85
+      }
+    },
+    {
+      "question_id": "q22",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 5556,
+      "completion_tokens": 485,
+      "wall_seconds": 15.14,
+      "answer": {
+        "status": "ok",
+        "value": 85,
+        "units": "companies",
+        "grain": "company",
+        "sql": "\n        SELECT COUNT(DISTINCT s.company_id) AS value\n        FROM subscriptions s\n        JOIN support_tickets t ON s.company_id = t.company_id\n        WHERE s.status = 'active' AND LOWER(t.priority) = 'critical'\n    ",
+        "reasoning": "Counted companies with active subscriptions and at least one critical priority support ticket by intersecting filtered sets."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 85
+      }
+    },
+    {
+      "question_id": "q22",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 8193,
+      "completion_tokens": 275,
+      "wall_seconds": 15.38,
+      "answer": {
+        "status": "ok",
+        "value": 85,
+        "units": "count",
+        "grain": "distinct companies with both active subscription and at least one critical-priority ticket",
+        "sql": "SELECT COUNT(DISTINCT s.company_id) AS count_companies_both FROM subscriptions s JOIN support_tickets t ON s.company_id = t.company_id WHERE LOWER(s.status) = 'active' AND LOWER(t.priority) = 'critical'",
+        "reasoning": "Filtered subscriptions for active status and support_tickets for critical priority, then counted distinct companies present in both."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 85
+      }
+    },
+    {
+      "question_id": "q22",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 15302,
+      "completion_tokens": 635,
+      "wall_seconds": 34.12,
+      "answer": {
+        "status": "success",
+        "value": 85,
+        "units": "count",
+        "grain": "company_id",
+        "sql": "\n        SELECT COUNT(DISTINCT s.company_id) AS num_companies_both\n        FROM subscriptions s\n        INNER JOIN support_tickets t ON s.company_id = t.company_id\n        WHERE s.status = 'active' AND t.priority = 'critical';\n    ",
+        "reasoning": "The count of distinct companies that have at least one active subscription and at least one critical-priority support ticket was computed by filtering active subscriptions and critical tickets, then taking the intersection of unique company IDs."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 85
+      }
+    },
+    {
+      "question_id": "q22",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 10076,
+      "completion_tokens": 630,
+      "wall_seconds": 33.73,
+      "answer": {
+        "status": "final",
+        "value": 85,
+        "units": "companies",
+        "grain": "distinct company",
+        "sql": "SELECT COUNT(DISTINCT s.company_id) FROM subscriptions s JOIN support_tickets t ON s.company_id = t.company_id WHERE s.status = 'active' AND t.priority = 'critical'",
+        "reasoning": "Filtered subscriptions to companies with status 'active', filtered support tickets to only those with critical priority, then counted distinct companies appearing in both sets."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 85
+      }
+    },
+    {
+      "question_id": "q22",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 18365,
+      "completion_tokens": 401,
+      "wall_seconds": 40.32,
+      "answer": {
+        "status": "success",
+        "value": 85,
+        "units": "count",
+        "grain": "company_id",
+        "sql": "\n    SELECT COUNT(DISTINCT s.company_id) AS value\n    FROM subscriptions s\n    JOIN support_tickets t ON s.company_id = t.company_id\n    WHERE s.status = 'active'\n      AND t.priority = 'critical'\n    ",
+        "reasoning": "Counted distinct companies that have at least one active subscription in subscriptions and at least one critical-priority ticket in support_tickets."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 85
+      }
+    },
+    {
+      "question_id": "q23",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 14042,
+      "completion_tokens": 343,
+      "wall_seconds": 30.16,
+      "answer": {
+        "status": "ok",
+        "value": 10374.664034,
+        "units": "calls/user",
+        "grain": "per active user",
+        "sql": "\nSELECT COUNT(DISTINCT user_id) AS active_user_count\nFROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\usage_logs.csv\nWHERE api_calls > 0\n\n-- Total api_calls: 93257855.0",
+        "reasoning": "We computed the total api_calls from knowledge_result and counted distinct active users from usage_logs as those with positive api_calls, then took the mean."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10374.664034
+      }
+    },
+    {
+      "question_id": "q23",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 19587,
+      "completion_tokens": 366,
+      "wall_seconds": 31.55,
+      "answer": {
+        "status": "ok",
+        "value": 10374.664034,
+        "units": "api_calls",
+        "grain": "per active user",
+        "sql": "\nSELECT COUNT(DISTINCT user_id) AS active_user_count\nFROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\usage_logs.csv\nWHERE api_calls > 0\n",
+        "reasoning": "Calculated total api_calls from knowledge_result divided by count of users with api_calls > 0 in usage_logs."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10374.664034
+      }
+    },
+    {
+      "question_id": "q23",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 8,
+      "prompt_tokens": 20200,
+      "completion_tokens": 1013,
+      "wall_seconds": 86.2,
+      "answer": {
+        "status": "success",
+        "value": 10960.796142,
+        "units": "api_calls per user",
+        "grain": "active user",
+        "sql": "\nWITH active_users AS (\n    SELECT user_id\n    FROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\users.csv\n    WHERE status = 'ACTIVE'  -- Assuming status column marks active users\n),\nuser_api_calls AS (\n    SELECT user_id, SUM(api_calls) AS total_api_calls\n    FROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\usage_logs.csv\n    GROUP BY user_id\n)\nSELECT\n    CAST(SUM(uac.total_api_calls) AS FLOAT) / COUNT(DISTINCT au.user_id) AS mean_api_calls_per_active_user\nFROM active_users au\nLEFT JOIN user_api_calls uac ON au.user_id = uac.user_id\n",
+        "reasoning": "Filtered active users from users table where is_active=1, then aggregated total api_calls per user from usage_logs and averaged over active users."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10960.796142
+      }
+    },
+    {
+      "question_id": "q23",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 7,
+      "prompt_tokens": 16268,
+      "completion_tokens": 240,
+      "wall_seconds": 21.93,
+      "answer": {
+        "status": "ok",
+        "value": 10893.817877,
+        "units": "api_calls per user",
+        "grain": "per active user",
+        "sql": "\n-- SQL equivalent:\nWITH active_users AS (\n  SELECT user_id\n  FROM users\n  WHERE is_active = 1\n),\nuser_api_calls AS (\n  SELECT user_id, SUM(api_calls) AS total_api_calls\n  FROM usage_logs\n  GROUP BY user_id\n)\nSELECT AVG(COALESCE(uac.total_api_calls, 0)) AS mean_api_calls_per_active_user\nFROM active_users au\nLEFT JOIN user_api_calls uac ON au.user_id = uac.user_id;\n",
+        "reasoning": "Computed sum of api_calls from usage_logs for each user, restricted to users flagged as active in users table, then averaged these totals per active user."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10893.817877
+      }
+    },
+    {
+      "question_id": "q23",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 13608,
+      "completion_tokens": 244,
+      "wall_seconds": 19.34,
+      "answer": {
+        "status": "OK",
+        "value": 10374.664034,
+        "units": "api_calls per user",
+        "grain": "per ACTIVE user",
+        "sql": "\nSELECT COUNT(DISTINCT user_id) AS active_user_count\nFROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\usage_logs.csv\nWHERE api_calls > 0\n",
+        "reasoning": "Used the aggregated sum of api_calls from knowledge_result and divided by the count of distinct active users (users with api_calls > 0) from usage_logs."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10374.664034
+      }
+    },
+    {
+      "question_id": "q23",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 8784,
+      "completion_tokens": 777,
+      "wall_seconds": 19.76,
+      "answer": {
+        "status": "success",
+        "value": 10960.796142,
+        "units": "api_calls per user",
+        "grain": "active user",
+        "sql": "\n    SELECT AVG(user_api_calls) AS mean_api_calls_per_active_user\n    FROM (\n        SELECT ul.user_id, SUM(ul.api_calls) AS user_api_calls\n        FROM usage_logs ul\n        JOIN users u ON ul.user_id = u.user_id\n        WHERE u.is_active = 1\n        GROUP BY ul.user_id\n    )\n    ",
+        "reasoning": "Filtered users to active only, summed api_calls per active user, then averaged these sums to get mean api_calls per active user."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 10960.796142
+      }
+    },
+    {
+      "question_id": "q24",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 7662,
+      "completion_tokens": 912,
+      "wall_seconds": 19.32,
+      "answer": {
+        "status": "ok",
+        "value": 38.2957,
+        "units": "percent",
+        "grain": "subscription",
+        "sql": "SELECT COUNT(*) FILTER (WHERE status = 'cancelled') * 100.0 / COUNT(*) AS pct_cancelled FROM subscriptions",
+        "reasoning": "Calculated the proportion of rows with 'cancelled' status out of total subscriptions."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 38.2957
+      }
+    },
+    {
+      "question_id": "q24",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 10205,
+      "completion_tokens": 217,
+      "wall_seconds": 16.56,
+      "answer": {
+        "status": "OK",
+        "value": 38.2957,
+        "units": "percent",
+        "grain": "one row per sub_id",
+        "sql": "SELECT COUNT(*) FROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\subscriptions.csv;",
+        "reasoning": "The percentage of subscriptions cancelled was computed by dividing the number of subscriptions with status 'cancelled' by the total number of subscriptions, then multiplying by 100 and rounding to 4 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 38.2957
+      }
+    },
+    {
+      "question_id": "q24",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 9812,
+      "completion_tokens": 162,
+      "wall_seconds": 12.6,
+      "answer": {
+        "status": "success",
+        "value": 38.2957,
+        "units": "percent",
+        "grain": "individual subscription",
+        "sql": "SELECT status, COUNT(*) as count FROM subscriptions GROUP BY status",
+        "reasoning": "I calculated the percentage of subscriptions with status 'cancelled' by dividing the count of cancelled subscriptions by the total number of subscriptions and multiplying by 100. The data was aggregated by status using the subscriptions dataset."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 38.2957
+      }
+    },
+    {
+      "question_id": "q24",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 13223,
+      "completion_tokens": 137,
+      "wall_seconds": 21.93,
+      "answer": {
+        "status": "ok",
+        "value": 38.2957,
+        "units": "percent",
+        "grain": "one row per sub_id",
+        "sql": "SELECT COUNT(*) FILTER (WHERE status = 'cancelled') * 100.0 / COUNT(*) AS percentage_cancelled FROM C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\dbo_eval\\csv\\subscriptions.csv",
+        "reasoning": "Used the pre-aggregated count of cancelled subscriptions from knowledge_result (373) and the total subscription count (974), divided and multiplied by 100 to get the percentage."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 38.2957
+      }
+    },
+    {
+      "question_id": "q24",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 13394,
+      "completion_tokens": 151,
+      "wall_seconds": 19.48,
+      "answer": {
+        "status": "OK",
+        "value": 38.2957,
+        "units": "percent",
+        "grain": "one row per subscription",
+        "sql": "SELECT ROUND(COUNT(*) FILTER (WHERE status = 'cancelled') * 100.0 / COUNT(*), 4) FROM subscriptions",
+        "reasoning": "Used the aggregate count of subscriptions with status 'cancelled' from knowledge_result divided by total subscription rows count, then rounded to 4 decimals."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 38.2957
+      }
+    },
+    {
+      "question_id": "q24",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 7570,
+      "completion_tokens": 380,
+      "wall_seconds": 12.92,
+      "answer": {
+        "status": "success",
+        "value": 0.383,
+        "units": "percentage",
+        "grain": "subscription",
+        "sql": "SELECT ROUND((SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) * 1.0) / COUNT(*), 4) AS cancelled_percentage FROM subscriptions",
+        "reasoning": "Calculated the count of subscriptions with status 'cancelled' divided by the total subscription count, rounded to 4 decimals."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 0.383
+      }
+    },
+    {
+      "question_id": "q25",
+      "arm": "A",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 4058,
+      "completion_tokens": 368,
+      "wall_seconds": 8.36,
+      "answer": {
+        "status": "OK",
+        "value": 1.213608,
+        "units": "count of payments",
+        "grain": "invoice",
+        "sql": "\n    SELECT AVG(payment_count) AS mean_payments_per_invoice\n    FROM (\n        SELECT invoice_id, COUNT(*) AS payment_count\n        FROM payments\n        GROUP BY invoice_id\n        HAVING COUNT(*) > 0\n    ) AS invoice_payment_counts\n    ",
+        "reasoning": "I computed the mean number of payments per invoice by counting payments grouped by invoice_id for invoices that have at least one payment, then took the average of those counts."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 1.213608
+      }
+    },
+    {
+      "question_id": "q25",
+      "arm": "B",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 5,
+      "prompt_tokens": 15670,
+      "completion_tokens": 336,
+      "wall_seconds": 24.9,
+      "answer": {
+        "status": "ok",
+        "value": 1.25,
+        "units": "payments per invoice",
+        "grain": "invoice_id",
+        "sql": "SELECT ROUND(AVG(payment_count), 6) as mean_payments_per_invoice FROM (SELECT invoice_id, COUNT(*) as payment_count FROM payments GROUP BY invoice_id) sub WHERE payment_count > 0",
+        "reasoning": "Counted the number of payments per invoice_id in payments table, filtered to invoices with at least one payment, then averaged these counts."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 1.25
+      }
+    },
+    {
+      "question_id": "q25",
+      "arm": "A",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 5169,
+      "completion_tokens": 201,
+      "wall_seconds": 8.64,
+      "answer": {
+        "status": "OK",
+        "value": 1.213608,
+        "units": "payments per invoice",
+        "grain": "invoice",
+        "sql": "SELECT AVG(num_payments) FROM (SELECT invoice_id, COUNT(*) as num_payments FROM payments GROUP BY invoice_id)",
+        "reasoning": "To find the mean number of payments per invoice, we counted the payments grouped by invoice_id from the payments table, considering only invoices with at least one payment, then averaged the counts."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 1.213608
+      }
+    },
+    {
+      "question_id": "q25",
+      "arm": "B",
+      "rep": 2,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 4,
+      "prompt_tokens": 13521,
+      "completion_tokens": 509,
+      "wall_seconds": 21.21,
+      "answer": {
+        "status": "OK",
+        "value": 1.213608,
+        "units": "count",
+        "grain": "one row per invoice with at least one payment",
+        "sql": "SELECT AVG(num_payments) AS mean_payments_per_invoice\nFROM (\n    SELECT invoice_id, COUNT(payment_id) AS num_payments\n    FROM payments\n    GROUP BY invoice_id\n) t;",
+        "reasoning": "Aggregated payments by invoice_id to count payments per invoice, then computed mean count only for invoices with at least one payment, as requested."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 1.213608
+      }
+    },
+    {
+      "question_id": "q25",
+      "arm": "A",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 3,
+      "prompt_tokens": 4890,
+      "completion_tokens": 810,
+      "wall_seconds": 13.47,
+      "answer": {
+        "status": "ok",
+        "value": 1.213608,
+        "units": "payments per invoice",
+        "grain": "invoice",
+        "sql": "SELECT AVG(payments_count) FROM (SELECT invoice_id, COUNT(*) as payments_count FROM payments GROUP BY invoice_id) AS payment_counts",
+        "reasoning": "Grouped payments by invoice_id to count payments per invoice, then averaged counts for invoices with at least one payment."
+      },
+      "grade": {
+        "contract_correct": true,
+        "analytic_correct": true,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": true,
+        "value": 1.213608
+      }
+    },
+    {
+      "question_id": "q25",
+      "arm": "B",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": true,
+      "submitted": true,
+      "failure_reason": null,
+      "turns": 6,
+      "prompt_tokens": 20374,
+      "completion_tokens": 542,
+      "wall_seconds": 42.56,
+      "answer": {
+        "status": "complete",
+        "value": null,
+        "units": "payments per invoice",
+        "grain": "invoice_id with at least one payment",
+        "sql": "SELECT\n  ROUND(AVG(payment_count), 6) as avg_payments_per_invoice_with_payment\nFROM\n  (SELECT\n    invoice_id,\n    COUNT(*) AS payment_count\n  FROM payments\n  GROUP BY invoice_id) sub",
+        "reasoning": "Calculated average number of payments per invoice by counting payments grouped by invoice_id, then taking average over invoices with at least one payment."
+      },
+      "grade": {
+        "contract_correct": false,
+        "analytic_correct": false,
+        "hit_hazard": false,
+        "abstained": false,
+        "machine_readable": false,
+        "value": "None"
+      }
+    }
+  ]
+}

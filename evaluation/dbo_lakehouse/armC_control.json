@@ -1,0 +1,174 @@
+{
+  "model": "openai/gpt-4.1-mini",
+  "learn": {
+    "lessons_total": 46,
+    "lessons_active": 46,
+    "fingerprint": "228ece5123c2e82799e1d08130385f6cfeca4a35de7e43e40ecbaa7bf5a34feb",
+    "learn_seconds": 3.4,
+    "sources": 10
+  },
+  "trials": [
+    {
+      "question_id": "q01",
+      "arm": "C",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 8.44
+    },
+    {
+      "question_id": "q01",
+      "arm": "C",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q02",
+      "arm": "C",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q02",
+      "arm": "C",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q03",
+      "arm": "C",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q03",
+      "arm": "C",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q07",
+      "arm": "C",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q07",
+      "arm": "C",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q08",
+      "arm": "C",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q08",
+      "arm": "C",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q12",
+      "arm": "C",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q12",
+      "arm": "C",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q17",
+      "arm": "C",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q17",
+      "arm": "C",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q18",
+      "arm": "C",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q18",
+      "arm": "C",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q25",
+      "arm": "C",
+      "rep": 1,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    },
+    {
+      "question_id": "q25",
+      "arm": "C",
+      "rep": 0,
+      "model": "openai/gpt-4.1-mini",
+      "ok": false,
+      "error": "ValueError: task inputs conflict with knowledge source aliases: companies, dim_date, features, industries, invoices, payments, subscriptions, support_tickets, usage_logs, users",
+      "wall_seconds": 0.0
+    }
+  ]
+}
