@@ -31,6 +31,15 @@
   askers and writers are small protocols with REST implementations for use
   outside a notebook and SDK implementations for use inside one; the
   notebook is a Fabric Python notebook on the 3.12 runtime.
+- **Review context and diagnostics.** `ReviewContext` states the agent's
+  scope, priorities, definitions, the reviewer's own questions (a query
+  or an answer as ground truth, graded first) and notes; the questions
+  are scoped and ordered by it, the definitions reach `RLM.learn`, and the
+  RLM second opinion receives it as prompt context. The report explains an
+  empty evaluation (year discovery failures, unrecognised fact tables,
+  missing date joins), names the source after its item, treats only
+  schema-shaped tokens as schema mentions, and picks the order date key
+  over due or ship dates whatever the column order.
 
 ### Changed
 

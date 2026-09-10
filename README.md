@@ -202,7 +202,12 @@ Python notebook (runtime 3.12) that runs the whole loop; applying the
 suggestions to the agent's draft stage is its last, explicit cell. The
 notebook scopes a lakehouse to the tables the agent has selected and raises
 the profile limits, since a lakehouse catalog is many tables rather than one
-file.
+file. A `ReviewContext` carries what the reviewer knows beyond the agent's
+configuration: the scope in plain words, priorities that order the questions,
+definitions declared to the RLM, the reviewer's own questions with a query or
+an answer as ground truth (graded first), and notes every RLM task receives.
+When nothing can be evaluated, the report says why (year discovery, fact
+tables, date joins).
 
 A package can also carry what earlier runs learned about a source. Every turn
 records its source calls as typed telemetry (the grain a semantic-model query

@@ -660,3 +660,92 @@ def test_sdk_reader_records_the_selected_tables_and_the_report_shows_them():
     schemas = [schema_from_tables("ds-1", {"factinternetsales": TABLES["factinternetsales"], "dimdate": TABLES["dimdate"]})]
     report = ReviewReport(snap, tuple(schemas), (), (), (), {}, (), suggest(snap, schemas, (), (), (), ()))
     assert "2 tables; 2 tables selected for the agent" in report.to_markdown()
+
+
+# ------------------------------------------------------------- diagnostics --
+
+
+def test_english_words_that_match_columns_are_not_schema_mentions():
+    tables = dict(TABLES)
+    tables["dimcustomer"] = ("CustomerKey", "GeographyKey", "FirstName", "Phone", "Status")
+    schema = schema_from_tables(LAKEHOUSE_ID, tables)
+    instructions = (
+        "RULES\n"
+        "- Do not list phone numbers or order status.\n"
+        "- State the channel and date range used.\n"
+        "- Revenue means SUM(SalesAmount) across factinternetsales and factresellersales.\n"
+    )
+    snapshot = AgentSnapshot(agent_id="a", name="Words", instructions=instructions, datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="lh", instructions="Use dbo tables.", description="d"),))
+    findings = {f.code: f for f in diagnose(snapshot, [schema])}
+    moved = findings["schema_in_agent_instructions"]
+    assert len(moved.evidence) == 1 and "SalesAmount" in moved.evidence[0]
+    assert not any("phone" in line.casefold() or "channel" in line.casefold() for line in moved.evidence)
+
+    suggestions = suggest(snapshot, [schema], tuple(findings.values()), (), (), ())
+    text = suggestions.datasource_instructions[LAKEHOUSE_ID]
+    assert "- Revenue means SUM(SalesAmount)" in text and "- - " not in text
+
+
+def test_no_questions_is_explained_and_year_discovery_failures_are_reported():
+    from fabric_rlm.data_agent_review import explain_no_questions
+
+    def broken(sql, *, sources):
+        raise RuntimeError("delta_scan failed on a void column")
+
+    executors = {LAKEHOUSE_ID: LakehouseExecutor(broken, TABLES)}
+    asked = []
+    report = review_agent(_snapshot(), _schemas(), executors, lambda q: asked.append(q) or "no")
+    assert not report.questions and not asked
+    assert any("year discovery failed: RuntimeError: delta_scan failed" in note for note in report.notes)
+    assert any("no complete years were discovered" in note for note in report.notes)
+    assert "Diagnostics:" in report.to_markdown()
+
+    no_date = schema_from_tables(LAKEHOUSE_ID, {k: v for k, v in TABLES.items() if k != "dimdate"})
+    notes = explain_no_questions(_snapshot(), [no_date], {})
+    assert any("factinternetsales has no join to a date table" in note for note in notes)
+    bare = AgentSnapshot(agent_id="a", name="Bare", instructions="Answer.", datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="lh", instructions="", description="d"),))
+    dims_only = schema_from_tables(LAKEHOUSE_ID, {k: v for k, v in TABLES.items() if not k.startswith("fact")})
+    assert any("no fact table recognised" in note for note in explain_no_questions(bare, [dims_only], {}))
+
+
+# ------------------------------------------------------------------ context --
+
+
+def test_context_scopes_prioritises_and_leads_with_supplied_questions():
+    from fabric_rlm.data_agent_review import ReviewContext
+
+    context = ReviewContext(
+        scope="Reseller sales through factresellersales",
+        priorities=("factresellersales",),
+        definitions={"Gross margin": "SUM(SalesAmount - TotalProductCost)"},
+        questions=(
+            ("How many internet sales rows are there?", "SELECT COUNT(*) AS n FROM dbo.factinternetsales"),
+            ("Revenue by year?", "Revenue was 1,100 in 2012 and 2,850 in 2013"),
+            ("Should it refuse?", "The agent declines politely"),
+        ),
+        notes="2014 is partial",
+    )
+    assert context and "Priorities: factresellersales" in context.as_prompt() and "Notes: 2014 is partial" in context.as_prompt()
+    assert not ReviewContext()
+
+    questions = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=4, context=context)
+    assert [q.kind for q in questions[:3]] == ["supplied"] * 3 and questions[0].id.endswith(".u1")
+    generated = [q for q in questions if q.kind != "supplied"]
+    assert len(generated) == 4 and all("factresellersales" in q.text for q in generated)
+
+    plain = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=4)
+    assert len(plain) == 4 and not all("factresellersales" in q.text for q in plain)
+
+    executor = _duckdb_executor()
+    references = {r.question_id: r for r in build_references(questions[:3], {LAKEHOUSE_ID: executor})}
+    assert references[questions[0].id].status == "ok" and references[questions[0].id].rows[0]["n"] > 0
+    figures = [float(r["value"]) for r in references[questions[1].id].rows]
+    assert references[questions[1].id].status == "ok" and 1100.0 in figures and 2850.0 in figures
+    assert references[questions[2].id].status == "failed"
+
+    declared = declared_from_snapshot(_snapshot(), _schemas(), context=context)
+    assert declared[LAKEHOUSE_ID]["definitions"]["Gross margin"] == "SUM(SalesAmount - TotalProductCost)"
+
+    report = review_agent(_snapshot(), _schemas(), {LAKEHOUSE_ID: executor}, lambda q: "no idea", years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=2, context=context)
+    markdown = report.to_markdown()
+    assert "## Scope and context" in markdown and "Supplied questions: 3" in markdown and report.questions[0].kind == "supplied"

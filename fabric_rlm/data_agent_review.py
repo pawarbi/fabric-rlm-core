@@ -152,6 +152,53 @@ class AgentSnapshot:
 
 
 @dataclass(frozen=True)
+class ReviewContext:
+    """What the reviewer states about the agent beyond its configuration.
+
+    ``scope`` says what the agent is for, in plain words; the tables it
+    names are in scope for question generation, like tables the agent's
+    instructions name. ``priorities`` are topics, measures or attributes to
+    evaluate first: questions that mention them come first and survive the
+    per-source limit. ``definitions`` are business terms the review
+    declares to the RLM, and they override the agent's own where the names
+    clash. ``questions`` are the reviewer's own evaluation cases as
+    ``(question, expected)`` pairs, where ``expected`` is either a query the
+    source can run (the reference is computed by executing it) or a prose
+    answer whose figures are the reference; they come before generated
+    questions, so supplied ground truth outranks generated ground truth.
+    ``notes`` is free text for every RLM task: known quirks, partial
+    periods, rules about personal data.
+    """
+
+    scope: str = ""
+    priorities: tuple[str, ...] = ()
+    definitions: Mapping[str, str] = field(default_factory=dict)
+    questions: tuple[tuple[str, str], ...] = ()
+    notes: str = ""
+
+    @property
+    def text(self) -> str:
+        """Scope, priorities and notes as one text, for scoping tables and joins."""
+        return "\n".join([self.scope, *self.priorities, self.notes])
+
+    def as_prompt(self) -> str:
+        """The context as a block for an RLM task prompt; empty when nothing was stated."""
+        parts = []
+        if self.scope.strip():
+            parts.append(f"Scope of the data agent under review: {self.scope.strip()}")
+        if self.priorities:
+            parts.append("Priorities: " + "; ".join(p.strip() for p in self.priorities if p.strip()))
+        if self.definitions:
+            parts.append("Definitions: " + "; ".join(f"{k} = {v}" for k, v in self.definitions.items()))
+        if self.notes.strip():
+            parts.append(f"Notes: {self.notes.strip()}")
+        return "\n".join(parts)
+
+    def __bool__(self) -> bool:
+        return bool(self.scope.strip() or self.priorities or self.definitions or self.questions or self.notes.strip())
+
+
+@dataclass(frozen=True)
 class SourceSchema:
     """What a source actually exposes, from a fabric-rlm profile or a catalog."""
 
@@ -315,6 +362,26 @@ def _source_from_entry(entry: Mapping[str, Any], fewshots: Sequence[FewShot], *,
     )
 
 
+def _resolve_item_name(item_id: str | None, workspace_id: str | None) -> str | None:
+    """The display name of a Fabric item through sempy, inside a notebook; ``None`` elsewhere."""
+    if not item_id:
+        return None
+    try:
+        import sempy.fabric as fabric
+    except ImportError:
+        return None
+    try:
+        return str(fabric.resolve_item_name(item_id, workspace=workspace_id))
+    except Exception:  # noqa: BLE001 - fall back to the listing
+        pass
+    try:
+        items = fabric.list_items(workspace=workspace_id)
+        row = items[items["Id"] == item_id]
+        return str(row["Display Name"].iloc[0]) if len(row) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 _LEAF_ELEMENT = re.compile(r"(column|measure|parameter|returnvalue|field)", re.IGNORECASE)
 _TABLE_ELEMENT = re.compile(r"(table|view|function|entity|dataset)", re.IGNORECASE)
 
@@ -446,6 +513,8 @@ class SdkAgentReader:
             sources = []
             for handle in management.list_datasources(stage=self.stage):
                 entry = handle.get_configuration(stage=self.stage) or {}
+                reference = _item_reference(entry)
+                name = entry.get("displayName") or entry.get("name") or _resolve_item_name(reference.get("itemId"), reference.get("workspaceId"))
                 try:
                     shots = _fewshot_records(handle.get_fewshots(stage=self.stage))
                 except Exception:  # noqa: BLE001 - few-shots are optional
@@ -456,7 +525,7 @@ class SdkAgentReader:
                         selected = _selected_table_paths(lambda root_id, token, h=handle: h.get_elements(stage=self.stage, root_id=root_id, continuation_token=token))
                     except Exception:  # noqa: BLE001 - the elements are a bonus; the whole source is reviewed without them
                         selected = []
-                sources.append(_source_from_entry(entry, shots, fallback_id=str(getattr(handle, "_id", "") or ""), selected_tables=selected))
+                sources.append(_source_from_entry(entry, shots, fallback_id=str(getattr(handle, "_id", "") or ""), name=name, selected_tables=selected))
             return AgentSnapshot(
                 agent_id=str(agent_id),
                 name=str(name),
@@ -540,15 +609,34 @@ def _lines(text: str) -> list[str]:
     return [line.strip() for line in (text or "").splitlines() if line.strip()]
 
 
+def _schema_shaped(token: str, schema: SourceSchema) -> bool:
+    """A token that reads as a schema name rather than an English word.
+
+    Dotted, underscored, digit-bearing or camel-cased tokens, DAX references
+    and table names count; ``status``, ``phone`` or ``channel`` do not, even
+    when a column of that name exists.
+    """
+    if "[" in token or "." in token or "_" in token or any(c.isdigit() for c in token):
+        return True
+    if token.casefold() in {t.casefold() for t in schema.tables}:
+        return True
+    return token[:1].isalpha() and token[1:] != token[1:].lower() and not token.isupper()
+
+
 def _schema_mentions(line: str, schemas: Sequence[SourceSchema]) -> dict[str, list[str]]:
-    """Schema identifiers a line names, grouped by the source that has them."""
+    """Schema identifiers a line names, grouped by the source that has them.
+
+    A line counts only when at least one hit is schema-shaped; the
+    schema-shaped hits are listed first.
+    """
     found: dict[str, list[str]] = {}
     candidates = {m.group(1) for m in _IDENTIFIER.finditer(line)} | {m.group(0) for m in _DAX_REFERENCE.finditer(line)}
     for schema in schemas:
         known = schema.identifiers()
         hits = sorted({c for c in candidates if c.casefold() in known and c.casefold() not in _STOPWORDS and len(c) > 2})
-        if hits:
-            found[schema.source_id] = hits
+        strong = [c for c in hits if _schema_shaped(c, schema)]
+        if strong:
+            found[schema.source_id] = strong + [c for c in hits if c not in strong]
     return found
 
 
@@ -875,13 +963,19 @@ def _normalize(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
 
 
-def declared_from_snapshot(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema]) -> dict[str, dict[str, object]]:
-    """What the agent's instructions declare, in ``RLM.learn(declared=...)`` form."""
+def declared_from_snapshot(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema], context: ReviewContext | None = None) -> dict[str, dict[str, object]]:
+    """What the agent's instructions declare, in ``RLM.learn(declared=...)`` form.
+
+    The reviewer's ``context.definitions`` are added to every profiled
+    source and override the agent's where the names clash.
+    """
     declared: dict[str, dict[str, object]] = {}
     by_id = {s.source_id: s for s in schemas}
     for source in snapshot.datasources:
         definitions = extract_definitions(source.instructions)
         definitions.update({k: v for k, v in extract_definitions(snapshot.instructions).items() if k not in definitions})
+        if context is not None:
+            definitions.update({str(k): str(v) for k, v in context.definitions.items()})
         if definitions and source.id in by_id:
             declared[source.id] = {"definitions": {k: v[:250] for k, v in definitions.items()}}
     return declared
@@ -904,7 +998,7 @@ _JOIN_LINE = re.compile(r"(?:dbo\.)?([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0
 class Question:
     id: str
     source_id: str
-    kind: str  # total_by_year | top_n | breakdown | distinct_by_year | yoy | combined_total_by_year
+    kind: str  # total_by_year | top_n | breakdown | distinct_by_year | yoy | combined_total_by_year | supplied
     text: str
     spec: Mapping[str, Any]
     reference_query: str  # what a few-shot would carry: T-SQL for a lakehouse, DAX for a model
@@ -967,11 +1061,27 @@ def _measure_columns(schema: SourceSchema, table: str) -> list[str]:
     return sorted(columns, key=lambda c: (next((i for i, p in enumerate(preferred) if p in c.casefold()), 99), c))
 
 
+def _date_candidates(columns: Sequence[str]) -> list[str]:
+    """Date columns of a fact in the order to try them: keys before dates, the order date before due or ship dates.
+
+    A profile lists columns alphabetically, so the physical order cannot be
+    relied on; ``DueDate`` must not win over ``OrderDateKey``.
+    """
+    matches = [c for c in columns if _DATE_KEY.search(c)]
+    lowered = lambda c: c.casefold()  # noqa: E731
+    return sorted(
+        matches,
+        key=lambda c: (
+            not lowered(c).endswith("key"),
+            not any(word in lowered(c) for word in ("order", "sales", "transaction", "invoice", "activity", "event")),
+            any(word in lowered(c) for word in ("due", "ship", "delivery", "modified", "created", "updated")),
+        ),
+    )
+
+
 def _date_join(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]]) -> tuple[str, str, str, str] | None:
     """(date column on the fact, date table, date key, year column)."""
-    for column in schema.tables[table]:
-        if not _DATE_KEY.search(column):
-            continue
+    for column in _date_candidates(schema.tables[table]):
         target = joins.get((table, column))
         if target is None:
             for candidate in ("dimdate", "date", "dim_date", "calendar"):
@@ -1087,6 +1197,39 @@ def _dax(spec: Mapping[str, Any]) -> str:
     return f"EVALUATE {body}"
 
 
+_QUERY_SHAPED = re.compile(r"^\s*(SELECT|WITH|EVALUATE|DEFINE)\b", re.IGNORECASE)
+
+
+def _supplied_questions(context: ReviewContext | None, source_id: str) -> list[Question]:
+    """The reviewer's own evaluation cases as questions; a query is executed, prose figures are the reference."""
+    if context is None:
+        return []
+    supplied: list[Question] = []
+    for number, (text, expected) in enumerate(context.questions, start=1):
+        expected_text = str(expected or "").strip()
+        if _QUERY_SHAPED.match(expected_text):
+            execution: dict[str, Any] = {"kind": "supplied_sql", "sql": expected_text}
+            reference_query = expected_text
+        else:
+            execution = {"kind": "supplied_text", "text": expected_text}
+            reference_query = ""
+        supplied.append(Question(id=f"{source_id}.u{number}", source_id=source_id, kind="supplied", text=str(text), spec={"kind": "supplied", "expected": expected_text}, reference_query=reference_query, execution=execution))
+    return supplied
+
+
+def _matches_priority(question: Question, priorities: Sequence[str]) -> bool:
+    haystack = f"{question.text} {json.dumps(question.spec, default=str)}".casefold()
+    return any(p.strip() and p.strip().casefold() in haystack for p in priorities)
+
+
+def _prioritised(generated: Sequence[Question], context: ReviewContext | None, limit: int) -> list[Question]:
+    """Questions that mention a priority first, then the rest in generation order, cut to the limit."""
+    if context is None or not context.priorities:
+        return list(generated)[:limit]
+    ranked = sorted(enumerate(generated), key=lambda item: (not _matches_priority(item[1], context.priorities), item[0]))
+    return [question for _index, question in ranked][:limit]
+
+
 def generate_questions(
     snapshot: AgentSnapshot,
     schemas: Sequence[SourceSchema],
@@ -1094,21 +1237,30 @@ def generate_questions(
     years: Mapping[str, Sequence[int]] | None = None,
     top: int = 10,
     limit_per_source: int = 8,
+    context: ReviewContext | None = None,
 ) -> tuple[Question, ...]:
     """Questions the sources can answer, each with the query that answers it.
 
     ``years`` maps a source id to the complete years its data covers (see
     :func:`discover_years`); without it the period questions are skipped.
+    ``context`` scopes the facts by the tables its text names, puts the
+    questions that mention a priority first, and leads with the reviewer's
+    own questions, which do not count against the limit.
     """
     questions: list[Question] = []
     sources = {s.id: s for s in snapshot.datasources}
+    supplied_target = next((s.source_id for s in schemas if s.kind != "semantic_model"), schemas[0].source_id if schemas else None)
+    generation_limit = limit_per_source * 4 if context is not None and context.priorities else limit_per_source
     for schema in schemas:
         source = sources.get(schema.source_id)
         source_years = list((years or {}).get(schema.source_id) or [])
+        if schema.source_id == supplied_target:
+            questions.extend(_supplied_questions(context, schema.source_id))
+        start = len(questions)
         if schema.kind == "semantic_model":
-            questions.extend(_semantic_questions(schema, source_years, top=top, limit=limit_per_source))
+            questions.extend(_prioritised(_semantic_questions(schema, source_years, top=top, limit=generation_limit), context, limit_per_source))
             continue
-        instructions = (source.instructions if source else "") + "\n" + snapshot.instructions
+        instructions = (source.instructions if source else "") + "\n" + snapshot.instructions + ("\n" + context.text if context is not None else "")
         joins = dict(_heuristic_joins(schema))
         joins.update(_joins_from_instructions(instructions, schema))
         facts = _scoped_facts(schema, instructions)
@@ -1129,7 +1281,7 @@ def generate_questions(
 
         def add(kind: str, text: str, spec: Mapping[str, Any], alternates: Sequence[tuple[str, Mapping[str, Any]]] = ()) -> None:
             nonlocal count
-            if count >= limit_per_source:
+            if count >= generation_limit:
                 return
             count += 1
             questions.append(Question(id=f"{prefix}.q{count}", source_id=schema.source_id, kind=kind, text=text, spec=spec, reference_query=_sql(spec, dialect="tsql"), execution={"kind": "sql", "sql": _sql(spec, dialect="duckdb")}, alternates=tuple(alternates)))
@@ -1151,6 +1303,9 @@ def generate_questions(
                 attr = {"fact_key": fact_key, "dim_table": dim_table, "dim_key": dim_key, "column": attribute, "alias": attribute}
                 add("top_n", f"What are the top {top} {attribute} values by {fact['measure']} in {fact['table']} for {latest}?", {"kind": "top_n", "facts": [{**base, "attribute": attr}], "year": latest, "top": top})
                 add("breakdown", f"What was total {fact['measure']} in {fact['table']} by {attribute} for {latest}?", {"kind": "breakdown", "facts": [{**base, "attribute": attr}], "year": latest})
+        generated = questions[start:]
+        del questions[start:]
+        questions.extend(_prioritised(generated, context, limit_per_source))
     return tuple(questions)
 
 
@@ -1270,16 +1425,60 @@ def discover_years(executor: LakehouseExecutor, schema: SourceSchema, source: Ag
     return []
 
 
+def _source_label(snapshot: AgentSnapshot, source_id: str) -> str:
+    source = next((s for s in snapshot.datasources if s.id == source_id), None)
+    return (source.name or source.id) if source else source_id
+
+
+def explain_no_questions(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema], years: Mapping[str, Sequence[int]] | None = None) -> list[str]:
+    """Why the generator produced nothing for each source: no fact table, no date join, no measure, no complete years."""
+    notes: list[str] = []
+    sources = {s.id: s for s in snapshot.datasources}
+    for schema in schemas:
+        label = _source_label(snapshot, schema.source_id)
+        if schema.kind == "semantic_model":
+            if not schema.measures:
+                notes.append(f"{label}: the model exposes no measures, so no questions were generated")
+            continue
+        source = sources.get(schema.source_id)
+        instructions = (source.instructions if source else "") + "\n" + snapshot.instructions
+        joins = dict(_heuristic_joins(schema))
+        joins.update(_joins_from_instructions(instructions, schema))
+        facts = _scoped_facts(schema, instructions)
+        if not facts:
+            notes.append(f"{label}: no fact table recognised among {len(schema.tables)} tables (none named in the instructions, none fact-shaped)")
+            continue
+        for table in facts:
+            if not _date_join(schema, table, joins):
+                notes.append(f"{label}: {table} has no join to a date table with a year column, so no period questions")
+            if not _measure_columns(schema, table):
+                notes.append(f"{label}: {table} has no numeric measure column")
+        if not (years or {}).get(schema.source_id):
+            notes.append(f"{label}: no complete years were discovered, so no questions were generated")
+    return notes
+
+
 def build_references(questions: Sequence[Question], executors: Mapping[str, Any]) -> tuple[Reference, ...]:
     """Execute every question's reference query; a failure is a status, not a guess."""
     references: list[Reference] = []
     for question in questions:
         executor = executors.get(question.source_id)
+        if question.execution.get("kind") == "supplied_text":
+            figures = _numbers_in(str(question.execution.get("text", "")))
+            if figures:
+                references.append(Reference(question.id, "ok", tuple({"value": figure} for figure in figures), "figures of the supplied answer"))
+            else:
+                references.append(Reference(question.id, "failed", note="the supplied answer carries no figures; supply a query or a figure"))
+            continue
         if executor is None:
             references.append(Reference(question.id, "abstained", note="no executor for the source"))
             continue
         try:
-            rows = executor.run(question.execution)
+            if question.execution.get("kind") == "supplied_sql":
+                sql = str(question.execution["sql"])
+                rows = executor.run_agent_sql(sql) if isinstance(executor, LakehouseExecutor) else executor.run({"sql": sql})
+            else:
+                rows = executor.run(question.execution)
         except Exception as exc:  # noqa: BLE001 - a failed reference is recorded, never invented
             references.append(Reference(question.id, "failed", note=f"{type(exc).__name__}: {exc}"[:200]))
             continue
@@ -1738,7 +1937,7 @@ def suggest(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema], findings: 
         if finding.code == "schema_in_agent_instructions" and finding.source_id:
             for line in finding.evidence:
                 original = line.rsplit("  [", 1)[0]
-                moved.setdefault(finding.source_id, []).append(original)
+                moved.setdefault(finding.source_id, []).append(re.sub(r"^\s*[-*]\s+", "", original))
                 remove.add(original.casefold())
     agent_lines = [line for line in (snapshot.instructions or "").splitlines() if line.strip().casefold() not in remove]
     causes = sorted({g.cause for g in graded if g.outcome in {"wrong", "partial", "abstained"} and g.cause in _CAUSE_GUIDANCE})
@@ -1805,6 +2004,8 @@ class ReviewReport:
     answers: Mapping[str, tuple[AgentAnswer, ...]]
     graded: tuple[Graded, ...]
     suggestions: Suggestions
+    notes: tuple[str, ...] = ()  # diagnostics: year discovery, why no questions
+    context: ReviewContext | None = None
 
     def score(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -1817,6 +2018,12 @@ class ReviewReport:
         lines = [f"# Data Agent review: {s.name}", ""]
         lines.append(f"Stage: {s.stage}. Agent instructions: {len(s.instructions):,} characters. Sources: {len(s.datasources)}.")
         lines.append("")
+        if self.context:
+            lines.append("## Scope and context (stated by the reviewer)")
+            lines.extend(f"- {line}" for line in self.context.as_prompt().splitlines())
+            if self.context.questions:
+                lines.append(f"- Supplied questions: {len(self.context.questions)} (graded first; a supplied query is executed for the reference, a supplied answer's figures are the reference)")
+            lines.append("")
         lines.append("## Sources")
         for source in s.datasources:
             schema = next((x for x in self.schemas if x.source_id == source.id), None)
@@ -1840,6 +2047,10 @@ class ReviewReport:
         counts = self.score()
         lines.append(", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "no questions")
         lines.append("")
+        if self.notes:
+            lines.append("Diagnostics:")
+            lines.extend(f"- {note}" for note in self.notes)
+            lines.append("")
         lines.append("| id | question | outcome | cause | detail | agent query | routed to |")
         lines.append("|---|---|---|---|---|---|---|")
         ref_by_id = {r.question_id: r for r in self.references}
@@ -1918,25 +2129,35 @@ def review_agent(
     top: int = 10,
     limit_per_source: int = 8,
     repetitions: int = 1,
+    context: ReviewContext | None = None,
 ) -> ReviewReport:
     """The whole review: diagnose, generate, reference, ask, grade, suggest.
+
+    ``context`` is what the reviewer states about the agent (scope,
+    priorities, definitions, own questions, notes); see :class:`ReviewContext`.
 
     With ``repetitions`` above one each question is asked that many times;
     an outcome that changes between runs is graded ``inconsistent``, which
     the routing guidance names as the sign of an ambiguous source choice.
     """
     findings = diagnose(snapshot, schemas)
+    notes: list[str] = []
     if years is None:
         years = {}
         for schema in schemas:
             executor = executors.get(schema.source_id)
             if isinstance(executor, LakehouseExecutor):
                 source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
+                label = _source_label(snapshot, schema.source_id)
                 try:
                     years[schema.source_id] = discover_years(executor, schema, source, snapshot.instructions)
-                except Exception:  # noqa: BLE001
+                    notes.append(f"{label}: complete years {years[schema.source_id] or 'none found'}")
+                except Exception as exc:  # noqa: BLE001 - the reason is the diagnostic
                     years[schema.source_id] = []
-    questions = generate_questions(snapshot, schemas, years=years, top=top, limit_per_source=limit_per_source)
+                    notes.append(f"{label}: year discovery failed: {type(exc).__name__}: {str(exc)[:300]}")
+    questions = generate_questions(snapshot, schemas, years=years, top=top, limit_per_source=limit_per_source, context=context)
+    if not questions:
+        notes.extend(explain_no_questions(snapshot, schemas, years))
     references = build_references(questions, executors)
     ref_by_id = {r.question_id: r for r in references}
     answers: dict[str, tuple[AgentAnswer, ...]] = {}
@@ -1968,7 +2189,7 @@ def review_agent(
             final = grades[0]
         graded.append(_with_routing(final, question, collected, snapshot))
     suggestions = suggest(snapshot, schemas, findings, questions, references, graded)
-    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions)
+    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context)
 
 
 # --------------------------------------------------------------------------- #

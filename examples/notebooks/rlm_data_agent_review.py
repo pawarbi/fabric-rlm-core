@@ -63,6 +63,15 @@ TOP_N = 10
 APPLY_SUGGESTIONS = False             # True writes to the agent's DRAFT stage (never published)
 REPORT_PATH = "/lakehouse/default/Files/data_agent_review.md"  # or None to skip saving
 
+# --- what you know about the agent (optional) -------------------------------
+# Used to scope the questions, to order them, to declare definitions to the
+# RLM, and as context for every RLM task (the second opinion below).
+SCOPE = ""            # e.g. "Adventure Works internet and reseller sales, 2010 to 2013, by product, territory and customer"
+PRIORITIES = []       # e.g. ["factresellersales", "product category", "gross margin"]; matching questions come first
+DEFINITIONS = {}      # e.g. {"gross margin": "SUM(SalesAmount - TotalProductCost)"}; override the agent's own
+KNOWN_QUESTIONS = []  # your own ground truth, graded first: [("Total internet sales in 2013?", "SELECT SUM(SalesAmount) FROM dbo.factinternetsales f JOIN dbo.dimdate d ON f.OrderDateKey = d.DateKey WHERE d.CalendarYear = 2013")]
+NOTES = ""            # e.g. "2014 is partial; customer names are PII"
+
 # METADATA ********************
 
 # META {
@@ -86,6 +95,16 @@ snapshot = SdkAgentReader(management, stage=STAGE).snapshot()
 print(f"{snapshot.name}: {len(snapshot.instructions):,} characters of agent instructions, {len(snapshot.datasources)} source(s)")
 for source in snapshot.datasources:
     print(f"- {source.name or source.id} ({source.kind}): {len(source.instructions):,} chars of instructions, {len(source.fewshots)} few-shots, {len(source.selected_tables) or 'an unknown number of'} tables selected, description {'present' if source.description.strip() else 'missing'}")
+
+if not any(source.selected_tables for source in snapshot.datasources):
+    # the selection could not be read; show what the elements endpoint returns so the reader can be adjusted
+    for handle in management.list_datasources(stage=STAGE):
+        try:
+            page = handle.get_elements(stage=STAGE)
+            elements = page.get("value") or []
+            print(f"elements of {handle._id}: {len(elements)} root element(s); first: {elements[0] if elements else None}")
+        except Exception as exc:
+            print(f"elements of {handle._id} unavailable: {type(exc).__name__}: {exc}")
 
 # METADATA ********************
 
@@ -113,11 +132,14 @@ for source in snapshot.datasources:
 
 # CELL ********************
 
+import time
+
 import sempy.fabric as fabric
 
 from fabric_rlm import RLM, LakehouseSource, SemanticModel
 from fabric_rlm.data_agent_review import (
     LakehouseExecutor,
+    ReviewContext,
     SemanticModelExecutor,
     declared_from_snapshot,
     schema_from_profile,
@@ -125,6 +147,7 @@ from fabric_rlm.data_agent_review import (
 from fabric_rlm.knowledge_sources import ProfileLimits
 
 PROFILE_LIMITS = ProfileLimits(max_fields=4096, max_diagnostic_bytes=4 * 1024 * 1024)  # a lakehouse catalog, not one file
+context = ReviewContext(scope=SCOPE, priorities=tuple(PRIORITIES), definitions=dict(DEFINITIONS), questions=tuple(KNOWN_QUESTIONS), notes=NOTES)
 
 workspace_id = fabric.resolve_workspace_id(WORKSPACE_NAME) if WORKSPACE_NAME else fabric.get_workspace_id()
 items_by_workspace = {}
@@ -143,7 +166,9 @@ for source in snapshot.datasources:
         root = f"abfss://{source_workspace}@onelake.dfs.fabric.microsoft.com/{source.item_id}" if source.item_id else f"abfss://{fabric.resolve_workspace_name(source_workspace)}@onelake.dfs.fabric.microsoft.com/{item_name}.Lakehouse"
         # only the tables the agent has selected; the whole lakehouse when the selection is unknown
         scopes = [f"Tables/{table}" for table in source.selected_tables] or None
-        handle = LakehouseSource(root, tables=scopes)
+        t0 = time.time()
+        handle = LakehouseSource(root, tables=scopes).resolve()   # discover the catalog once; every query reuses it
+        print(f"{item_name}: {len(handle.catalog or ())} tables discovered in {round(time.time() - t0)} s")
     elif source.kind == "semantic_model":
         handle = SemanticModel(item_name, workspace=source_workspace)
     else:
@@ -154,7 +179,7 @@ for source in snapshot.datasources:
 
 knowledge = RLM.learn(sources=sources, limits=PROFILE_LIMITS)
 schemas = [schema_from_profile(profile, source_id=profile.source_id) for profile in knowledge.package.sources]
-declared = declared_from_snapshot(snapshot, schemas)
+declared = declared_from_snapshot(snapshot, schemas, context=context)   # the agent's definitions plus yours
 if declared:
     knowledge = RLM.learn(sources=sources, declared=declared, limits=PROFILE_LIMITS)   # the agent's stated definitions become facts the RLM knows
 
@@ -168,6 +193,21 @@ for source_id, (source, handle) in handles.items():
 
 for schema in schemas:
     print(f"{schema.source_id}: {len(schema.tables)} tables, {len(schema.measures)} measures, {len(schema.relationships)} relationships")
+
+# the references need this path; show the reason when it does not work
+for source_id, (source, handle) in handles.items():
+    if source.kind != "lakehouse":
+        continue
+    schema = next(s for s in schemas if s.source_id == source_id)
+    table = next(iter(schema.tables), None)
+    if table is None:
+        continue
+    t0 = time.time()
+    try:
+        rows = executors[source_id].run({"sql": f"SELECT COUNT(*) AS n FROM {table}"})
+        print(f"query check on {source.name or source_id}.{table}: {rows[0]['n']:,} rows in {round(time.time() - t0, 1)} s")
+    except Exception as exc:
+        print(f"query check on {source.name or source_id}.{table} FAILED after {round(time.time() - t0, 1)} s: {type(exc).__name__}: {exc}")
 
 # METADATA ********************
 
@@ -210,8 +250,11 @@ report = review_agent(
     top=TOP_N,
     limit_per_source=QUESTIONS_PER_SOURCE,
     repetitions=REPETITIONS,
+    context=context,
 )
 print("outcomes:", report.score())
+for note in report.notes:
+    print("note:", note)
 for finding in report.findings:
     print(f"[{finding.severity}] {finding.code}: {finding.message[:120]}")
 
@@ -295,8 +338,9 @@ LM = None                  # e.g. {"model": "openrouter/z-ai/glm-5.3-flash", "ca
 if FREEFORM_QUESTION and LM:
     from fabric_rlm import verified_task
 
+    task = FREEFORM_QUESTION + ("\n\n" + context.as_prompt() if context.as_prompt() else "")   # the RLM gets your scope and notes
     reference = verified_task(
-        FREEFORM_QUESTION,
+        task,
         inputs={source_id: handle for source_id, (_, handle) in handles.items()},
         outputs=["answer"],
         knowledge=knowledge,
