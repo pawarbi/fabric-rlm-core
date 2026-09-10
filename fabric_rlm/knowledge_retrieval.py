@@ -11,10 +11,12 @@ evidence conflicts.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from collections.abc import Iterable, Mapping, Sequence
 import re
 
-from fabric_rlm.knowledge import KnowledgePackage, LearnedLesson
+from fabric_rlm.knowledge import KnowledgePackage, LearnedLesson, canonical_json
 
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9]+")
@@ -97,6 +99,7 @@ _SECTION_TITLES = {
     "query_behavior": "Query behavior",
 }
 _BASIS_TEXT = {
+    "declared": "declared by the source owner",
     "source_declared": "source declared",
     "schema_name_pattern": "inferred from schema names",
     "boolean_period_flag": "boolean flag in a period table",
@@ -156,6 +159,16 @@ def lesson_score(lesson: LearnedLesson, task_tokens: set[str]) -> float:
         return 0.0
     score = float(len(subject_tokens & task_tokens))
     score += 0.5 * len(triggers & task_tokens)
+    if lesson.kind == "semantic_fact" and "declared" in lesson.basis:
+        # A declaration by the source owner is not a hypothesis to be
+        # matched against the question: it applies to every task on the
+        # source, below whatever the question names explicitly. The
+        # structural facts (grain, period column, units) come before the
+        # definitions and notes.
+        base = {"grain": 0.75, "period_column": 0.75, "units": 0.6}.get(
+            str(lesson.structured_rule.get("fact")), 0.5
+        )
+        return base + score + _CONFIDENCE_WEIGHT.get(lesson.confidence, 0.0)
     if score <= 0:
         return 0.0
     return score + _CONFIDENCE_WEIGHT.get(lesson.confidence, 0.0)
@@ -185,6 +198,7 @@ def retrieve_lessons(
     wanted_sources = set(source_ids) if source_ids is not None else None
     task_tokens = _tokens(task_text)
     scored: list[tuple[float, int, str, LearnedLesson]] = []
+    declared: list[tuple[float, int, str, LearnedLesson]] = []
     for lesson in package.lessons:
         if lesson.status not in allowed:
             continue
@@ -194,9 +208,59 @@ def retrieve_lessons(
         if score <= 0:
             continue
         kind_rank = _KIND_ORDER.index(lesson.kind) if lesson.kind in _KIND_ORDER else len(_KIND_ORDER)
-        scored.append((-score, kind_rank, lesson.lesson_id, lesson))
+        entry = (-score, kind_rank, lesson.lesson_id, lesson)
+        # Declared facts have their own budget: a package with many of them
+        # must not crowd out the evidence lessons the question asked for,
+        # and the evidence lessons must not push the declared grain out.
+        if lesson.kind == "semantic_fact" and "declared" in lesson.basis:
+            declared.append(entry)
+        else:
+            scored.append(entry)
     scored.sort(key=lambda item: item[:3])
-    return tuple(item[3] for item in scored[:limit])
+    chosen = [item[3] for item in scored[:limit]]
+    chosen.extend(_declared_selection(declared, limit * 2))
+    return tuple(chosen)
+
+
+_DECLARED_TIER = {"grain": 0, "period_column": 0, "units": 1}
+
+
+def _declared_selection(
+    entries: list[tuple[float, int, str, LearnedLesson]], budget: int
+) -> list[LearnedLesson]:
+    """Declared facts in the order the agent needs them, one line per fact.
+
+    The structural facts (grain, period column, units) come first whatever
+    the question mentions, then definitions and notes by relevance. The
+    same fact declared on several sources (a glossary shared by every
+    table of a domain) is one line tagged with all of them.
+    """
+    merged: dict[str, LearnedLesson] = {}
+    order: list[str] = []
+    for entry in sorted(
+        entries,
+        key=lambda item: (
+            _DECLARED_TIER.get(str(item[3].structured_rule.get("fact")), 2),
+            item[0],
+            item[1],
+            item[2],
+        ),
+    ):
+        lesson = entry[3]
+        key = canonical_json({"kind": lesson.kind, "rule": dict(lesson.structured_rule)})
+        if key in merged:
+            first = merged[key]
+            merged[key] = replace(
+                first,
+                source_dependencies=tuple(
+                    sorted(set(first.source_dependencies) | set(lesson.source_dependencies))
+                ),
+                source_fingerprints={**first.source_fingerprints, **lesson.source_fingerprints},
+            )
+            continue
+        merged[key] = lesson
+        order.append(key)
+    return [merged[key] for key in order[:budget]]
 
 
 def _grain_text(grain: object) -> str:
@@ -271,6 +335,22 @@ def _render_rule(lesson: LearnedLesson) -> str:
             f"({int(rule.get('contexts', 0))} contexts). That is an observed coincidence of values, "
             "not a verified equivalence of definitions; do not substitute one for the other."
         )
+    if kind == "semantic_fact" and rule.get("fact"):
+        fact = rule.get("fact")
+        if fact == "grain":
+            grain = " x ".join(str(c) for c in (rule.get("grain") or []))
+            return f"Declared grain: one row per {grain}. Aggregate at this grain, or say why the answer's grain differs."
+        if fact == "period_column":
+            return (
+                f"Declared period column: {rule.get('column')}. Define \"current\", \"latest\" and any "
+                "period comparison by this column, not by the maximum of another field."
+            )
+        if fact == "units":
+            return f"{rule.get('column')} is measured in {rule.get('unit')}; report it with that unit."
+        if fact == "definition":
+            return f"{rule.get('name')}: {rule.get('definition')}"
+        if fact == "note":
+            return str(rule.get("text") or lesson.subject)
     if kind in {"metric_equivalence", "metric_non_equivalence"}:
         measures = " and ".join(str(m) for m in (rule.get("measures") or [lesson.subject]))
         relation = "are equivalent by definition" if kind == "metric_equivalence" else "are not equivalent"

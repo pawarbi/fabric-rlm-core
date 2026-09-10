@@ -45,6 +45,9 @@ Use instructions for task-specific guidance, pydantic_schemas for typed outputs,
 
 - If a turn fails or returns wrong data, write a recovery turn.
 - Diagnose briefly with code/prints, then change approach.
+- One code block per turn. The runtime executes it and returns the real output; output you write yourself is not evidence and is never executed.
+- Every number you submit must come from code that ran: pass computed values to SUBMIT and print them first. A literal you typed that no output showed is rejected.
+- When repeated failures leave no computed result, call ABSTAIN('what is missing') rather than inventing values. An abstention is recorded as a failed run with your reason; an invented answer is a wrong one.
 
 ## Task
 

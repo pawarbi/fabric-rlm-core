@@ -75,6 +75,174 @@ def _table_of(name: str) -> str:
     return text[: text.index("[")].strip() if "[" in text else ""
 
 
+def _field_types(profile: SourceProfile) -> dict[str, str]:
+    """Column name to profiled type for a tabular or Lakehouse source."""
+    types: dict[str, str] = {}
+    schema = profile.schema if isinstance(profile.schema, Mapping) else {}
+    for name, entry in schema.items():
+        if not isinstance(entry, Mapping):
+            continue
+        declared = entry.get("type")
+        if isinstance(declared, str):
+            types[str(name)] = declared
+        nested = entry.get("columns")
+        if isinstance(nested, Mapping):
+            for column, column_entry in nested.items():
+                if isinstance(column_entry, Mapping) and isinstance(column_entry.get("type"), str):
+                    types[str(column)] = str(column_entry["type"])
+    return types
+
+
+def _tabular_structural_lessons(profile: SourceProfile) -> list[LearnedLesson]:
+    """What a table declares about time through its own columns.
+
+    A boolean column named like a current-period flag (``is_current``,
+    ``current_quarter_flag``) is the table saying it defines "current"
+    itself. With a period word in the name too it is active at medium
+    confidence; a bare "current" is only a candidate, since the word has
+    other meanings in a table (current balance, current owner).
+    """
+    lessons: list[LearnedLesson] = []
+    fingerprints = {profile.source_id: profile.schema_fingerprint}
+    flags = [
+        name
+        for name, declared in sorted(_field_types(profile).items())
+        if declared == "boolean" and _CURRENT_PERIOD.search(name)
+    ]
+    if not flags:
+        return lessons
+    period_named = [name for name in flags if _PERIOD_COLUMN.search(name)]
+    if period_named:
+        status, confidence, basis = "active", "medium", ("schema_name_pattern", "boolean_period_flag")
+        constructs = period_named
+    else:
+        status, confidence, basis = "candidate", "medium", ("schema_name_pattern",)
+        constructs = flags
+    lessons.append(
+        LearnedLesson(
+            lesson_id=_lesson_id("time_semantics", profile.source_id, "current period"),
+            kind="time_semantics",
+            subject="current period",
+            structured_rule={
+                "current_period_constructs": constructs[:8],
+                "advice": "use_declared_current_flag",
+            },
+            status=status,
+            confidence=confidence,
+            source_dependencies=(profile.source_id,),
+            source_fingerprints=fingerprints,
+            basis=basis,
+            dependency_scope="schema",
+        )
+    )
+    return lessons
+
+
+_DECLARED_KEYS = frozenset({"grain", "period_column", "units", "definitions", "notes"})
+
+
+def _known_field_names(profile: SourceProfile) -> set[str]:
+    names = set(_field_types(profile))
+    if profile.family == "semantic_model":
+        for section in ("columns", "measures"):
+            for name in _schema_section(profile, section):
+                names.add(str(name))
+                leaf = _leaf(str(name))
+                if leaf:
+                    names.add(leaf)
+    return names
+
+
+def declared_lessons(
+    package: KnowledgePackage,
+    declared: Mapping[str, Mapping[str, object]] | None,
+) -> tuple[LearnedLesson, ...]:
+    """Facts the source owner states, as active lessons with a declared basis.
+
+    ``declared`` maps a source id to any of ``grain`` (the columns one row
+    is unique by), ``period_column`` (the column that defines periods, and
+    therefore "current" and "latest"), ``units`` (column to unit),
+    ``definitions`` (a metric or flag to the text that defines it) and
+    ``notes`` (free text). Columns must exist in the profiled schema; a
+    declaration about a column the source does not have is an error, not a
+    lesson. These are the only lessons that reach an agent for every task
+    on the source, because a declaration is not a hypothesis.
+    """
+    if not declared:
+        return ()
+    if not isinstance(declared, Mapping):
+        raise TypeError("declared must map source ids to fact mappings")
+    profiles = {profile.source_id: profile for profile in package.sources}
+    lessons: list[LearnedLesson] = []
+    for source_id, facts in sorted(declared.items()):
+        profile = profiles.get(str(source_id))
+        if profile is None:
+            raise ValueError(f"declared metadata names an unknown source: {source_id}")
+        if not isinstance(facts, Mapping):
+            raise ValueError(f"declared metadata for {source_id} must be a mapping")
+        unknown = sorted(set(map(str, facts)) - _DECLARED_KEYS)
+        if unknown:
+            raise ValueError(f"declared metadata for {source_id} has unknown key: {unknown[0]}")
+        known = _known_field_names(profile)
+
+        def require_column(name: object, what: str) -> str:
+            text = str(name).strip()
+            if not text:
+                raise ValueError(f"declared {what} for {source_id} names an empty column")
+            if known and text not in known:
+                raise ValueError(f"declared {what} for {source_id} names an unknown column: {text}")
+            return text
+
+        def fact(subject: str, rule: Mapping[str, object]) -> LearnedLesson:
+            return LearnedLesson(
+                lesson_id=_lesson_id("semantic_fact", profile.source_id, subject),
+                kind="semantic_fact",
+                subject=subject,
+                structured_rule=dict(rule),
+                status="active",
+                confidence="high",
+                source_dependencies=(profile.source_id,),
+                source_fingerprints={profile.source_id: profile.schema_fingerprint},
+                basis=("declared",),
+                dependency_scope="schema",
+            )
+
+        grain = facts.get("grain")
+        if grain is not None:
+            if isinstance(grain, str) or not isinstance(grain, (list, tuple)) or not grain:
+                raise ValueError(f"declared grain for {source_id} must be a non-empty list of columns")
+            columns = [require_column(item, "grain") for item in grain]
+            lessons.append(fact("grain", {"fact": "grain", "grain": columns, "advice": "one_row_per_grain"}))
+        period = facts.get("period_column")
+        if period is not None:
+            column = require_column(period, "period_column")
+            lessons.append(
+                fact("period column", {"fact": "period_column", "column": column, "advice": "define_periods_by_this_column"})
+            )
+        units = facts.get("units")
+        if units is not None:
+            if not isinstance(units, Mapping):
+                raise ValueError(f"declared units for {source_id} must map columns to units")
+            for column_name, unit in sorted(units.items()):
+                column = require_column(column_name, "units")
+                lessons.append(fact(f"{column} units", {"fact": "units", "column": column, "unit": str(unit).strip()}))
+        definitions = facts.get("definitions")
+        if definitions is not None:
+            if not isinstance(definitions, Mapping):
+                raise ValueError(f"declared definitions for {source_id} must map names to text")
+            for name, text in sorted(definitions.items()):
+                lessons.append(
+                    fact(f"{str(name).strip()} definition", {"fact": "definition", "name": str(name).strip(), "definition": str(text).strip()})
+                )
+        notes = facts.get("notes")
+        if notes is not None:
+            if isinstance(notes, str) or not isinstance(notes, (list, tuple)):
+                raise ValueError(f"declared notes for {source_id} must be a list of strings")
+            for index, text in enumerate(notes):
+                lessons.append(fact(f"note {index + 1}", {"fact": "note", "text": str(text).strip()}))
+    return tuple(lessons)
+
+
 def _lesson_id(kind: str, source_id: str, subject: str) -> str:
     suffix = _domain_fingerprint(
         "fabric-rlm.knowledge.lesson.v1",
@@ -108,6 +276,7 @@ def structural_lessons(package: KnowledgePackage) -> tuple[LearnedLesson, ...]:
     lessons: list[LearnedLesson] = []
     for profile in package.sources:
         if profile.family != "semantic_model":
+            lessons.extend(_tabular_structural_lessons(profile))
             continue
         fingerprints = {profile.source_id: profile.schema_fingerprint}
         columns = _schema_section(profile, "columns")
@@ -299,7 +468,7 @@ def _valid_grain_lessons(
     for record in records:
         if record.observation_type != "query_execution" or not record.execution_trusted:
             continue
-        if record.observation.get("query_type") not in {"aggregate", "measure"}:
+        if record.observation.get("query_type") not in {"aggregate", "measure", "registered_operation"}:
             continue
         grain = record.observation.get("grain")
         rows = _number(record.observation.get("returned_rows"))
@@ -811,4 +980,4 @@ def promote_lessons(
     )
 
 
-__all__ = ["current_evidence", "derive_lessons", "promote_lessons", "structural_lessons"]
+__all__ = ["current_evidence", "declared_lessons", "derive_lessons", "promote_lessons", "structural_lessons"]

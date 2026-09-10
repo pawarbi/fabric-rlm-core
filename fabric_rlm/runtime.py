@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import inspect
 import json
 import logging
@@ -11,7 +12,7 @@ import re
 import time
 import uuid
 import warnings
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -303,6 +304,102 @@ def _truncate_for_feedback(text: str, limit: int, *, tail_ratio: float = 0.0) ->
     return f"{head_part}\n... ({omitted} chars omitted) ...\n{tail_part}"
 
 
+class OperationResultPacket(dict):
+    """The result of a registered host operation, as the agent receives it.
+
+    A plain dict for code (``knowledge_result["rows"]``) that introduces
+    itself in the prompt: which operation ran with which parameters, the
+    columns and grain of its rows, that it is already aggregated, and that
+    the raw sources are still bound for anything it does not answer.
+    """
+
+    def __init__(
+        self,
+        packet: Mapping[str, Any],
+        *,
+        operation: Any = None,
+        raw_sources: Sequence[str] = (),
+    ) -> None:
+        super().__init__(packet)
+        self._operation = operation
+        self._raw_sources = list(raw_sources)
+
+    def __rlm_describe__(self) -> str:
+        rows = self.get("rows") or []
+        columns: list[str] = []
+        for row in rows:
+            if isinstance(row, Mapping):
+                for name in row:
+                    if name not in columns:
+                        columns.append(str(name))
+        kind = getattr(self._operation, "operation", None) or "registered operation"
+        grain = getattr(self._operation, "grain", None) or ""
+        parameters = self.get("parameters") or {}
+        active = {k: v for k, v in parameters.items() if v not in ("", None)}
+        lines = [
+            f"dict: host-computed result of registered operation {self.get('operation_id')} "
+            f"({kind}); audit {self.get('audit_status')}.",
+            f"    parameters: {json.dumps(active, sort_keys=True, default=str)}",
+            f"    rows: {self.get('row_count', len(rows))} row(s) with columns {columns}"
+            + (f"; grain: {grain}" if grain else ""),
+            "    This is an already aggregated result, not the raw table: its rows have no "
+            "other columns, and the numbers in them are the only host-verified figures.",
+        ]
+        if self._raw_sources:
+            lines.append(
+                f"    Raw source(s) {', '.join(self._raw_sources)} remain bound. Use "
+                "knowledge_result first; recompute from a raw source only when the packet "
+                "does not answer the task, and say so."
+            )
+        return "\n".join(lines)
+
+
+def _operation_telemetry(
+    operation: Any,
+    parameters: Mapping[str, Any],
+    *,
+    executed: bool,
+    seconds: float,
+    returned_rows: int | None = None,
+    reason: str | None = None,
+    error: BaseException | None = None,
+    audit_status: str | None = None,
+) -> dict[str, Any]:
+    """One typed record for a host-side operation, shaped like a source call."""
+    grain = [
+        str(parameters[name])
+        for name in ("groupby", "groupby_2", "join_key", "join_key_2")
+        if parameters.get(name)
+    ]
+    filter_columns = [
+        str(parameters[name])
+        for name in ("filter_column", "filter_column_2", "filter_column_3")
+        if parameters.get(name)
+    ]
+    record: dict[str, Any] = {
+        "query_type": "registered_operation",
+        "operation_id": getattr(operation, "operation_id", None),
+        "operation": getattr(operation, "operation", None),
+        "required_sources": list(getattr(operation, "required_sources", ()) or ()),
+        "groupby": grain,
+        "filter_columns": filter_columns,
+        "filter_count": len(filter_columns),
+        "measures": [str(parameters[name]) for name in ("measure", "left_measure", "right_measure") if parameters.get(name)],
+        "executed": executed,
+        "execution_seconds": round(float(seconds), 3),
+        "total_seconds": round(float(seconds), 3),
+    }
+    if returned_rows is not None:
+        record["returned_rows"] = int(returned_rows)
+    if audit_status is not None:
+        record["audit_status"] = audit_status
+    if reason is not None:
+        record["reason"] = reason
+    if error is not None:
+        record["error"] = f"{type(error).__name__}: {error}"[:300]
+    return record
+
+
 def _final_turn_suffix() -> str:
     """BUG-LIB-3: addendum appended to the user message immediately preceding
     the LM's final permitted turn. Tells the model that this is its last shot
@@ -315,9 +412,11 @@ def _final_turn_suffix() -> str:
         "\n\n*** FINAL TURN ***\n"
         "This is your LAST turn - no further code will be executed after this "
         "one. Respond with one complete ```python code block that calls "
-        "SUBMIT(...) with your best current answer derived from the state "
-        "above. Submitting an imperfect answer is strictly better than "
-        "submitting nothing."
+        "SUBMIT(...) with values computed by code that actually ran (the REPL "
+        "output and state above). Do not type numbers or claims you have not "
+        "computed: an incomplete answer built on executed output is acceptable, "
+        "an invented one is not. If nothing that executed supports an answer, "
+        "call ABSTAIN('what is missing') instead of guessing."
     )
 
 
@@ -1204,8 +1303,14 @@ class RLM:
         registry: SourceAdapterRegistry | None = None,
         transport: OneLakeKnowledgeTransport | None = None,
         overwrite: bool = False,
+        declared: Mapping[str, Mapping[str, object]] | None = None,
     ) -> Knowledge:
-        """Learn a deterministic package from explicitly approved sources."""
+        """Learn a deterministic package from explicitly approved sources.
+
+        ``declared`` states what the profile cannot infer about a source:
+        its grain, period column, units and definitions. See
+        ``fabric_rlm.knowledge_lessons.declared_lessons``.
+        """
 
         from .knowledge_api import learn as learn_knowledge
 
@@ -1218,6 +1323,7 @@ class RLM:
             registry=registry,
             transport=transport,
             overwrite=overwrite,
+            declared=declared,
         )
 
     def _bind_knowledge_inputs(
@@ -1298,6 +1404,7 @@ class RLM:
         from .knowledge_execution import (
             OperationPlanError,
             OperationPlanFallback,
+            OperationResultTooLarge,
             execute_registered_operation,
             parse_operation_plan,
         )
@@ -1398,13 +1505,39 @@ class RLM:
             metadata["operation_fallback_reason"] = "no_compatible_operation"
             metadata["knowledge_mode"] = "fallback_no_compatible_operation"
             return bound_inputs, metadata
+        operation = next(
+            (
+                item
+                for item in self._knowledge.package.operations
+                if item.operation_id == plan.operation_id
+            ),
+            None,
+        )
+        telemetry_before = self._handle_telemetry_lengths()
+        started = time.perf_counter()
         try:
             execution = execute_registered_operation(
                 self._knowledge,
                 operation_id=plan.operation_id,
                 parameters=plan.parameters,
             )
-        except OperationPlanError:
+        except OperationResultTooLarge as exc:
+            logger.warning(
+                "Registered operation result exceeded its declared bounds"
+            )
+            metadata["operation_fallback_reason"] = "operation_result_bound_exceeded"
+            metadata["knowledge_mode"] = "fallback_operation_result_too_large"
+            metadata["operation_execution"] = _operation_telemetry(
+                operation,
+                plan.parameters,
+                executed=True,
+                reason="result_bound_exceeded",
+                error=exc,
+                seconds=time.perf_counter() - started,
+            )
+            metadata["operation_source_calls"] = self._handle_telemetry_since(telemetry_before)
+            return bound_inputs, metadata
+        except OperationPlanError as exc:
             logger.warning(
                 "Registered operation plan was rejected by the host contract"
             )
@@ -1412,9 +1545,38 @@ class RLM:
                 "operation_plan_contract_rejected"
             )
             metadata["knowledge_mode"] = "fallback_operation_plan_rejected"
+            metadata["operation_execution"] = _operation_telemetry(
+                operation,
+                plan.parameters,
+                executed=False,
+                reason="plan_rejected",
+                error=exc,
+                seconds=time.perf_counter() - started,
+            )
+            metadata["operation_source_calls"] = self._handle_telemetry_since(telemetry_before)
             return bound_inputs, metadata
+        except ValueError as exc:
+            metadata["operation_execution"] = _operation_telemetry(
+                operation,
+                plan.parameters,
+                executed=True,
+                reason="audit_failed",
+                error=exc,
+                seconds=time.perf_counter() - started,
+            )
+            metadata["operation_source_calls"] = self._handle_telemetry_since(telemetry_before)
+            raise
 
         packet = execution.to_packet()
+        metadata["operation_execution"] = _operation_telemetry(
+            operation,
+            plan.parameters,
+            executed=True,
+            returned_rows=int(packet.get("row_count") or 0),
+            seconds=execution.elapsed_seconds,
+            audit_status=execution.audit_status,
+        )
+        metadata["operation_source_calls"] = self._handle_telemetry_since(telemetry_before)
         metadata.update(
             {
                 "knowledge_mode": "registered_operation",
@@ -1429,13 +1591,53 @@ class RLM:
                 "operation_host_seconds": execution.elapsed_seconds,
             }
         )
-        synthesis_inputs = {
-            name: value
-            for name, value in bound_inputs.items()
-            if name not in self._knowledge.bindings
-        }
-        synthesis_inputs["knowledge_result"] = packet
+        # The raw sources stay bound next to the packet: learning narrows
+        # the search, it never removes the cold path. The packet introduces
+        # itself in the prompt as what it is, an already aggregated host
+        # result with a known shape.
+        synthesis_inputs = dict(bound_inputs)
+        synthesis_inputs["knowledge_result"] = OperationResultPacket(
+            packet,
+            operation=operation,
+            raw_sources=[name for name in bound_inputs if name in self._knowledge.bindings],
+        )
         return synthesis_inputs, metadata
+
+    def _handle_telemetry_lengths(self) -> dict[str, int]:
+        """How many telemetry records each bound handle holds right now."""
+        lengths: dict[str, int] = {}
+        if self._knowledge is None:
+            return lengths
+        for alias, handle in self._knowledge.bindings.items():
+            if hasattr(type(handle), "query_telemetry"):
+                try:
+                    lengths[alias] = len(handle.query_telemetry)
+                except Exception:  # noqa: BLE001 - telemetry is best effort
+                    continue
+        return lengths
+
+    def _handle_telemetry_since(self, before: Mapping[str, int]) -> list[dict[str, Any]]:
+        """The typed records a host-side operation added to the bound handles.
+
+        A registered semantic-model operation runs on the parent side, so
+        its cardinality preflight and evaluation never pass through the
+        worker's telemetry. They are collected here and harvested with the
+        run's evidence like any other source call.
+        """
+        records: list[dict[str, Any]] = []
+        if self._knowledge is None:
+            return records
+        for alias, handle in self._knowledge.bindings.items():
+            if alias not in before:
+                continue
+            try:
+                log = list(handle.query_telemetry)
+            except Exception:  # noqa: BLE001
+                continue
+            for record in log[before[alias]:]:
+                if isinstance(record, Mapping):
+                    records.append({"input": alias, **dict(record)})
+        return records
 
     @staticmethod
     def _attach_knowledge_metadata(
@@ -2214,7 +2416,7 @@ class RLM:
                 # that isn't valid Python). Sibling of the truncation guard
                 # above: don't ship prose to the worker just to get a SyntaxError
                 # back — short-circuit with a clean "resend a block" signal.
-                selected_code = _select_code_block(response_text)
+                selected_code, protocol_notes = _select_execution(response_text)
                 if selected_code is None:
                     messages.append({"role": "assistant", "content": response_text})
                     turn_counter += 1
@@ -2466,6 +2668,20 @@ class RLM:
                     )
                 )
 
+                if getattr(result, "abstained", False):
+                    reason = getattr(result, "abstain_reason", None) or ""
+                    trajectory.metadata["abstain_reason"] = reason
+                    self._log(f"ABSTAIN: {reason}")
+                    return RLMResult(
+                        submitted=False,
+                        payload=None,
+                        trajectory=trajectory,
+                        final_state=result.state,
+                        max_turns=self.max_turns,
+                        failure_reason="abstained",
+                        **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
+                    )
+
                 # NEW-H stuck-loop circuit breaker: bail early if the last
                 # ``stuck_loop_threshold`` CONSECUTIVE turns are all failures
                 # with the same normalized code and the same error type.
@@ -2578,7 +2794,10 @@ class RLM:
                 messages.append({
                     "role": "user",
                     "content": self._format_feedback(
-                        result, turn_counter, is_final_turn=is_final_turn
+                        result,
+                        turn_counter,
+                        is_final_turn=is_final_turn,
+                        protocol_notes=protocol_notes,
                     ),
                 })
 
@@ -2938,6 +3157,7 @@ class RLM:
         problems: list[str] = []
         problems.extend(check_answer_hygiene(combined))
         problems.extend(check_directional_claims(combined))
+        problems.extend(self._unsupported_literal_problems(payload, context))
 
         task_text, _ = _task_and_outputs(self.signature, self._inline_task, self._inline_outputs)
         if task_asks_about_change(task_text):
@@ -2957,6 +3177,38 @@ class RLM:
                 if issue.kind == "cartesian_candidate_filter":
                     problems.append(f"Turn {issue.turn}: {issue.message}")
         return problems
+
+    def _unsupported_literal_problems(
+        self, payload: Mapping[str, Any] | None, context: Mapping[str, Any]
+    ) -> list[str]:
+        """Numbers typed into SUBMIT that no executed output ever showed.
+
+        A value computed by code arrives in SUBMIT as a name or an
+        expression. A number typed as a literal inside the call is the
+        model's own claim, and it has to appear in the real REPL output of
+        this run, in the registered-operation packet, or in the task text.
+        Anything else was invented, whatever the prose around it says.
+        """
+        from .analytical_integrity import check_unsupported_literals
+
+        if os.environ.get("FABRIC_RLM_CLAIM_PROVENANCE", "").strip().lower() in {"0", "false", "off", "no"}:
+            return []
+        trajectory = context.get("trajectory")
+        turns = list(getattr(trajectory, "turns", None) or [])
+        if not turns:
+            return []
+        code = turns[-1].code or ""
+        evidence: list[str] = [turn.stdout or "" for turn in turns]
+        task_text, _ = _task_and_outputs(self.signature, self._inline_task, self._inline_outputs)
+        evidence.append(task_text or "")
+        inputs = context.get("inputs") or {}
+        packet = inputs.get("knowledge_result") if isinstance(inputs, Mapping) else None
+        if isinstance(packet, Mapping):
+            try:
+                evidence.append(json.dumps(packet, default=str))
+            except Exception:  # noqa: BLE001
+                pass
+        return check_unsupported_literals(code, payload, "\n".join(evidence))
 
     def _run_analytical_integrity(
         self, payload: Mapping[str, Any] | None, context: Mapping[str, Any]
@@ -3060,7 +3312,12 @@ class RLM:
         return None
 
     def _format_feedback(
-        self, result: ExecResult, turn: int, *, is_final_turn: bool = False
+        self,
+        result: ExecResult,
+        turn: int,
+        *,
+        is_final_turn: bool = False,
+        protocol_notes: Sequence[str] | None = None,
     ) -> str:
         stdout_text = _truncate_for_feedback(
             result.stdout,
@@ -3068,6 +3325,8 @@ class RLM:
             tail_ratio=_tail_ratio("FABRIC_RLM_STDOUT_TAIL_RATIO", _STDOUT_TAIL_RATIO_DEFAULT),
         )
         parts = [f"REPL output from turn {turn}:\n```\n{stdout_text}\n```"]
+        for note in protocol_notes or ():
+            parts.append(f"\nProtocol note: {note}")
         if len(result.stdout) > STDOUT_FEEDBACK_LIMIT and _truncation_hint_enabled():
             parts.append(_build_truncation_hint(len(result.stdout), STDOUT_FEEDBACK_LIMIT))
         if not result.ok:
@@ -3613,6 +3872,85 @@ def _select_code_block(text: str) -> str | None:
 def _extract_code(text: str) -> str:
     """Back-compat wrapper: the selected code block, or "" when none is runnable."""
     return _select_code_block(text) or ""
+
+
+_OUTPUT_FENCE_LANGS = {"", "text", "txt", "output", "console", "stdout", "plaintext", "log"}
+
+
+def _bound_names(tree: ast.AST) -> set[str]:
+    """Names a block binds: assignments, imports, defs, loop and with targets."""
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound.add((alias.asname or alias.name).split(".", 1)[0])
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+    return bound
+
+
+def _free_names(tree: ast.AST) -> set[str]:
+    """Names a block reads without binding them itself."""
+    loaded = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+    return loaded - _bound_names(tree) - set(dir(builtins))
+
+
+def _select_execution(text: str) -> tuple[str | None, list[str]]:
+    """The code to run for one response, plus protocol notes for the model.
+
+    One block is the protocol. A model that writes several blocks with
+    invented output between them has simulated a transcript: running only
+    its last block would fail on names the earlier blocks were supposed to
+    create, and the model would carry its invented numbers forward. When
+    the last block depends on names an earlier block binds, the blocks run
+    in order as one step, so what the model sees next is real output for
+    the whole sequence. A self-contained last block (a revision) runs
+    alone, as before. Any output the model wrote itself is noted as not
+    executed.
+    """
+    blocks = _fenced_blocks(text)
+    python_blocks = [body for lang, body in blocks if lang in _PYTHON_FENCE_LANGS and body]
+    notes: list[str] = []
+    fabricated_output = False
+    seen_python = False
+    for lang, body in blocks:
+        if lang in _PYTHON_FENCE_LANGS:
+            seen_python = True
+        elif seen_python and lang in _OUTPUT_FENCE_LANGS and body and not _is_parseable_python(body):
+            fabricated_output = True
+    selected = _select_code_block(text)
+    if selected is None:
+        return None, notes
+    parseable = [body for body in python_blocks if _is_parseable_python(body)]
+    if len(parseable) >= 2 and selected == parseable[-1]:
+        earlier_bound: set[str] = set()
+        for body in parseable[:-1]:
+            earlier_bound |= _bound_names(ast.parse(body))
+        needed = _free_names(ast.parse(selected)) & earlier_bound
+        if needed:
+            selected = "\n\n".join(parseable)
+            notes.append(
+                f"Your response contained {len(parseable)} code blocks; the last one used "
+                f"{', '.join(sorted(needed)[:6])} from the earlier ones, so all of them were "
+                "executed in order as one step. Only the output below is real."
+            )
+    if fabricated_output:
+        notes.append(
+            "Output you wrote yourself in the response was not executed and is not evidence; "
+            "only the REPL output the runtime returns counts. Send one code block per turn "
+            "and read the real output before deciding anything."
+        )
+    return selected, notes
 
 
 def validate_submit_payload(

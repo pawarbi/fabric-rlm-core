@@ -4,6 +4,73 @@
 
 ### Added
 
+- **`ABSTAIN(reason)` in the worker namespace.** A run that cannot support an
+  answer ends on the record instead of inventing one: the result is not
+  submitted, `failure_reason` is `"abstained"` and the reason is on the
+  trajectory as `abstain_reason`. `from sandbox import ABSTAIN` works like
+  `SUBMIT`. The final-turn addendum now asks for values computed by code
+  that ran, or an abstention; it no longer says an imperfect answer beats
+  nothing.
+- **Declared source metadata.** `RLM.learn(..., declared={"orders": {...}})`
+  states what a profile cannot infer: the `grain` (columns a row is unique
+  by), the `period_column` that defines periods and therefore "current" and
+  "latest", `units` per column, `definitions` of metrics and flags, and
+  free `notes`. Declared facts become active `semantic_fact` lessons with a
+  `declared` basis, reach every task on the source (the agent and the
+  operation planner), persist with the package, and are validated against
+  the profiled schema: a declaration about a column the source does not
+  have is an error. See `fabric_rlm.knowledge_lessons.declared_lessons`.
+- **Evidence from host-side operations.** A registered operation the
+  runtime executes for a run is recorded on the trajectory
+  (`operation_execution`: grain, filter columns, measures, row count,
+  seconds, audit status, or the reason it was refused) together with the
+  telemetry the bound handles produced while it ran
+  (`operation_source_calls`). Evidence harvesting turns both into
+  `query_execution` records, so file and Lakehouse sources learn grain
+  lessons from their registered operations exactly as semantic models do
+  from worker queries, and a refused semantic-model grouping becomes
+  expensive-grain evidence. Before this, only handles with worker telemetry
+  produced any evidence, so a CSV, Parquet or Lakehouse package could never
+  hold a lesson.
+- **Lakehouse query grain.** Parent-side Lakehouse SQL telemetry now records
+  the columns a query grouped by (`groupby`, parsed from DuckDB's own AST;
+  the SQL still never leaves the run), so Lakehouse queries feed grain
+  lessons.
+- **A current-period flag in a table is a structural lesson.** A boolean
+  column named like a current-period marker in a CSV, Parquet, Delta or
+  Lakehouse source yields a time-semantics lesson: active at medium
+  confidence when the name also carries a period word (`is_current_period`),
+  a candidate otherwise (`current` alone has other meanings).
+
+### Changed
+
+- **A dependent code sequence runs in order.** When a response holds
+  several Python blocks and the last one reads names an earlier block
+  binds, the blocks execute in order as one step, so the model sees real
+  output for the whole sequence instead of a `NameError` on its last block.
+  A self-contained last block (a revision) still runs alone. Output the
+  model wrote itself between blocks is named in the feedback as not
+  executed and not evidence, and the prompt now states the one-block
+  protocol.
+- **Numbers typed into SUBMIT must trace to executed output.** The
+  analytical-integrity screen rejects a number typed as a literal inside
+  the SUBMIT call (as a value or inside a string) that appears in no REPL
+  output of the run, in the registered-operation packet, or in the task
+  text. Computed values passed as names are untouched; rounding and
+  percent-versus-ratio spellings are accepted. In repair mode this costs a
+  turn that prints the figure; the accepted answer then traces. Set
+  `FABRIC_RLM_CLAIM_PROVENANCE=0` to switch this one screen off;
+  `analytical_integrity=False` still switches off the whole screen.
+- **The registered-operation packet is a typed contract and the raw
+  sources stay bound.** `knowledge_result` introduces itself in the prompt
+  as the host-computed, audited result of a named operation with its
+  parameters, the columns and grain of its rows, and the fact that it is
+  already aggregated. The raw sources remain bound next to it: learning
+  narrows the search, it never removes the cold path. Previously the raw
+  handles were removed and the packet was listed as a bare dict.
+
+### Added
+
 - **Evidence and lessons in knowledge packages.** Each turn now records its
   source calls as typed telemetry in `TurnRecord.source_calls` (semantic-model
   `aggregate`, `measure` and `dax` records with grain, counts, estimated

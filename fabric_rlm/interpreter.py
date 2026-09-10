@@ -223,10 +223,15 @@ class ExecResult:
     # model telemetry plus parent-side Lakehouse queries). ``None`` when the
     # turn reported none.
     source_calls: list[dict[str, Any]] | None = None
+    # True when the turn called ABSTAIN(reason): the run ends without an
+    # answer and the reason travels with it.
+    abstained: bool = False
+    abstain_reason: str | None = None
 
     @classmethod
     def from_response(cls, raw: dict[str, Any]) -> "ExecResult":
         reported = raw.get("source_calls")
+        reason = raw.get("abstain_reason")
         return cls(
             ok=bool(raw.get("ok")),
             submitted=bool(raw.get("submitted", False)),
@@ -240,6 +245,8 @@ class ExecResult:
                 if isinstance(reported, list)
                 else None
             ),
+            abstained=bool(raw.get("abstained", False)),
+            abstain_reason=str(reason) if isinstance(reason, str) else None,
         )
 
 
@@ -431,6 +438,13 @@ class Interpreter:
             truncated=bool(result.get("truncated")) if isinstance(result, dict) else None,
             total_seconds=round(time.monotonic() - started, 3),
         )
+        # The grain of the query is what a package can learn from it: the
+        # column names it grouped by, never the SQL or a value.
+        from .lakehouse import query_group_by
+
+        groupby = query_group_by(sql)
+        if groupby:
+            record["groupby"] = groupby
         self._pending_source_calls.append(record)
         return result
 

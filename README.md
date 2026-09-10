@@ -186,9 +186,13 @@ closed rather than entering registered execution.
 
 A package can also carry what earlier runs learned about a source. Every turn
 records its source calls as typed telemetry (the grain a semantic-model query
-asked for, the estimated group count, whether it ran, was rejected or timed
-out, how long it took, which measures came back identical) and never the data
-values. `capture_evidence=True` turns that telemetry, together with what actually
+or a Lakehouse query asked for, the estimated group count, whether it ran, was
+rejected or timed out, how long it took, which measures came back identical)
+and never the data values; a registered operation the host executed for the
+run is recorded the same way, so CSV, Parquet, Delta and Lakehouse sources learn
+from their operations as semantic models learn from worker queries. Declared
+facts (grain, period column, units, definitions) are lessons from the start
+and reach every task on the source. `capture_evidence=True` turns that telemetry, together with what actually
 checked the run's answer (a validator or skill verifier that executed and
 accepted it, never configuration alone) and the analytical-integrity
 status, into `result.evidence`;
@@ -199,7 +203,19 @@ the package it is enriched into is dropped and noted as an event, never
 relabelled:
 
 ```python
-knowledge = RLM.learn(sources={"arr_model": model}, store=store)
+knowledge = RLM.learn(
+    sources={"production": "production.csv"},
+    store=store,
+    # what the profile cannot infer, stated by the source owner
+    declared={
+        "production": {
+            "grain": ["line_id", "reporting_period"],
+            "period_column": "reporting_period",
+            "units": {"produced_units": "units"},
+            "definitions": {"reporting_complete": "the row is final; exclude incomplete rows from totals"},
+        }
+    },
+)
 
 result = RLM.task(question, knowledge=knowledge, lm=lm, capture_evidence=True).run()
 knowledge = RLM.enrich(knowledge, [result], store=store, overwrite=True)

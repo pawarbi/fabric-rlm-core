@@ -22,6 +22,7 @@ from fabric_rlm.analytical_integrity import (
     check_directional_claims,
     check_ranking_disclosure,
     classify_claim_level,
+    check_unsupported_literals,
     infer_requested_ranking,
     is_material_change,
     parse_directional_claims,
@@ -824,3 +825,74 @@ def test_entry_point_activates_only_the_checks_with_inputs():
     with pytest.raises(AnalyticalIntegrityError):
         validate_analysis_integrity(requested_grain=["a", "b"], actual_grain=["a"], strict=True)
     assert math.isfinite(1.0)
+
+
+# --- claim provenance: numbers typed into SUBMIT that no output showed ---
+# The screen exists because a run fabricated a transcript and typed figures
+# that had never been computed. A sign or an exponent must not change that
+# verdict in either direction.
+
+
+def test_invented_negative_literal_is_reported_like_a_positive_one():
+    """A drop or loss is typed negative; the screen must still see it."""
+    positive = check_unsupported_literals("SUBMIT(value=72800)", {"a": 1}, "total 1800\n")
+    negative = check_unsupported_literals("SUBMIT(value=-72800)", {"a": 1}, "total 1800\n")
+    assert positive, "sanity: a positive invented literal is reported"
+    assert negative, "a negative invented literal must be reported too"
+
+
+def test_negative_literal_supported_by_printed_output_is_accepted():
+    assert not check_unsupported_literals(
+        "SUBMIT(value=-500000)", {"a": 1}, "impact -500000\n"
+    )
+    assert not check_unsupported_literals(
+        "SUBMIT(r={'delta': -0.071})", {"a": 1}, "growth -0.0714\n"
+    )
+
+
+def test_exponent_formatted_output_supports_the_plain_spelling():
+    """numpy and pandas print wide floats as 4.5e+06; that is the evidence."""
+    assert not check_unsupported_literals(
+        "SUBMIT(value=4500000)", {"a": 1}, "impact 4.5e+06\n"
+    )
+    assert not check_unsupported_literals(
+        "SUBMIT(value=0.00035)", {"a": 1}, "rate 3.5e-04\n"
+    )
+
+
+def test_exponent_output_does_not_support_an_unrelated_number():
+    assert check_unsupported_literals("SUBMIT(value=72800)", {"a": 1}, "impact 4.5e+06\n")
+
+
+def test_signed_prose_is_supported_by_a_magnitude_printed_in_code():
+    """Code prints "abs drop = 1500000"; prose writes "Change: $-1,500,000"."""
+    assert not check_unsupported_literals(
+        "SUBMIT(a='Change: $-1,500,000  Ranked-by: abs drop')",
+        {"a": 1},
+        "abs drop = 1,500,000\n",
+    )
+    # and the reverse spelling, so neither side of the sign is privileged
+    assert not check_unsupported_literals(
+        "SUBMIT(a='declined by 500000')", {"a": 1}, "delta -500000\n"
+    )
+
+
+def test_magnitude_matching_does_not_excuse_a_figure_never_computed():
+    assert check_unsupported_literals(
+        "SUBMIT(a='Change: $-72,800')", {"a": 1}, "abs drop = 1,500,000\n"
+    )
+
+
+def test_a_sign_flip_is_out_of_scope_for_this_screen():
+    """Pinned so the boundary is a decision, not a surprise.
+
+    The screen asks whether a figure was computed, not whether its
+    direction is right. This behaviour is unchanged from before magnitudes
+    were compared; it is recorded here so a future reader does not mistake
+    it for a guarantee.
+    """
+    assert not check_unsupported_literals(
+        "SUBMIT(value=-500000)", {"a": 1}, "delta 500000\n"
+    )
+    # but a magnitude that was never computed is still caught, sign or not
+    assert check_unsupported_literals("SUBMIT(value=-72800)", {"a": 1}, "delta 500000\n")

@@ -65,6 +65,22 @@ class OperationPlanError(ValueError):
     """A model-produced plan is incompatible with the registered contract."""
 
 
+class OperationResultTooLarge(OperationPlanError):
+    """A legal plan produced more rows than the operation's declared bound.
+
+    This is a planning mistake rather than a host-contract violation: the
+    model chose ``groupby`` from the operation's own enum, so it can recover by
+    choosing a coarser grain. It subclasses :class:`OperationPlanError` so the
+    runtime falls back instead of aborting, while remaining distinguishable for
+    telemetry because the operation did execute before the bound was checked.
+
+    Deliberately *not* used for the column bound. The number of columns is
+    chosen by the host implementation, not by the plan, so an overflow there is
+    a genuine contract violation and must keep failing closed. See
+    ``test_failed_host_audit_does_not_fall_back_to_ordinary_execution``.
+    """
+
+
 @dataclass(frozen=True)
 class OperationPlan:
     operation_id: str
@@ -265,7 +281,7 @@ def _result_rows(
 ) -> tuple[dict[str, object], ...]:
     if isinstance(value, Mapping):
         if value.get("truncated") is True:
-            raise ValueError("operation result was truncated")
+            raise OperationResultTooLarge("operation result was truncated")
         columns = value.get("columns")
         raw_rows = value.get("rows")
         if (
@@ -290,7 +306,7 @@ def _result_rows(
     if not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
         raise ValueError("operation result must provide tabular records")
     if len(records) > operation.max_output_rows:
-        raise ValueError("operation result exceeds row bound")
+        raise OperationResultTooLarge("operation result exceeds row bound")
 
     columns: set[str] = set()
     normalized: list[dict[str, object]] = []
@@ -887,6 +903,7 @@ __all__ = [
     "OperationExecutionResult",
     "OperationPlan",
     "OperationPlanError",
+    "OperationResultTooLarge",
     "OperationPlanFallback",
     "execute_registered_operation",
     "parse_operation_plan",

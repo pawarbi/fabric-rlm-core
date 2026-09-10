@@ -384,7 +384,32 @@ def _ran():
 
 
 def _submit(payload):
-    return ExecResult(ok=True, submitted=True, stdout="", stderr="", state={}, submit_payload=payload)
+    # These fixtures exercise the prose and ranking screens. The figures an
+    # answer quotes count as printed by the submitting turn, since the
+    # literal-provenance screen (a number typed into SUBMIT that no output
+    # showed) has its own tests in test_generalization.py.
+    return ExecResult(
+        ok=True, submitted=True, stdout=_quoted_figures(payload), stderr="", state={},
+        submit_payload=payload,
+    )
+
+
+def _quoted_figures(payload) -> str:
+    import re
+
+    texts = []
+    stack = list(payload.values()) if isinstance(payload, dict) else [payload]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            texts.append(item)
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+        elif isinstance(item, (int, float)) and not isinstance(item, bool):
+            texts.append(repr(item))
+    return " ".join(re.findall(r"\d[\d,]*(?:\.\d+)?", " ".join(texts)))
 
 
 TASK = (
@@ -409,7 +434,13 @@ def _fence(code: str) -> str:
 
 
 def test_regression_bad_submission_is_sent_back_then_accepted(monkeypatch):
-    fake = FakeInterpreter([_ran(), _submit({"analysis": BAD_ANALYSIS}), _ran(), _submit({"analysis": GOOD_ANALYSIS})])
+    # the repair turn prints the ranked figures the answer then quotes; a
+    # figure typed into SUBMIT that no output showed is rejected as invented
+    printed = ExecResult(
+        ok=True, submitted=False, stderr="", state={},
+        stdout="Cloud APAC TELCO 2025/Q4 5,000,000 2026/Q2 4,500,000 impact 500,000 rank 1",
+    )
+    fake = FakeInterpreter([_ran(), _submit({"analysis": BAD_ANALYSIS}), printed, _submit({"analysis": GOOD_ANALYSIS})])
     monkeypatch.setattr(runtime_mod, "Interpreter", lambda **kwargs: fake)
     monkeypatch.delenv("FABRIC_RLM_ANALYTICAL_INTEGRITY", raising=False)
     lm = ScriptedLM(
