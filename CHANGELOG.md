@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.6.1 — 2026-09-10 — generalized run protocol and learning substrate
 
 ### Added
