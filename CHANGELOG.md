@@ -32,6 +32,16 @@
   outside a notebook and SDK implementations for use inside one; the
   notebook is a Fabric Python notebook on the 3.12 runtime.
 
+### Changed
+
+- `LakehouseSource.query` reads a Delta table from its own Parquet files,
+  replayed from the transaction log (checkpoint plus later commits), and
+  uses the Delta reader only for tables whose features need it (deletion
+  vectors, column mapping, v2 checkpoints). Tables the Delta readers
+  reject, such as those with Spark `void` columns, now answer; a catalog
+  column no data file carries comes back as NULL. The file list is cached
+  per table while the log listing is unchanged.
+
 ## 0.6.1 — 2026-09-10 — generalized run protocol and learning substrate
 
 ### Added

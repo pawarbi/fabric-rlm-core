@@ -137,6 +137,7 @@ class AgentDataSource:
     item_id: str | None = None
     workspace_id: str | None = None
     fewshots: tuple[FewShot, ...] = ()
+    selected_tables: tuple[str, ...] = ()  # schema/table paths the agent has selected, when the elements are readable
 
 
 @dataclass(frozen=True)
@@ -298,7 +299,7 @@ def _fewshot_records(payload: Any) -> list[FewShot]:
     return shots
 
 
-def _source_from_entry(entry: Mapping[str, Any], fewshots: Sequence[FewShot], *, fallback_id: str = "", name: str | None = None) -> AgentDataSource:
+def _source_from_entry(entry: Mapping[str, Any], fewshots: Sequence[FewShot], *, fallback_id: str = "", name: str | None = None, selected_tables: Sequence[str] = ()) -> AgentDataSource:
     """An ``AgentDataSource`` from a public-API datasource payload (REST or SDK)."""
     reference = _item_reference(entry)
     return AgentDataSource(
@@ -310,7 +311,49 @@ def _source_from_entry(entry: Mapping[str, Any], fewshots: Sequence[FewShot], *,
         item_id=reference.get("itemId"),
         workspace_id=reference.get("workspaceId"),
         fewshots=tuple(fewshots),
+        selected_tables=tuple(selected_tables),
     )
+
+
+_LEAF_ELEMENT = re.compile(r"(column|measure|parameter|returnvalue|field)", re.IGNORECASE)
+_TABLE_ELEMENT = re.compile(r"(table|view|function|entity|dataset)", re.IGNORECASE)
+
+
+def _selected_table_paths(fetch: Callable[[str | None, str | None], Mapping[str, Any] | None]) -> list[str]:
+    """Paths (``schema/table`` or ``table``) of the selected tables in a datasource's elements tree.
+
+    ``fetch(root_id, continuation_token)`` returns one page of elements
+    (``{"value": [...], "continuationToken": ...}``). Columns and measures
+    are leaves; a container (a schema) is walked, a table is not.
+    """
+    found: list[str] = []
+
+    def children(root_id: str | None) -> list[Mapping[str, Any]]:
+        items: list[Mapping[str, Any]] = []
+        token: str | None = None
+        for _page in range(1000):
+            page = fetch(root_id, token) or {}
+            items.extend(item for item in (page.get("value") or []) if isinstance(item, Mapping))
+            token = page.get("continuationToken")
+            if not token:
+                break
+        return items
+
+    def walk(root_id: str | None, prefix: str, depth: int) -> None:
+        for element in children(root_id):
+            kind = str(element.get("type") or "")
+            if _LEAF_ELEMENT.search(kind):
+                continue
+            name = str(element.get("displayName") or element.get("name") or "")
+            path = f"{prefix}/{name}" if prefix else name
+            selected = element.get("isSelected") if "isSelected" in element else element.get("is_selected")
+            if selected and name:
+                found.append(path)
+            if not _TABLE_ELEMENT.search(kind) and element.get("id") is not None and depth < 4:
+                walk(str(element["id"]), path, depth + 1)
+
+    walk(None, "", 0)
+    return found
 
 
 class RestAgentReader:
@@ -352,7 +395,16 @@ class RestAgentReader:
                     name = _http_json(f"{FABRIC_API}/workspaces/{reference['workspaceId']}/items/{reference['itemId']}", token).get("displayName")
                 except RuntimeError:
                     name = None
-            sources.append(_source_from_entry(entry, fewshots, name=name))
+
+            def elements(root_id: str | None, continuation: str | None, *, datasource_id: str = str(entry["id"])) -> Mapping[str, Any]:
+                params = urllib.parse.urlencode({k: v for k, v in (("rootId", root_id), ("continuationToken", continuation)) if v})
+                return _http_json(self._stage_path(f"datasources/{datasource_id}/elements") + (f"?{params}" if params else ""), token)
+
+            try:
+                selected = _selected_table_paths(elements)
+            except RuntimeError:
+                selected = []
+            sources.append(_source_from_entry(entry, fewshots, name=name, selected_tables=selected))
         return AgentSnapshot(
             agent_id=self.agent_id,
             name=str(item.get("displayName") or self.agent_id),
@@ -398,7 +450,13 @@ class SdkAgentReader:
                     shots = _fewshot_records(handle.get_fewshots(stage=self.stage))
                 except Exception:  # noqa: BLE001 - few-shots are optional
                     shots = []
-                sources.append(_source_from_entry(entry, shots, fallback_id=str(getattr(handle, "_id", "") or "")))
+                selected: list[str] = []
+                if hasattr(handle, "get_elements"):
+                    try:
+                        selected = _selected_table_paths(lambda root_id, token, h=handle: h.get_elements(stage=self.stage, root_id=root_id, continuation_token=token))
+                    except Exception:  # noqa: BLE001 - the elements are a bonus; the whole source is reviewed without them
+                        selected = []
+                sources.append(_source_from_entry(entry, shots, fallback_id=str(getattr(handle, "_id", "") or ""), selected_tables=selected))
             return AgentSnapshot(
                 agent_id=str(agent_id),
                 name=str(name),
@@ -1763,7 +1821,8 @@ class ReviewReport:
         for source in s.datasources:
             schema = next((x for x in self.schemas if x.source_id == source.id), None)
             shape = f"{len(schema.tables)} tables" + (f", {len(schema.measures)} measures" if schema and schema.measures else "") if schema else "not profiled"
-            lines.append(f"- {source.name or source.id} ({source.kind}): {shape}; {len(source.fewshots)} few-shots; {len(source.instructions):,} characters of instructions; description {'present' if source.description.strip() else 'missing'}.")
+            selected = f"; {len(source.selected_tables)} tables selected for the agent" if source.selected_tables else ""
+            lines.append(f"- {source.name or source.id} ({source.kind}): {shape}{selected}; {len(source.fewshots)} few-shots; {len(source.instructions):,} characters of instructions; description {'present' if source.description.strip() else 'missing'}.")
         lines.append("")
         lines.append("## Findings")
         if not self.findings:

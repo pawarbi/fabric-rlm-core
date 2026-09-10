@@ -12,8 +12,10 @@ from collections import deque
 from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
+from urllib.request import url2pathname
 
 
 class LakehouseDiscoveryError(RuntimeError):
@@ -812,10 +814,7 @@ def execute_lakehouse_query(
         ):
             raise ValueError("LakehouseSource.query requires a read-only catalog query.")
 
-        kinds = {str(entry.get("kind", "")).lower() for _, entry in selected}
         remote = any("://" in str(entry["path"]) for _, entry in selected)
-        if "delta" in kinds:
-            con.sql("INSTALL delta; LOAD delta;")
         if remote:
             con.sql("INSTALL azure; LOAD azure;")
             token = _storage_token()
@@ -829,8 +828,24 @@ def execute_lakehouse_query(
         for alias, entry in selected:
             kind = str(entry.get("kind", "")).lower()
             path = _quote_literal(str(entry["path"]))
+            missing_columns: list[str] = []
             if kind == "delta":
-                relation = f"delta_scan({path})"
+                # The table's own data files, replayed from the transaction
+                # log; the Delta reader only for tables whose features need it.
+                try:
+                    files = _delta_parquet_files(con, str(entry["path"]))
+                except Exception:  # noqa: BLE001 - a log we cannot replay falls back to the reader
+                    files = None
+                if files is None:
+                    con.sql("INSTALL delta; LOAD delta;")
+                    relation = f"delta_scan({path})"
+                else:
+                    listed = ", ".join(_quote_literal(item) for item in files)
+                    relation = (
+                        f"read_parquet([{listed}], union_by_name=true, "
+                        "hive_partitioning=true)"
+                    )
+                    missing_columns = _columns_missing_from(con, relation, entry)
             elif kind == "csv":
                 relation = f"read_csv_auto({path}, header=true)"
             elif kind == "parquet":
@@ -839,9 +854,12 @@ def execute_lakehouse_query(
                 raise ValueError(
                     f"LakehouseSource.query does not support source kind {kind!r}."
                 )
+            projection = "*" + "".join(
+                f", NULL AS {_quote_column(column)}" for column in missing_columns
+            )
             con.execute(
                 f"CREATE TEMP VIEW {_quote_identifier(alias)} AS "
-                f"SELECT * FROM {relation}"
+                f"SELECT {projection} FROM {relation}"
             )
 
         def interrupt_query() -> None:
@@ -875,6 +893,208 @@ def execute_lakehouse_query(
 
 
 _GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_DELTA_COMMIT = re.compile(r"(\d{20})\.json")
+_DELTA_MULTIPART_CHECKPOINT = re.compile(r"(\.\d{10}){2}\.parquet")
+# Reader features whose effect a plain Parquet read cannot reproduce.
+_DELTA_READER_FEATURES_NEEDING_DELTA = frozenset(
+    {"deletionvectors", "columnmapping", "v2checkpoint", "typewidening", "icebergcompatv2", "variantshredding"}
+)
+_MAX_DELTA_LOG_REPLAY = 200
+_DELTA_FILES_CACHE: dict[str, tuple[tuple[str, ...], list[str] | None]] = {}
+_DELTA_FILES_LOCK = threading.Lock()
+
+
+def _quote_column(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _local_path(path: str) -> str | None:
+    """The OS path of a local table, or ``None`` for a remote one."""
+    parsed = urlsplit(path)
+    if parsed.scheme.casefold() == "file":
+        return url2pathname(parsed.path)
+    if "://" in path:
+        return None
+    return path
+
+
+def _delta_log_entries(table_path: str) -> list[tuple[str, str, int]]:
+    """``(name, path, size)`` for every file in a Delta table's transaction log."""
+    local = _local_path(table_path)
+    if local is None:
+        delta_log = f"{table_path.rstrip('/')}/_delta_log"
+        return [
+            (
+                str(item.name).rstrip("/"),
+                str(item.path).rstrip("/"),
+                int(getattr(item, "size", 0) or 0),
+            )
+            for item in _list(_get_fs(), delta_log)
+            if not item.isDir
+        ]
+    directory = Path(local) / "_delta_log"
+    if not directory.is_dir():
+        raise LakehouseDiscoveryError(
+            f"Delta transaction log not found at {str(directory)!r}."
+        )
+    return [
+        (item.name, str(item), item.stat().st_size)
+        for item in sorted(directory.iterdir())
+        if item.is_file()
+    ]
+
+
+def _delta_log_text(path: str, size: int) -> str:
+    local = _local_path(path)
+    if local is None:
+        return _get_fs().head(path, size if size > 0 else _MAX_DELTA_LOG_BYTES)
+    return Path(local).read_text(encoding="utf-8")
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    """A struct or map value from DuckDB or JSON as a mapping."""
+    if isinstance(value, Mapping):
+        keys, values = value.get("key"), value.get("value")
+        if set(value) == {"key", "value"} and isinstance(keys, list) and isinstance(values, list):
+            return dict(zip(keys, values))
+        return value
+    return {}
+
+
+def _delta_parquet_files(con: Any, table_path: str) -> list[str] | None:
+    """The active data files of a Delta table, replayed from its transaction log.
+
+    Reading the files directly sidesteps reader limitations such as Spark
+    ``void`` columns, which the Delta readers reject and no data file
+    contains. Returns ``None`` when only the Delta reader can produce the
+    table: deletion vectors, column mapping, a v2 checkpoint, a gap in the
+    log, or more commits since the last checkpoint than the replay bound.
+    Results are cached per table for as long as the log listing is unchanged.
+    """
+    entries = _delta_log_entries(table_path)
+    signature = tuple(sorted(name for name, _path, _size in entries))
+    with _DELTA_FILES_LOCK:
+        cached = _DELTA_FILES_CACHE.get(table_path)
+    if cached is not None and cached[0] == signature:
+        return list(cached[1]) if cached[1] is not None else None
+    files = _replay_delta_log(con, table_path, entries)
+    with _DELTA_FILES_LOCK:
+        _DELTA_FILES_CACHE[table_path] = (
+            signature,
+            list(files) if files is not None else None,
+        )
+    return files
+
+
+def _replay_delta_log(
+    con: Any,
+    table_path: str,
+    entries: Sequence[tuple[str, str, int]],
+) -> list[str] | None:
+    by_name = {name: (path, size) for name, path, size in entries}
+    checkpoint_version = -1
+    checkpoint_files: list[str] = []
+    if "_last_checkpoint" in by_name:
+        last = json.loads(_delta_log_text(*by_name["_last_checkpoint"]))
+        checkpoint_version = int(last.get("version", -1))
+        prefix = f"{checkpoint_version:020d}.checkpoint"
+        for name, path, _size in entries:
+            if not name.startswith(prefix):
+                continue
+            middle = name[len(prefix):]
+            if middle != ".parquet" and _DELTA_MULTIPART_CHECKPOINT.fullmatch(middle) is None:
+                return None  # a v2 checkpoint with sidecars, or a form we do not know
+            checkpoint_files.append(path)
+        if checkpoint_version < 0 or not checkpoint_files:
+            return None
+    commits = sorted(
+        (int(match.group(1)), path, size)
+        for name, path, size in entries
+        for match in [_DELTA_COMMIT.fullmatch(name)]
+        if match is not None and int(match.group(1)) > checkpoint_version
+    )
+    if len(commits) > _MAX_DELTA_LOG_REPLAY or (not commits and not checkpoint_files):
+        return None
+    if commits and checkpoint_version >= 0 and commits[0][0] != checkpoint_version + 1:
+        return None
+    for index in range(1, len(commits)):
+        if commits[index][0] != commits[index - 1][0] + 1:
+            return None
+
+    active: dict[str, None] = {}
+    features: set[str] = set()
+    needs_delta = False
+
+    def note(action: Mapping[str, Any], *, checkpoint: bool) -> None:
+        nonlocal needs_delta
+        protocol = _as_mapping(action.get("protocol"))
+        if protocol:
+            features.update(
+                str(feature).casefold()
+                for feature in (protocol.get("readerFeatures") or [])
+            )
+        metadata = _as_mapping(action.get("metaData"))
+        if metadata:
+            configuration = _as_mapping(metadata.get("configuration"))
+            mode = str(configuration.get("delta.columnMapping.mode") or "none").casefold()
+            if mode != "none":
+                needs_delta = True
+        add = _as_mapping(action.get("add"))
+        if add.get("path"):
+            active[str(add["path"])] = None
+            if add.get("deletionVector"):
+                needs_delta = True
+        remove = _as_mapping(action.get("remove"))
+        # a checkpoint holds the reconciled state: its tombstones are history
+        if remove.get("path") and not checkpoint:
+            active.pop(str(remove["path"]), None)
+
+    if checkpoint_files:
+        listed = ", ".join(_quote_literal(path) for path in checkpoint_files)
+        relation = f"read_parquet([{listed}], union_by_name=true)"
+        available = {
+            str(row[0]).casefold()
+            for row in con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall()
+        }
+        wanted = ("add", "remove", "protocol", "metaData")
+        projection = ", ".join(
+            _quote_column(column) if column.casefold() in available else "NULL"
+            for column in wanted
+        )
+        for row in con.execute(f"SELECT {projection} FROM {relation}").fetchall():
+            note(dict(zip(wanted, row)), checkpoint=True)
+    for _version, path, size in commits:
+        for line in _delta_log_text(path, size).splitlines():
+            if not line.strip():
+                continue
+            action = json.loads(line)
+            if isinstance(action, Mapping):
+                note(action, checkpoint=False)
+    if needs_delta or features & _DELTA_READER_FEATURES_NEEDING_DELTA or not active:
+        return None
+    local = _local_path(table_path)
+    base = (local if local is not None else table_path).rstrip("/")
+    files = []
+    for relative in active:
+        decoded = unquote(relative)
+        files.append(decoded if "://" in decoded else f"{base}/{decoded}")
+    return files
+
+
+def _columns_missing_from(con: Any, relation: str, entry: Mapping[str, Any]) -> list[str]:
+    """Catalog columns no data file carries (Spark ``void`` columns, a column added with no data yet)."""
+    declared = [
+        str(column[0])
+        for column in entry.get("columns") or ()
+        if isinstance(column, (list, tuple)) and column
+    ]
+    if not declared:
+        return []
+    present = {
+        str(row[0]).casefold()
+        for row in con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall()
+    }
+    return [column for column in declared if column.casefold() not in present]
 
 
 def _delta_rs_path(path: str) -> str:

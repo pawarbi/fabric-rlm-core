@@ -591,3 +591,72 @@ def test_guid_lakehouse_roots_keep_their_segments_for_delta_rs():
     assert _delta_rs_path(guid) == guid
     named = "abfss://ws@onelake.dfs.fabric.microsoft.com/AWLakehouse/Tables/dimdate"
     assert _delta_rs_path(named) == "abfss://ws@onelake.dfs.fabric.microsoft.com/AWLakehouse.Lakehouse/Tables/dimdate"
+
+
+# --------------------------------------------------------- selected elements --
+
+
+def test_selected_tables_come_from_the_elements_tree():
+    from fabric_rlm.data_agent_review import _selected_table_paths
+
+    tree = {
+        None: [
+            {"id": "s1", "displayName": "dbo", "type": "Schema", "isSelected": False},
+            {"id": "s2", "displayName": "staging", "type": "Schema", "isSelected": False},
+        ],
+        "s1": [
+            {"id": "t1", "displayName": "factinternetsales", "type": "LakehouseTable", "isSelected": True},
+            {"id": "t2", "displayName": "dimemployee", "type": "LakehouseTable", "isSelected": False},
+        ],
+        "s2": [{"id": "t3", "displayName": "raw_orders", "type": "LakehouseTable", "isSelected": True}],
+        "t1": [{"id": "c1", "displayName": "SalesAmount", "type": "Column", "isSelected": True}],
+    }
+    fetched = []
+
+    def fetch(root_id, token):
+        fetched.append(root_id)
+        items = tree.get(root_id, [])
+        if root_id is None and token is None:
+            return {"value": items[:1], "continuationToken": "next"}  # the root listing is paged
+        if root_id is None:
+            return {"value": items[1:]}
+        return {"value": items}
+
+    assert _selected_table_paths(fetch) == ["dbo/factinternetsales", "staging/raw_orders"]
+    assert "t1" not in fetched  # a table's columns are not walked
+
+
+def test_sdk_reader_records_the_selected_tables_and_the_report_shows_them():
+    from fabric_rlm.data_agent_review import ReviewReport
+
+    class Handle:
+        _id = "ds-1"
+
+        def get_configuration(self, stage="staging"):
+            return {"id": "ds-1", "type": "LakehouseTables", "displayName": "AWLakehouse", "instructions": "", "description": "Sales.", "lakehouseReference": {"itemId": "item-1", "workspaceId": "ws-2"}}
+
+        def get_fewshots(self, stage="staging"):
+            return {"value": []}
+
+        def get_elements(self, stage="staging", root_id=None, continuation_token=None):
+            if root_id is None:
+                return {"value": [{"id": "t1", "displayName": "factinternetsales", "type": "Table", "isSelected": True}, {"id": "t2", "displayName": "dimdate", "type": "Table", "isSelected": True}, {"id": "t3", "displayName": "dimemployee", "type": "Table", "isSelected": False}]}
+            return {"value": []}
+
+    class Management:
+        data_agent_name = "Sales Agent"
+        data_agent_id = "agent-1"
+        workspace_id = "ws-1"
+
+        def get_settings(self, stage="staging"):
+            return {"aiInstructions": "Answer."}
+
+        def list_datasources(self, stage="staging"):
+            return [Handle()]
+
+    snap = SdkAgentReader(Management()).snapshot()
+    assert snap.datasources[0].selected_tables == ("factinternetsales", "dimdate")
+
+    schemas = [schema_from_tables("ds-1", {"factinternetsales": TABLES["factinternetsales"], "dimdate": TABLES["dimdate"]})]
+    report = ReviewReport(snap, tuple(schemas), (), (), (), {}, (), suggest(snap, schemas, (), (), (), ()))
+    assert "2 tables; 2 tables selected for the agent" in report.to_markdown()

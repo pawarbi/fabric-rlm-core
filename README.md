@@ -199,7 +199,10 @@ its prose, classify the failures (misrouting included on multi-source
 agents); and render suggested instructions, descriptions and few-shots
 into a report. `examples/notebooks/rlm_data_agent_review.py` is the Fabric
 Python notebook (runtime 3.12) that runs the whole loop; applying the
-suggestions to the agent's draft stage is its last, explicit cell.
+suggestions to the agent's draft stage is its last, explicit cell. The
+notebook scopes a lakehouse to the tables the agent has selected and raises
+the profile limits, since a lakehouse catalog is many tables rather than one
+file.
 
 A package can also carry what earlier runs learned about a source. Every turn
 records its source calls as typed telemetry (the grain a semantic-model query

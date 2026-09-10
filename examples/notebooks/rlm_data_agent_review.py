@@ -85,7 +85,7 @@ snapshot = SdkAgentReader(management, stage=STAGE).snapshot()
 
 print(f"{snapshot.name}: {len(snapshot.instructions):,} characters of agent instructions, {len(snapshot.datasources)} source(s)")
 for source in snapshot.datasources:
-    print(f"- {source.name or source.id} ({source.kind}): {len(source.instructions):,} chars of instructions, {len(source.fewshots)} few-shots, description {'present' if source.description.strip() else 'missing'}")
+    print(f"- {source.name or source.id} ({source.kind}): {len(source.instructions):,} chars of instructions, {len(source.fewshots)} few-shots, {len(source.selected_tables) or 'an unknown number of'} tables selected, description {'present' if source.description.strip() else 'missing'}")
 
 # METADATA ********************
 
@@ -103,6 +103,13 @@ for source in snapshot.datasources:
 # (schema, fingerprints, registered operations, declared facts from the
 # agent's own definitions), and the review reads the schemas from those
 # profiles. Executors run the reference queries against the handles.
+#
+# A lakehouse handle is scoped to the tables the agent has selected, so the
+# profile and the questions cover what the agent sees; when the selection
+# cannot be read, the whole lakehouse is profiled. The profile limits are
+# raised because a lakehouse catalog is many tables, not one file. Lakehouse
+# queries read each table's Parquet files, resolved from the Delta log, so
+# tables the Delta readers reject (Spark `void` columns) still answer.
 
 # CELL ********************
 
@@ -115,6 +122,9 @@ from fabric_rlm.data_agent_review import (
     declared_from_snapshot,
     schema_from_profile,
 )
+from fabric_rlm.knowledge_sources import ProfileLimits
+
+PROFILE_LIMITS = ProfileLimits(max_fields=4096, max_diagnostic_bytes=4 * 1024 * 1024)  # a lakehouse catalog, not one file
 
 workspace_id = fabric.resolve_workspace_id(WORKSPACE_NAME) if WORKSPACE_NAME else fabric.get_workspace_id()
 items_by_workspace = {}
@@ -131,7 +141,9 @@ for source in snapshot.datasources:
     if source.kind == "lakehouse":
         # OneLake by ids: no name resolution, no spaces, no friendly-name suffix
         root = f"abfss://{source_workspace}@onelake.dfs.fabric.microsoft.com/{source.item_id}" if source.item_id else f"abfss://{fabric.resolve_workspace_name(source_workspace)}@onelake.dfs.fabric.microsoft.com/{item_name}.Lakehouse"
-        handle = LakehouseSource(root)
+        # only the tables the agent has selected; the whole lakehouse when the selection is unknown
+        scopes = [f"Tables/{table}" for table in source.selected_tables] or None
+        handle = LakehouseSource(root, tables=scopes)
     elif source.kind == "semantic_model":
         handle = SemanticModel(item_name, workspace=source_workspace)
     else:
@@ -140,11 +152,11 @@ for source in snapshot.datasources:
     sources[source.id] = handle
     handles[source.id] = (source, handle)
 
-knowledge = RLM.learn(sources=sources)
+knowledge = RLM.learn(sources=sources, limits=PROFILE_LIMITS)
 schemas = [schema_from_profile(profile, source_id=profile.source_id) for profile in knowledge.package.sources]
 declared = declared_from_snapshot(snapshot, schemas)
 if declared:
-    knowledge = RLM.learn(sources=sources, declared=declared)   # the agent's stated definitions become facts the RLM knows
+    knowledge = RLM.learn(sources=sources, declared=declared, limits=PROFILE_LIMITS)   # the agent's stated definitions become facts the RLM knows
 
 executors = {}
 for source_id, (source, handle) in handles.items():
