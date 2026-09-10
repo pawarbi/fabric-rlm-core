@@ -195,7 +195,8 @@ abstentions) to this gate. Two things refuted that attribution:
 2. **GLM-5.3-flash scored 91.7% in the identical environment.**
 
 I then fixed the harness (H6) to persist trajectories and count rejections
-directly. The GLM learn arm gives the **measured** picture:
+directly. The GLM learn arm gives the **measured** picture — **for that arm
+only**:
 
 | | value |
 |---|---|
@@ -203,14 +204,22 @@ directly. The GLM learn arm gives the **measured** picture:
 | Questions hitting the gate | **7 / 24** |
 | Per question | q01:2, q02:2, **q08:13**, q15:2, q20:2, **q21:10**, q22:4 |
 
-The two highest gate counts are the two highest turn counts (q08 → 20 of 22
-turns, q21 → 17) and **q08 is the arm's only turn-exhaustion failure** — it
-produced no answer, while the cold arm answered it correctly in 8 turns.
+Within this arm, the two highest gate counts are the two highest turn counts
+(q08 → 20 of 22 turns, q21 → 17). That is a **correlation inside a single arm**
+and it is the strongest form the evidence supports.
+
+**Cross-arm attribution is NOT available (harness defect H8).** H6 landed
+*after* the cold arm ran, so arm A's run log has **no `catalog_gate_rejections`
+field at all**. "0 vs 35" is unmeasured versus measured, not a comparison — I
+cannot say whether the cold arm hit the gate 0 times or 40. Accordingly, the
+earlier reading of **q08 as gate-caused turn exhaustion is withdrawn**; q08 is
+reclassified as sampling divergence (see §10). The gate is a demonstrable cost
+of the *system*; it is not demonstrably a cost of *learning*.
 
 **The bounded, supported claim:** the undiagnosable message measurably costs
-turns and can cost an answer outright. **The unsupported claim, still
-withdrawn:** that it caused the gpt-4.1-mini collapse — GLM absorbed 35
-rejections and still scored 91.7%.
+turns, and correlates with the worst-performing questions in the arm where it
+was measured. **The unsupported claim, still withdrawn:** that it caused the
+gpt-4.1-mini collapse — GLM absorbed 35 rejections and still scored 91.7%.
 
 **Proposed fix — universal mechanism, NOT a domain rule.** Nothing here is
 specific to ARR, invoices, or any business concept:
@@ -566,6 +575,7 @@ run**, so no claim is made either way.
 | F12 the meaning of a column name | no | **yes** — `declared=` | no |
 | F12 more English synonyms in `_CURRENT_PERIOD` | **rejected** — puts a naming rule in core | no | no |
 | F14 all four result-bound violations must fall back, not re-raise (3 of 4 currently fatal) | **yes** | no | no |
+| Memoise the operation-selection decision — 21 of 24 tasks paid a selection LM call to be declined, while the 3 that converted were correct and nearly free | **yes** | no | no |
 | F9 append-or-fail contract for derived artifacts | **weak** — model-dependent, so a core patch is not justified on this evidence | no | **candidate** — test `excel_modify` first |
 | H5 output contract for categorical answers | harness-only | no | no |
 

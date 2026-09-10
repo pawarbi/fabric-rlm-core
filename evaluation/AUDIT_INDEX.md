@@ -32,8 +32,8 @@ and classified, never applied.
 |---|---|---|
 | 1. Audit domain dependencies | **measured** | F12: the only tabular lesson is gated on English name tokens — `repro_learn_naming.py`, no credentials. Verified representative: the Delta profiler emits exactly `"boolean"`. |
 | 3. Naming robustness | **measured for the learning path** | 5/12 semantically identical columns yield a lesson; abbreviations and non-English names yield none. |
-| 5. What learning adds (A vs B) | **measured** | Arms A/B differ only by `knowledge=`: 91.7% vs 83.3%, +21% turns, +64% tokens, package had **0 lessons**. Gate **FAILS**. |
-| 6. Failure handling | **partially measured** | F14 (truncation aborts instead of falling back), F11 (35 gate rejections over 7/24 questions), F9 (silent artifact loss with `ok=True`). |
+| 5. What learning adds (A vs B) | **measured** | Arms A/B differ only by `knowledge=`: 91.7% vs 83.3%, +21% turns, +64% tokens (paired sign test p=0.0005 tokens / 0.0075 turns), package had **0 lessons but a live operation set**. Gate **FAILS**. Where an operation actually fired (3/24) learn was **3/3 and nearly free**; the regression is entirely on the 21 questions that paid a selection call and were declined. |
+| 6. Failure handling | **partially measured** | F14 (3 of 4 result-bound violations abort the task instead of falling back), F11 (35 gate rejections over 7/24 questions **in the learn arm only** — the cold arm was uninstrumented, H8, so no cross-arm claim), F9 (silent artifact loss with `ok=True`, model-dependent). |
 | 7. Correctness vs efficiency, separately | **measured** | Accuracy, turns, prompt tokens, gate rejections, per-question, per-arm. Abstentions and crashes counted as incomplete, not averaged away. |
 | General execution capability | **measured** | 91.7% on 24 unseen complex questions against real Fabric Delta tables, 0 fan-out hazard traps. |
 

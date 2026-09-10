@@ -109,12 +109,48 @@ variance dominates per-question token counts. And the operation-executed
 questions being the *cheapest* is the opposite of what "the `knowledge_result`
 packet inflates the prompt" would predict.
 
-**Therefore:** the aggregate overhead (+64% tokens, +21% turns) is real and
-reproducible in the totals, but its **decomposition is not established**. The
-selection call certainly costs something; how much is unmeasured. Isolating it
-needs `operation_selection_prompt_tokens`, which the framework already emits on
-`trajectory.metadata` and which my harness failed to persist — recorded as
-harness defect **H7**.
+**The aggregate direction is nonetheless solid.** A paired sign test over all 23
+comparable questions:
+
+| metric | + / − / tie | two-sided sign p |
+|---|---|---|
+| prompt tokens | **20 / 3 / 0** | **0.0005** |
+| turns | **15 / 3 / 5** | **0.0075** |
+
+So the overhead is not itself noise — learning cost more on ~87% of questions.
+What is unmeasured is **where the cost goes**, not whether it exists.
+
+### Where the cost actually goes — the diagnosis inverts
+
+Splitting by whether an operation was *actually executed* (`knowledge_result`
+present) changes the story:
+
+| subset | cold | learn | token delta |
+|---|---|---|---|
+| operation **executed** (q15, q17, q24) | 3/3 | **3/3** | +5,655 · +21,131 · **+607** |
+| operation **not executed** (21 questions) | 19/21 | **17/21** | the entire regression |
+
+q24 used **2 fewer turns and +607 tokens**. Where the operations pathway fires,
+it is correct and close to free.
+
+**The harm is concentrated on the 21 questions that paid an operation-selection
+LM call and were then declined.** The planner ran on every task, converted on
+3, and on the other 21 bought nothing. That reframes the fix: the problem is not
+that operations are harmful, it is that **selection is re-litigated per task
+with no memoisation of a decline**. Caching the selection decision per
+(source, question-class), or short-circuiting when the previous decision for an
+identical binding was "decline", would remove most of the cost while keeping the
+3 wins.
+
+This is the one piece of **positive** evidence for learning in the arm, and it
+was invisible until the subsets were separated — an overall average would have
+concealed it.
+
+**Therefore:** the aggregate overhead is real and statistically supported, but
+its **decomposition into planner-call vs prompt-growth is not established**.
+Isolating it needs `operation_selection_prompt_tokens`, which the framework
+already emits on `trajectory.metadata` and which my harness failed to persist —
+recorded as harness defect **H7**.
 
 ## Why — the package was empty of lessons
 
