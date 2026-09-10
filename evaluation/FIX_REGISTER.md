@@ -36,7 +36,7 @@ package.
 | id | proof it is on the task path | severity |
 |---|---|---|
 | **F11** query gate | `_normalize_catalog_query` (`lakehouse.py:437`) is `LakehouseSource.query`, bound directly as a task input. No knowledge involved. | **critical** |
-| **F9** artifact loss | `artifacts.py:140` `FileDestination` — grep for `_knowledge\|package\|LearnedKnowledge` in `artifacts.py` returns **nothing**. Publishing is independent of learning. | needs evidence |
+| **F9** artifact loss | `artifacts.py:140` `FileDestination` — grep for `_knowledge\|package\|LearnedKnowledge` in `artifacts.py` returns **nothing**. Publishing is independent of learning. **Now evidenced on the merge target**: a staged-but-unpublished workbook is reported `published=True` (`COLD_RERUN_4277a90.md` §3). | **critical** |
 | **F16** clarification guard | `validators.py:382`, on the verification path — **but exported only**, never applied by default. Reachable only when a caller passes it to `validators=`. | critical *when used*, not default-path |
 | **V-1** conjunction stripping | `verify.py:95`, used by the public `verified_task` / `answers_agree`. | **low** — see below |
 
@@ -90,7 +90,7 @@ These are the ones where the system reports success while something is broken.
 |---|---|---|---|
 | **F14** | Of the four result-bound checks in `_result_rows`, only the row bound raises the graceful `OperationResultTooLarge` and falls back. Truncation (`:284`), column bound (`:320`) and byte bound (`:329`) raise **bare `ValueError`**, which `runtime.py:1568` re-raises and the task dies. | Observed live: arm B q13, `ValueError: operation result was truncated`, killed inside `_prepare_registered_operation` **before the agent loop**, so `turns=None`, no trajectory, 12 s. | **universal mechanism** |
 | **F16** | `assert_not_clarification_request` detects a deferral by matching English opener phrases. A non-English "please confirm / I need more information" matches nothing, so **no assert fires and the answer passes** — it fails *open*. The guard against a model dodging the question only works in English. | `_CLARIFICATION_OPENERS` (`validators.py:373-378`): 4/4 English detected, 0/4 German-Spanish-French-Italian detected. Docstring says "Universal … because clarification openers are domain-agnostic **English**." | **universal mechanism** |
-| **F9** | A derived artifact (the Excel workbook) can be lost or not appended while the task still reports `ok=True`. | Phase 2; model-dependent — GLM maintained the workbook across 24 updates, gpt-4.1-mini did not. | **needs evidence first** — test the bundled `excel_modify` skill before any core change |
+| **F9** | A derived artifact (the Excel workbook) can be lost or not appended while the task still reports `ok=True`. | **Evidenced — cold re-run on `4277a90`, GLM.** q13 appended its correct row and printed `saved staged file`, then submitted without publishing; the next question reloaded the last *published* workbook (q12's) so the row was never carried. q25's `Question ID` was written as the integer `25`, not `"q25"`. Both recorded `ok=True` and `published=True`. See `COLD_RERUN_4277a90.md` §3. | **critical, `.task` path** — status flags do not reflect delivery |
 
 **F14 and F16 are the two I would fix first.** F14 turns a recoverable
 size-limit into a dead task; F16 lets an evasion be scored as an answer.

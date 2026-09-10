@@ -49,11 +49,36 @@ Both questions were answered **correctly** and recorded `ok=True`,
 
 Two *distinct* defects in the same path:
 
-**q13 — a row was silently dropped.** The progress log shows the workbook byte
-count not moving across that question: q12 `bytes=15497`, q13 `bytes=15497`,
-q14 `bytes=16159`. The workbook was rewritten and q13's row was not carried
-through. The agent spent 14 turns and 331 s producing a correct answer that never
-reached the deliverable. `published=True` was still reported.
+**q13 — the row was written, staged, and never published.** This is verifiable
+from the trajectory rather than inferred. On its final working turn the agent
+appended the correct row:
+
+```
+a.append(["q13", "How many companies hold more than one subscription?", 334, "companies", ...])
+...
+stdout: saved staged file; answers rows: 13 | data rows: 20 | evidence rows: 43
+```
+
+Compare the same step on q14, which delivered:
+
+```
+stdout: published: /tmp/fabric-rlm-files-.../rlm_answers.xlsx | answer: 2616.79164 | answers rows: 13
+```
+
+q13 printed **`saved staged file`**; q14 printed **`published:`**. q13 then
+submitted without ever promoting the staged file. The next question loads
+`/tmp/workbook_in.xlsx`, which is the last *published* workbook — q12's — so
+q13's row was never carried forward. That is exactly why the byte count does not
+move: q12 `bytes=15497`, q13 `bytes=15497`, q14 `bytes=16159`.
+
+**The run nevertheless recorded `ok=True` and `published=True` for q13.** The
+status flag does not reflect whether the workbook was actually published. That is
+the defect: not a lost write, but an unpublished one reported as published.
+
+A likely contributing factor: q13 carried **`gate=11`**, the highest count of
+catalog-gate rejections in the run (finding F11), and consumed 14 turns and 331 s
+— by far the most expensive question. The turn budget went into rejected queries,
+and the publish step was the casualty.
 
 **q25 — the identifier lost its type.** The answer is correct and present, but the
 key is the integer `25` where every other row holds the string `"q25"`. Any
@@ -107,8 +132,12 @@ Two consequences:
 1. Single-run accuracy for this system should not be quoted to a tenth of a
    percent. The observed cold reasoning range is 22–23/24 across two runs; the
    honest statement is "roughly 90%, n=2 runs, not 91.7%".
-2. The workbook defect is **intermittent**, which makes it more dangerous, not
-   less: it will pass a one-off acceptance test.
+2. The workbook defect did not fire in the prior run, so it is **not
+   deterministic**. Two runs establish that it can fail; they establish nothing
+   about how often. No rate should be inferred from n=2, and the prior run was on
+   different bytes with a different question ordering. The practical consequence
+   stands regardless: a defect that does not fire every time will pass a one-off
+   acceptance test.
 
 ## 6. What this says about the merge
 
