@@ -1,0 +1,40 @@
+{
+ "lakehouse": {
+  "definitions": {
+   "dbo.companies": "500 rows; one row per company_id (unique key); repeated labels in company_name (495 distinct of 500) \u2014 do NOT join or group on these as if unique.",
+   "dbo.dim_date": "1,370 rows; one row per date_key + date; repeated labels in month_name (12 distinct of 1,370), day_name (7 distinct of 1,370) \u2014 do NOT join or group on these as if unique.",
+   "dbo.features": "20 rows; one row per feature_id + feature_name + display_name.",
+   "dbo.industries": "15 rows; one row per industry_id + industry_name.",
+   "dbo.invoices": "8,062 rows; one row per invoice_id (unique key).",
+   "dbo.payments": "9,204 rows; one row per payment_id (unique key).",
+   "dbo.rlm_eval_defects": "5 rows; one row per defect_units (unique key); repeated labels in line_id (2 distinct of 5) \u2014 do NOT join or group on these as if unique.",
+   "dbo.rlm_eval_inventory_snapshots": "4 rows; one row per allocated_units + on_hand_units; repeated labels in product_id (2 distinct of 4), warehouse_id (2 distinct of 4) \u2014 do NOT join or group on these as if unique.",
+   "dbo.rlm_eval_order_lines": "4 rows; one row per order_id (unique key); repeated labels in customer_id (3 distinct of 4), customer_name (2 distinct of 4), product_id (2 distinct of 4) \u2014 do NOT join or group on these as if unique.",
+   "dbo.rlm_eval_production": "3 rows; one row per produced_units (unique key); repeated labels in line_id (2 distinct of 3), product_id (2 distinct of 3) \u2014 do NOT join or group on these as if unique.",
+   "dbo.rlm_eval_products": "2 rows; one row per product_id + unit_cost; repeated labels in product_name (1 distinct of 2) \u2014 do NOT join or group on these as if unique.",
+   "dbo.rlm_eval_shipment_events": "5 rows; one row per event_date + shipment_id + shipped_units; repeated labels in order_id (4 distinct of 5) \u2014 do NOT join or group on these as if unique.",
+   "dbo.rlm_eval_sla_policies": "2 rows; one row per first_response_minutes + policy_id + priority.",
+   "dbo.rlm_eval_ticket_events": "5 rows; one row per event_at + event_id; repeated labels in ticket_id (3 distinct of 5) \u2014 do NOT join or group on these as if unique.",
+   "dbo.rlm_eval_ticket_sla": "3 rows; one row per ticket_id + opened_at + first_response_at + response_minutes.",
+   "dbo.rlm_eval_tickets": "3 rows; one row per closed_at + opened_at + ticket_id; repeated labels in customer_id (2 distinct of 3), policy_id (2 distinct of 3) \u2014 do NOT join or group on these as if unique.",
+   "dbo.subscriptions": "974 rows; one row per sub_id (unique key); nulls present in end_date (92); repeated labels in plan_name (4 distinct of 974) \u2014 do NOT join or group on these as if unique.",
+   "dbo.support_tickets": "4,192 rows; one row per ticket_id (unique key); nulls present in resolved_at (678), satisfaction_score (678).",
+   "dbo.users": "10,667 rows; one row per user_id (unique key)."
+  },
+  "notes": [
+   "joining dbo.companies to dbo.invoices on company_id FANS OUT ~16.1x (8,062 invoices rows over 500 distinct company_id); aggregate the child first or parent columns will be double counted",
+   "joining dbo.companies to dbo.subscriptions on company_id FANS OUT ~1.9x (974 subscriptions rows over 500 distinct company_id); aggregate the child first or parent columns will be double counted",
+   "joining dbo.companies to dbo.support_tickets on company_id FANS OUT ~8.4x (4,192 support_tickets rows over 500 distinct company_id); aggregate the child first or parent columns will be double counted",
+   "joining dbo.companies to dbo.users on company_id FANS OUT ~21.3x (10,667 users rows over 500 distinct company_id); aggregate the child first or parent columns will be double counted",
+   "joining dbo.industries to dbo.companies on industry_id FANS OUT ~33.3x (500 companies rows over 15 distinct industry_id); aggregate the child first or parent columns will be double counted",
+   "joining dbo.invoices to dbo.payments on invoice_id FANS OUT ~1.2x (9,204 payments rows over 7,584 distinct invoice_id); aggregate the child first or parent columns will be double counted",
+   "joining dbo.rlm_eval_order_lines to dbo.rlm_eval_shipment_events on order_id FANS OUT ~1.2x (5 rlm_eval_shipment_events rows over 4 distinct order_id); aggregate the child first or parent columns will be double counted",
+   "joining dbo.rlm_eval_sla_policies to dbo.rlm_eval_tickets on policy_id FANS OUT ~1.5x (3 rlm_eval_tickets rows over 2 distinct policy_id); aggregate the child first or parent columns will be double counted",
+   "joining dbo.rlm_eval_products to dbo.rlm_eval_inventory_snapshots on product_id FANS OUT ~2.0x (4 rlm_eval_inventory_snapshots rows over 2 distinct product_id); aggregate the child first or parent columns will be double counted",
+   "joining dbo.rlm_eval_products to dbo.rlm_eval_order_lines on product_id FANS OUT ~2.0x (4 rlm_eval_order_lines rows over 2 distinct product_id); aggregate the child first or parent columns will be double counted",
+   "joining dbo.rlm_eval_products to dbo.rlm_eval_production on product_id FANS OUT ~1.5x (3 rlm_eval_production rows over 2 distinct product_id); aggregate the child first or parent columns will be double counted",
+   "joining dbo.subscriptions to dbo.invoices on sub_id FANS OUT ~8.3x (8,062 invoices rows over 974 distinct sub_id); aggregate the child first or parent columns will be double counted",
+   "These facts were computed from the tables directly. They describe structure and data quality only; they do not state any business interpretation. Verify anything you rely on."
+  ]
+ }
+}

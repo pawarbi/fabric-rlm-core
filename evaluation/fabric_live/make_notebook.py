@@ -151,6 +151,13 @@ SKILLS = ""
 # knowledge= and inputs= cannot bind the same alias, so arm B must drop the
 # "lakehouse" input -- that is the library's intended shape, not a handicap.
 LEARN = False
+# Arm D. When set (and LEARN is on), this JSON is passed to RLM.learn() as
+# `declared=`. It carries data statistics the profiler cannot infer because it
+# never reads a row: row counts, grain/uniqueness, join fan-out ratios, null
+# density, repeated labels, negative values. Built by build_declared.py from an
+# independent pandas/deltalake profile, machine-filtered against the reference
+# answers. Empty string = arm B (learn with no declared metadata).
+DECLARED_JSON = ""
 ''' % max_questions, tags=["parameters"]),
 
         cell(f'''
@@ -184,7 +191,7 @@ note(f"python {{sys.version.split()[0]}}")
 note(f"OPENROUTER_API_KEY supplied: {{bool(OPENROUTER_API_KEY)}} "
      f"(len={{len(OPENROUTER_API_KEY)}})")
 note(f"RUN_TAG={{RUN_TAG}}  WORKBOOK_DUTY={{WORKBOOK_DUTY}}  "
-     f"ARM={{'B-learn' if LEARN else 'A-cold'}}/"
+     f"ARM={{('D-declared' if str(DECLARED_JSON).strip() else 'B-learn') if LEARN else 'A-cold'}}/"
      f"{{'workbook' if WORKBOOK_DUTY else 'control-no-workbook'}}  "
      f"MODEL={{MODEL}}  SKILLS={{SKILL_LIST or 'none (library default)'}}")
 if not OPENROUTER_API_KEY:
@@ -267,13 +274,21 @@ LEARN_SUMMARY = {{}}
 if LEARN:
     import time as _t
     _t0 = _t.perf_counter()
-    LEARNED = RLM.learn(sources={{"lakehouse": source}})
+    _declared = None
+    if str(DECLARED_JSON).strip():
+        _declared = json.loads(DECLARED_JSON)
+        note(f"DECLARED supplied for sources: {{sorted(_declared)}} "
+             f"({{len(DECLARED_JSON):,}} chars)")
+    LEARNED = RLM.learn(sources={{"lakehouse": source}}, declared=_declared)
     _pkg = LEARNED.package
     LEARN_SUMMARY = {{
         "lessons_total": len(_pkg.lessons),
         "lessons_active": sum(1 for x in _pkg.lessons if x.status == "active"),
+        "lessons_declared": sum(1 for x in _pkg.lessons
+                                if "declared" in (getattr(x, "basis", ()) or ())),
         "fingerprint": getattr(_pkg, "fingerprint", None),
         "learn_seconds": round(_t.perf_counter() - _t0, 1),
+        "declared": bool(_declared),
     }}
     note(f"LEARN package frozen: {{LEARN_SUMMARY}}")
 
@@ -376,7 +391,7 @@ try:
         row = {"id": qid, "question": text, "has_workbook_in": bool(prior),
                "model": MODEL, "workbook_duty": WORKBOOK_DUTY,
                "skills": SKILL_LIST, "run_tag": RUN_TAG,
-               "arm": "B-learn" if LEARN else "A-cold",
+               "arm": ("D-declared" if str(DECLARED_JSON).strip() else "B-learn") if LEARN else "A-cold",
                "learn_summary": LEARN_SUMMARY}
         try:
             rlm = RLM.task(
