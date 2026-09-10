@@ -38,11 +38,11 @@
 #    Markdown report. Applying the changes to the draft stage is a separate,
 #    explicit step at the end.
 #
-# Python notebook, runtime 3.12. No Spark session is needed.
+# Python notebook, runtime 3.12. No Spark session is needed. The review module ships with the fabric-rlm release the install cell pins; to run it before that release, install the build from the pull request branch instead.
 
 # CELL ********************
 
-%pip install -q "git+https://github.com/pawarbi/fabric-rlm-core@feat/data-agent-review" fabric-data-agent-sdk  # switch to @main once the branch is merged
+%pip install -q "fabric-rlm==0.6.1" fabric-data-agent-sdk
 
 # METADATA ********************
 
