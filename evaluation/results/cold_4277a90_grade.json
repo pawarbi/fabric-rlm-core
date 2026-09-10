@@ -1,0 +1,160 @@
+{
+  "structural": {
+    "unique_qids_equals_expected": false,
+    "no_duplicate_qids": true,
+    "no_missing_qids": false
+  },
+  "duplicates": [],
+  "missing": [
+    "q13",
+    "q25"
+  ],
+  "correct": 20,
+  "total": 24,
+  "results": [
+    {
+      "qid": "q01",
+      "verdict": "PASS",
+      "rlm": 10582466.89,
+      "reference": 10582466.89
+    },
+    {
+      "qid": "q02",
+      "verdict": "PASS",
+      "rlm": 31166.17,
+      "reference": 31166.17
+    },
+    {
+      "qid": "q03",
+      "verdict": "PASS",
+      "rlm": 8.1319,
+      "reference": 8.1362
+    },
+    {
+      "qid": "q04",
+      "verdict": "PASS",
+      "rlm": 360.0,
+      "reference": 360.0
+    },
+    {
+      "qid": "q05",
+      "verdict": "PASS",
+      "rlm": 375337.21,
+      "reference": 375337.21
+    },
+    {
+      "qid": "q06",
+      "verdict": "PASS",
+      "rlm": 3.012237,
+      "reference": 3.012237
+    },
+    {
+      "qid": "q07",
+      "verdict": "PASS",
+      "rlm": 83.8263,
+      "reference": 83.8263
+    },
+    {
+      "qid": "q08",
+      "verdict": "PASS",
+      "rlm": 120.423824,
+      "reference": 120.423824
+    },
+    {
+      "qid": "q09",
+      "verdict": "PASS",
+      "rlm": 93257855.0,
+      "reference": 93257855
+    },
+    {
+      "qid": "q10",
+      "verdict": "PASS",
+      "rlm": "Collaboration",
+      "reference": "Collaboration"
+    },
+    {
+      "qid": "q11",
+      "verdict": "PASS",
+      "rlm": "Middle East",
+      "reference": "Middle East"
+    },
+    {
+      "qid": "q12",
+      "verdict": "FAIL",
+      "rlm": 30.5062,
+      "reference": 19.7798
+    },
+    {
+      "qid": "q13",
+      "verdict": "MISSING",
+      "rlm": null,
+      "reference": 334
+    },
+    {
+      "qid": "q14",
+      "verdict": "PASS",
+      "rlm": 2616.79164,
+      "reference": 2616.79164
+    },
+    {
+      "qid": "q15",
+      "verdict": "PASS",
+      "rlm": 47.0,
+      "reference": 47
+    },
+    {
+      "qid": "q16",
+      "verdict": "FAIL",
+      "rlm": "3642.94",
+      "reference": "enterprise"
+    },
+    {
+      "qid": "q17",
+      "verdict": "PASS",
+      "rlm": 78.2413,
+      "reference": 78.2413
+    },
+    {
+      "qid": "q18",
+      "verdict": "PASS",
+      "rlm": 283453.2,
+      "reference": 283453.2
+    },
+    {
+      "qid": "q19",
+      "verdict": "PASS",
+      "rlm": "ach",
+      "reference": "ach"
+    },
+    {
+      "qid": "q20",
+      "verdict": "PASS",
+      "rlm": 20.8027,
+      "reference": 20.8027
+    },
+    {
+      "qid": "q21",
+      "verdict": "PASS",
+      "rlm": "Middle East",
+      "reference": "Middle East"
+    },
+    {
+      "qid": "q22",
+      "verdict": "PASS",
+      "rlm": 85.0,
+      "reference": 85
+    },
+    {
+      "qid": "q24",
+      "verdict": "PASS",
+      "rlm": 38.2957,
+      "reference": 38.2957
+    },
+    {
+      "qid": "q25",
+      "verdict": "MISSING",
+      "rlm": null,
+      "reference": 1.213608
+    }
+  ]
+}
