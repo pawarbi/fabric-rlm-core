@@ -49,15 +49,19 @@ and classified, never applied.
 
 ### Not tested — explicitly not claimed
 
-- **Semantic-model sources**, the only family with richer `structural_lessons`.
-  Every statement about learning here is scoped to tabular/Lakehouse sources.
 - **SQL / Warehouse endpoint** as a distinct source type in Fabric.
 - The three synthetic domains (inventory, manufacturing, service) **at Fabric
   scale** — they were exercised locally, not deployed as Delta tables.
-- **`declared=`-supplied metadata.** Every Phase-2 learn measurement used an
-  empty package. A `declared=` block would produce a non-empty one; that tests
-  author-supplied metadata, not what `learn()` infers.
 - Stability across models beyond the two tested.
+
+### Since closed
+
+- ~~**Semantic-model sources**~~ — now tested. `RLM.learn()` on the live
+  `ecommerce-dataset` yields 7 lessons, **all `candidate`, `active=0`**, all
+  from one English regex. See `F15_SEMANTIC_NAMING.md`.
+- ~~**`declared=`-supplied metadata**~~ — now tested as arm D. 32 active
+  lessons; abstentions 2→0; turns and tokens **null** (sign test p=1.0). See
+  `ARM_D_RESULTS.md`.
 
 ---
 
@@ -75,9 +79,17 @@ identified.**
 on English column-name tokens, so meaning-preserving renames change what is
 learned. On the real lakehouse it produced **0 lessons**, and the learn arm was
 strictly worse: same reasoning quality, two extra failure modes, +64% tokens.
-The library is **not ARR-specialized** — no measure name, business concept or
-source type from the development domain appears in a runtime decision — but the
-learning path **is naming-convention-specialized**.
+On a **semantic model** it produces 7 lessons, but all `candidate` / `active=0`,
+and all from a single English regex that misses non-English names entirely
+(0/7) while false-positiving on ordinary statistical English (8/8) — two of
+those false positives occurred on the live model.
+
+The library is **not broadly ARR-specialized** — no measure name, business
+concept or source type from the development domain drives a runtime decision —
+with one concrete exception: `nrr` and `grr` (Net/Gross Revenue Retention) are
+subscription-metric tokens hard-coded in a runtime core regex. The dominant
+coupling is **naming-convention and English-language specialization**, which is
+broader and more mundane than ARR coupling.
 
 **3. Portability across tested sources — confirmed where tested.**
 Delta/Lakehouse in real Fabric with real credentials, and local files. An
