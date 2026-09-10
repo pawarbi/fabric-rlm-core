@@ -37,17 +37,29 @@ the entity. Nothing in the run marked this as a mismatch, because the workbook
 `Units` cell was filled in confidently as "USD (monthly recurring revenue per
 subscription)". This is a **confidently wrong answer**, not an abstention.
 
-## 3. The two delivery failures — a `.task`-path defect
+## 3. The two delivery failures — model-authored, not a `.task`-path defect
 
-Both questions were answered **correctly** and recorded `ok=True`,
-`published=True` in the run log:
+> **Corrected 2026-09-10.** This section originally called these a critical
+> library defect on the grounds that "the run reported `published=True`". That
+> attribution was wrong. `published` is a **harness** field: `make_notebook.py:453`
+> sets it from `workbook_state()`, which asks only *"does the workbook file exist
+> in OneLake, and how big is it"*. The workbook has existed since q01, so the flag
+> reads `True` for every question regardless of whether that question's row was
+> published. It was never a library status flag, and the library never claimed
+> anything about per-question delivery. The trajectory evidence below is unchanged
+> and still correct; only the attribution is corrected. See §3a.
+
+Both questions were answered **correctly**. The run log's `ok=True` is the RLM
+run status (the run did succeed) and `published=True` is the harness's
+file-existence probe (see the correction above) — neither is a per-question
+delivery claim:
 
 | q | run-log answer | reference | in workbook? |
 |---|---|---|---|
 | q13 | `334` companies | 334 | **row absent entirely** |
 | q25 | `1.213608` | 1.2136 | present, but **`Question ID` written as the integer `25`, not `"q25"`** |
 
-Two *distinct* defects in the same path:
+Two *distinct* failures in the same path:
 
 **q13 — the row was written, staged, and never published.** This is verifiable
 from the trajectory rather than inferred. On its final working turn the agent
@@ -71,27 +83,44 @@ submitted without ever promoting the staged file. The next question loads
 q13's row was never carried forward. That is exactly why the byte count does not
 move: q12 `bytes=15497`, q13 `bytes=15497`, q14 `bytes=16159`.
 
-**The run nevertheless recorded `ok=True` and `published=True` for q13.** The
-status flag does not reflect whether the workbook was actually published. That is
-the defect: not a lost write, but an unpublished one reported as published.
+**The model, not the library, skipped the publish call.** `FileDestination.stage()`
+and `.publish()` are two separate calls by design (`fabric_rlm/artifacts.py:196`
+and `:204`); staging without publishing is legitimate — scratch files and
+superseded drafts do it. The agent was instructed to publish after each question
+and did so on 23 of 24. On q13 it did not.
 
 A likely contributing factor: q13 carried **`gate=11`**, the highest count of
 catalog-gate rejections in the run (finding F11), and consumed 14 turns and 331 s
 — by far the most expensive question. The turn budget went into rejected queries,
-and the publish step was the casualty.
+and the publish step was the casualty. **F11 is a genuine library finding and is
+the one with a plausible causal link to this loss.**
 
 **q25 — the identifier lost its type.** The answer is correct and present, but the
 key is the integer `25` where every other row holds the string `"q25"`. Any
-consumer joining on question id drops the row.
+consumer joining on question id drops the row. This too is model-authored: the
+library performs no Excel writing at all. `fabric_rlm/excel_artifacts.py` only
+ever calls `load_workbook` to *read* (lines 71, 96–97, 146–147); every answer row
+comes from the model's own `openpyxl` code, as `make_notebook.py`'s docstring
+states — "the parent harness deliberately does no Excel work at all."
 
 The workbook has 23 data rows for 24 questions, and only 22 of them carry a
 well-formed id.
 
-**Why this matters more than the accuracy number.** The library's own reported
-status was clean: 24/24 `ok=True`, `published=True` on every question. Nothing in
-the run surfaced either defect. A user reading the run log would conclude all 24
-questions were delivered. The failure is silent, and it corrupts the artifact the
-task exists to produce.
+### 3a. What this actually establishes
+
+- **Not** that the library reports unpublished work as published. It makes no
+  per-question delivery claim, and nothing in `fabric_rlm` writes workbook rows.
+- **Yes** that an agent given a workbook duty can drop it under turn pressure,
+  and that on this harness nothing surfaced the loss. The harness's own
+  `published` probe was too coarse to catch it — a **measurement** weakness in
+  `make_notebook.py`, fixed by recording per-question row counts or byte deltas
+  rather than mere existence.
+- A possible universal mechanism — surfacing staged-but-never-published files at
+  end of run — is recorded as a **proposal** in `FIX_REGISTER.md` (evidence n=1).
+  It is deliberately not implemented here: staging without publishing is
+  legitimate, so it cannot be an error, and reporting it would not have prevented
+  q13's loss.
+
 
 ## 4. Did the F14 repair cause any of this?
 

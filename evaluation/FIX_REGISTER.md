@@ -36,18 +36,28 @@ package.
 | id | proof it is on the task path | severity |
 |---|---|---|
 | **F11** query gate | `_normalize_catalog_query` (`lakehouse.py:437`) is `LakehouseSource.query`, bound directly as a task input. No knowledge involved. | **critical** |
-| **F9** artifact loss | `artifacts.py:140` `FileDestination` — grep for `_knowledge\|package\|LearnedKnowledge` in `artifacts.py` returns **nothing**. Publishing is independent of learning. **Now evidenced on the merge target**: a staged-but-unpublished workbook is reported `published=True` (`COLD_RERUN_4277a90.md` §3). | **critical** |
+| **F9** ~~artifact loss~~ **WITHDRAWN** | `artifacts.py:140` `FileDestination` is indeed independent of learning, so the *reachability* claim was right. But the **defect claim was wrong**: `published=True` is a harness field (`make_notebook.py:453`, a OneLake file-existence probe), not a library status flag, and the library writes no workbook rows at all. Both q13 and q25 are model-authored. See §1 F9 and `COLD_RERUN_4277a90.md` §3/§3a. | **withdrawn — not a library defect** |
 | **F16** clarification guard | `validators.py:382`, on the verification path — **but exported only**, never applied by default. Reachable only when a caller passes it to `validators=`. | critical *when used*, not default-path |
 | **V-1** conjunction stripping | `verify.py:95`, used by the public `verified_task` / `answers_agree`. | **low** — see below |
 
-### Two severity corrections I owe against my own earlier register
+### Three severity corrections I owe against my own earlier register
 
+- **F9 is withdrawn entirely** (see §1). It was never a library defect — the
+  `published` flag it rested on is the harness's own file-existence probe.
 - **F14 is not a `.task` defect.** It is critical, but it belongs to `.learn`.
 - **V-1 is low, not medium.** `answers_agree` documents that it *"errs toward
   disagreement: a false 'disagree' costs one reconciliation run, a false
   'agree' costs correctness"* (`verify.py:131`). Failing to strip `und`/`y`/`et`
   produces a false *disagreement*, which triggers an extra reconciliation run
   and costs latency — the safe direction, by design.
+
+### A standing check this evaluation learned the hard way
+
+Twice now a **measurement artifact** was filed as a library property: first the
+freeze proof verified against the wrong tree (`PROVENANCE_CORRECTION.md`), then
+F9's `published` flag. Before filing any finding as a library defect, confirm the
+signal **originates in library code** — locate the emitting line in `fabric_rlm/`,
+not in the harness, the notebook, or the model's own output.
 
 ### The result
 
@@ -90,7 +100,8 @@ These are the ones where the system reports success while something is broken.
 |---|---|---|---|
 | **F14** | Of the four result-bound checks in `_result_rows`, only the row bound raises the graceful `OperationResultTooLarge` and falls back. Truncation (`:284`), column bound (`:320`) and byte bound (`:329`) raise **bare `ValueError`**, which `runtime.py:1568` re-raises and the task dies. | Observed live: arm B q13, `ValueError: operation result was truncated`, killed inside `_prepare_registered_operation` **before the agent loop**, so `turns=None`, no trajectory, 12 s. | **universal mechanism** |
 | **F16** | `assert_not_clarification_request` detects a deferral by matching English opener phrases. A non-English "please confirm / I need more information" matches nothing, so **no assert fires and the answer passes** — it fails *open*. The guard against a model dodging the question only works in English. | `_CLARIFICATION_OPENERS` (`validators.py:373-378`): 4/4 English detected, 0/4 German-Spanish-French-Italian detected. Docstring says "Universal … because clarification openers are domain-agnostic **English**." | **universal mechanism** |
-| **F9** | A derived artifact (the Excel workbook) can be lost or not appended while the task still reports `ok=True`. | **Evidenced — cold re-run on `4277a90`, GLM.** q13 appended its correct row and printed `saved staged file`, then submitted without publishing; the next question reloaded the last *published* workbook (q12's) so the row was never carried. q25's `Question ID` was written as the integer `25`, not `"q25"`. Both recorded `ok=True` and `published=True`. See `COLD_RERUN_4277a90.md` §3. | **critical, `.task` path** — status flags do not reflect delivery |
+| **F9** ~~artifact loss~~ | **WITHDRAWN 2026-09-10 — this was not a library defect.** The observation was real: on the cold re-run, q13 appended its correct row, printed `saved staged file`, and submitted without publishing, so the next question reloaded q12's workbook and the row was never carried; q25's `Question ID` was the integer `25`. The **attribution was wrong.** `published=True` is not a library status flag — it is the harness's own OneLake file-existence probe (`make_notebook.py:453` → `workbook_state()`), which reads `True` for every question because the workbook has existed since q01. And no library code writes workbook rows: `excel_artifacts.py` only ever calls `load_workbook` to read (`:71, :96-97, :146-147`), while `make_notebook.py` states "the parent harness deliberately does no Excel work at all." Both failures are **model-authored**; the harness's probe was simply too coarse to notice. | **withdrawn** — reclassified as (a) harness measurement weakness and (b) model prompt-adherence. See F9-P for the one salvageable idea. |
+| **F9-P** *(proposal, not a finding)* | Nothing surfaces staged-but-never-published files at end of run. `FileDestination` already tracks `_staged_paths` (`artifacts.py:158`), so the run could report which staged files were never promoted. | Evidence **n=1** (q13). Deliberately **not implemented**: staging without publishing is legitimate (scratch files, superseded drafts), so it cannot be an error; and reporting it would not have prevented the loss. Needs a real frequency estimate first. | **proposed universal mechanism — unbuilt** |
 
 **F14 and F16 are the two I would fix first.** F14 turns a recoverable
 size-limit into a dead task; F16 lets an evasion be scored as an answer.
@@ -157,7 +168,8 @@ it fixes the non-English gap without adding a single vocabulary word to core.
 | **universal mechanism** | 10 | F14, F16, F12a, D-2, D-3, OP-1, F11, F15-3, F15-4, V-1 |
 | **source metadata** (`declared=`) | 2 | F12b, F15-2 |
 | **optional domain skill** | 1 | F15-1 |
-| **needs evidence before any change** | 1 | F9 |
+| **proposed, unbuilt** (evidence n=1) | 1 | F9-P |
+| **withdrawn — not a library defect** | 1 | F9 |
 | **rejected** | 2 | English-synonym expansion, domain core patches |
 
 The distribution is the reassuring part: **almost every defect found is a
