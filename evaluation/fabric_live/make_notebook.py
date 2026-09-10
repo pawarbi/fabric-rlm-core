@@ -225,6 +225,19 @@ import fabric_rlm
 from fabric_rlm import RLM, LakehouseSource, File, FileDestination
 note(f"fabric_rlm loaded from {{fabric_rlm.__file__}}")
 
+# Provenance stamp. The lakehouse wheel path is fixed and the version string
+# never moves, so the filename cannot say which bytes ran. An earlier phase of
+# this evaluation reported a freeze against a base commit that was not the
+# code under test. Hash the installed package so results name the exact build.
+import hashlib as _hashlib
+_pkg_dir = Path(fabric_rlm.__file__).parent
+_digest = _hashlib.sha256()
+for _src in sorted(_pkg_dir.rglob("*.py")):
+    _digest.update(_src.relative_to(_pkg_dir).as_posix().encode())
+    _digest.update(_src.read_bytes())
+BUILD_FINGERPRINT = _digest.hexdigest()
+note(f"BUILD_FINGERPRINT {{BUILD_FINGERPRINT}}")
+
 import openpyxl
 note(f"openpyxl {{openpyxl.__version__}}")
 

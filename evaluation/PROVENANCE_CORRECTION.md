@@ -88,25 +88,51 @@ across arms A/B/D. That control is **not currently demonstrated**.
 **Until this is resolved, the A/B/D comparison should not be treated as a fully
 controlled experiment.**
 
-### 6a. The F14 contradiction, resolved: the fix does not cover the raise that fired
+### 6a. The F14 contradiction, resolved: the fix covers the wrong row-bound path
 
 `bd924bc` (09-09) claims to make operation row-bound overflow *recoverable*, yet
 arm D's q13 was recorded dying at `turns=None` with `ValueError: operation result
-was truncated` (finding F14). The two are consistent, and the reason matters:
+was truncated` (finding F14). The two are consistent, and the reason matters.
 
-- `bd924bc` adds `class OperationResultTooLarge(OperationPlanError)` and a
-  `except OperationResultTooLarge` handler in `runtime.py` that degrades to
-  `fallback_operation_result_too_large`.
-- **The original `raise ValueError("operation result was truncated")` in
-  `knowledge_execution.py` still exists, unchanged, at `bd924bc`.**
-- `OperationResultTooLarge` derives from `OperationPlanError`, **not** from
-  `ValueError`, so the new handler cannot catch the old raise.
+**Correction to an earlier draft of this section.** It stated that
+`OperationResultTooLarge` "derives from `OperationPlanError`, not `ValueError`, so
+the handler cannot catch the old raise." That reasoning is **wrong**:
+`class OperationPlanError(ValueError)`, so `OperationResultTooLarge` *is* a
+`ValueError`. The conclusion survives, but the mechanism is different and more
+specific.
 
-So the fix introduced a *second*, bounded path while leaving the original fatal
-path reachable. **F14 is unfixed at `bd924bc`, and the raise is equally present at
-`4466e9b`.** This is a stronger finding than "arms used different wheels": the
-partial fix is misleading, because its presence in a changelog suggests the failure
-mode was addressed when the observed crash site was untouched.
+There are **two distinct row-bound overflow paths** in `knowledge_execution.py`:
+
+| line | condition | raises | outcome |
+|---|---|---|---|
+| 309 | `len(rows) > max_output_rows` | `OperationResultTooLarge` | **recoverable** — `runtime.py:1524` falls back to ordinary execution |
+| **284** | host returned `{"truncated": True}` | **bare `ValueError`** | **fatal** |
+
+`bd924bc` fixed line 309 and left line 284 untouched. In `runtime.py` the handler
+chain is `OperationResultTooLarge` → `OperationPlanError` → `except ValueError as
+exc:` at line 1558, and that last handler records telemetry with
+`reason="audit_failed"` and then **bare `raise`** — it re-raises, aborting the run.
+
+A bare `ValueError` is not an `OperationResultTooLarge` nor an
+`OperationPlanError`, so the `truncated` path falls through to line 1568 and kills
+the task before the agent loop starts. That is precisely the observed `turns=None`
+signature.
+
+**Line 284 is a row bound by the code's own design.** The comment at line 677
+states: *"The row bound stays an over-fetch so a period with more groups than the
+operation may return is reported as truncated, never trimmed."* The Lakehouse
+operation deliberately over-fetches by one row and signals overflow via the
+`truncated` flag. So the `truncated` path is the *Lakehouse* expression of exactly
+the condition line 309 handles for in-memory results — and by `bd924bc`'s own
+stated rationale (*"rows follow from the model's plan choice, so they are
+recoverable; columns are the host's contract, so they fail closed"*) it should be
+recoverable too.
+
+**Conclusion.** `bd924bc` is sound in intent and correct where it applies, but
+**incomplete**: it makes the in-memory row bound recoverable while the Lakehouse
+row bound — the one that actually fired on real Fabric Delta data — stays fatal.
+F14 is therefore unfixed at `bd924bc`, and equally unfixed at `4466e9b`, which
+lacks even the partial fix.
 
 This also means q13's crash does **not** prove the arms ran different wheels — the
 crash is explained at any wheel in the range. Arm comparability remains formally
