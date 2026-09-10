@@ -6,9 +6,14 @@ First Last", "it has duplicates", "sales_amount has negatives, skewed right"?
 What did RLM have to rediscover on every single question?
 
 **Short answer:** the premise is correct and stronger than assumed. `learn()`
-does not merely under-use the data — **it never reads a single row.** And the
-traces show the agent re-deriving the same question-independent facts on
-essentially every question.
+does not merely under-use the data — **it never reads a single row.**
+
+But the trace evidence corrects the second half of the intuition. RLM does *not*
+burn many turns rediscovering data facts; it goes almost straight to analytical
+SQL. What it re-derives every time is the **catalog** (21/23). What it mostly
+**never checks at all** is data quality — cardinality 6/23, ranges 3/23, nulls
+2/23, no row sampling. So a data-exploring `learn()` would buy **correctness
+more than speed**.
 
 ---
 
@@ -50,76 +55,85 @@ because **the profile it is derived from is thin.**
 
 ## 2. What the agent re-derived on every question
 
-From the 23 captured trajectories of the GLM learn arm
-(`analyze_rediscovery.py`; the cold arm predates trajectory capture, H8).
-Probes are matched against the executed **code**; friction against **stdout**.
+> **v1 of this section was unsound and its numbers are withdrawn.** The probe
+> vocabulary was written for pandas (`.shape`, `groupby().size()`, `.min()`) but
+> the agent works almost entirely in **SQL**, so those patterns matched 0 times
+> and produced false negatives. Worse, v1 counted every `COUNT(*)` as row-count
+> *profiling* when it is overwhelmingly part of an analytical query
+> (`COUNT(*) AS invoices_with_payment`). v1's headline — "row count 23/23, 133
+> turns, the single clearest waste" — was **wrong**. Audit in
+> `audit_probes.py`; corrected measurement in `analyze_rediscovery_v2.py`.
 
-| question-independent fact | questions | share | turns spent |
+v2 counts a construct as orientation **only when it is standalone** — a
+statement whose entire purpose is to inspect, with no `SUM`/`AVG`/`ROUND`/
+`GROUP BY` alongside it. This deliberately under-counts rather than over-counts.
+
+From the 23 captured trajectories of the GLM learn arm (the cold arm predates
+trajectory capture, H8):
+
+| standalone orientation construct | questions | share | turns |
 |---|---|---|---|
-| **row count** | **23 / 23** | **100%** | **133** |
-| **catalog (`list_sources()`)** | **21 / 23** | **91%** | 21 |
-| join fan-out / grain | 11 / 23 | 48% | **48** |
-| distinct / cardinality | 10 / 23 | 43% | 33 |
-| null checks | 8 / 23 | 35% | 12 |
-| sample rows | 5 / 23 | 22% | 7 |
-| schema / dtypes | 4 / 23 | 17% | 5 |
-| negative-value checks | 3 / 23 | 13% | 9 |
-| duplicate checks | **0 / 23** | 0% | 0 |
-| range / min-max | **0 / 23** | 0% | 0 |
+| **catalog listing (`list_sources()`)** | **21 / 23** | **91%** | 21 |
+| distinct cardinality probe | 6 / 23 | 26% | 11 |
+| range (`MIN`/`MAX`) probe | 3 / 23 | 13% | 3 |
+| null probe | 2 / 23 | 9% | 3 |
+| bare row count (`SELECT COUNT(*) FROM t`) | **1 / 23** | 4% | 1 |
+| sample rows (`SELECT * … LIMIT`) | 0 / 23 | 0% | 0 |
 
-Turn budget across 228 captured turns:
+Turn budget over 228 captured turns:
 
 | bucket | turns | share |
 |---|---|---|
-| orientation (question-independent) | 79 | **35%** |
-| analysis (question-specific) | 87 | 38% |
-| friction (traceback / exception / gate) | 40 | 18% |
+| pure orientation | 25 | **11%** |
+| analytical | 86 | 38% |
+| friction (traceback) | 38 | 17% |
+| unclassified | 79 | 35% |
 
-Orientation consumed **249,643 bytes of stdout**. Six tables — `invoices`,
-`companies`, `dim_date`, `features`, `industries`, `payments` — appear in
-**23/23** questions, because the catalog is re-listed and re-inspected from
-scratch every time.
+**The corrected finding is the opposite of the intuitive one.** RLM does *not*
+burn many turns rediscovering data facts. It goes almost straight to analytical
+SQL. The one thing it genuinely re-derives on nearly every question is the
+**catalog listing — 21 of 23** — and six tables (`invoices`, `companies`,
+`dim_date`, `features`, `industries`, `payments`) appear in **23/23**
+trajectories because the catalog is re-listed and re-printed from scratch each
+time. That is the only well-supported rediscovery cost, and it is schema-level,
+which `learn()` *already* captures and evidently fails to hand over usefully.
 
-**The single clearest waste: 133 row-count turns across 23 questions to
-establish a fact that is identical every time and could have been computed once.**
+Note also that **friction (17%) exceeds pure orientation (11%)**. On this
+evidence, defects (F11/F14) cost more turns than orientation does.
 
 ## 3. The user's examples split into two very different cases
 
-This distinction matters more than the totals, and the data forces it.
+**(a) Turn savings — small, and mostly one thing.** Only the catalog listing
+recurs broadly. A profile that eliminated it addresses ~21 turns and the bulk of
+the repeated stdout, but the ceiling here is **11% of turns**, not a third.
 
-**(a) Facts the agent *does* re-derive → a profile would buy turns.**
-Row counts (100%), catalog/schema (91%), join fan-out (48%), cardinality (43%),
-nulls (35%). These are recomputed constantly and are question-independent.
+**(b) Correctness, not speed — the larger prize.** Standalone data-quality
+probes are *rare*: cardinality 6/23, ranges 3/23, nulls 2/23, and no sampling at
+all. The agent largely **does not check** for fan-out, negatives, duplicates or
+skew — it writes the aggregate and reports the number.
 
-**(b) Facts the agent *never* checks → a profile would buy correctness, not
-speed.** Duplicate checks and min/max ranges were probed in **0 of 23**
-questions. Negative values in only 3 of 23 — on a lakehouse where the brief
-explicitly asked about "joins that can multiply values" and returns/credits.
-
-For (b) the value proposition inverts: caching them saves no turns, because the
-agent wasn't spending turns on them. It would instead surface a hazard the agent
-is currently **silently not checking** — an unflagged fan-out or an unnoticed
-negative is a *wrong answer*, not a slow one. Given the arm still produced
-confident answers on those questions, (b) is arguably the higher-value half.
+For this half the value proposition inverts. Caching those facts saves almost no
+turns, because the agent wasn't spending turns on them. It would instead surface
+hazards the agent is currently **silently not checking** — an unflagged fan-out
+or an unnoticed negative is a *wrong answer*, not a slow one. On a lakehouse
+where the brief explicitly asked about "joins that can multiply values", the arm
+still produced confident answers with almost no distribution checking. **This is
+where a data-exploring `learn()` would earn its keep.**
 
 ## 4. What this does and does not license
 
-**Measured:** what was re-derived, how often, at what turn and byte cost, and
-that the profiler cannot supply any of it.
+**Measured:** that the profiler reads no rows (source, §1); that the catalog is
+re-listed in 21/23 questions; that standalone data-quality probing is rare.
 
-**NOT measured — this is a hypothesis, stated as an upper bound.** I cannot
-claim a richer profile removes those 79 orientation turns without running that
-arm. Three reasons it would recover less than 100%:
+**NOT measured — a hypothesis, stated as a ceiling.** I cannot claim a richer
+profile removes those 25 orientation turns without running that arm. It would
+recover less than all of them because a profile **enters the prompt** (it must
+be smaller than the ~21 catalog dumps it displaces), because the agent may
+re-verify anyway (correct behaviour against a stale profile), and because 17%
+friction is untouched by any profile.
 
-1. A profile **enters the prompt**. It replaces ~250 KB of orientation stdout,
-   but only if it is smaller than what it displaces — an unbounded profile over
-   21 tables could easily cost more than it saves.
-2. The agent may re-verify anyway. Nothing forces it to trust a supplied fact,
-   and for a *stale* profile re-verification is correct behaviour.
-3. 18% of turns are friction (F11/F14), which a profile does not address.
-
-The honest framing: **35% of turns went to facts a profile could in principle
-supply**, and that is the ceiling, not the expected gain.
+**And the honest headline: turn savings are not the case for data profiling
+here — correctness is.**
 
 ## 5. Fix classification (per the brief)
 
@@ -140,8 +154,13 @@ says "this looks like an invoice line" does not.
 ## 6. Reproduce
 
 ```bash
-python analyze_rediscovery.py     # needs run_log_glm_learn.json alongside
+python audit_probes.py              # shows what each regex really matched
+python analyze_rediscovery_v2.py    # the corrected, SQL-aware measurement
+python analyze_rediscovery.py       # v1 — RETAINED ONLY as the retracted version
 ```
+
+All three need `run_log_glm_learn.json` alongside. **Use v2.** v1 is kept in the
+tree solely so the retraction is auditable, and its output should not be cited.
 
 Source claims verified against the `pr-75` worktree at `bd924bc`:
 `knowledge_lakehouse_sources.py:241,244,279,403,413`; `knowledge.py:507`
