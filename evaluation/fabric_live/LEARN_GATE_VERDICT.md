@@ -18,8 +18,26 @@ duty on in both. **Only `knowledge=` differs.**
 | Lessons in the package | — | **0** | — |
 
 **Gate fails on every axis simultaneously.** Learning did not improve accuracy,
-did not reduce turns, and did not reduce tokens. It cost 64% more tokens to
-deliver a worse result.
+did not reduce turns, and did not reduce tokens.
+
+### The precise claim — learning did not degrade *reasoning*, it added *failures*
+
+"−8.4 points" would overstate the case, so state it exactly. On the **22
+questions where neither new failure mode fired, the two arms are identical**:
+20/22 each, missing the same two questions (q16, q19) for the same H5 grading
+artifact. Learning changed analytical quality **not at all**.
+
+The entire gap is two questions lost to two mechanisms that **only exist on the
+knowledge path**:
+
+- **q13** — F14 crash (`ValueError: operation result was truncated`)
+- **q08** — F11 turn exhaustion (13 gate rejections, 20 of 22 turns)
+
+So the defensible verdict is narrower and stronger than a quality regression:
+
+> With an empty package, `.learn` left reasoning quality unchanged, cost **+21%
+> turns and +64% prompt tokens**, and introduced **two failure modes the cold
+> path does not have**, losing two questions the cold arm answered correctly.
 
 ## Why — the package was empty
 
@@ -72,7 +90,8 @@ evidence. It is a real cost, but it is *not* what produced the gpt-4.1-mini
 
 ## Honest scope
 
-- n = 1 per arm; the −8.4 point gap rests on two questions.
+- n = 1 per arm; the whole difference rests on two questions, each attributable
+  to a specific identified mechanism (F14, F11) rather than to noise.
 - Both arms share the categorical-slot grading artifact (H5) on q16/q19, so it
   does not bias the comparison.
 - This says nothing about `.learn` on a **semantic model**, the one family with

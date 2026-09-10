@@ -51,8 +51,10 @@ reported only for workbook-duty arms.
 
 Note both GLM run-log misses (q16, q19) are **grading artifacts** — RLM named
 the right category in `reasoning` while `value` held the metric. Cause is
-harness defect **H5** (an under-specified output contract), not RLM. The strict
-scores above are reported unchanged and deliberately **not** upgraded to 24/24.
+harness defect **H5** (an under-specified output contract), **identified but not
+fixed**: both GLM arms ran the same unfixed contract, so it cannot bias the
+cold-vs-learn comparison. The strict scores above are reported unchanged and
+deliberately **not** upgraded to 24/24.
 
 ## 3. Finding F9 — the workbook reset (NEW, high severity)
 
@@ -427,7 +429,7 @@ run**, so no claim is made either way.
 | H2 | Fixed output paths | cancelling a local shell does not cancel the Fabric job; a second run deleted the first run's workbook mid-flight | namespace all outputs and logs by `RUN_TAG` |
 | H3 | Bare `except` around verification | hid a `NameError: WORKBOOK` across four runs, making RLM look like it never published | `except BaseException` + traceback |
 | H4 | Client-side token expiry | poller died at ~15 min while the job continued | re-poll with a fresh token; never relaunch |
-| H5 | Output contract does not say what `answer.value` holds for a **categorical** question | GLM's correct answers for q16/q19 landed in `reasoning` and were graded FAIL; cost 2 points of a real 24/24 | contract now names `value` as the answer *label* for categorical questions; **scores in this report are NOT retro-upgraded** |
+| H5 | Output contract does not say what `answer.value` holds for a **categorical** question | GLM's correct answers for q16/q19 landed in `reasoning` and were graded FAIL; cost 2 points of a real 24/24 | **Identified, NOT yet applied.** Both GLM arms ran the unfixed contract, so it affects them equally and does not bias the cold-vs-learn comparison. Scores are reported unchanged. |
 | H6 | Run log stored the answer payload only, never `RLMResult.trajectory` | no gate-hit count existed, so F11's causal claim rested on 2 self-reports and had to be withdrawn | persist trajectory per question; count gate rejections directly |
 
 ## 8. Deployment blockers found (would affect any user)
@@ -485,13 +487,15 @@ run**, so no claim is made either way.
   questions over a real Fabric lakehouse, 0 hazard traps, 100% answer rate.
 - **Generalization of *learned* behaviour:** **measured, and it fails.** On the
   same model and source, `.learn` scored **83.3% vs 91.7% cold**, took **+21%
-  turns** and **+64% prompt tokens**, and lost two questions the cold arm
-  answered. The package contained **0 lessons**, so this is pure overhead. The
-  explanation is F12: for tabular/Lakehouse sources learning emits at most one
-  lesson type, gated on English column-name tokens — rename with the same
-  meaning and it disappears (5/12 in the probe). The library is **not**
-  ARR-specialized, but the learning path *is* **English-snake_case-specialized**.
-  Full detail in `LEARN_GATE_VERDICT.md`.
+  turns** and **+64% prompt tokens**. Stated precisely: on the 22 questions
+  where no new failure mode fired the arms are **identical** (20/22 each), so
+  learning did not degrade reasoning — it added two failure modes the cold path
+  lacks (F14 crash on q13, F11 turn exhaustion on q08) at a 64% token premium,
+  while carrying **0 lessons**. The explanation is F12: for tabular/Lakehouse
+  sources learning emits at most one lesson type, gated on English column-name
+  tokens — rename with the same meaning and it disappears (5/12 in the probe).
+  The library is **not** ARR-specialized, but the learning path *is*
+  **English-snake_case-specialized**. Full detail in `LEARN_GATE_VERDICT.md`.
 - **Portability across sources:** Lakehouse/Delta confirmed live. Semantic
   model is the only source family with richer `structural_lessons`, and it was
   **not** exercised in Phase 2 — listed as untested, not claimed.

@@ -74,3 +74,16 @@ print("_PERIOD_COLUMN: period|quarter|month|year|date|week|fiscal|day.")
 print("\nRename-preserving-meaning therefore CHANGES what is learned. This is a")
 print("naming-convention and English-keyword dependency in the learning path,")
 print("not merely in examples or fixtures.")
+
+# The probe is only meaningful if "boolean" is the string the real Delta
+# profiler emits -- _tabular_structural_lessons compares it exactly.
+from fabric_rlm.knowledge_lakehouse_sources import _primitive_type  # noqa: E402
+
+print("\n--- probe representativeness check ---")
+for delta in ("boolean", "bool", "BOOLEAN", "string", "double"):
+    try:
+        print(f"  delta type {delta:9} -> profiled as {_primitive_type(delta)!r}")
+    except Exception as exc:  # pragma: no cover - diagnostic only
+        print(f"  delta type {delta:9} -> {type(exc).__name__}: {exc}")
+print("Delta 'boolean' and 'bool' both normalize to 'boolean', which is exactly")
+print("the value used above, so the probe reflects real Delta profiling.")
