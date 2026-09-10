@@ -42,7 +42,7 @@
 
 # CELL ********************
 
-%pip install -q "git+https://github.com/pawarbi/fabric-rlm-core@main" fabric-data-agent-sdk
+%pip install -q "git+https://github.com/pawarbi/fabric-rlm-core@feat/data-agent-review" fabric-data-agent-sdk  # switch to @main once the branch is merged
 
 # METADATA ********************
 
