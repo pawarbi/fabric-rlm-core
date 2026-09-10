@@ -332,39 +332,73 @@ TRACE  fabric_rlm/runtime.py, in _prepare_registered_operation
 ```
 
 Raised at `knowledge_execution.py:284` when a host operation returns
-`truncated: True`, and re-raised at `runtime.py:1568`.
+`truncated: True`. It reaches the bare `except ValueError` at `runtime.py:1558`,
+which re-raises at `:1568`.
 
-**Why this is a defect and not a design choice.** Every *other* failure in
-`_prepare_registered_operation` degrades gracefully — it records a
-`operation_fallback_reason` and returns `bound_inputs`, so the agent continues
-on the raw sources:
+**The defect is larger than one condition.** `_result_rows` enforces four
+sibling result bounds within ~45 lines of each other. **One** uses the graceful
+exception class; the other three do not:
 
-| condition | handling |
-|---|---|
-| planner response invalid | fallback |
-| planner declines the operations | fallback |
-| `OperationResultTooLarge` | **fallback** |
-| `OperationPlanError` | fallback |
-| `ValueError` (incl. *truncated*) | **re-raise — task dies** |
+| line | condition | class raised | outcome |
+|---|---|---|---|
+| 309 | exceeds **row** bound | `OperationResultTooLarge` | **falls back** |
+| 284 | result **truncated** | bare `ValueError` | **task dies** |
+| 320 | exceeds **column** bound | bare `ValueError` | **task dies** |
+| 329 | exceeds **byte** bound | bare `ValueError` | **task dies** |
 
-`OperationResultTooLarge` and "result was truncated" are the *same class of
-condition* — the host produced more data than the contract allows — yet one
-falls back and the other is fatal. The code's own comment states the intended
-invariant:
+These are the same class of condition — the host returned more data than the
+contract allows — handled three different-but-identical ways and one correct
+way. That asymmetry between adjacent lines in one function is the signature of
+an oversight, not a design decision.
+
+**Why the row bound survives and the others don't** comes down to handler order,
+because `OperationPlanError` *is itself a `ValueError`*
+(`class OperationPlanError(ValueError)`, `:64`; `class OperationResultTooLarge(OperationPlanError)`, `:68`):
+
+```
+runtime.py:1524   except OperationResultTooLarge  → fallback
+runtime.py:1540   except OperationPlanError       → fallback
+runtime.py:1558   except ValueError               → telemetry, then `raise` (:1568)
+```
+
+Anything raised as a subclass is caught early and degrades gracefully; anything
+raised as a plain `ValueError` falls through to the re-raise. So every *other*
+failure in `_prepare_registered_operation` — invalid planner response, planner
+declines, unknown operation, bad parameter types — records an
+`operation_fallback_reason`, returns `bound_inputs`, and lets the agent continue
+on the raw sources. Only the three bare-`ValueError` bound violations kill the
+task.
+
+> Note for the record: an adversarial review of this finding asserted that
+> `OperationResultTooLarge` "does not exist in the package". That is incorrect —
+> it is defined at `knowledge_execution.py:68` and caught at `runtime.py:1524`.
+> The review's underlying instinct (that this is a *family* of uncaught
+> conditions, not a single one) was right, and the table above is the corrected,
+> stronger version of the original finding.
+
+The code's own comment states the intended invariant:
 
 > *"The raw sources stay bound next to the packet: learning narrows the search,
 > it never removes the cold path."*
 
-This path removes the cold path.
+These three paths remove the cold path.
 
-**Expected:** fall back to the raw sources with
-`operation_fallback_reason="operation_result_truncated"`, exactly as
-`OperationResultTooLarge` does.
+**Expected:** fall back to the raw sources with an
+`operation_fallback_reason`, exactly as the row bound does.
 **Actual:** unhandled `ValueError` propagates and the question is lost.
 
 **Measured cost:** q13 was answered **correctly (334.0)** by the cold arm and
 crashed after 12 s in the learn arm. Enabling learning turned a passing question
-into an exception.
+into an exception. Only the *truncated* branch was observed live; the column and
+byte branches are identified by inspection and **not** exercised in this
+evaluation.
+
+**Proposed fix (not applied — core is frozen):** raise all four bound violations
+as `OperationResultTooLarge`, or narrow the re-raise so result-bound errors are
+caught. One-line-per-site change in `knowledge_execution.py`.
+
+**Classification: universal mechanism.** It concerns result-bound handling and
+knows nothing about any business domain. **No core patch was made.**
 
 **Classification: universal mechanism.** It concerns result-bound handling and
 knows nothing about any business domain. **No core patch was made.**
@@ -431,6 +465,8 @@ run**, so no claim is made either way.
 | H4 | Client-side token expiry | poller died at ~15 min while the job continued | re-poll with a fresh token; never relaunch |
 | H5 | Output contract does not say what `answer.value` holds for a **categorical** question | GLM's correct answers for q16/q19 landed in `reasoning` and were graded FAIL; cost 2 points of a real 24/24 | **Identified, NOT yet applied.** Both GLM arms ran the unfixed contract, so it affects them equally and does not bias the cold-vs-learn comparison. Scores are reported unchanged. |
 | H6 | Run log stored the answer payload only, never `RLMResult.trajectory` | no gate-hit count existed, so F11's causal claim rested on 2 self-reports and had to be withdrawn | persist trajectory per question; count gate rejections directly |
+| H7 | Trajectory capture stringified **turns** only, dropping `trajectory.metadata` — so `operation_selection_lm_calls`, `operation_selection_prompt_tokens` and `total_cached_tokens` were never persisted (0 occurrences in both run logs) | the +64% token overhead could not be decomposed; my attribution to the selection call had to be **withdrawn**, and raw tokens could not be converted to cost | persist `trajectory.metadata` and `RunResult.total_cached_tokens` per question |
+| H8 | H6 landed **after** the cold arm ran, so arm A has no `catalog_gate_rejections` field | "0 vs 35 rejections" is unmeasured-vs-measured, not a comparison; q08's attribution to the gate had to be withdrawn | re-run arm A instrumented before any gate claim is made across arms |
 
 ## 8. Deployment blockers found (would affect any user)
 
@@ -480,18 +516,37 @@ run**, so no claim is made either way.
   arm B carries no knowledge to test. A meaningful learn gate needs either a
   semantic-model source or a hand-written `declared=` block.
 - That the Python 3.11 → 3.12 difference contributes nothing.
+- **That the +64% prompt-token overhead comes from the operation-selection LM
+  call.** The call is real and unconditional (confirmed in source), but the
+  attribution is **withdrawn**: `analyze_token_overhead.py` shows per-question
+  deltas ranging −28,725 to +80,667, with **3 of 18** clean questions *negative*
+  and the three questions where an operation actually executed showing the
+  *smallest* deltas. At temperature 1.0 with n = 1, sampling variance dominates.
+  The aggregate is real; the decomposition is unmeasured (harness defect H7).
+- That the +64% represents **cost**. These are raw prompt tokens;
+  `total_cached_tokens` was not captured, and the frozen operations JSON is
+  cache-friendly.
+- That the catalog gate costs the *learn* arm specifically — arm A has no
+  `catalog_gate_rejections` field at all, so "0 vs 35" is unmeasured vs
+  measured, not a comparison.
 
 ## 10. Answering the original brief directly
 
 - **General execution capability:** demonstrated. 91.7% on 24 unseen complex
   questions over a real Fabric lakehouse, 0 hazard traps, 100% answer rate.
-- **Generalization of *learned* behaviour:** **measured, and it fails.** On the
-  same model and source, `.learn` scored **83.3% vs 91.7% cold**, took **+21%
-  turns** and **+64% prompt tokens**. Stated precisely: on the 22 questions
-  where no new failure mode fired the arms are **identical** (20/22 each), so
-  learning did not degrade reasoning — it added two failure modes the cold path
-  lacks (F14 crash on q13, F11 turn exhaustion on q08) at a 64% token premium,
-  while carrying **0 lessons**. The explanation is F12: for tabular/Lakehouse
+- **Generalization of *learned* behaviour:** **measured, and it fails on this
+  configuration.** On the same model and source, `.learn` scored **83.3% vs
+  91.7% cold**, took **+21% turns** and **+64% prompt tokens**. Stated
+  precisely: on the 22 questions where no new failure mode fired the arms score
+  **identically** (20/22 each), so I detected no reasoning difference — though
+  at n = 1 and temperature 1.0 that is "none detectable at this power". Of the
+  two remaining questions, **only q13 is attributable to learning** (F14 crashes
+  in a frame reachable only when operations are registered). **q08 is not** —
+  arm A was never instrumented for gate rejections, so there is no baseline, and
+  no operation executed on q08; it is reclassified as sampling divergence.
+  The package carried **0 lessons** but a **live operation set**, so what was
+  actually tested is the *operations* pathway, not the lesson pathway. The
+  explanation for the empty lesson set is F12: for tabular/Lakehouse
   sources learning emits at most one lesson type, gated on English column-name
   tokens — rename with the same meaning and it disappears (5/12 in the probe).
   The library is **not** ARR-specialized, but the learning path *is*
@@ -510,7 +565,7 @@ run**, so no claim is made either way.
 | F12 report learning coverage / warn on an empty package | **yes** | no | no |
 | F12 the meaning of a column name | no | **yes** — `declared=` | no |
 | F12 more English synonyms in `_CURRENT_PERIOD` | **rejected** — puts a naming rule in core | no | no |
-| F14 truncated operation result must fall back, not re-raise | **yes** | no | no |
+| F14 all four result-bound violations must fall back, not re-raise (3 of 4 currently fatal) | **yes** | no | no |
 | F9 append-or-fail contract for derived artifacts | **weak** — model-dependent, so a core patch is not justified on this evidence | no | **candidate** — test `excel_modify` first |
 | H5 output contract for categorical answers | harness-only | no | no |
 
