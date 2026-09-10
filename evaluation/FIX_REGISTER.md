@@ -14,6 +14,74 @@ questions:
 
 ---
 
+## 0. `.task` vs `.learn` — which path does each defect actually sit on?
+
+Established by reading the guards, not by assumption. **This corrects the
+severity ordering in §1**: the register originally ranked F14 as the top
+critical item for core, and F14 turns out to be unreachable without a knowledge
+package.
+
+### Verified `.learn`-only — a plain `RLM.task()` never reaches these
+
+| id | proof it cannot fire without a package |
+|---|---|
+| **F14** result bounds | `_prepare_registered_operation` (`runtime.py:1397`) opens with `if self._knowledge is None or metadata.get("knowledge_mode") != "registered_operations_available": return`. `_result_rows` is only reachable through `execute_registered_operation`, called at `runtime.py:1519` inside that guard. |
+| **OP-1** operation-selection cost | Same function, same guard. |
+| **F12** `learn()` reads zero rows | Only executes inside `RLM.learn()`. |
+| **F15** measure-name gating | Lesson construction; `learn()` only. |
+| **D-2 / D-3** declared scoping and retrieval | `declared=` is a `learn()` parameter. |
+
+### Verified `.task` path — reachable with no knowledge package at all
+
+| id | proof it is on the task path | severity |
+|---|---|---|
+| **F11** query gate | `_normalize_catalog_query` (`lakehouse.py:437`) is `LakehouseSource.query`, bound directly as a task input. No knowledge involved. | **critical** |
+| **F9** artifact loss | `artifacts.py:140` `FileDestination` — grep for `_knowledge\|package\|LearnedKnowledge` in `artifacts.py` returns **nothing**. Publishing is independent of learning. | needs evidence |
+| **F16** clarification guard | `validators.py:382`, on the verification path — **but exported only**, never applied by default. Reachable only when a caller passes it to `validators=`. | critical *when used*, not default-path |
+| **V-1** conjunction stripping | `verify.py:95`, used by the public `verified_task` / `answers_agree`. | **low** — see below |
+
+### Two severity corrections I owe against my own earlier register
+
+- **F14 is not a `.task` defect.** It is critical, but it belongs to `.learn`.
+- **V-1 is low, not medium.** `answers_agree` documents that it *"errs toward
+  disagreement: a false 'disagree' costs one reconciliation run, a false
+  'agree' costs correctness"* (`verify.py:131`). Failing to strip `und`/`y`/`et`
+  produces a false *disagreement*, which triggers an extra reconciliation run
+  and costs latency — the safe direction, by design.
+
+### The result
+
+**The `.task` critical list is one item: F11.**
+
+That is the substantive finding of this partition, and it is a good one: it is
+consistent with cold `.task` scoring 91.7% on 24 unseen complex questions with
+zero fan-out traps. Core execution is in better shape than the undifferentiated
+register implied — most of what was found belongs to the learning path.
+
+### F11, demonstrated
+
+`_normalize_catalog_query` rejects on substring containment with no awareness of
+string literals, and emits **one identical message for five different causes**:
+
+```
+PASS    SELECT * FROM t
+REJECT  SELECT * FROM companies WHERE name = 'Smith--Jones'   <-- legitimate
+REJECT  SELECT * FROM t WHERE code = 'A/*B'                   <-- legitimate
+REJECT  SELECT * FROM t -- drop everything                    <-- correct
+REJECT  ''                                                    <-- correct
+REJECT  DELETE FROM t                                         <-- correct
+all five: "LakehouseSource.query requires a read-only catalog query."
+```
+
+This is **not merely a turn-cost bug**. A row whose data contains `--` or `/*`
+cannot be filtered on at all, and no rephrasing rescues it, so a legitimate
+analytical question about such data is unanswerable. The identical message is
+the second half of the defect: the agent cannot tell "your query contains a
+comment marker" from "you used DELETE" from "your query is too long", which is
+consistent with the 35 gate rejections observed across 7/24 questions.
+
+---
+
 ## 1. Critical — wrong or lost results that look successful
 
 These are the ones where the system reports success while something is broken.
