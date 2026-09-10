@@ -80,7 +80,29 @@ wrong one.
 
 **q13 specifically corroborates F14.** In arm B, q13 hit the truncated-result
 branch at `knowledge_execution.py:284`, which raises a bare `ValueError` and
-kills the task instead of falling back. In arm D the agent had the
+kills the task instead of falling back. Verbatim from
+`progress-glm-learn-1.log`:
+
+```
+23:49:32  [13/24] q13 ok=False ... turns=None gate=None 12.0s
+23:49:32     ERROR ValueError: operation result was truncated
+23:49:32     TRACE runtime.py", line 1519, in _prepare_registered_operation
+                 execution = execute_registered_operation(
+               knowledge_execution.py", line 869, in execute_registered_operation
+                 rows = _result_rows(raw_result, operation)
+```
+
+*Why this record shows `turns=None` and no trajectory* — worth stating, because
+it reads at first glance like an infrastructure failure rather than an F14
+death. The operation is prepared in `_prepare_registered_operation` **before the
+agent loop begins**. `_result_rows` raises there, so the task dies during
+preparation: no turn ever executes, no trajectory is recorded, no tokens are
+billed, and the whole thing is over in 12 s. Zero turns is not evidence that
+nothing analytical happened — it is the *signature* of F14, which kills at
+prep time rather than degrading inside the loop. (`turns=None` is coerced to 0
+when tabulating, which is why it must be excluded from the paired tests in §1.)
+
+In arm D the agent had the
 invoice→payment fan-out declared (9,204 payment rows over 7,584 distinct
 `invoice_id`), wrote a pre-aggregated query, and never produced an oversized
 result. F14 is a real bounded-recovery defect, and arm D routed around it — it

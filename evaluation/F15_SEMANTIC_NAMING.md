@@ -58,6 +58,13 @@ The measures it fired on in the live model: `Revenue PY`, `Revenue YTD`,
 
 ## 3. Behavioural effect — demonstrated, not asserted
 
+**Scope this claim before reading the numbers.** All 7 lessons were
+`status='candidate'`, and `active=0`. Candidates are not retrieved, so **no
+lesson in this probe was observed influencing any answer.** What the regex
+decides is *which candidates exist* — a gate on what learning is even capable of
+proposing for a semantic model. That is the effect measured below. It is a real
+dependency in runtime core, and it is not a demonstration that an answer changed.
+
 `_is_derived_measure` is a pure function, so the dependency is directly
 measurable. Repro: `evaluation/generalization/repro_measure_naming.py`.
 
@@ -89,9 +96,10 @@ subscription/SaaS metrics, hard-coded into a runtime regex in core that decides
 which lessons exist. `retention` and `churn` are the same family.
 
 This is the clearest instance found of the development domain leaking into
-runtime behaviour. It is narrow — it changes which *candidates* are nominated,
-never an answer directly — but it is real, it is in core, and it is exactly the
-class of rule the brief says belongs elsewhere.
+runtime behaviour. It is narrow — per §3 it changes which *candidates* are
+nominated and no candidate was observed reaching an agent in this probe — but it
+is real, it is in core, and it is exactly the class of rule the brief says
+belongs elsewhere.
 
 ## 5. Honest counterweight
 
