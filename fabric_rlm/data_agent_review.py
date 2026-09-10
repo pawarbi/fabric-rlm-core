@@ -49,7 +49,7 @@ import urllib.parse
 import urllib.request
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 __all__ = [
@@ -265,6 +265,54 @@ def _http_json(url: str, token: str, *, method: str = "GET", body: Mapping[str, 
     return json.loads(text) if text.strip() else {}
 
 
+_REFERENCE_KEYS = ("lakehouseReference", "semanticModelReference", "warehouseReference", "kqlDatabaseReference", "itemReference")
+
+
+def _item_reference(entry: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The item a datasource entry points at: ``{"itemId", "workspaceId"}``."""
+    for key in _REFERENCE_KEYS:
+        if isinstance(entry.get(key), Mapping):
+            return entry[key]
+    return {k: entry[k] for k in ("itemId", "workspaceId") if entry.get(k)}
+
+
+def _fewshot_records(payload: Any) -> list[FewShot]:
+    """Few-shots from a DataFrame (SDK), a ``{"value": [...]}`` page (REST) or a list of records."""
+    if payload is None:
+        return []
+    if hasattr(payload, "to_dict"):
+        records = payload.to_dict(orient="records")
+    elif isinstance(payload, Mapping):
+        records = payload.get("value") or payload.get("fewShots") or []
+    else:
+        records = list(payload)
+    shots = []
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        lowered = {str(k).casefold(): v for k, v in record.items()}
+        question = lowered.get("question")
+        if question is None:
+            continue
+        shots.append(FewShot(str(lowered.get("id", "") or ""), str(question), str(lowered.get("query") or lowered.get("answer") or "")))
+    return shots
+
+
+def _source_from_entry(entry: Mapping[str, Any], fewshots: Sequence[FewShot], *, fallback_id: str = "", name: str | None = None) -> AgentDataSource:
+    """An ``AgentDataSource`` from a public-API datasource payload (REST or SDK)."""
+    reference = _item_reference(entry)
+    return AgentDataSource(
+        id=str(entry.get("id") or fallback_id),
+        kind=_kind(entry.get("type")),
+        name=str(name or entry.get("displayName") or entry.get("name") or reference.get("itemId") or entry.get("id") or fallback_id),
+        instructions=str(entry.get("instructions") or entry.get("dataSourceInstructions") or ""),
+        description=str(entry.get("description") or ""),
+        item_id=reference.get("itemId"),
+        workspace_id=reference.get("workspaceId"),
+        fewshots=tuple(fewshots),
+    )
+
+
 class RestAgentReader:
     """Reads a Data Agent through the public Fabric REST API.
 
@@ -292,13 +340,11 @@ class RestAgentReader:
         settings = _http_json(self._stage_path("settings"), token)
         sources = []
         for entry in _http_json(self._stage_path("datasources"), token).get("value", []):
-            reference = next((entry[k] for k in ("lakehouseReference", "semanticModelReference", "warehouseReference", "kqlDatabaseReference") if isinstance(entry.get(k), Mapping)), {})
-            fewshots = []
             try:
-                for shot in _http_json(self._stage_path(f"datasources/{entry['id']}/fewshots"), token).get("value", []):
-                    fewshots.append(FewShot(str(shot.get("id", "")), str(shot.get("question", "")), str(shot.get("query", "") or shot.get("answer", ""))))
+                fewshots = _fewshot_records(_http_json(self._stage_path(f"datasources/{entry['id']}/fewshots"), token))
             except RuntimeError:
-                pass
+                fewshots = []
+            reference = _item_reference(entry)
             name = entry.get("displayName") or entry.get("name")
             if not name and reference.get("itemId") and reference.get("workspaceId"):
                 # the datasource listing carries the item id only; the item has the name
@@ -306,18 +352,7 @@ class RestAgentReader:
                     name = _http_json(f"{FABRIC_API}/workspaces/{reference['workspaceId']}/items/{reference['itemId']}", token).get("displayName")
                 except RuntimeError:
                     name = None
-            sources.append(
-                AgentDataSource(
-                    id=str(entry["id"]),
-                    kind=_kind(entry.get("type")),
-                    name=str(name or reference.get("itemId") or entry["id"]),
-                    instructions=str(entry.get("instructions") or ""),
-                    description=str(entry.get("description") or ""),
-                    item_id=reference.get("itemId"),
-                    workspace_id=reference.get("workspaceId"),
-                    fewshots=tuple(fewshots),
-                )
-            )
+            sources.append(_source_from_entry(entry, fewshots, name=name))
         return AgentSnapshot(
             agent_id=self.agent_id,
             name=str(item.get("displayName") or self.agent_id),
@@ -330,49 +365,83 @@ class RestAgentReader:
 
 
 class SdkAgentReader:
-    """Reads a Data Agent through ``fabric.dataagent.client.FabricDataAgentManagement``.
+    """Reads a Data Agent through the SDK's ``FabricDataAgentManagement``.
 
     Inside a Fabric notebook::
 
         from fabric.dataagent.client import FabricDataAgentManagement
         snapshot = SdkAgentReader(FabricDataAgentManagement("Sales Agent RLM")).snapshot()
+
+    Uses the SDK's public-API methods (``get_settings``, ``list_datasources``,
+    the handle's ``get_configuration(stage)`` and ``get_fewshots(stage)``),
+    which return the same payloads as the REST reader, so a source in another
+    workspace keeps its workspace id. Older SDKs without those methods are
+    read through the legacy workload-host methods and their snake_case keys.
     """
 
-    def __init__(self, management: Any) -> None:
+    def __init__(self, management: Any, *, stage: str = "staging") -> None:
         self._management = management
+        self.stage = stage
 
     def snapshot(self) -> AgentSnapshot:
+        management = self._management
+        client = getattr(management, "_client", None)
+        name = getattr(management, "data_agent_name", None) or getattr(client, "data_agent_name", "") or "data agent"
+        agent_id = getattr(management, "data_agent_id", None) or getattr(client, "data_agent_id", "") or name
+        workspace_id = getattr(management, "workspace_id", None) or getattr(client, "workspace_id", None)
+        if hasattr(management, "list_datasources") and hasattr(management, "get_settings"):
+            settings = management.get_settings(stage=self.stage) or {}
+            sources = []
+            for handle in management.list_datasources(stage=self.stage):
+                entry = handle.get_configuration(stage=self.stage) or {}
+                try:
+                    shots = _fewshot_records(handle.get_fewshots(stage=self.stage))
+                except Exception:  # noqa: BLE001 - few-shots are optional
+                    shots = []
+                sources.append(_source_from_entry(entry, shots, fallback_id=str(getattr(handle, "_id", "") or "")))
+            return AgentSnapshot(
+                agent_id=str(agent_id),
+                name=str(name),
+                instructions=str(settings.get("aiInstructions") or ""),
+                datasources=tuple(sources),
+                stage=self.stage,
+                workspace_id=str(workspace_id) if workspace_id else None,
+            )
+        return self._legacy_snapshot(str(agent_id), str(name), workspace_id)
+
+    def _legacy_snapshot(self, agent_id: str, name: str, workspace_id: Any) -> AgentSnapshot:
         management = self._management
         configuration = management.get_configuration()
         instructions = getattr(configuration, "instructions", None)
         if instructions is None and isinstance(configuration, Mapping):
-            instructions = configuration.get("aiInstructions") or configuration.get("instructions")
+            instructions = configuration.get("aiInstructions") or configuration.get("additionalInstructions") or configuration.get("instructions")
         sources = []
         for datasource in management.get_datasources():
             config = datasource.get_configuration() if hasattr(datasource, "get_configuration") else {}
             config = config if isinstance(config, Mapping) else {}
-            fewshots = []
             try:
-                frame = datasource.get_fewshots()
-                records = frame.to_dict(orient="records") if hasattr(frame, "to_dict") else list(frame)
-                for record in records:
-                    fewshots.append(FewShot(str(record.get("id", "")), str(record.get("question", "")), str(record.get("query", "") or "")))
+                shots = _fewshot_records(datasource.get_fewshots())
             except Exception:  # noqa: BLE001 - few-shots are optional
-                pass
-            sources.append(
-                AgentDataSource(
-                    id=str(getattr(datasource, "_id", None) or config.get("id") or ""),
-                    kind=_kind(config.get("type") or getattr(datasource, "type", "")),
-                    name=str(config.get("displayName") or config.get("display_name") or getattr(datasource, "name", "") or ""),
-                    instructions=str(config.get("instructions") or config.get("dataSourceInstructions") or ""),
-                    description=str(config.get("description") or config.get("userDescription") or ""),
-                    item_id=config.get("artifactId") or (config.get("lakehouseReference") or {}).get("itemId"),
-                    fewshots=tuple(fewshots),
-                )
-            )
-        name = getattr(management, "data_agent_name", None) or getattr(getattr(management, "_client", None), "data_agent_name", "") or "data agent"
-        agent_id = getattr(management, "data_agent_id", None) or getattr(getattr(management, "_client", None), "data_agent_id", "") or name
-        return AgentSnapshot(agent_id=str(agent_id), name=str(name), instructions=str(instructions or ""), datasources=tuple(sources), stage="staging")
+                shots = []
+            # the legacy payload uses snake_case keys and names the item by its id
+            entry = {
+                "id": getattr(datasource, "_id", None) or config.get("id") or "",
+                "type": config.get("type") or getattr(datasource, "type", ""),
+                "displayName": config.get("displayName") or config.get("display_name") or getattr(datasource, "name", "") or "",
+                "instructions": config.get("instructions") or config.get("additional_instructions") or config.get("dataSourceInstructions") or "",
+                "description": config.get("description") or config.get("user_description") or config.get("userDescription") or "",
+                "itemId": config.get("artifactId") or config.get("artifact_id") or config.get("id"),
+                "workspaceId": config.get("workspaceId") or config.get("workspace_id"),
+            }
+            sources.append(_source_from_entry(entry, shots, fallback_id=str(entry["id"])))
+        return AgentSnapshot(
+            agent_id=agent_id,
+            name=name,
+            instructions=str(instructions or ""),
+            datasources=tuple(sources),
+            stage="staging",
+            workspace_id=str(workspace_id) if workspace_id else None,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -877,6 +946,22 @@ def _attributes(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str]
     return found
 
 
+_LANGUAGE_VARIANT = re.compile(r"^(spanish|french|german|italian|portuguese|dutch|japanese|chinese)", re.IGNORECASE)
+
+
+def _diverse_attributes(attributes: Sequence[tuple[str, str, str, str]]) -> list[tuple[str, str, str, str]]:
+    """Grouping attributes with one per dimension table first, English names before translated variants."""
+    ranked = sorted(attributes, key=lambda a: (bool(_LANGUAGE_VARIANT.match(a[3])), not a[3].casefold().startswith("english")))
+    chosen: list[tuple[str, str, str, str]] = []
+    seen: set[str] = set()
+    for attribute in ranked:
+        if attribute[1] not in seen:
+            chosen.append(attribute)
+            seen.add(attribute[1])
+    chosen.extend(a for a in ranked if a not in chosen)
+    return chosen
+
+
 def _order_column(schema: SourceSchema, table: str) -> str | None:
     return next((c for c in schema.tables[table] if _ORDER_ID_HINT.search(c)), None)
 
@@ -1004,7 +1089,7 @@ def generate_questions(
                 add("distinct_by_year", f"How many distinct {fact['order_column']} values (orders) does {fact['table']} have per year for {span}?", {"kind": "distinct_by_year", "facts": [base], "years": source_years})
             if len(source_years) >= 2:
                 add("yoy", f"What was the year-over-year change in total {fact['measure']} in {fact['table']} from {source_years[-2]} to {source_years[-1]}?", {"kind": "yoy", "facts": [base], "years": source_years[-2:]})
-            for fact_key, dim_table, dim_key, attribute in fact["attributes"][:2]:
+            for fact_key, dim_table, dim_key, attribute in _diverse_attributes(fact["attributes"])[:2]:
                 attr = {"fact_key": fact_key, "dim_table": dim_table, "dim_key": dim_key, "column": attribute, "alias": attribute}
                 add("top_n", f"What are the top {top} {attribute} values by {fact['measure']} in {fact['table']} for {latest}?", {"kind": "top_n", "facts": [{**base, "attribute": attr}], "year": latest, "top": top})
                 add("breakdown", f"What was total {fact['measure']} in {fact['table']} by {attribute} for {latest}?", {"kind": "breakdown", "facts": [{**base, "attribute": attr}], "year": latest})
@@ -1156,16 +1241,123 @@ def build_references(questions: Sequence[Question], executors: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
+class AgentStep:
+    """One tool step of an agent run: the function called, its arguments, its output."""
+
+    kind: str  # function_call | function_call_output | code_interpreter_call | tool_call
+    name: str = ""
+    arguments: str = ""
+    output: str = ""
+
+
+@dataclass(frozen=True)
 class AgentAnswer:
     text: str
     query: str | None = None  # the query the agent executed, when the run steps expose it
     language: str | None = None
     datasource: str | None = None
     seconds: float = 0.0
+    steps: tuple[AgentStep, ...] = ()  # the run steps, for the insight section of the report
+    status: str = "completed"
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, default=str)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _response_text(items: Sequence[Any]) -> str:
+    parts = []
+    for item in items:
+        if _field(item, "type") != "message":
+            continue
+        for content in _field(item, "content", []) or []:
+            text = _field(content, "text")
+            if text:
+                parts.append(str(text))
+    return "\n\n".join(parts)
+
+
+def _response_steps(items: Sequence[Any]) -> tuple[AgentStep, ...]:
+    """The tool steps of a Responses API output, in order."""
+    steps = []
+    for item in items:
+        kind = str(_field(item, "type", "") or "")
+        if kind == "function_call":
+            steps.append(AgentStep(kind, str(_field(item, "name", "") or ""), _text(_field(item, "arguments", "")), ""))
+        elif kind == "function_call_output":
+            steps.append(AgentStep(kind, str(_field(item, "name", "") or ""), "", _text(_field(item, "output", ""))))
+        elif kind == "code_interpreter_call":
+            steps.append(AgentStep(kind, kind, _text(_field(item, "code") or _field(item, "input", "")), _text(_field(item, "output", ""))))
+    return tuple(steps)
+
+
+_FENCED = re.compile(r"```(sql|dax|kql|kusto)\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+_QUERY_START = re.compile(r"^\s*(SELECT|WITH|EVALUATE|DEFINE|DECLARE|let\s|\w+\s*\|)", re.IGNORECASE)
+_DATASOURCE_KEYS = ("datasource_name", "datasourceName", "data_source", "dataSource", "datasource", "artifact_name", "artifactName", "source")
+
+
+def _language_of(query: str, tag: str | None = None) -> str:
+    if tag:
+        return "kql" if tag.casefold() == "kusto" else tag.casefold()
+    if "EVALUATE" in query.upper():
+        return "dax"
+    if re.search(r"^\s*\w+\s*\|\s*(where|summarize|project|take|count|extend)\b", query, re.IGNORECASE | re.MULTILINE):
+        return "kql"
+    return "sql"
+
+
+def _steps_summary(steps: Sequence[AgentStep]) -> tuple[str | None, str | None, str | None]:
+    """The executed query, its language and the routed data source, from the run steps.
+
+    A fenced ``sql``/``dax``/``kql`` block in a tool output is the query the
+    service ran; failing that, a query-shaped value in the call arguments or
+    the output. The data source comes from the call arguments.
+    """
+    query: str | None = None
+    language: str | None = None
+    datasource: str | None = None
+    for step in steps:
+        candidate: tuple[str, str] | None = None
+        fenced = _FENCED.findall(step.output)
+        if fenced:
+            tag, body = fenced[-1]
+            candidate = (body.strip(), _language_of(body, tag))
+        else:
+            for text in (step.arguments, step.output):
+                found = _query_in(text)
+                if found:
+                    candidate = (found, _language_of(found))
+                    break
+        if candidate:
+            query, language = candidate
+        for key in _DATASOURCE_KEYS:
+            match = re.search(rf'"{key}"\s*:\s*"([^"]+)"', step.arguments)
+            if match:
+                datasource = match.group(1)
+                break
+    return query, language, datasource
 
 
 class McpAgentAsker:
-    """Asks through the agent's MCP endpoint; returns the answer text only."""
+    """Asks through the agent's MCP endpoint; returns the answer text only.
+
+    Inside a Fabric notebook the token provider is
+    ``lambda: notebookutils.credentials.getToken("pbi")``; the endpoint
+    serves the published agent.
+    """
 
     def __init__(self, workspace_id: str, agent_id: str, token_provider: Callable[[], str]) -> None:
         self.url = f"{FABRIC_API}/mcp/workspaces/{workspace_id}/dataagents/{agent_id}/agent"
@@ -1174,34 +1366,85 @@ class McpAgentAsker:
     def __call__(self, question: str) -> AgentAnswer:
         import asyncio
 
-        import httpx
         from mcp.client.session import ClientSession
-        from mcp.client.streamable_http import streamable_http_client
+
+        async def ask(streams: Any) -> str:
+            async with ClientSession(streams[0], streams[1]) as session:
+                await session.initialize()
+                tools = await session.list_tools()
+                tool = tools.tools[0]
+                schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None) or {}
+                key = next(iter(schema.get("properties", {"userQuestion": 1})))
+                result = await session.call_tool(tool.name, {key: question})
+                return " ".join(getattr(c, "text", "") for c in result.content)
 
         async def run() -> str:
-            async with httpx.AsyncClient(headers={"Authorization": f"Bearer {self._token()}"}, timeout=240.0) as client:
-                async with streamable_http_client(self.url, http_client=client) as streams:
-                    async with ClientSession(streams[0], streams[1]) as session:
-                        await session.initialize()
-                        tools = await session.list_tools()
-                        tool = tools.tools[0]
-                        schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None) or {}
-                        key = next(iter(schema.get("properties", {"userQuestion": 1})))
-                        result = await session.call_tool(tool.name, {key: question})
-                        return " ".join(getattr(c, "text", "") for c in result.content)
+            headers = {"Authorization": f"Bearer {self._token()}"}
+            try:
+                from mcp.client.streamable_http import streamable_http_client as connect
+            except ImportError:  # mcp releases before 1.24 spell it differently
+                from mcp.client.streamable_http import streamablehttp_client as connect_legacy
+
+                async with connect_legacy(self.url, headers=headers) as streams:
+                    return await ask(streams)
+            import httpx
+
+            async with httpx.AsyncClient(headers=headers, timeout=240.0) as client:
+                async with connect(self.url, http_client=client) as streams:
+                    return await ask(streams)
 
         started = time.time()
         return AgentAnswer(text=asyncio.run(run()), seconds=round(time.time() - started, 1))
 
 
+class ResponsesAgentAsker:
+    """Asks through the agent's OpenAI-compatible Responses endpoint.
+
+    Inside a notebook pass the SDK's ``FabricOpenAIResponses`` client (SDK
+    0.1.28a0 and later; ``ai_skill_stage="sandbox"`` asks the draft
+    configuration, ``"production"`` the published one). ``responses.create``
+    returns the answer together with the output items: the function calls
+    and their outputs, which carry the query the agent executed and the
+    source it routed to. Any client with ``responses.create`` and
+    ``responses.retrieve`` works.
+    """
+
+    TERMINAL = frozenset({"completed", "failed", "incomplete", "cancelled"})
+
+    def __init__(self, client: Any, *, model: str | None = None) -> None:
+        self.client = client
+        self.model = model
+
+    def __call__(self, question: str, *, timeout: float = 600.0, poll_seconds: float = 2.0) -> AgentAnswer:
+        started = time.time()
+        kwargs: dict[str, Any] = {"input": question}
+        if self.model:
+            kwargs["model"] = self.model
+        response = self.client.responses.create(**kwargs)
+        while str(_field(response, "status", "completed") or "completed").lower() not in self.TERMINAL:
+            if time.time() - started > timeout:
+                raise TimeoutError(f"response {_field(response, 'id', '')} did not finish within {timeout:.0f} s")
+            time.sleep(poll_seconds)
+            response = self.client.responses.retrieve(_field(response, "id"))
+        items = list(_field(response, "output", []) or [])
+        text = _response_text(items) or str(_field(response, "output_text", "") or "")
+        steps = _response_steps(items)
+        query, language, datasource = _steps_summary(steps)
+        status = str(_field(response, "status", "completed") or "completed").lower()
+        if status != "completed" and not text:
+            text = f"ERROR: response ended with status {status}"
+        return AgentAnswer(text=text, query=query, language=language, datasource=datasource, seconds=round(time.time() - started, 1), steps=steps, status=status)
+
+
 class AssistantsAgentAsker:
     """Asks through the agent's OpenAI-compatible Assistants endpoint.
 
-    Beyond the answer text, the run steps expose the query the agent
-    generated and executed and the data source it routed to, so the review
-    can grade the query itself. Works outside a notebook with a token for
+    The run steps expose the query the agent generated and executed and the
+    data source it routed to, so the review can grade the query itself.
+    Works outside a notebook with a token for
     ``https://api.fabric.microsoft.com`` and inside one through the SDK's
-    ``FabricOpenAI`` client (pass it as ``client``).
+    ``FabricOpenAI`` client (pass it as ``client``). Prefer
+    ``ResponsesAgentAsker`` where the SDK offers ``FabricOpenAIResponses``.
     """
 
     def __init__(self, workspace_id: str | None = None, agent_id: str | None = None, token_provider: Callable[[], str] | None = None, *, client: Any = None, api_version: str = "2024-05-01-preview") -> None:
@@ -1239,32 +1482,23 @@ class AssistantsAgentAsker:
             if message.role == "assistant":
                 text = " ".join(getattr(getattr(part, "text", None), "value", "") for part in message.content)
                 break
-        query, language, datasource = None, None, None
         try:
-            steps = client.beta.threads.runs.steps.list(thread_id=thread.id, run_id=run.id, order="asc", limit=100).data
+            raw_steps = client.beta.threads.runs.steps.list(thread_id=thread.id, run_id=run.id, order="asc", limit=100).data
         except Exception:  # noqa: BLE001 - steps are a bonus
-            steps = []
-        for step in steps:
+            raw_steps = []
+        steps: list[AgentStep] = []
+        for step in raw_steps:
             if getattr(step, "type", "") != "tool_calls" or not getattr(step, "step_details", None):
                 continue
             for call in getattr(step.step_details, "tool_calls", []) or []:
                 function = getattr(call, "function", None)
                 if function is None:
                     continue
-                name = str(getattr(function, "name", "") or "")
-                arguments = str(getattr(function, "arguments", "") or "")
-                output = str(getattr(function, "output", "") or "")
-                found = _query_in(arguments if "execute" in name else output)
-                if found:
-                    query = found
-                    language = "dax" if "EVALUATE" in found.upper() else "sql"
-                for key in ("datasource_name", "datasourceName", "data_source", "artifact_name"):
-                    match = re.search(rf'"{key}"\s*:\s*"([^"]+)"', arguments)
-                    if match:
-                        datasource = match.group(1)
+                steps.append(AgentStep("tool_call", str(getattr(function, "name", "") or ""), _text(getattr(function, "arguments", "")), _text(getattr(function, "output", ""))))
+        query, language, datasource = _steps_summary(steps)
         if run.status != "completed" and not text:
             text = f"ERROR: run ended with status {run.status}"
-        return AgentAnswer(text=text, query=query, language=language, datasource=datasource, seconds=round(time.time() - started, 1))
+        return AgentAnswer(text=text, query=query, language=language, datasource=datasource, seconds=round(time.time() - started, 1), steps=tuple(steps), status=str(run.status))
 
 
 def _query_in(text: str) -> str | None:
@@ -1279,7 +1513,7 @@ def _query_in(text: str) -> str | None:
         if isinstance(payload, Mapping):
             for key in ("code", "sql", "query", "dax", "kql"):
                 value = payload.get(key)
-                if isinstance(value, str) and value.strip():
+                if isinstance(value, str) and value.strip() and _QUERY_START.search(unfenced(value)):
                     return unfenced(value)
     except ValueError:
         pass
@@ -1432,6 +1666,7 @@ _CAUSE_GUIDANCE = {
     "agent_abstained": "Answer questions the selected schema can answer; abstain only when a required definition or table is missing.",
     "answered_without_data": "When the query returns no rows, say that the source has no data for that scope; do not produce figures.",
     "inconsistent": "Give the same answer to the same question: prefer the authoritative table named in the source instructions.",
+    "misrouted": "Choose the data source by topic: name which source answers which subjects, and keep each source's description specific to its subjects.",
 }
 
 
@@ -1546,16 +1781,27 @@ class ReviewReport:
         counts = self.score()
         lines.append(", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "no questions")
         lines.append("")
-        lines.append("| id | question | outcome | cause | detail | agent query |")
-        lines.append("|---|---|---|---|---|---|")
+        lines.append("| id | question | outcome | cause | detail | agent query | routed to |")
+        lines.append("|---|---|---|---|---|---|---|")
         ref_by_id = {r.question_id: r for r in self.references}
         for q in self.questions:
             g = next((x for x in self.graded if x.question_id == q.id), None)
             answers = self.answers.get(q.id, ())
             query = next((a.query for a in answers if a.query), None)
+            routed = next((a.datasource for a in answers if a.datasource), "")
             detail = (g.detail if g else ref_by_id.get(q.id, Reference(q.id, "failed")).note)[:80]
-            lines.append(f"| {q.id} | {q.text} | {g.outcome if g else ''} | {g.cause if g else ''} | {detail} | {'yes' if query else 'no'} |")
+            lines.append(f"| {q.id} | {q.text} | {g.outcome if g else ''} | {g.cause if g else ''} | {detail} | {'yes' if query else 'no'} | {routed} |")
         lines.append("")
+        if any(a.steps for answers in self.answers.values() for a in answers):
+            lines.append("## Agent run steps")
+            lines.append("What the agent did per question: the functions it called, the language of the query it executed, the source it routed to.")
+            for q in self.questions:
+                for attempt, a in enumerate(self.answers.get(q.id, ()), start=1):
+                    if not a.steps:
+                        continue
+                    names = sorted({s.name for s in a.steps if s.name})
+                    lines.append(f"- {q.id} (attempt {attempt}): {len(a.steps)} step(s); functions: {', '.join(names) or 'none'}; query language: {a.language or 'none'}; routed to: {a.datasource or 'unknown'}; status: {a.status}; {a.seconds}s")
+            lines.append("")
         lines.append("## Suggested changes")
         lines.append("### Agent instructions")
         lines.append("```")
@@ -1584,6 +1830,23 @@ class ReviewReport:
         lines.append("## Method")
         lines.append("References were computed by executing generated queries against the sources, never by a model. Grades compare the agent's executed query where the run steps exposed it, else its prose figures, with a 0.5% tolerance. Repeat the evaluation three times before believing a delta.")
         return "\n".join(lines)
+
+
+def _same_source(routed: str, source: AgentDataSource) -> bool:
+    key = re.sub(r"[^a-z0-9]", "", routed.casefold())
+    return any(key and key == re.sub(r"[^a-z0-9]", "", n.casefold()) for n in (source.id, source.name, source.item_id or "") if n)
+
+
+def _with_routing(graded: Graded, question: Question, answers: Sequence[AgentAnswer], snapshot: AgentSnapshot) -> Graded:
+    """On a multi-source agent, a failed answer that came from another source is a routing failure."""
+    if len(snapshot.datasources) < 2 or graded.outcome == "correct":
+        return graded
+    routed = next((a.datasource for a in answers if a.datasource), None)
+    source = next((s for s in snapshot.datasources if s.id == question.source_id), None)
+    if not routed or source is None or _same_source(routed, source):
+        return graded
+    detail = f"routed to {routed}; the question is about {source.name or source.id}. {graded.detail}".strip()
+    return replace(graded, cause="misrouted", detail=detail[:200])
 
 
 def review_agent(
@@ -1641,9 +1904,10 @@ def review_agent(
         outcomes = Counter(g.outcome for g in grades)
         if len(outcomes) > 1:
             worst = min(grades, key=lambda g: ("correct", "partial", "abstained", "incomplete", "wrong", "no_reference").index(g.outcome) * -1)
-            graded.append(Graded(question.id, worst.outcome, "inconsistent", f"outcomes across {len(grades)} runs: {dict(outcomes)}", worst.matched, worst.expected, worst.query_checked))
+            final = Graded(question.id, worst.outcome, "inconsistent", f"outcomes across {len(grades)} runs: {dict(outcomes)}", worst.matched, worst.expected, worst.query_checked)
         else:
-            graded.append(grades[0])
+            final = grades[0]
+        graded.append(_with_routing(final, question, collected, snapshot))
     suggestions = suggest(snapshot, schemas, findings, questions, references, graded)
     return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions)
 
@@ -1675,23 +1939,42 @@ class RestAgentWriter:
 
 
 class SdkAgentWriter:
+    """Writes to the agent's staging (draft) configuration through the SDK.
+
+    Prefers the public-API methods (``update_settings``, ``list_datasources``
+    and the datasource handle's ``update_configuration`` and ``add_fewshots``)
+    and falls back to the legacy workload-host methods on older SDKs. Nothing
+    here publishes.
+    """
+
     def __init__(self, management: Any) -> None:
         self._management = management
 
+    def _public(self) -> bool:
+        return hasattr(self._management, "list_datasources") and hasattr(self._management, "update_settings")
+
     def _datasource(self, datasource_id: str) -> Any:
-        for datasource in self._management.get_datasources():
+        handles = self._management.list_datasources(stage="staging") if self._public() else self._management.get_datasources()
+        for datasource in handles:
             if str(getattr(datasource, "_id", "")) == datasource_id:
                 return datasource
         raise KeyError(datasource_id)
 
     def update_agent_instructions(self, text: str) -> None:
-        self._management.update_configuration(instructions=text)
+        if self._public():
+            self._management.update_settings(ai_instructions=text)
+        else:
+            self._management.update_configuration(instructions=text)
 
     def update_datasource_instructions(self, datasource_id: str, text: str) -> None:
         self._datasource(datasource_id).update_configuration(instructions=text)
 
     def update_datasource_description(self, datasource_id: str, text: str) -> None:
-        self._datasource(datasource_id).update_description(text)
+        datasource = self._datasource(datasource_id)
+        if self._public():
+            datasource.update_configuration(description=text)
+        else:
+            datasource.update_description(text)
 
     def add_fewshots(self, datasource_id: str, shots: Sequence[FewShot]) -> None:
         self._datasource(datasource_id).add_fewshots({shot.question: shot.query for shot in shots})

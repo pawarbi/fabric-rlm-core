@@ -17,11 +17,13 @@
   from the schemas and computes each reference by executing a query against
   the source (SQL for lakehouse tables, a bounded aggregate for a semantic
   model), so there is ground truth without anyone writing it; asks the
-  agent the same questions through its Assistants endpoint, grades the
-  query it executed where the run steps expose it and its prose otherwise,
+  agent the same questions through its Responses endpoint (Assistants and
+  MCP askers exist too), keeps the run steps, grades the query it executed
+  where the steps expose it and its prose otherwise,
   and classifies failures by cause (missing rows, unsorted ranking, a
   narrower scope than asked, values that match nothing, an abstention where
-  the source answers, inconsistency across repetitions); and renders
+  the source answers, inconsistency across repetitions, misrouting between
+  sources); and renders
   suggestions (agent instructions with schema lines moved out, data-source
   instructions with structured sections, descriptions, few-shots built from
   the executed references) into a Markdown report. Applying the suggestions

@@ -358,28 +358,6 @@ def test_apply_and_sdk_reader_use_the_management_surface():
     applied = apply_suggestions(Writer(), suggestions)
     assert ("description", MODEL_ID) in calls and applied[0] == "agent instructions"
 
-    class Datasource:
-        _id = "ds-1"
-
-        def get_configuration(self):
-            return {"type": "lakehouse_tables", "displayName": "AWLakehouse", "instructions": "Use dbo tables.", "description": "Sales."}
-
-        def get_fewshots(self):
-            return [{"id": "f1", "question": "How many orders?", "query": "SELECT COUNT(*) FROM factinternetsales"}]
-
-    class Management:
-        data_agent_name = "Sales Agent"
-        data_agent_id = "agent-1"
-
-        def get_configuration(self):
-            return type("Config", (), {"instructions": "Answer sales questions."})()
-
-        def get_datasources(self):
-            return [Datasource()]
-
-    snap = SdkAgentReader(Management()).snapshot()
-    assert snap.name == "Sales Agent" and snap.datasources[0].kind == "lakehouse" and snap.datasources[0].fewshots[0].question == "How many orders?"
-
 
 def test_semantic_executor_and_profile_schema(tmp_path: Path):
     frames = []
@@ -439,3 +417,177 @@ def test_single_year_questions_read_naturally_and_no_data_answers_are_wrong():
     invented = grade(_question(), no_rows, "Total revenue was $1,250,000 in that period.")
     assert invented.outcome == "wrong" and invented.cause == "answered_without_data"
     assert grade(_question(), no_rows, "Here is the breakdown.").outcome == "incomplete"
+
+
+# --------------------------------------------- SDK layers, Responses, routing --
+
+
+def test_sdk_reader_prefers_the_public_layer_and_falls_back_to_legacy_keys():
+    class PublicHandle:
+        _id = "ds-1"
+
+        def get_configuration(self, stage="staging"):
+            assert stage == "staging"
+            return {"id": "ds-1", "type": "LakehouseTables", "displayName": "AWLakehouse", "instructions": "Use dbo tables.", "description": "Sales.", "lakehouseReference": {"itemId": "item-1", "workspaceId": "ws-2"}}
+
+        def get_fewshots(self, stage="staging"):
+            return {"value": [{"id": "f1", "question": "How many orders?", "query": "SELECT COUNT(*) FROM factinternetsales"}]}
+
+    class PublicManagement:
+        data_agent_name = "Sales Agent"
+        data_agent_id = "agent-1"
+        workspace_id = "ws-1"
+
+        def get_settings(self, stage="staging"):
+            return {"aiInstructions": "Answer sales questions."}
+
+        def list_datasources(self, stage="staging"):
+            return [PublicHandle()]
+
+        def get_configuration(self):  # the legacy layer must not be touched when the public one exists
+            raise AssertionError("legacy layer used")
+
+    snap = SdkAgentReader(PublicManagement()).snapshot()
+    source = snap.datasources[0]
+    assert snap.instructions == "Answer sales questions." and snap.workspace_id == "ws-1" and snap.stage == "staging"
+    assert source.kind == "lakehouse" and source.name == "AWLakehouse" and source.instructions == "Use dbo tables." and source.description == "Sales."
+    assert source.item_id == "item-1" and source.workspace_id == "ws-2" and source.fewshots[0].question == "How many orders?"
+
+    class LegacyFrame:
+        def to_dict(self, orient="records"):
+            return [{"Id": "f1", "Question": "How many orders?", "Query": "SELECT 1", "State": "ok"}]
+
+    class LegacyDatasource:
+        _id = "item-1"
+
+        def get_configuration(self):
+            return {"id": "item-1", "type": "lakehouse_tables", "display_name": "AWLakehouse", "additional_instructions": "Use dbo tables.", "user_description": "Sales."}
+
+        def get_fewshots(self):
+            return LegacyFrame()
+
+    class LegacyManagement:
+        data_agent_name = "Sales Agent"
+        data_agent_id = "agent-1"
+
+        def get_configuration(self):
+            return type("Config", (), {"instructions": "Answer sales questions."})()
+
+        def get_datasources(self):
+            return [LegacyDatasource()]
+
+    legacy = SdkAgentReader(LegacyManagement()).snapshot()
+    source = legacy.datasources[0]
+    assert legacy.instructions == "Answer sales questions." and source.name == "AWLakehouse" and source.kind == "lakehouse"
+    assert source.instructions == "Use dbo tables." and source.description == "Sales." and source.item_id == "item-1" and source.workspace_id is None
+    assert source.fewshots[0].query == "SELECT 1"
+
+
+def test_responses_asker_reads_the_answer_query_and_routing_from_the_output_items():
+    from fabric_rlm.data_agent_review import AgentStep, Graded, ResponsesAgentAsker, ReviewReport, _steps_summary
+
+    class Responses:
+        retrieved = 0
+
+        def create(self, **kwargs):
+            assert kwargs["input"] == "How many orders?"
+            return {"id": "resp-1", "status": "in_progress", "output": []}
+
+        def retrieve(self, response_id):
+            self.retrieved += 1
+            return {
+                "id": response_id,
+                "status": "completed",
+                "output": [
+                    {"type": "function_call", "name": "query_lakehouse", "arguments": '{"datasource_name": "AWLakehouse", "natural_language_query": "How many orders?"}'},
+                    {"type": "function_call_output", "output": "Executed:\n```sql\nSELECT COUNT(DISTINCT SalesOrderNumber) AS orders FROM dbo.factinternetsales\n```\nrows: 1"},
+                    {"type": "message", "content": [{"type": "output_text", "text": "There were 27,659 orders."}]},
+                ],
+            }
+
+    class Client:
+        responses = Responses()
+
+    answer = ResponsesAgentAsker(Client())("How many orders?", poll_seconds=0)
+    assert answer.text == "There were 27,659 orders." and answer.status == "completed" and Client.responses.retrieved == 1
+    assert answer.query == "SELECT COUNT(DISTINCT SalesOrderNumber) AS orders FROM dbo.factinternetsales" and answer.language == "sql"
+    assert answer.datasource == "AWLakehouse" and [s.kind for s in answer.steps] == ["function_call", "function_call_output"]
+
+    # a natural-language "query" argument is not the executed query; the fenced DAX in the output is
+    query, language, datasource = _steps_summary([
+        AgentStep("function_call", "query_semantic_model", '{"query": "top products", "artifact_name": "Sales Model"}', ""),
+        AgentStep("function_call_output", "", "", "```dax\nEVALUATE TOPN(3, VALUES(Product[Name]))\n```"),
+    ])
+    assert language == "dax" and query.startswith("EVALUATE") and datasource == "Sales Model"
+    assert _query_in('{"query": "top products"}') is None
+
+    snapshot, schemas = _snapshot(), _schemas()
+    question = _question()
+    report = ReviewReport(snapshot, tuple(schemas), (), (question,), (Reference("q", "failed"),), {"q": (answer,)}, (Graded("q", "wrong", "values_differ", "x"),), suggest(snapshot, schemas, (), (), (), ()))
+    text = report.to_markdown()
+    assert "| routed to |" in text and "| AWLakehouse |" in text and "## Agent run steps" in text and "query_lakehouse" in text
+
+
+def test_failed_answers_from_another_source_are_misrouted():
+    from fabric_rlm.data_agent_review import Graded, _with_routing
+
+    snapshot = _snapshot(second_source=True)
+    question = _question()
+    wrong = Graded(question.id, "wrong", "values_differ", "no figure matched")
+    routed = _with_routing(wrong, question, [AgentAnswer("12", datasource="Sales Model")], snapshot)
+    assert routed.cause == "misrouted" and "Sales Model" in routed.detail and routed.outcome == "wrong"
+    assert _with_routing(wrong, question, [AgentAnswer("12", datasource="AWLakehouse")], snapshot).cause == "values_differ"
+    assert _with_routing(wrong, question, [AgentAnswer("12", datasource="Sales Model")], _snapshot()).cause == "values_differ"
+    correct = Graded(question.id, "correct")
+    assert _with_routing(correct, question, [AgentAnswer("12", datasource="Sales Model")], snapshot).cause == ""
+
+
+def test_grouping_attributes_span_dimensions_and_prefer_english_names():
+    tables = dict(TABLES)
+    tables["dimproduct"] = ("ProductKey", "SpanishProductName", "EnglishProductName", "FrenchProductName", "ProductSubcategoryKey")
+    schema = schema_from_tables(LAKEHOUSE_ID, tables)
+    questions = generate_questions(_snapshot(), [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=40)
+    texts = [q.text for q in questions]
+    assert any("EnglishProductName" in t for t in texts) and any("SalesTerritoryRegion" in t for t in texts)
+    assert not any("SpanishProductName" in t or "FrenchProductName" in t for t in texts)
+
+
+def test_sdk_writer_uses_the_public_layer_when_present():
+    from fabric_rlm.data_agent_review import SdkAgentWriter
+
+    calls = []
+
+    class Handle:
+        _id = "ds-1"
+
+        def update_configuration(self, instructions=None, description=None):
+            calls.append(("configure", instructions, description))
+            return {}
+
+        def add_fewshots(self, shots):
+            calls.append(("fewshots", dict(shots)))
+            return []
+
+    class Management:
+        def update_settings(self, ai_instructions=None):
+            calls.append(("settings", ai_instructions))
+            return {}
+
+        def list_datasources(self, stage="staging"):
+            return [Handle()]
+
+    writer = SdkAgentWriter(Management())
+    writer.update_agent_instructions("Route by topic.")
+    writer.update_datasource_instructions("ds-1", "## Schema notes")
+    writer.update_datasource_description("ds-1", "Sales facts.")
+    writer.add_fewshots("ds-1", [FewShot("", "How many orders?", "SELECT 1")])
+    assert calls == [("settings", "Route by topic."), ("configure", "## Schema notes", None), ("configure", None, "Sales facts."), ("fewshots", {"How many orders?": "SELECT 1"})]
+
+
+def test_guid_lakehouse_roots_keep_their_segments_for_delta_rs():
+    from fabric_rlm.lakehouse import _delta_rs_path
+
+    guid = "abfss://11111111-2222-3333-4444-555555555555@onelake.dfs.fabric.microsoft.com/66666666-7777-8888-9999-000000000000/Tables/dimdate"
+    assert _delta_rs_path(guid) == guid
+    named = "abfss://ws@onelake.dfs.fabric.microsoft.com/AWLakehouse/Tables/dimdate"
+    assert _delta_rs_path(named) == "abfss://ws@onelake.dfs.fabric.microsoft.com/AWLakehouse.Lakehouse/Tables/dimdate"

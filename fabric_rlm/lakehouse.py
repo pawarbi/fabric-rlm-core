@@ -874,6 +874,9 @@ def execute_lakehouse_query(
         con.close()
 
 
+_GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
 def _delta_rs_path(path: str) -> str:
     parsed = urlsplit(path)
     if (
@@ -882,7 +885,8 @@ def _delta_rs_path(path: str) -> str:
     ):
         return path
     segments = parsed.path.lstrip("/").split("/")
-    if segments and not segments[0].casefold().endswith(".lakehouse"):
+    if segments and not segments[0].casefold().endswith(".lakehouse") and not _GUID.fullmatch(segments[0]):
+        # a GUID item id is addressed without the friendly-name suffix
         segments[0] = f"{segments[0]}.Lakehouse"
     return f"{parsed.scheme}://{parsed.netloc}/{'/'.join(segments)}"
 

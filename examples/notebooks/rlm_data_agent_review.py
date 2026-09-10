@@ -42,7 +42,7 @@
 
 # CELL ********************
 
-%pip install -q "fabric-rlm==0.6.1" fabric-data-agent-sdk
+%pip install -q "fabric-rlm==0.6.1" "fabric-data-agent-sdk==0.1.28a0"
 
 # METADATA ********************
 
@@ -56,6 +56,7 @@
 # --- configuration ---------------------------------------------------------
 AGENT_NAME = "Sales Agent RLM"        # the Data Agent to review (name or id)
 WORKSPACE_NAME = None                 # None = this notebook's workspace
+STAGE = "staging"                     # "staging" reviews the draft configuration, "published" the live one
 REPETITIONS = 1                       # 3 before believing a delta
 QUESTIONS_PER_SOURCE = 8
 TOP_N = 10
@@ -75,12 +76,12 @@ REPORT_PATH = "/lakehouse/default/Files/data_agent_review.md"  # or None to skip
 
 # CELL ********************
 
-from fabric.dataagent.client import FabricDataAgentManagement, FabricOpenAI
+from fabric.dataagent.client import FabricDataAgentManagement
 
 from fabric_rlm.data_agent_review import SdkAgentReader
 
 management = FabricDataAgentManagement(AGENT_NAME, WORKSPACE_NAME) if WORKSPACE_NAME else FabricDataAgentManagement(AGENT_NAME)
-snapshot = SdkAgentReader(management).snapshot()
+snapshot = SdkAgentReader(management, stage=STAGE).snapshot()
 
 print(f"{snapshot.name}: {len(snapshot.instructions):,} characters of agent instructions, {len(snapshot.datasources)} source(s)")
 for source in snapshot.datasources:
@@ -116,18 +117,23 @@ from fabric_rlm.data_agent_review import (
 )
 
 workspace_id = fabric.resolve_workspace_id(WORKSPACE_NAME) if WORKSPACE_NAME else fabric.get_workspace_id()
-workspace_name = fabric.resolve_workspace_name(workspace_id)
-items = fabric.list_items(workspace=workspace_id)
+items_by_workspace = {}
 
 sources, handles = {}, {}
 for source in snapshot.datasources:
+    # a source can live in another workspace than the agent; bind it where it is
+    source_workspace = source.workspace_id or workspace_id
+    if source_workspace not in items_by_workspace:
+        items_by_workspace[source_workspace] = fabric.list_items(workspace=source_workspace)
+    items = items_by_workspace[source_workspace]
     row = items[items["Id"] == source.item_id].head(1)
     item_name = row["Display Name"].iloc[0] if len(row) else source.name
-    item_workspace = workspace_name if not source.workspace_id or source.workspace_id == workspace_id else fabric.resolve_workspace_name(source.workspace_id)
     if source.kind == "lakehouse":
-        handle = LakehouseSource(f"abfss://{item_workspace}@onelake.dfs.fabric.microsoft.com/{item_name}.Lakehouse")
+        # OneLake by ids: no name resolution, no spaces, no friendly-name suffix
+        root = f"abfss://{source_workspace}@onelake.dfs.fabric.microsoft.com/{source.item_id}" if source.item_id else f"abfss://{fabric.resolve_workspace_name(source_workspace)}@onelake.dfs.fabric.microsoft.com/{item_name}.Lakehouse"
+        handle = LakehouseSource(root)
     elif source.kind == "semantic_model":
-        handle = SemanticModel(item_name, workspace=item_workspace)
+        handle = SemanticModel(item_name, workspace=source_workspace)
     else:
         print(f"source kind {source.kind} is not reviewed yet: {item_name}")
         continue
@@ -162,15 +168,28 @@ for schema in schemas:
 
 # ## 3. Diagnose, generate questions, build references, ask the agent, grade
 #
-# The agent is asked through its Assistants endpoint so the run steps expose
-# the query it executed; that query is re-run against the source and graded
-# against the reference rows. Prose is graded only when no query was captured.
+# The agent is asked through its Responses endpoint (SDK 0.1.28a0 and later;
+# the Assistants endpoint on older SDKs). The response carries the run steps:
+# the functions the agent called and their outputs, including the query it
+# executed and the source it routed to. That query is re-run against the
+# source and graded against the reference rows; prose is graded only when no
+# query was captured. On a multi-source agent a failed answer that came from
+# another source is graded `misrouted`.
 
 # CELL ********************
 
-from fabric_rlm.data_agent_review import AssistantsAgentAsker, review_agent
+from fabric_rlm.data_agent_review import AssistantsAgentAsker, ResponsesAgentAsker, review_agent
 
-asker = AssistantsAgentAsker(client=FabricOpenAI(artifact_name=AGENT_NAME, workspace_name=WORKSPACE_NAME))
+# "sandbox" asks the draft configuration, "production" the published one
+agent_stage = "sandbox" if STAGE == "staging" else "production"
+try:
+    from fabric.dataagent.client import FabricOpenAIResponses
+
+    asker = ResponsesAgentAsker(FabricOpenAIResponses(artifact_name=AGENT_NAME, workspace_name=WORKSPACE_NAME, ai_skill_stage=agent_stage))
+except ImportError:
+    from fabric.dataagent.client import FabricOpenAI
+
+    asker = AssistantsAgentAsker(client=FabricOpenAI(artifact_name=AGENT_NAME, workspace_name=WORKSPACE_NAME, ai_skill_stage=agent_stage))
 report = review_agent(
     snapshot,
     schemas,
@@ -205,6 +224,40 @@ if REPORT_PATH:
     with open(REPORT_PATH, "w", encoding="utf-8") as handle:
         handle.write(markdown)
     print("saved", REPORT_PATH)
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "jupyter_python"
+# META }
+
+# MARKDOWN ********************
+
+# ## 4b. Run steps
+#
+# What the agent did for each question: the functions it called, their
+# arguments and outputs, the query it executed. Failed questions come first.
+
+# CELL ********************
+
+import pandas as pd
+
+rows = []
+for question in report.questions:
+    graded = next(g for g in report.graded if g.question_id == question.id)
+    for attempt, answer in enumerate(report.answers.get(question.id, ()), start=1):
+        for number, step in enumerate(answer.steps, start=1):
+            rows.append({
+                "question": question.id, "outcome": graded.outcome, "cause": graded.cause, "attempt": attempt, "step": number,
+                "kind": step.kind, "function": step.name, "arguments": step.arguments[:300], "output": step.output[:300],
+                "routed_to": answer.datasource, "language": answer.language,
+            })
+steps = pd.DataFrame(rows)
+if len(steps):
+    display(steps.sort_values(["outcome", "question", "attempt", "step"]).reset_index(drop=True))
+else:
+    print("the endpoint returned no run steps")
 
 # METADATA ********************
 

@@ -193,8 +193,10 @@ names belong in data-source instructions, references must exist, definitions
 must not conflict between levels, descriptions drive routing, instructions
 truncate past about 4,600 characters); generate questions from the schemas
 and compute each reference by executing a query against the source; ask the
-agent the same questions, grade the query it executed or its prose, classify
-the failures; and render suggested instructions, descriptions and few-shots
+agent the same questions through its Responses endpoint, whose run steps
+carry the query it executed and the source it routed to, grade that query or
+its prose, classify the failures (misrouting included on multi-source
+agents); and render suggested instructions, descriptions and few-shots
 into a report. `examples/notebooks/rlm_data_agent_review.py` is the Fabric
 Python notebook (runtime 3.12) that runs the whole loop; applying the
 suggestions to the agent's draft stage is its last, explicit cell.
