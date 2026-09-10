@@ -425,14 +425,41 @@ def _schema_mentions(line: str, schemas: Sequence[SourceSchema]) -> dict[str, li
     return found
 
 
+_PLAIN_WORDS = {"dimension", "dimensions", "fact", "facts", "factor", "factors", "factual", "dim", "view", "views"}
+
+
 def _unknown_schema_like(line: str, schema: SourceSchema) -> list[str]:
     known = schema.identifiers()
     unknown = []
     for match in _IDENTIFIER.finditer(line):
         token = match.group(1)
-        if _SCHEMA_LIKE.match(token) and token.casefold() not in known and token.split(".")[-1].casefold() not in known:
+        if not _SCHEMA_LIKE.match(token) or token.casefold() in _PLAIN_WORDS:
+            continue
+        # a schema-shaped token is a name, not an English word: dotted,
+        # underscored, digit-bearing, or a long lower/camel-case compound
+        shaped = "." in token or "_" in token or any(c.isdigit() for c in token) or (len(token) >= 8 and not token.isupper())
+        if shaped and token.casefold() not in known and token.split(".")[-1].casefold() not in known:
             unknown.append(token)
     return sorted(set(unknown))
+
+
+def _tables_named_in(text: str, schema: SourceSchema) -> list[str]:
+    """Tables the instructions name, in the order they first appear."""
+    lower = {t.casefold(): t for t in schema.tables}
+    named: list[str] = []
+    for match in _IDENTIFIER.finditer(text or ""):
+        table = lower.get(match.group(1).split(".")[-1].casefold())
+        if table and table not in named:
+            named.append(table)
+    return named
+
+
+def _scoped_facts(schema: SourceSchema, instructions: str) -> list[str]:
+    """Fact tables in the agent's declared scope first; all of them when it names none."""
+    facts = _fact_tables(schema)
+    named = _tables_named_in(instructions, schema)
+    in_scope = [t for t in named if t in facts]
+    return in_scope or facts
 
 
 def extract_definitions(text: str) -> dict[str, str]:
@@ -938,9 +965,10 @@ def generate_questions(
         if schema.kind == "semantic_model":
             questions.extend(_semantic_questions(schema, source_years, top=top, limit=limit_per_source))
             continue
+        instructions = (source.instructions if source else "") + "\n" + snapshot.instructions
         joins = dict(_heuristic_joins(schema))
-        joins.update(_joins_from_instructions(source.instructions if source else "", schema))
-        facts = _fact_tables(schema)
+        joins.update(_joins_from_instructions(instructions, schema))
+        facts = _scoped_facts(schema, instructions)
         per_fact = []
         for table in facts:
             date = _date_join(schema, table, joins)
@@ -953,6 +981,7 @@ def generate_questions(
         count = 0
         shared = [f for f in per_fact if f["measure"] == per_fact[0]["measure"]]
         latest = max(source_years)
+        span = f"{source_years[0]} to {source_years[-1]}" if len(source_years) > 1 else str(source_years[0])
         prefix = f"{schema.source_id}"
 
         def add(kind: str, text: str, spec: Mapping[str, Any], alternates: Sequence[tuple[str, Mapping[str, Any]]] = ()) -> None:
@@ -967,12 +996,12 @@ def generate_questions(
             bare = [{k: v for k, v in f.items() if k != "attributes"} for f in shared]
             spec = {"kind": "combined_total_by_year", "facts": bare, "years": source_years}
             alternates = [(f["table"], {"kind": "sql", "sql": _sql({**spec, "facts": [f]}, dialect="duckdb")}) for f in bare]
-            add("combined_total_by_year", f"What was total {measure_name} by year for {source_years[0]} to {source_years[-1]}, across {' and '.join(f['table'] for f in shared)} combined?", spec, alternates)
+            add("combined_total_by_year", f"What was total {measure_name} by year for {span}, across {' and '.join(f['table'] for f in shared)} combined?", spec, alternates)
         for fact in per_fact:
             base = {k: v for k, v in fact.items() if k != "attributes"}
-            add("total_by_year", f"What was total {fact['measure']} in {fact['table']} by year for {source_years[0]} to {source_years[-1]}?", {"kind": "total_by_year", "facts": [base], "years": source_years})
+            add("total_by_year", f"What was total {fact['measure']} in {fact['table']} by year for {span}?", {"kind": "total_by_year", "facts": [base], "years": source_years})
             if fact["order_column"]:
-                add("distinct_by_year", f"How many distinct {fact['order_column']} values (orders) does {fact['table']} have per year for {source_years[0]} to {source_years[-1]}?", {"kind": "distinct_by_year", "facts": [base], "years": source_years})
+                add("distinct_by_year", f"How many distinct {fact['order_column']} values (orders) does {fact['table']} have per year for {span}?", {"kind": "distinct_by_year", "facts": [base], "years": source_years})
             if len(source_years) >= 2:
                 add("yoy", f"What was the year-over-year change in total {fact['measure']} in {fact['table']} from {source_years[-2]} to {source_years[-1]}?", {"kind": "yoy", "facts": [base], "years": source_years[-2:]})
             for fact_key, dim_table, dim_key, attribute in fact["attributes"][:2]:
@@ -1078,11 +1107,12 @@ def _rows(result: Any) -> list[dict[str, Any]]:
     return []
 
 
-def discover_years(executor: LakehouseExecutor, schema: SourceSchema, source: AgentDataSource | None = None) -> list[int]:
-    """The complete calendar years the first fact table covers."""
+def discover_years(executor: LakehouseExecutor, schema: SourceSchema, source: AgentDataSource | None = None, agent_instructions: str = "") -> list[int]:
+    """The complete calendar years the first in-scope fact table covers."""
+    instructions = (source.instructions if source else "") + "\n" + (agent_instructions or "")
     joins = dict(_heuristic_joins(schema))
-    joins.update(_joins_from_instructions(source.instructions if source else "", schema))
-    for table in _fact_tables(schema):
+    joins.update(_joins_from_instructions(instructions, schema))
+    for table in _scoped_facts(schema, instructions):
         date = _date_join(schema, table, joins)
         if not date:
             continue
@@ -1265,7 +1295,11 @@ def _query_in(text: str) -> str | None:
 # --------------------------------------------------------------------------- #
 
 _TEXT_NUMBER = re.compile(r"(?<![A-Za-z_\d.])-?\$?\d[\d,]*(?:\.\d+)?")
-_ABSTAIN_HINT = re.compile(r"(cannot|can't|unable|not available|not in scope|no data|missing|do not have|don't have|not possible)", re.IGNORECASE)
+_ABSTAIN_HINT = re.compile(
+    r"(cannot|can't|unable|not available|not in scope|no data|no records|no rows|no results|not found|"
+    r"does not contain|doesn't contain|missing|do not have|don't have|not possible)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -1330,8 +1364,13 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
     text = answer.text if isinstance(answer, AgentAnswer) else str(answer)
     if reference.status != "ok":
         if reference.status == "abstained":
-            abstained = bool(_ABSTAIN_HINT.search(text or "")) and not _numbers_in(text)
-            return Graded(question.id, "correct" if abstained else "no_reference", "abstain_expected", "reference abstained; " + ("agent abstained too" if abstained else "agent answered anyway"))
+            # the source holds no rows for this question: saying so is right,
+            # producing figures is an invented answer
+            if _ABSTAIN_HINT.search(text or "") and not _numbers_in(text):
+                return Graded(question.id, "correct", "abstain_expected", "the source has no rows for this question and the agent said so")
+            if _numbers_in(text):
+                return Graded(question.id, "wrong", "answered_without_data", "the source has no rows for this question, yet the answer carries figures")
+            return Graded(question.id, "incomplete", "abstain_expected", "the source has no rows for this question; the answer neither says so nor gives figures")
         return Graded(question.id, "no_reference", "reference_failed", reference.note)
     if agent_rows is not None:
         if _rows_match(reference.rows, agent_rows):
@@ -1391,6 +1430,7 @@ _CAUSE_GUIDANCE = {
     "narrower_scope": "When a question covers more than one fact table or channel, aggregate each separately and combine before ranking or totalling; state the scope used.",
     "values_differ": "Compute every figure with a query against the selected tables; never estimate or carry a number from a previous answer.",
     "agent_abstained": "Answer questions the selected schema can answer; abstain only when a required definition or table is missing.",
+    "answered_without_data": "When the query returns no rows, say that the source has no data for that scope; do not produce figures.",
     "inconsistent": "Give the same answer to the same question: prefer the authoritative table named in the source instructions.",
 }
 
@@ -1571,7 +1611,7 @@ def review_agent(
             if isinstance(executor, LakehouseExecutor):
                 source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
                 try:
-                    years[schema.source_id] = discover_years(executor, schema, source)
+                    years[schema.source_id] = discover_years(executor, schema, source, snapshot.instructions)
                 except Exception:  # noqa: BLE001
                     years[schema.source_id] = []
     questions = generate_questions(snapshot, schemas, years=years, top=top, limit_per_source=limit_per_source)

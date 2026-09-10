@@ -247,7 +247,7 @@ def test_prose_grading_outcomes_and_causes():
     assert grade(_question(), reference, "Revenue grew strongly.").outcome == "incomplete"
     abstain_expected = Reference("q", "abstained", note="no rows")
     assert grade(_question(), abstain_expected, "I do not have data for that.").outcome == "correct"
-    assert grade(_question(), abstain_expected, "It was 12").outcome == "no_reference"
+    assert grade(_question(), abstain_expected, "It was 12").cause == "answered_without_data"
 
 
 def test_ranking_grading_sees_order_and_missing_rows():
@@ -403,3 +403,39 @@ def test_semantic_executor_and_profile_schema(tmp_path: Path):
     knowledge = RLM.learn(sources={"service": source})
     schema = schema_from_profile(knowledge.package.sources[0], source_id="ds-9")
     assert schema.source_id == "ds-9" and schema.kind == "lakehouse" and schema.tables == {"tickets": ("hours", "region", "ticket_id")}
+
+
+# ------------------------------------------------ scope and false positives --
+
+
+def test_questions_stay_within_the_facts_the_instructions_name():
+    # the lakehouse also holds a finance fact the agent never mentions; the
+    # review must not evaluate the agent on tables outside its declared scope
+    tables = dict(TABLES)
+    tables["factfinance"] = ("FinanceKey", "DateKey", "OrganizationKey", "Amount")
+    tables["dimorganization"] = ("OrganizationKey", "OrganizationName")
+    schema = schema_from_tables(LAKEHOUSE_ID, tables)
+    questions = generate_questions(_snapshot(), [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=20)
+    assert questions and all("factfinance" not in q.text for q in questions)
+    unnamed = AgentSnapshot(agent_id="a", name="Bare", instructions="Answer questions.", datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="lh", instructions="", description="d"),))
+    everything = generate_questions(unnamed, [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=40)
+    assert any("factfinance" in q.text for q in everything)
+
+
+def test_plain_words_are_not_unknown_references():
+    source = AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="lh", instructions="FACT TABLES\n- dbo.factinternetsales joins the DIMENSION tables. Both facts share ProductKey.\n- Use vw_sales_flat for rollups.", description="d")
+    snapshot = AgentSnapshot(agent_id="a", name="Words", instructions="Answer.", datasources=(source,))
+    findings = {f.code: f for f in diagnose(snapshot, _schemas())}
+    unknown = findings["unknown_reference"]
+    assert "vw_sales_flat" in unknown.message
+    assert "DIMENSION" not in unknown.message and "facts" not in unknown.message
+
+
+def test_single_year_questions_read_naturally_and_no_data_answers_are_wrong():
+    questions = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2013]}, top=3)
+    assert all("2013 to 2013" not in q.text for q in questions) and any("for 2013" in q.text for q in questions)
+    no_rows = Reference("q", "abstained", note="the query returned no rows")
+    assert grade(_question(), no_rows, "There are no records for that period.").outcome == "correct"
+    invented = grade(_question(), no_rows, "Total revenue was $1,250,000 in that period.")
+    assert invented.outcome == "wrong" and invented.cause == "answered_without_data"
+    assert grade(_question(), no_rows, "Here is the breakdown.").outcome == "incomplete"
