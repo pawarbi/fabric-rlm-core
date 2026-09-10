@@ -184,6 +184,21 @@ selects only typed scalar parameters; it never supplies SQL or file-reader
 expressions. Inexact Lakehouse file catalogs and stale source snapshots fail
 closed rather than entering registered execution.
 
+### Reviewing a Fabric Data Agent
+
+`fabric_rlm.data_agent_review` turns the same machinery on a Data Agent: read
+its sources, instructions, descriptions and few-shots; profile the sources
+with `RLM.learn`; check the setup against the documented guidance (schema
+names belong in data-source instructions, references must exist, definitions
+must not conflict between levels, descriptions drive routing, instructions
+truncate past about 4,600 characters); generate questions from the schemas
+and compute each reference by executing a query against the source; ask the
+agent the same questions, grade the query it executed or its prose, classify
+the failures; and render suggested instructions, descriptions and few-shots
+into a report. `examples/notebooks/rlm_data_agent_review.py` is the Fabric
+Python notebook (runtime 3.12) that runs the whole loop; applying the
+suggestions to the agent's draft stage is its last, explicit cell.
+
 A package can also carry what earlier runs learned about a source. Every turn
 records its source calls as typed telemetry (the grain a semantic-model query
 or a Lakehouse query asked for, the estimated group count, whether it ran, was

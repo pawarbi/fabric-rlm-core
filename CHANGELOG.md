@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Added
+
+- **Data Agent review** (`fabric_rlm.data_agent_review`, notebook
+  `examples/notebooks/rlm_data_agent_review.py`). Point it at a Fabric Data
+  Agent and it reads what the agent uses and how it is instructed (sources,
+  agent and data-source instructions, descriptions, few-shots), profiles the
+  same sources through `RLM.learn`, and then: diagnoses the setup against
+  the documented guidance (schema names in agent-level instructions that
+  belong with the source, references to objects the source does not have,
+  definitions that conflict between levels, missing descriptions, length
+  past the truncation limit, few-shot counts, schema size, negative
+  phrasing, routing rules for multi-source agents); generates questions
+  from the schemas and computes each reference by executing a query against
+  the source (SQL for lakehouse tables, a bounded aggregate for a semantic
+  model), so there is ground truth without anyone writing it; asks the
+  agent the same questions through its Assistants endpoint, grades the
+  query it executed where the run steps expose it and its prose otherwise,
+  and classifies failures by cause (missing rows, unsorted ranking, a
+  narrower scope than asked, values that match nothing, an abstention where
+  the source answers, inconsistency across repetitions); and renders
+  suggestions (agent instructions with schema lines moved out, data-source
+  instructions with structured sections, descriptions, few-shots built from
+  the executed references) into a Markdown report. Applying the suggestions
+  is a separate call against the agent's draft stage. Readers, executors,
+  askers and writers are small protocols with REST implementations for use
+  outside a notebook and SDK implementations for use inside one; the
+  notebook is a Fabric Python notebook on the 3.12 runtime.
+
 ## 0.6.1 — 2026-09-10 — generalized run protocol and learning substrate
 
 ### Added

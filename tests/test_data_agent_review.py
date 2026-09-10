@@ -1,0 +1,405 @@
+"""Data Agent review: diagnosis, questions, references, grading, suggestions.
+
+Everything runs against fakes: a snapshot shaped like a real agent, an
+in-memory DuckDB star schema for the lakehouse, a scripted agent. The one
+live-shaped piece, the REST reader and asker, is exercised through their
+parsing helpers only.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from fabric_rlm.data_agent_review import (
+    AgentAnswer,
+    AgentDataSource,
+    AgentSnapshot,
+    FewShot,
+    LakehouseExecutor,
+    Question,
+    Reference,
+    SdkAgentReader,
+    SemanticModelExecutor,
+    _query_in,
+    _tsql_to_duckdb,
+    apply_suggestions,
+    build_references,
+    declared_from_snapshot,
+    diagnose,
+    discover_years,
+    extract_definitions,
+    generate_questions,
+    grade,
+    review_agent,
+    schema_from_profile,
+    schema_from_tables,
+    suggest,
+)
+
+AGENT_INSTRUCTIONS = """You are the Adventure Works Sales Agent. Answer questions about sales performance.
+
+SCOPE AND DEFINITIONS
+- Unless a channel is specified, revenue means the sum of SalesAmount across both factinternetsales and factresellersales.
+- Orders = row count.
+- Treat 2013 as the last complete calendar year.
+
+RESPONSE STYLE
+- Lead with the answer, then a compact table.
+"""
+
+SOURCE_INSTRUCTIONS = """This source is the AWLakehouse star schema. Use dbo tables only.
+- dbo.factinternetsales: B2C order lines. Revenue = SUM(SalesAmount). Orders = COUNT(DISTINCT SalesOrderNumber).
+- dbo.factresellersales: B2B order lines.
+- Product hierarchy: dimproduct.ProductSubcategoryKey -> dimproductsubcategory.ProductSubcategoryKey -> dimproductcategory.ProductCategoryKey
+- Dates: factinternetsales.OrderDateKey -> dimdate.DateKey
+- Territory: factinternetsales.SalesTerritoryKey -> dimsalesterritory.SalesTerritoryKey
+- Pre-joined views available: vw_internet_sales, vw_reseller_sales
+- Average order value = SUM(SalesAmount) / COUNT(DISTINCT SalesOrderNumber).
+- Avoid joining the two fact tables directly.
+- Never guess a definition.
+- Do not list customer names.
+"""
+
+TABLES = {
+    "factinternetsales": ("ProductKey", "OrderDateKey", "SalesTerritoryKey", "CustomerKey", "SalesOrderNumber", "SalesAmount", "OrderQuantity", "TotalProductCost"),
+    "factresellersales": ("ProductKey", "OrderDateKey", "SalesTerritoryKey", "ResellerKey", "SalesOrderNumber", "SalesAmount", "OrderQuantity", "TotalProductCost"),
+    "dimdate": ("DateKey", "FullDateAlternateKey", "CalendarYear", "CalendarQuarter"),
+    "dimproduct": ("ProductKey", "EnglishProductName", "ProductSubcategoryKey"),
+    "dimproductsubcategory": ("ProductSubcategoryKey", "EnglishProductSubcategoryName", "ProductCategoryKey"),
+    "dimproductcategory": ("ProductCategoryKey", "EnglishProductCategoryName"),
+    "dimsalesterritory": ("SalesTerritoryKey", "SalesTerritoryRegion", "SalesTerritoryCountry", "SalesTerritoryGroup"),
+    "dimcustomer": ("CustomerKey", "GeographyKey", "FirstName"),
+    "dimreseller": ("ResellerKey", "ResellerName"),
+}
+
+LAKEHOUSE_ID = "lh-1"
+MODEL_ID = "sm-1"
+
+
+def _snapshot(*, second_source: bool = False, fewshots: int = 0) -> AgentSnapshot:
+    sources = [
+        AgentDataSource(
+            id=LAKEHOUSE_ID,
+            kind="lakehouse",
+            name="AWLakehouse",
+            instructions=SOURCE_INSTRUCTIONS,
+            description="Adventure Works sales star schema for internet and reseller sales.",
+            fewshots=tuple(FewShot(f"f{i}", f"question {i}", "SELECT 1") for i in range(fewshots)),
+        )
+    ]
+    if second_source:
+        sources.append(AgentDataSource(id=MODEL_ID, kind="semantic_model", name="Sales Model", instructions="Use [Total Sales] for revenue.", description=""))
+    return AgentSnapshot(agent_id="agent-1", name="Sales Agent", instructions=AGENT_INSTRUCTIONS, datasources=tuple(sources))
+
+
+def _schemas(*, second_source: bool = False):
+    schemas = [schema_from_tables(LAKEHOUSE_ID, TABLES)]
+    if second_source:
+        schemas.append(
+            schema_from_tables(
+                MODEL_ID,
+                {"Date": ("Date", "Year"), "Product": ("Product", "Category"), "Sales": ("Amount",)},
+                kind="semantic_model",
+                measures=("Total Sales", "Total Orders"),
+                relationships=(("Sales", "ProductKey", "Product", "ProductKey"),),
+            )
+        )
+    return schemas
+
+
+def _duckdb_executor():
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("CREATE TABLE dimdate AS SELECT * FROM (VALUES (20120101, 2012), (20130101, 2013), (20140101, 2014)) t(DateKey, CalendarYear)")
+    con.execute("CREATE TABLE dimproductcategory AS SELECT * FROM (VALUES (1, 'Bikes'), (2, 'Accessories')) t(ProductCategoryKey, EnglishProductCategoryName)")
+    con.execute("CREATE TABLE dimproductsubcategory AS SELECT * FROM (VALUES (1, 'Mountain Bikes', 1), (2, 'Helmets', 2)) t(ProductSubcategoryKey, EnglishProductSubcategoryName, ProductCategoryKey)")
+    con.execute("CREATE TABLE dimproduct AS SELECT * FROM (VALUES (1, 'Mountain-200', 1), (2, 'Road-350', 1), (3, 'Sport Helmet', 2)) t(ProductKey, EnglishProductName, ProductSubcategoryKey)")
+    con.execute("CREATE TABLE dimsalesterritory AS SELECT * FROM (VALUES (1, 'Northwest', 'United States', 'North America'), (2, 'Germany', 'Germany', 'Europe')) t(SalesTerritoryKey, SalesTerritoryRegion, SalesTerritoryCountry, SalesTerritoryGroup)")
+    con.execute("CREATE TABLE dimcustomer AS SELECT * FROM (VALUES (1, 1, 'Ann')) t(CustomerKey, GeographyKey, FirstName)")
+    con.execute("CREATE TABLE dimreseller AS SELECT * FROM (VALUES (1, 'Bike World')) t(ResellerKey, ResellerName)")
+    con.execute(
+        "CREATE TABLE factinternetsales AS SELECT * FROM (VALUES "
+        "(1, 20120101, 1, 1, 'SO1', 100.0, 1, 60.0), (2, 20130101, 1, 1, 'SO2', 300.0, 2, 150.0), (3, 20130101, 2, 1, 'SO2', 50.0, 1, 20.0), (3, 20130101, 2, 1, 'SO3', 25.0, 1, 10.0), (1, 20140101, 1, 1, 'SO9', 10.0, 1, 5.0)"
+        ") t(ProductKey, OrderDateKey, SalesTerritoryKey, CustomerKey, SalesOrderNumber, SalesAmount, OrderQuantity, TotalProductCost)"
+    )
+    con.execute(
+        "CREATE TABLE factresellersales AS SELECT * FROM (VALUES "
+        "(1, 20120101, 2, 1, 'RO1', 1000.0, 10, 700.0), (2, 20130101, 2, 1, 'RO2', 2000.0, 20, 1500.0), (3, 20130101, 1, 1, 'RO3', 500.0, 5, 300.0)"
+        ") t(ProductKey, OrderDateKey, SalesTerritoryKey, ResellerKey, SalesOrderNumber, SalesAmount, OrderQuantity, TotalProductCost)"
+    )
+
+    def query(sql, *, sources):
+        relation = con.execute(sql)
+        columns = [d[0] for d in relation.description]
+        return {"columns": columns, "rows": relation.fetchall(), "truncated": False}
+
+    return LakehouseExecutor(query, TABLES)
+
+
+# ------------------------------------------------------------- diagnosis --
+
+
+def test_diagnosis_follows_the_documented_rules():
+    findings = {f.code: f for f in diagnose(_snapshot(second_source=True), _schemas(second_source=True))}
+    moved = findings["schema_in_agent_instructions"]
+    assert moved.source_id == LAKEHOUSE_ID and moved.severity == "medium"
+    assert any("factinternetsales" in line for line in moved.evidence)
+    assert not any("Lead with the answer" in line for line in moved.evidence)
+    unknown = findings["unknown_reference"]
+    assert "vw_internet_sales" in unknown.message and "vw_reseller_sales" in unknown.message and unknown.severity == "high"
+    conflict = findings["conflicting_definitions"]
+    assert "Orders" in conflict.evidence[0] and conflict.severity == "high"
+    assert findings["no_fewshots"].source_id == LAKEHOUSE_ID
+    assert findings["definitions_declared"].source_id == LAKEHOUSE_ID
+    assert findings["calculation_in_instructions"].source_id == LAKEHOUSE_ID
+    description = findings["datasource_description_missing"]
+    assert description.source_id == MODEL_ID and description.severity == "high"
+    assert findings["routing_rules_missing"].severity == "medium"
+    assert findings["negative_phrasing"].source_id == LAKEHOUSE_ID
+    assert "unstructured_instructions" in findings  # the source text has no headers
+    assert all(f.basis for f in findings.values() if f.code != "source_not_profiled")
+
+
+def test_diagnosis_is_quiet_on_a_clean_single_source_agent():
+    clean = AgentSnapshot(
+        agent_id="a",
+        name="Clean",
+        instructions="Answer sales questions. Lead with the answer.",
+        datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="AWLakehouse", instructions="## Join Paths\n- Join factinternetsales to dimdate on OrderDateKey = DateKey.\n## Business Rules\n- Revenue = SUM(SalesAmount)\n- Orders = COUNT(DISTINCT SalesOrderNumber)\n- Report USD.\n- State the period.\n- Rank after aggregation.", description="Sales facts.", fewshots=(FewShot("f", "q", "SELECT 1"),)),),
+    )
+    codes = {f.code for f in diagnose(clean, _schemas())}
+    assert "schema_in_agent_instructions" not in codes and "unknown_reference" not in codes
+    assert "no_fewshots" not in codes and "datasource_description_missing" not in codes
+    assert "unstructured_instructions" not in codes and "negative_phrasing" not in codes
+
+
+def test_length_limits_and_fewshot_floods_are_findings():
+    long_text = "\n".join(f"- rule {i} about SalesAmount and the way to compute revenue for the period." for i in range(90))
+    snapshot = AgentSnapshot(agent_id="a", name="Long", instructions="Answer.", datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="lh", instructions=long_text, description="d", fewshots=tuple(FewShot(str(i), f"q{i}", "SELECT 1") for i in range(20))),))
+    codes = {f.code: f for f in diagnose(snapshot, _schemas())}
+    assert codes["instructions_too_long"].severity == "high"
+    assert codes["fewshots_too_many"].severity == "medium"
+
+
+def test_definitions_are_extracted_and_declared():
+    definitions = extract_definitions("- Revenue = SUM(SalesAmount)\n- AOV means revenue per distinct order\nSome prose without a definition.")
+    assert definitions == {"Revenue": "SUM(SalesAmount)", "AOV": "revenue per distinct order"}
+    declared = declared_from_snapshot(_snapshot(), _schemas())
+    assert "Average order value" in declared[LAKEHOUSE_ID]["definitions"]
+
+
+# ------------------------------------------------------------- questions --
+
+
+def test_questions_are_generated_from_the_schema_with_both_dialects():
+    questions = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3)
+    kinds = [q.kind for q in questions]
+    assert kinds[0] == "combined_total_by_year" and questions[0].alternates
+    assert "top_n" in kinds and "distinct_by_year" in kinds and "yoy" in kinds
+    top = next(q for q in questions if q.kind == "top_n")
+    assert top.reference_query.startswith("SELECT TOP 3") and "LIMIT 3" in top.execution["sql"]
+    assert "JOIN dimdate d" in top.execution["sql"] and "WHERE d.CalendarYear = 2013" in top.execution["sql"]
+    combined = questions[0]
+    assert "UNION ALL" in combined.reference_query and combined.reference_query.count("SUM(f.SalesAmount)") == 2
+    assert all(q.text for q in questions)
+
+
+def test_semantic_model_questions_render_dax():
+    snapshot = _snapshot(second_source=True)
+    questions = [q for q in generate_questions(snapshot, _schemas(second_source=True), years={MODEL_ID: [2012, 2013]}, top=5) if q.source_id == MODEL_ID]
+    assert questions and questions[0].execution["kind"] == "aggregate"
+    assert questions[0].reference_query.startswith("EVALUATE SUMMARIZECOLUMNS('Date'[Year]")
+    top = next(q for q in questions if q.kind == "top_n")
+    assert top.reference_query.startswith("EVALUATE TOPN(5,") and top.execution["order_by"] == "Total Sales"
+
+
+def test_years_references_and_partial_year_detection():
+    executor = _duckdb_executor()
+    schema = _schemas()[0]
+    assert discover_years(executor, schema, _snapshot().datasources[0]) == [2012, 2013]
+    questions = generate_questions(_snapshot(), [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=20)
+    references = {r.question_id: r for r in build_references(questions, {LAKEHOUSE_ID: executor})}
+    combined = references[questions[0].id]
+    assert combined.status == "ok"
+    assert [(r["year"], float(r["value"])) for r in combined.rows] == [(2012, 1100.0), (2013, 2875.0)]
+    assert set(combined.alternates) == {"factinternetsales", "factresellersales"}
+    broken = build_references([Question("x", LAKEHOUSE_ID, "total_by_year", "?", {}, "", {"sql": "SELECT * FROM nowhere"})], {LAKEHOUSE_ID: executor})
+    assert broken[0].status == "failed" and "nowhere" in broken[0].note.casefold() or broken[0].status == "failed"
+
+
+# --------------------------------------------------------------- grading --
+
+
+def _question(kind="total_by_year", alternates=()):
+    return Question("q", LAKEHOUSE_ID, kind, "?", {}, "", {"sql": ""}, tuple(alternates))
+
+
+def test_prose_grading_outcomes_and_causes():
+    reference = Reference("q", "ok", ({"year": 2012, "value": 1100.0}, {"year": 2013, "value": 2850.0}), alternates={"factinternetsales": ({"year": 2012, "value": 100.0}, {"year": 2013, "value": 350.0})})
+    assert grade(_question(), reference, "2012: $1,100.00; 2013: $2,850.00").outcome == "correct"
+    assert grade(_question(), reference, "Revenue was $1,100 in 2012 and $2,850.4 in 2013").outcome == "correct"  # 0.5% tolerance
+    narrower = grade(_question(), reference, "2012: $100.00 and 2013: $350.00")
+    assert narrower.outcome == "wrong" and narrower.cause == "narrower_scope" and "factinternetsales" in narrower.detail
+    assert grade(_question(), reference, "Total revenue was 999 and 42").cause == "values_differ"
+    assert grade(_question(), reference, "I cannot answer this from the selected tables.").outcome == "abstained"
+    assert grade(_question(), reference, "Revenue grew strongly.").outcome == "incomplete"
+    abstain_expected = Reference("q", "abstained", note="no rows")
+    assert grade(_question(), abstain_expected, "I do not have data for that.").outcome == "correct"
+    assert grade(_question(), abstain_expected, "It was 12").outcome == "no_reference"
+
+
+def test_ranking_grading_sees_order_and_missing_rows():
+    rows = ({"EnglishProductName": "Mountain-200", "value": 2500.0}, {"EnglishProductName": "Road-350", "value": 2000.0}, {"EnglishProductName": "Sport Helmet", "value": 50.0})
+    reference = Reference("q", "ok", rows)
+    ordered = grade(_question("top_n"), reference, "1. Mountain-200 2,500 2. Road-350 2,000 3. Sport Helmet 50")
+    assert ordered.outcome == "correct"
+    unsorted = grade(_question("top_n"), reference, "Road-350 2,000; Mountain-200 2,500; Sport Helmet 50")
+    assert unsorted.outcome == "partial" and unsorted.cause == "unsorted_ranking"
+    missing = grade(_question("top_n"), reference, "Mountain-200 2,500 and Road-350 2,000")
+    assert missing.outcome == "partial" and missing.cause == "missing_rows"
+
+
+def test_query_level_grading_prefers_the_executed_rows():
+    reference = Reference("q", "ok", ({"year": 2012, "value": 1100.0}, {"year": 2013, "value": 2850.0}), alternates={"factinternetsales": ({"year": 2012, "value": 100.0}, {"year": 2013, "value": 350.0})})
+    right = grade(_question(), reference, AgentAnswer("some prose without numbers", query="SELECT 1", language="sql"), agent_rows=[{"year": 2013, "value": 2850.0}, {"year": 2012, "value": 1100.0}])
+    assert right.outcome == "correct" and right.query_checked
+    scope = grade(_question(), reference, AgentAnswer("prose", query="SELECT 1", language="sql"), agent_rows=[{"year": 2012, "value": 100.0}, {"year": 2013, "value": 350.0}])
+    assert scope.cause == "narrower_scope" and scope.query_checked
+    fewer = grade(_question(), reference, AgentAnswer("prose", query="SELECT 1", language="sql"), agent_rows=[{"year": 2013, "value": 2850.0}])
+    assert fewer.cause == "missing_rows"
+
+
+def test_agent_sql_is_translated_for_the_local_engine_and_queries_are_unfenced():
+    sql = _tsql_to_duckdb("SELECT TOP 3 p.[EnglishProductName], SUM(f.SalesAmount) AS v FROM dbo.factinternetsales f JOIN dbo.dimproduct p ON f.ProductKey = p.ProductKey GROUP BY p.[EnglishProductName] ORDER BY v DESC;")
+    assert sql.startswith("SELECT p.") and sql.endswith("LIMIT 3") and "dbo." not in sql and '"EnglishProductName"' in sql
+    assert _query_in('{"code": "```sql\\nSELECT 1\\n```"}') == "SELECT 1"
+    assert _query_in("text then ```sql\nSELECT 2\n```") == "SELECT 2"
+    assert _query_in('{"sql": "SELECT 3"}') == "SELECT 3"
+    assert _query_in("no query here") is None
+
+
+# -------------------------------------------------------------- the loop --
+
+
+def test_review_runs_end_to_end_with_a_scripted_agent():
+    executor = _duckdb_executor()
+    schema = _schemas()[0]
+    snapshot = _snapshot()
+
+    def ask(question: str):
+        if question.startswith("What was total SalesAmount by year") and "combined" in question:
+            return AgentAnswer("2012: $100.00; 2013: $375.00")  # internet only: narrower scope
+        if question.startswith("What are the top"):
+            return AgentAnswer("Road-350 2,000 then Mountain-200 2,500 then Sport Helmet 50", query="SELECT TOP 3 a.EnglishProductName, SUM(f.SalesAmount) AS value FROM dbo.factinternetsales f JOIN dbo.dimdate d ON f.OrderDateKey = d.DateKey JOIN dbo.dimproduct a ON f.ProductKey = a.ProductKey WHERE d.CalendarYear = 2013 GROUP BY a.EnglishProductName ORDER BY value DESC", language="sql")
+        if "distinct" in question:
+            return AgentAnswer("I cannot determine orders from the selected tables.")
+        return AgentAnswer("The values are 1,100.00 for 2012 and 2,850.00 for 2013; 100.00 and 350.00; 1,000.00 and 2,500.00; 2,750.00 and 350.00; 2,500 and 1,000 and 2,000 and 350 and 500 and 50")
+
+    report = review_agent(snapshot, [schema], {LAKEHOUSE_ID: executor}, ask, top=3, limit_per_source=6)
+    outcomes = {g.question_id: g for g in report.graded}
+    combined = outcomes[report.questions[0].id]
+    assert combined.outcome == "wrong" and combined.cause == "narrower_scope"
+    top = next(g for q, g in outcomes.items() if next(x for x in report.questions if x.id == q).kind == "top_n")
+    assert top.query_checked  # the agent's SQL ran locally and its rows were compared
+    abstained = next(g for q, g in outcomes.items() if next(x for x in report.questions if x.id == q).kind == "distinct_by_year")
+    assert abstained.outcome == "abstained"
+    markdown = report.to_markdown()
+    assert "## Findings" in markdown and "## Evaluation" in markdown and "## Suggested changes" in markdown
+    assert "narrower_scope" in markdown and "schema_in_agent_instructions" in markdown
+    suggestions = report.suggestions
+    assert "factinternetsales and factresellersales" not in suggestions.agent_instructions.split("BEHAVIOUR")[0]
+    assert "## Schema notes (moved from agent instructions)" in suggestions.datasource_instructions[LAKEHOUSE_ID]
+    assert "aggregate each separately and combine" in suggestions.agent_instructions
+    shots = suggestions.fewshots[LAKEHOUSE_ID]
+    assert 1 <= len(shots) <= 4 and all(shot.query.startswith("SELECT") for shot in shots)
+    assert any("UNION ALL" in shot.query for shot in shots)
+
+
+def test_repetitions_surface_inconsistency():
+    executor = _duckdb_executor()
+    schema = _schemas()[0]
+    answers = iter(["2012: $1,100.00; 2013: $2,875.00", "2012: $100.00; 2013: $375.00"] * 20)
+    report = review_agent(_snapshot(), [schema], {LAKEHOUSE_ID: executor}, lambda q: next(answers), top=3, limit_per_source=1, repetitions=2)
+    (graded,) = report.graded
+    assert graded.cause == "inconsistent" and "2 runs" in graded.detail
+
+
+def test_suggestions_propose_descriptions_and_join_paths_for_models():
+    snapshot = _snapshot(second_source=True)
+    schemas = _schemas(second_source=True)
+    findings = diagnose(snapshot, schemas)
+    suggestions = suggest(snapshot, schemas, findings, (), (), ())
+    assert MODEL_ID in suggestions.datasource_descriptions
+    assert "## Join Paths" in suggestions.datasource_instructions[MODEL_ID]
+    assert "## Topics" in suggestions.agent_instructions
+
+
+def test_apply_and_sdk_reader_use_the_management_surface():
+    calls = []
+
+    class Writer:
+        def update_agent_instructions(self, text):
+            calls.append(("agent", text[:10]))
+
+        def update_datasource_instructions(self, sid, text):
+            calls.append(("instructions", sid))
+
+        def update_datasource_description(self, sid, text):
+            calls.append(("description", sid))
+
+        def add_fewshots(self, sid, shots):
+            calls.append(("fewshots", sid, len(shots)))
+
+    snapshot = _snapshot(second_source=True)
+    schemas = _schemas(second_source=True)
+    suggestions = suggest(snapshot, schemas, diagnose(snapshot, schemas), (), (), ())
+    applied = apply_suggestions(Writer(), suggestions)
+    assert ("description", MODEL_ID) in calls and applied[0] == "agent instructions"
+
+    class Datasource:
+        _id = "ds-1"
+
+        def get_configuration(self):
+            return {"type": "lakehouse_tables", "displayName": "AWLakehouse", "instructions": "Use dbo tables.", "description": "Sales."}
+
+        def get_fewshots(self):
+            return [{"id": "f1", "question": "How many orders?", "query": "SELECT COUNT(*) FROM factinternetsales"}]
+
+    class Management:
+        data_agent_name = "Sales Agent"
+        data_agent_id = "agent-1"
+
+        def get_configuration(self):
+            return type("Config", (), {"instructions": "Answer sales questions."})()
+
+        def get_datasources(self):
+            return [Datasource()]
+
+    snap = SdkAgentReader(Management()).snapshot()
+    assert snap.name == "Sales Agent" and snap.datasources[0].kind == "lakehouse" and snap.datasources[0].fewshots[0].question == "How many orders?"
+
+
+def test_semantic_executor_and_profile_schema(tmp_path: Path):
+    frames = []
+
+    def aggregate(measures, *, groupby=None, filters=None, order_by=None, top=None):
+        frames.append((measures, groupby, filters, order_by, top))
+        return [{"Date[Year]": 2013, "Total Sales": 10.0}]
+
+    rows = SemanticModelExecutor(aggregate).run({"measures": ["Total Sales"], "groupby": ["'Date'[Year]"], "filters": {"'Date'[Year]": [2013]}})
+    assert rows == [{"Date[Year]": 2013, "Total Sales": 10.0}] and frames[0][4] is None
+
+    deltalake = pytest.importorskip("deltalake")
+    pyarrow = pytest.importorskip("pyarrow")
+    from fabric_rlm import RLM
+    from fabric_rlm.lakehouse import LakehouseSource
+
+    tickets = tmp_path / "tickets"
+    deltalake.write_deltalake(str(tickets), pyarrow.table({"ticket_id": [1, 2], "region": ["EU", "US"], "hours": [2.0, 3.0]}))
+    table = deltalake.DeltaTable(str(tickets), without_files=True)
+    source = LakehouseSource("file:///svc", catalog=[{"kind": "delta", "name": "tickets", "path": str(tickets), "version": table.version(), "table_id": table.metadata().id, "columns": [["ticket_id", "BIGINT"], ["region", "VARCHAR"], ["hours", "DOUBLE"]]}])
+    knowledge = RLM.learn(sources={"service": source})
+    schema = schema_from_profile(knowledge.package.sources[0], source_id="ds-9")
+    assert schema.source_id == "ds-9" and schema.kind == "lakehouse" and schema.tables == {"tickets": ("hours", "region", "ticket_id")}
