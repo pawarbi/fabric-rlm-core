@@ -281,7 +281,7 @@ def _result_rows(
 ) -> tuple[dict[str, object], ...]:
     if isinstance(value, Mapping):
         if value.get("truncated") is True:
-            raise ValueError("operation result was truncated")
+            raise OperationResultTooLarge("operation result was truncated")
         columns = value.get("columns")
         raw_rows = value.get("rows")
         if (

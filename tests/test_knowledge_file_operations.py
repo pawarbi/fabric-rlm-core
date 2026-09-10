@@ -375,3 +375,38 @@ def test_column_bound_overflow_stays_fatal(tmp_path: Path) -> None:
         )
 
     assert not isinstance(caught.value, OperationPlanError)
+
+
+def test_truncated_host_result_is_recoverable(tmp_path: Path) -> None:
+    """A host that signals overflow via ``truncated`` must be recoverable.
+
+    The Lakehouse operation deliberately over-fetches by one row so that a
+    period with more groups than the operation may return "is reported as
+    truncated, never trimmed". That makes ``truncated`` the Lakehouse spelling
+    of exactly the condition ``max_output_rows`` covers for in-memory results,
+    and it follows from the model's choice of grain, so it is a recoverable
+    planning mistake rather than a host-contract violation.
+
+    Pinned because the in-memory row bound was made recoverable while this
+    path kept raising a bare ValueError, which ``runtime.py`` re-raises after
+    recording ``reason="audit_failed"`` -- aborting the whole run before the
+    agent loop starts. That is the ``turns=None`` crash observed on real
+    Fabric Delta data.
+    """
+
+    import fabric_rlm.knowledge_execution as execution
+
+    source = _many_orders_csv(tmp_path, rows=5)
+    knowledge = RLM.learn(sources={"orders": source})
+    operation = knowledge.package.operations[0]
+
+    with pytest.raises(ValueError, match="truncated") as caught:
+        execution._result_rows(
+            {"truncated": True, "columns": ["region"], "rows": [["R0"]]},
+            operation,
+        )
+
+    # The type is the whole contract: runtime.py falls back on
+    # OperationResultTooLarge and re-raises on a bare ValueError.
+    assert isinstance(caught.value, OperationResultTooLarge)
+    assert isinstance(caught.value, OperationPlanError)
