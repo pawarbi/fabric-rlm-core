@@ -183,24 +183,32 @@ Two distinct defects:
 them with a message naming the violated rule.
 **Actual:** silent-to-the-model rejection with no repair signal.
 
-### Why the causal claim was withdrawn
+### Why the causal claim was withdrawn — and what replaced it
 
 I had attributed the gpt-4.1-mini collapse (33.3%, 11.67 turns, 41.7%
-abstentions) to this gate. Two things refute that attribution:
+abstentions) to this gate. Two things refuted that attribution:
 
-1. **The evidence was one self-report, not a hit count.** The run log records
-   the final answer payload only — **not** `RLMResult.trajectory`. Searching it
-   finds the gate string **once** in the workbook arm and **once** in the
-   control arm. I had read those as symptomatic of a pervasive problem; they are
-   two data points.
-2. **GLM-5.3-flash scored 91.7% in the identical environment** with **zero**
-   occurrences of the gate string. If the gate imposed the ceiling, it would
-   have applied to GLM too.
+1. **The evidence was one self-report, not a hit count.** The run log recorded
+   the final answer payload only — **not** `RLMResult.trajectory`.
+2. **GLM-5.3-flash scored 91.7% in the identical environment.**
 
-The honest reading: F11 is a genuine usability defect that plausibly *amplifies*
-weak-model failure, and a capable model routes around it. Establishing the real
-frequency requires trajectory capture, which is now implemented in the harness
-(defect H6) for all future arms.
+I then fixed the harness (H6) to persist trajectories and count rejections
+directly. The GLM learn arm gives the **measured** picture:
+
+| | value |
+|---|---|
+| Total catalog-gate rejections | **35** |
+| Questions hitting the gate | **7 / 24** |
+| Per question | q01:2, q02:2, **q08:13**, q15:2, q20:2, **q21:10**, q22:4 |
+
+The two highest gate counts are the two highest turn counts (q08 → 20 of 22
+turns, q21 → 17) and **q08 is the arm's only turn-exhaustion failure** — it
+produced no answer, while the cold arm answered it correctly in 8 turns.
+
+**The bounded, supported claim:** the undiagnosable message measurably costs
+turns and can cost an answer outright. **The unsupported claim, still
+withdrawn:** that it caused the gpt-4.1-mini collapse — GLM absorbed 35
+rejections and still scored 91.7%.
 
 **Proposed fix — universal mechanism, NOT a domain rule.** Nothing here is
 specific to ARR, invoices, or any business concept:
@@ -310,7 +318,56 @@ library's inference.
 
 **No core patch was made during this evaluation.**
 
-## 4d. Does the bundled `excel_modify` skill prevent F9?
+## 4d. Finding F14 — a truncated operation result aborts the task instead of
+falling back to the cold path (NEW, learn-path only, universal mechanism)
+
+**Reproduction:** `glm-learn-1`, q13. Observed once in 24 questions.
+
+```
+ERROR ValueError: operation result was truncated
+TRACE  fabric_rlm/runtime.py, in _prepare_registered_operation
+       raise ValueError("operation result was truncated")
+```
+
+Raised at `knowledge_execution.py:284` when a host operation returns
+`truncated: True`, and re-raised at `runtime.py:1568`.
+
+**Why this is a defect and not a design choice.** Every *other* failure in
+`_prepare_registered_operation` degrades gracefully — it records a
+`operation_fallback_reason` and returns `bound_inputs`, so the agent continues
+on the raw sources:
+
+| condition | handling |
+|---|---|
+| planner response invalid | fallback |
+| planner declines the operations | fallback |
+| `OperationResultTooLarge` | **fallback** |
+| `OperationPlanError` | fallback |
+| `ValueError` (incl. *truncated*) | **re-raise — task dies** |
+
+`OperationResultTooLarge` and "result was truncated" are the *same class of
+condition* — the host produced more data than the contract allows — yet one
+falls back and the other is fatal. The code's own comment states the intended
+invariant:
+
+> *"The raw sources stay bound next to the packet: learning narrows the search,
+> it never removes the cold path."*
+
+This path removes the cold path.
+
+**Expected:** fall back to the raw sources with
+`operation_fallback_reason="operation_result_truncated"`, exactly as
+`OperationResultTooLarge` does.
+**Actual:** unhandled `ValueError` propagates and the question is lost.
+
+**Measured cost:** q13 was answered **correctly (334.0)** by the cold arm and
+crashed after 12 s in the learn arm. Enabling learning turned a passing question
+into an exception.
+
+**Classification: universal mechanism.** It concerns result-bound handling and
+knows nothing about any business domain. **No core patch was made.**
+
+## 4e. Does the bundled `excel_modify` skill prevent F9?
 
 The library bundles skills including `excel_modify.md`, `excel_extract.md`,
 `analytical_integrity.md`, `data_exploration.md` and `delta_lakehouse.md`.
@@ -426,12 +483,15 @@ run**, so no claim is made either way.
 
 - **General execution capability:** demonstrated. 91.7% on 24 unseen complex
   questions over a real Fabric lakehouse, 0 hazard traps, 100% answer rate.
-- **Generalization of *learned* behaviour:** **not demonstrated, and now
-  explained.** For tabular and Lakehouse sources, learning emits at most one
-  lesson type, gated on English column-name tokens (F12). Rename with the same
-  meaning and the lesson disappears — 5/12 in the probe. On the real lakehouse
-  it produced nothing at all (F13). The library is **not** ARR-specialized, but
-  the learning path *is* **English-snake_case-specialized**.
+- **Generalization of *learned* behaviour:** **measured, and it fails.** On the
+  same model and source, `.learn` scored **83.3% vs 91.7% cold**, took **+21%
+  turns** and **+64% prompt tokens**, and lost two questions the cold arm
+  answered. The package contained **0 lessons**, so this is pure overhead. The
+  explanation is F12: for tabular/Lakehouse sources learning emits at most one
+  lesson type, gated on English column-name tokens — rename with the same
+  meaning and it disappears (5/12 in the probe). The library is **not**
+  ARR-specialized, but the learning path *is* **English-snake_case-specialized**.
+  Full detail in `LEARN_GATE_VERDICT.md`.
 - **Portability across sources:** Lakehouse/Delta confirmed live. Semantic
   model is the only source family with richer `structural_lessons`, and it was
   **not** exercised in Phase 2 — listed as untested, not claimed.
@@ -446,6 +506,7 @@ run**, so no claim is made either way.
 | F12 report learning coverage / warn on an empty package | **yes** | no | no |
 | F12 the meaning of a column name | no | **yes** — `declared=` | no |
 | F12 more English synonyms in `_CURRENT_PERIOD` | **rejected** — puts a naming rule in core | no | no |
+| F14 truncated operation result must fall back, not re-raise | **yes** | no | no |
 | F9 append-or-fail contract for derived artifacts | **weak** — model-dependent, so a core patch is not justified on this evidence | no | **candidate** — test `excel_modify` first |
 | H5 output contract for categorical answers | harness-only | no | no |
 
