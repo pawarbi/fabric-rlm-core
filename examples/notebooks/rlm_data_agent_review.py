@@ -65,7 +65,7 @@ AGENT_NAME = "Sales Agent RLM"        # the Data Agent to review (name or id)
 WORKSPACE_NAME = None                 # None = this notebook's workspace
 STAGE = "staging"                     # "staging" reviews the draft configuration, "published" the live one
 REPETITIONS = 1                       # 3 before believing a delta
-QUESTIONS_PER_SOURCE = 8
+QUESTIONS_PER_SOURCE = 25             # spread round-robin across the skills
 TOP_N = 10
 APPLY_SUGGESTIONS = False             # True writes to the agent's DRAFT stage (never published)
 REPORT_PATH = "/lakehouse/default/Files/data_agent_review.md"  # or None to skip saving

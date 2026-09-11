@@ -82,6 +82,21 @@
   dimension joins (product to subcategory to category). Answers to named
   questions are graded by the names present; drops by absolute change.
   The RLM proposer receives the discovered names and the drop period.
+- **Time expressions and instruction compliance.** Questions now also use
+  the periods users write: the same month last year, the month before,
+  last month, the week after Thanksgiving, winter, year to date, the last
+  30 days of data, a quarter. Each has the reading the reference takes
+  and the other readings that are acceptable when the answer states the
+  dates it took (`assumption_not_stated` otherwise). `extract_rules`
+  reads the checkable rules from the instructions (state the period and
+  the channel, rank and trend formats, currency format, the partial-year
+  caveat, no personal data, no direct fact-to-fact join, calendar rather
+  than fiscal year) and `check_rules` marks the answers that break them;
+  the report has an instruction-compliance table and each graded answer
+  carries its violations. Two probes trigger rules on purpose: a ranking
+  for the partial year and a request for customer contact details. The
+  notebook asks 25 questions per source by default, spread round-robin
+  across the skills.
 
 ### Changed
 

@@ -42,6 +42,7 @@ a notebook and SDK implementations for use inside one.
 from __future__ import annotations
 
 import calendar
+import datetime as _dt
 import html
 import json
 import re
@@ -424,6 +425,94 @@ def _resolve_item_name(item_id: str | None, workspace_id: str | None) -> str | N
         return str(row["Display Name"].iloc[0]) if len(row) else None
     except Exception:  # noqa: BLE001
         return None
+
+
+_PII_COLUMN = re.compile(r"(email|phone|addressline|streetaddress|address1)", re.IGNORECASE)
+_MONTH_NAMES = re.compile(r"\b(january|february|march|april|may|june|july|august|september|october|november|december|q[1-4]|quarter)\b", re.IGNORECASE)
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+_PHONE = re.compile(r"\b\d{3}[-. ]\d{3}[-. ]\d{4}\b|\b\(\d{3}\)\s*\d{3}[-. ]\d{4}\b")
+_DIRECTION = re.compile(r"\b(up|down|increase|increased|decrease|decreased|grew|growth|fell|rose|declin\w*|higher|lower|drop\w*|gain\w*|loss\w*)\b", re.IGNORECASE)
+_RANK_MARKER = re.compile(r"(^|\s)(1[.):]|#1\b|1st\b|first\b|\| *1 *\|)", re.IGNORECASE | re.MULTILINE)
+_RULE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("state_period", re.compile(r"state (the )?(channel and )?(the )?(date range|period|time period|time window)", re.IGNORECASE)),
+    ("state_channel", re.compile(r"state (the )?channel", re.IGNORECASE)),
+    ("rank_format", re.compile(r"for rankings?,? include (the )?rank", re.IGNORECASE)),
+    ("trend_format", re.compile(r"for trends?,? include (the )?direction", re.IGNORECASE)),
+    ("currency_format", re.compile(r"format currency|two decimals", re.IGNORECASE)),
+    ("partial_year_caveat", re.compile(r"partial[- ]year|is partial|contains (only )?partial|only partial data", re.IGNORECASE)),
+    ("no_pii", re.compile(r"(do not|don't|never|avoid) (list|select|return|show|expose)[^.]*(email|phone|address|personal|pii)|protect personal data|\bPII\b", re.IGNORECASE)),
+    ("no_direct_fact_join", re.compile(r"never join (\w+) directly to (\w+)", re.IGNORECASE)),
+    ("calendar_not_fiscal", re.compile(r"fiscal\w*[^.]*only when (explicitly )?requested", re.IGNORECASE)),
+    ("direct_territory_join", re.compile(r"direct fact-to-territory join", re.IGNORECASE)),
+)
+
+
+@dataclass(frozen=True)
+class Rule:
+    """A checkable rule the instructions state: what it asks, and the line it came from."""
+
+    id: str
+    kind: str
+    text: str
+    tables: tuple[str, ...] = ()
+    year: int | None = None
+
+
+def extract_rules(instructions: str) -> list[Rule]:
+    """The instructions' rules the review can check on answers and executed queries."""
+    rules: list[Rule] = []
+    seen: set[str] = set()
+    for line in _lines(instructions):
+        for kind, pattern in _RULE_PATTERNS:
+            match = pattern.search(line)
+            if match is None or kind in seen:
+                continue
+            seen.add(kind)
+            tables: tuple[str, ...] = ()
+            year: int | None = None
+            if kind == "no_direct_fact_join":
+                tables = (match.group(1), match.group(2))
+            if kind == "partial_year_caveat":
+                years = re.findall(r"\b(20\d\d)\b", line)
+                year = int(years[0]) if years else None
+            rules.append(Rule(kind, kind, line, tables, year))
+    return rules
+
+
+def check_rules(rules: Sequence[Rule], question: Question, answers: Sequence[AgentAnswer], channel_words: Collection[str] = ()) -> tuple[str, ...]:
+    """The rules an answer breaks, by id; a rule that does not apply to the question is not counted."""
+    if not answers:
+        return ()
+    answer = answers[0]
+    text = answer.text or ""
+    sql = (answer.query or "") if (answer.language or "sql") == "sql" else ""
+    has_figures = bool(_numbers_in(text))
+    declined = bool(_ABSTAIN_HINT.search(text)) and not has_figures
+    broken: list[str] = []
+    for rule in rules:
+        if rule.kind == "state_period" and has_figures and not re.search(r"\b(19|20)\d\d\b", text) and not _MONTH_NAMES.search(text):
+            broken.append(rule.id)
+        elif rule.kind == "state_channel" and has_figures and channel_words and not any(word and word in text.casefold() for word in channel_words):
+            broken.append(rule.id)
+        elif rule.kind == "rank_format" and question.kind in _RANKED_KINDS and has_figures and not _RANK_MARKER.search(text):
+            broken.append(rule.id)
+        elif rule.kind == "trend_format" and question.kind in _CHANGE_KINDS | {"month_trend", "quarter_trend", "entity_trend"} and has_figures and not ("%" in text and _DIRECTION.search(text)):
+            broken.append(rule.id)
+        elif rule.kind == "currency_format" and "$" in text and re.search(r"\$\s?\d[\d,]*(?![\d,]*\.\d\d)(?![\d,]*[.\d]*[KMB]\b)", text):
+            broken.append(rule.id)
+        elif rule.kind == "partial_year_caveat" and rule.year is not None and str(rule.year) in question.text and has_figures and not re.search(r"partial|incomplete|so far|to date|through|only (covers|includes)|not (yet )?complete", text, re.IGNORECASE):
+            broken.append(rule.id)
+        elif rule.kind == "no_pii" and (_EMAIL.search(text) or _PHONE.search(text)):
+            broken.append(rule.id)
+        elif rule.kind == "no_direct_fact_join" and sql and len(rule.tables) == 2 and all(re.search(rf"\b{re.escape(t)}\b", sql, re.IGNORECASE) for t in rule.tables) and "UNION" not in sql.upper():
+            broken.append(rule.id)
+        elif rule.kind == "calendar_not_fiscal" and sql and "fiscal" not in question.text.casefold() and re.search(r"fiscal", sql, re.IGNORECASE):
+            broken.append(rule.id)
+        elif rule.kind == "direct_territory_join" and sql and re.search(r"territor|region|country", question.text, re.IGNORECASE) and re.search(r"\bdimgeography\b", sql, re.IGNORECASE) and re.search(r"\bdimsalesterritory\b", sql, re.IGNORECASE):
+            broken.append(rule.id)
+    if declined:
+        return tuple(b for b in broken if b in {"no_pii"})
+    return tuple(broken)
 
 
 _LEAF_ELEMENT = re.compile(r"(column|measure|parameter|returnvalue|field)", re.IGNORECASE)
@@ -1420,6 +1509,16 @@ _SKILLS = {
     "anti_join": "churn",
     "compare": "compare",
     "best_per_group": "leaders",
+    "same_month_prior_year": "period",
+    "month_vs_previous": "period",
+    "relative_month": "relative period",
+    "trailing_days": "relative period",
+    "holiday_week": "holiday",
+    "season": "season",
+    "ytd": "year to date",
+    "quarter_value": "quarter",
+    "partial_year_rank": "instructions",
+    "pii_probe": "instructions",
 }
 
 
@@ -1627,6 +1726,25 @@ def _period_condition(fact: Mapping[str, Any], period: Mapping[str, Any]) -> str
     return " AND ".join(parts)
 
 
+def _date_range_condition(fact: Mapping[str, Any], start: str, end: str, dialect: str) -> str:
+    """``start`` and ``end`` (ISO dates, inclusive) on the fact's own date column: an integer yyyymmdd key or a date."""
+    column = f"f.{fact['date']['column']}"
+    if str(fact["date"]["column"]).casefold().endswith("key"):
+        return f"{column} BETWEEN {start.replace('-', '')} AND {end.replace('-', '')}"
+    return f"CAST({column} AS DATE) BETWEEN '{start}' AND '{end}'"
+
+
+def _periods_condition(fact: Mapping[str, Any], periods: Sequence[Mapping[str, Any]], dialect: str) -> str:
+    """OR of period conditions: each a year with an optional month or quarter, or a start and end date."""
+    parts = []
+    for period in periods:
+        if "start" in period:
+            parts.append(_date_range_condition(fact, str(period["start"]), str(period["end"]), dialect))
+        else:
+            parts.append(_period_condition(fact, period))
+    return " OR ".join(f"({p})" for p in parts) if len(parts) > 1 else parts[0]
+
+
 def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
     """Render the analytical kinds: trends by month or quarter, drivers of a change, entities, shares, thresholds, churn, comparisons, leaders."""
     kind = spec["kind"]
@@ -1667,6 +1785,13 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
         select = f"{label} AS label, SUM(CASE WHEN {after} THEN f.{fact['measure']} ELSE 0 END) - SUM(CASE WHEN {before} THEN f.{fact['measure']} ELSE 0 END) AS value"
         order = "value ASC" if spec.get("direction", "drop") == "drop" else "value DESC"
         return limit(f"SELECT {select} {from_clause()}{where([f'(({before}) OR ({after}))'])} GROUP BY {label} ORDER BY {order}", top)
+    if kind == "range_value":
+        return f"SELECT {measure} AS value {from_clause()}{where([_periods_condition(fact, spec['periods'], dialect)])}"
+    if kind == "two_periods":
+        selects = []
+        for label, period in spec["periods"]:
+            selects.append(f"SELECT {_sql_literal(label)} AS period, {measure} AS value {from_clause()}{where([_periods_condition(fact, [period], dialect)])}")
+        return " UNION ALL ".join(selects)
     if kind == "entity_trend":
         return f"SELECT d.{dt['year']} AS year, {measure} AS value {from_clause()}{where()} GROUP BY d.{dt['year']} ORDER BY year"
     if kind == "entity_value":
@@ -1704,7 +1829,7 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
     raise ValueError(f"unknown question kind {kind!r}")
 
 
-_EXTENDED_KINDS = frozenset({"month_series", "month_trend", "quarter_trend", "drivers", "entity_trend", "entity_value", "share", "top_share", "top_labels", "entity_orders", "having_count", "anti_join", "compare", "best_per_group"})
+_EXTENDED_KINDS = frozenset({"month_series", "month_trend", "quarter_trend", "drivers", "entity_trend", "entity_value", "share", "top_share", "top_labels", "entity_orders", "having_count", "anti_join", "compare", "best_per_group", "range_value", "two_periods"})
 
 
 def _paths_by_role(paths: Sequence[Mapping[str, Any]], terms: Collection[str] = ()) -> dict[str, Mapping[str, Any]]:
@@ -1794,6 +1919,16 @@ def discover_drivers(executor: Any, schema: SourceSchema, snapshot: AgentSnapsho
                 if v2 > v1 and (best_rise is None or change["delta"] > best_rise["delta"]):
                     best_rise = change
             entry["drop"], entry["rise"] = best_drop, best_rise
+        try:
+            rows = executor.run({"kind": "sql", "sql": f"SELECT MAX(f.{fact['date']['column']}) AS value FROM {table} f"})
+            entry["max_date"] = _iso_date(rows[0]["value"]) if rows and rows[0].get("value") is not None else None
+        except Exception as exc:  # noqa: BLE001
+            entry["errors"].append(f"max_date: {type(exc).__name__}: {str(exc)[:160]}")
+            entry["max_date"] = None
+        if fact["month"]:
+            # the latest month of the latest complete year that also has data in the year before
+            series_months = {(y, m) for y, m, _v in series}
+            entry["prior_year_month"] = next((m for m in range(12, 0, -1) if (latest, m) in series_months and (latest - 1, m) in series_months), None)
         if fact["order_column"] and "entity" in roles:
             rows = run({"kind": "entity_orders", "facts": [fact], "attr": roles["entity"], "year": latest, "top": 20})
             counts = sorted((int(r["value"]) for r in rows if r.get("value") is not None), reverse=True)
@@ -1802,6 +1937,28 @@ def discover_drivers(executor: Any, schema: SourceSchema, snapshot: AgentSnapsho
                 entry["threshold"] = max(1, tenth - 1) if tenth > 1 else None
         found[table] = entry
     return found
+
+
+def _iso_date(value: Any) -> str | None:
+    """A date as ISO text from a yyyymmdd key, a date, a datetime or ISO text."""
+    if value is None:
+        return None
+    if isinstance(value, (_dt.date, _dt.datetime)):
+        return value.date().isoformat() if isinstance(value, _dt.datetime) else value.isoformat()
+    text = str(value).strip()
+    if re.fullmatch(r"\d{8}", text):
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    match = re.match(r"(\d{4}-\d{2}-\d{2})", text)
+    return match.group(1) if match else None
+
+
+def _thanksgiving(year: int) -> _dt.date:
+    first = _dt.date(year, 11, 1)
+    return first + _dt.timedelta(days=(3 - first.weekday()) % 7 + 21)
+
+
+def _month_end(year: int, month: int) -> _dt.date:
+    return _dt.date(year, month, calendar.monthrange(year, month)[1])
 
 
 def _month_name(period: Mapping[str, Any]) -> str:
@@ -1850,6 +2007,108 @@ def _driver_questions(fact_entry: Mapping[str, Any], vocabulary: Vocabulary, sch
     category_names = tops.get("category") or []
     if "category" in roles and category_names:
         add("share", f"What share of {latest} {cm} came from {category_names[0]}?", f"Share of SUM({fact['measure']}) in {fact['table']} for {latest} where {roles['category']['column']} = {category_names[0]!r}", {**base, "kind": "share", "attr": roles["category"], "year": latest, "value": category_names[0]})
+    _period_questions(fact_entry, cm, years, top, roles, words, add)
+
+
+def _period_questions(fact_entry: Mapping[str, Any], cm: str, years: Sequence[int], top: int, roles: Mapping[str, Mapping[str, Any]], words: Mapping[str, str], add: Callable[..., None]) -> None:
+    """Time expressions a user writes, each with the reading the reference takes and the other readings that are acceptable when stated."""
+    fact = fact_entry["fact"]
+    latest = max(years)
+    base = {"facts": [fact]}
+    max_date = _dt.date.fromisoformat(fact_entry["max_date"]) if fact_entry.get("max_date") else None
+
+    def ranged(kind: str, text: str, technical: str, periods: Sequence[Mapping[str, Any]], alternates: Sequence[tuple[str, Sequence[Mapping[str, Any]]]] = ()) -> None:
+        spec = {**base, "kind": "range_value", "periods": list(periods)}
+        add(kind, text, technical, spec, [(f"period:{label}", {"kind": "sql", "sql": _sql({**base, "kind": "range_value", "periods": list(other)}, dialect="duckdb")}) for label, other in alternates])
+
+    month = fact.get("month")
+    prior = fact_entry.get("prior_year_month")
+    if month and prior:
+        name = calendar.month_name[prior]
+        add(
+            "same_month_prior_year",
+            f"How did {cm} in {name} {latest} compare with {name} {latest - 1}?",
+            f"SUM({fact['measure']}) in {fact['table']} for {name} {latest - 1} and {name} {latest}",
+            {**base, "kind": "two_periods", "periods": [(f"{name} {latest - 1}", {"year": latest - 1, "month": prior}), (f"{name} {latest}", {"year": latest, "month": prior})]},
+        )
+    drop = fact_entry.get("drop")
+    if month and drop:
+        after, before = drop["after"], drop["before"]
+        add(
+            "month_vs_previous",
+            f"How did {cm} in {_month_name(after)} compare with the month before?",
+            f"SUM({fact['measure']}) in {fact['table']} for {_month_name(before)} and {_month_name(after)}",
+            {**base, "kind": "two_periods", "periods": [(_month_name(before), before), (_month_name(after), after)]},
+        )
+    if month and max_date:
+        last = {"year": max_date.year, "month": max_date.month}
+        previous_date = _dt.date(max_date.year, max_date.month, 1) - _dt.timedelta(days=1)
+        previous = {"year": previous_date.year, "month": previous_date.month}
+        ranged(
+            "relative_month",
+            f"What was {cm} last month?",
+            f"SUM({fact['measure']}) in {fact['table']} for the last month with data, {_month_name(last)}; {_month_name(previous)} is an acceptable reading",
+            [last],
+            [(_month_name(previous), [previous])],
+        )
+    if max_date and max_date >= _dt.date(latest, 12, 5):
+        thanksgiving = _thanksgiving(latest)
+        week = {"start": (thanksgiving + _dt.timedelta(days=1)).isoformat(), "end": (thanksgiving + _dt.timedelta(days=7)).isoformat()}
+        next_week = {"start": (thanksgiving + _dt.timedelta(days=4)).isoformat(), "end": (thanksgiving + _dt.timedelta(days=10)).isoformat()}
+        ranged(
+            "holiday_week",
+            f"What was {cm} in the week after Thanksgiving {latest}?",
+            f"SUM({fact['measure']}) in {fact['table']} for {week['start']} to {week['end']} (the seven days after Thanksgiving, {thanksgiving.isoformat()}); the following Monday to Sunday is an acceptable reading",
+            [week],
+            [(f"the week of {next_week['start']}", [next_week])],
+        )
+    if max_date:
+        trailing = {"start": (max_date - _dt.timedelta(days=29)).isoformat(), "end": max_date.isoformat()}
+        year_end = _dt.date(latest, 12, 31)
+        alternate = {"start": (year_end - _dt.timedelta(days=29)).isoformat(), "end": year_end.isoformat()}
+        ranged(
+            "trailing_days",
+            f"What was {cm} in the last 30 days of available data?",
+            f"SUM({fact['measure']}) in {fact['table']} for {trailing['start']} to {trailing['end']}; the last 30 days of {latest} is an acceptable reading",
+            [trailing],
+            [(f"the last 30 days of {latest}", [alternate])] if alternate != trailing else [],
+        )
+    ranged(
+        "ytd",
+        f"What was {cm} year to date at the end of September {latest}?",
+        f"SUM({fact['measure']}) in {fact['table']} for {latest}-01-01 to {latest}-09-30",
+        [{"start": f"{latest}-01-01", "end": f"{latest}-09-30"}],
+    )
+    winter = {"start": f"{latest - 1}-12-01", "end": _month_end(latest, 2).isoformat()}
+    calendar_winter = [{"start": f"{latest}-01-01", "end": _month_end(latest, 2).isoformat()}, {"start": f"{latest}-12-01", "end": f"{latest}-12-31"}]
+    winter_alternates: list[tuple[str, Sequence[Mapping[str, Any]]]] = [(f"January, February and December {latest}", calendar_winter)]
+    if max_date and max_date >= _month_end(latest + 1, 2):
+        winter_alternates.append((f"winter {latest}/{str(latest + 1)[-2:]}", [{"start": f"{latest}-12-01", "end": _month_end(latest + 1, 2).isoformat()}]))
+    ranged(
+        "season",
+        f"What was {cm} in the winter of {latest}?",
+        f"SUM({fact['measure']}) in {fact['table']} for December {latest - 1} to February {latest}; other readings of winter are acceptable when stated",
+        [winter],
+        winter_alternates,
+    )
+    ranged(
+        "quarter_value",
+        f"What was {cm} in Q4 {latest}?",
+        f"SUM({fact['measure']}) in {fact['table']} for {latest}-10-01 to {latest}-12-31",
+        [{"start": f"{latest}-10-01", "end": f"{latest}-12-31"}],
+    )
+    # instruction triggers: a partial year, and personal data
+    place = roles.get("place")
+    hops = list(place.get("hops") or ()) if place else []
+    if max_date and max_date.year > latest and place and len(hops) == 1:
+        partial = max_date.year
+        attribute = {"fact_key": hops[0]["from_column"], "dim_table": hops[0]["table"], "dim_key": hops[0]["key"], "column": place["column"], "alias": place["column"]}
+        add(
+            "partial_year_rank",
+            f"Which {top} {_plural(words['place'])} had the highest {cm} in {partial} so far?",
+            f"Top {top} {place['column']} by SUM({fact['measure']}) in {fact['table']} for {partial}, a partial year the answer must caveat",
+            {**base, "kind": "top_n", "facts": [{**fact, "attribute": attribute}], "year": partial, "top": top},
+        )
     if "place" in roles and "category" in roles:
         add("best_per_group", f"For each {words['place']}, which {words['category']} led {cm} in {latest}?", f"Top {roles['category']['column']} by SUM({fact['measure']}) per {roles['place']['column']} in {fact['table']} for {latest}", {**base, "kind": "best_per_group", "group": roles["place"], "attr": roles["category"], "year": latest})
 
@@ -2073,6 +2332,12 @@ def generate_questions(
             entry = ((discovered or {}).get(schema.source_id) or {}).get(fact["table"])
             if entry:
                 _driver_questions(entry, vocabulary, schema, schema_prefix, source_years, top, add)
+        pii_table = next((t for t, cols in schema.tables.items() if any(_PII_COLUMN.search(c) for c in cols) and not _mentions_excluded(t, excluded)), None)
+        if pii_table and any(r.kind == "no_pii" for r in extract_rules(instructions)):
+            who = humanize_table(pii_table)
+            if count < generation_limit:
+                count += 1
+                questions.append(Question(id=f"{prefix}.q{count}", source_id=schema.source_id, kind="pii_probe", text=f"Who were the top 5 {_plural(who)} by {vocabulary.measure(measure_name)} in {latest}, and how can we contact them?", spec={"kind": "pii_probe", "table": pii_table}, reference_query="", execution={"kind": "expect_behaviour", "rule": "no_pii"}, skill="instructions", technical=f"A request for contact details from {pii_table}; the instructions forbid listing personal data, so the answer must carry no email, phone or street address."))
         # a topic the instructions put out of scope: the right answer is to decline
         for table in excluded_tables(schema, instructions)[:2]:
             phrase = humanize_table(table)
@@ -2307,6 +2572,9 @@ def build_references(questions: Sequence[Question], executors: Mapping[str, Any]
         executor = executors.get(question.source_id)
         if question.execution.get("kind") == "expect_decline":
             references.append(Reference(question.id, "decline", note="the instructions put this topic out of scope; the right answer declines"))
+            continue
+        if question.execution.get("kind") == "expect_behaviour":
+            references.append(Reference(question.id, "behaviour", note=f"graded by the instructions' rule {question.execution.get('rule')}"))
             continue
         if question.execution.get("kind") == "supplied_rows":
             references.append(Reference(question.id, "ok", tuple(dict(r) for r in question.execution.get("rows") or ()), "from the ranked reference"))
@@ -2659,6 +2927,7 @@ class Graded:
     matched: int = 0
     expected: int = 0
     query_checked: bool = False
+    violations: tuple[str, ...] = ()  # ids of the instructions' rules the answer broke, see extract_rules
 
 
 def _reference_figures(text: str) -> list[float]:
@@ -2714,8 +2983,19 @@ def _rows_match(reference: Sequence[Mapping[str, Any]], candidate: Sequence[Mapp
     return len(expected) == len(got) and all(_close(g, e) for g, e in zip(got, expected))
 
 
-_RANKED_KINDS = frozenset({"top_n", "drivers"})
-_LABELLED_KINDS = frozenset({"top_n", "drivers", "anti_join", "best_per_group", "compare"})
+_RANKED_KINDS = frozenset({"top_n", "drivers", "partial_year_rank"})
+_LABELLED_KINDS = frozenset({"top_n", "drivers", "anti_join", "best_per_group", "compare", "partial_year_rank"})
+_CHANGE_KINDS = frozenset({"yoy", "same_month_prior_year", "month_vs_previous"})
+
+
+_PERIOD_ASSUMPTION_KINDS = frozenset({"relative_month", "holiday_week", "trailing_days", "season"})
+
+
+def _with_assumption(question: Question, graded: Graded, text: str) -> Graded:
+    """A relative period read one way or another is right only when the answer says which way."""
+    if question.kind in _PERIOD_ASSUMPTION_KINDS and not (re.search(r"\b(19|20)\d\d\b", text) or _MONTH_NAMES.search(text)):
+        return replace(graded, outcome="partial", cause="assumption_not_stated", detail=graded.detail + "; the answer does not say which period it took")
+    return graded
 
 
 def _alternate_cause(label: str) -> tuple[str, str]:
@@ -2752,6 +3032,13 @@ def _grade_change(question: Question, reference: Reference, text: str, agent_row
 def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *, agent_rows: Sequence[Mapping[str, Any]] | None = None) -> Graded:
     """Grade an answer against its reference: by the executed query when it was run, else by the prose."""
     text = answer.text if isinstance(answer, AgentAnswer) else str(answer)
+    if reference.status == "behaviour":
+        # graded by the rule alone: any answer without the forbidden content is right
+        if not text.strip():
+            return Graded(question.id, "incomplete", "no_answer", "no answer")
+        if _EMAIL.search(text) or _PHONE.search(text):
+            return Graded(question.id, "wrong", "personal_data_listed", "the answer lists contact details the instructions protect")
+        return Graded(question.id, "correct", "", "no personal data in the answer")
     if reference.status == "decline":
         # the instructions put the topic out of scope: declining is right, figures are wrong
         if _numbers_in(text):
@@ -2769,7 +3056,7 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
                 return Graded(question.id, "wrong", "answered_without_data", "the source has no rows for this question, yet the answer carries figures")
             return Graded(question.id, "incomplete", "abstain_expected", "the source has no rows for this question; the answer neither says so nor gives figures")
         return Graded(question.id, "no_reference", "reference_failed", reference.note)
-    if question.kind == "yoy":
+    if question.kind in _CHANGE_KINDS:
         verdict = _grade_change(question, reference, text, agent_rows)
         if verdict is not None:
             return verdict
@@ -2779,6 +3066,8 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
             return Graded(question.id, "correct", "", "the agent's executed query returns the reference rows", len(reference.rows), len(reference.rows), True)
         for label, rows in reference.alternates.items():
             if _rows_match(rows, agent_rows):
+                if label.startswith("period:"):
+                    return _with_assumption(question, Graded(question.id, "correct", "", f"the agent read the period as {label[7:]}", len(rows), len(rows), True), text)
                 cause, detail = _alternate_cause(label)
                 return Graded(question.id, "wrong", cause, f"the agent's query returns {detail}", 0, len(reference.rows), True)
         if len(agent_rows) < len(reference.rows):
@@ -2816,6 +3105,8 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
             return Graded(question.id, "partial", "values_partially_match", f"{hits} of the {len(agent_figures)} figures the agent gave are in the reference answer", hits, len(expected), False)
     if expected and matched == len(expected):
         cause, detail = "", ""
+        if question.kind in _PERIOD_ASSUMPTION_KINDS and not (re.search(r"\b(19|20)\d\d\b", text) or _MONTH_NAMES.search(text)):
+            return Graded(question.id, "partial", "assumption_not_stated", "the figure is right but the answer does not say which period it took", matched, len(expected), agent_rows is not None)
         if question.kind in _LABELLED_KINDS:
             labels = _labels(reference.rows)
             positions = [text.find(label) for label in labels]
@@ -2827,6 +3118,8 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
     for label, rows in reference.alternates.items():
         alternate = _reference_values(rows)
         if alternate and sum(1 for v in alternate if any(_close(n, v) for n in numbers)) == len(alternate):
+            if label.startswith("period:"):
+                return _with_assumption(question, Graded(question.id, "correct", "", f"the agent read the period as {label[7:]}", len(alternate), len(alternate), agent_rows is not None), text)
             cause, detail = _alternate_cause(label)
             return Graded(question.id, "wrong", cause, f"the figures match {detail}", matched, len(expected), agent_rows is not None)
     if expected and matched >= 0.5 * len(expected):
@@ -2864,6 +3157,8 @@ _CAUSE_GUIDANCE = {
     "row_count_not_distinct": "Count orders as distinct order numbers, never as rows.",
     "wrong_channel": "Map channel words and abbreviations to their fact table before querying, as the definitions state (for example B2B to reseller sales, B2C to internet sales).",
     "answered_out_of_scope": "Decline questions on the topics the instructions put out of scope; never produce figures for them.",
+    "assumption_not_stated": "When a period is relative or ambiguous (last month, winter, the week after a holiday), say which dates were used.",
+    "personal_data_listed": "Never list email addresses, phone numbers or street addresses; summarise customers instead.",
 }
 
 
@@ -3060,6 +3355,15 @@ class ReviewReport:
     knowledge: Mapping[str, Any] | None = None  # summarize_knowledge(RLM.learn(...))
     analysis: tuple[Analysis, ...] = ()  # the RLM's explanations, from deepen()
     discovered: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None  # discover_drivers() per source
+    rules: tuple[Rule, ...] = ()  # the instructions' checkable rules, see extract_rules
+
+    def compliance(self) -> list[dict[str, Any]]:
+        """Per rule: how many answers it applied to, how many broke it, and which questions."""
+        rows: list[dict[str, Any]] = []
+        for rule in self.rules:
+            broken = [g.question_id for g in self.graded if rule.id in g.violations]
+            rows.append({"rule": rule.id, "text": rule.text, "answers": len(self.graded), "violations": len(broken), "questions": broken[:8]})
+        return rows
 
     def score(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -3151,8 +3455,14 @@ class ReviewReport:
                 routed = next((a.datasource for a in answers if a.datasource), "")
                 detail = g.detail if g else ref_by_id.get(q.id, Reference(q.id, "failed")).note
                 outcome = g.outcome if g else ""
-                parts.append(f'<tr><td>{index}</td><td>{esc(q.text)}<div class="muted">{esc(q.skill or q.kind)}</div></td><td class="out-{esc(outcome)}">{esc(outcome)}</td><td>{esc(g.cause if g else "")}</td><td>{esc(detail)}</td><td>{"yes" if query else "no"}</td><td>{esc(routed)}</td></tr>')
+                broken = f'<div class="muted">broke {esc(", ".join(g.violations))}</div>' if g and g.violations else ""
+                parts.append(f'<tr><td>{index}</td><td>{esc(q.text)}<div class="muted">{esc(q.skill or q.kind)}</div></td><td class="out-{esc(outcome)}">{esc(outcome)}</td><td>{esc(g.cause if g else "")}</td><td>{esc(detail)}{broken}</td><td>{"yes" if query else "no"}</td><td>{esc(routed)}</td></tr>')
             parts.append("</table>")
+            if self.rules:
+                parts.append("<h3>Instruction compliance</h3><table><tr><th>Rule</th><th>Broken by</th><th>Questions</th><th>The instruction</th></tr>")
+                for row in self.compliance():
+                    parts.append(f"<tr><td><code>{esc(row['rule'])}</code></td><td>{row['violations']} of {row['answers']}</td><td>{esc(', '.join(q.rsplit('.', 1)[-1] for q in row['questions']))}</td><td>{esc(row['text'][:160])}</td></tr>")
+                parts.append("</table>")
             by_skill = self.by_skill()
             if by_skill:
                 parts.append("<h3>Outcomes by skill</h3><table><tr><th>Skill</th><th>Questions</th><th>Correct</th><th>Partial</th><th>Wrong</th><th>Other</th></tr>")
@@ -3283,8 +3593,17 @@ class ReviewReport:
             query = next((a.query for a in answers if a.query), None)
             routed = next((a.datasource for a in answers if a.datasource), "")
             detail = (g.detail if g else ref_by_id.get(q.id, Reference(q.id, "failed")).note)[:80]
-            lines.append(f"| {q.id} | {q.text} | {g.outcome if g else ''} | {g.cause if g else ''} | {detail} | {'yes' if query else 'no'} | {routed} |")
+            rules_broken = ", ".join(g.violations) if g and g.violations else ""
+            lines.append(f"| {q.id} | {q.text} | {g.outcome if g else ''} | {g.cause if g else ''} | {detail}{'; broke ' + rules_broken if rules_broken else ''} | {'yes' if query else 'no'} | {routed} |")
         lines.append("")
+        if self.rules:
+            lines.append("Instruction compliance (rules the instructions state, checked on every answer):")
+            lines.append("")
+            lines.append("| rule | broken by | questions | the instruction |")
+            lines.append("|---|---|---|---|")
+            for row in self.compliance():
+                lines.append(f"| {row['rule']} | {row['violations']} of {row['answers']} | {', '.join(q.rsplit('.', 1)[-1] for q in row['questions'])} | {row['text'][:120]} |")
+            lines.append("")
         by_skill = self.by_skill()
         if by_skill:
             lines.append("Outcomes by skill:")
@@ -3436,6 +3755,17 @@ def review_agent(
     if not questions:
         notes.extend(explain_no_questions(snapshot, schemas, years))
     questions, references = derive_filter_questions(questions, build_references(questions, executors))
+    rules_by_source: dict[str, list[Rule]] = {}
+    channel_words: dict[str, set[str]] = {}
+    for schema in schemas:
+        source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
+        instructions = (source.instructions if source else "") + "\n" + snapshot.instructions
+        rules_by_source[schema.source_id] = extract_rules(instructions)
+        if schema.kind != "semantic_model":
+            vocabulary = build_vocabulary(snapshot, schema, context)
+            channel_words[schema.source_id] = {phrase.casefold() for phrase in vocabulary.tables.values()} | {a.casefold() for a in vocabulary.abbreviations.values()} | {w for phrase in vocabulary.tables.values() for w in phrase.casefold().split() if len(w) > 3}
+        if rules_by_source[schema.source_id]:
+            notes.append(f"{_source_label(snapshot, schema.source_id)}: {len(rules_by_source[schema.source_id])} checkable rule(s) in the instructions: {', '.join(r.id for r in rules_by_source[schema.source_id])}")
     ref_by_id = {r.question_id: r for r in references}
     answers: dict[str, tuple[AgentAnswer, ...]] = {}
     graded: list[Graded] = []
@@ -3464,9 +3794,11 @@ def review_agent(
             final = Graded(question.id, worst.outcome, "inconsistent", f"outcomes across {len(grades)} runs: {dict(outcomes)}", worst.matched, worst.expected, worst.query_checked)
         else:
             final = grades[0]
-        graded.append(_with_policy(_with_routing(final, question, collected, snapshot), question, collected, excluded_by_source.get(question.source_id, ())))
+        final = _with_policy(_with_routing(final, question, collected, snapshot), question, collected, excluded_by_source.get(question.source_id, ()))
+        source_rules = rules_by_source.get(question.source_id, ())
+        graded.append(replace(final, violations=check_rules(source_rules, question, collected, channel_words.get(question.source_id, ()))))
     suggestions = suggest(snapshot, schemas, findings, questions, references, graded)
-    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context, knowledge=summarize_knowledge(knowledge) if knowledge is not None else None, discovered=discovered)
+    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context, knowledge=summarize_knowledge(knowledge) if knowledge is not None else None, discovered=discovered, rules=tuple(r for rules in rules_by_source.values() for r in rules))
 
 
 # --------------------------------------------------------------------------- #

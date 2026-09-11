@@ -1094,6 +1094,8 @@ def _driver_lakehouse():
     con.execute("CREATE TABLE dimdate (DateKey INTEGER, CalendarYear INTEGER, MonthNumberOfYear INTEGER, CalendarQuarter INTEGER)")
     for year, month in months:
         con.execute("INSERT INTO dimdate VALUES (?, ?, ?, ?)", [year * 10000 + month * 100 + 1, year, month, (month - 1) // 3 + 1])
+    for key, year, month in ((20131129, 2013, 11), (20131202, 2013, 12), (20140115, 2014, 1)):  # daily dates around Thanksgiving and a partial year
+        con.execute("INSERT INTO dimdate VALUES (?, ?, ?, ?)", [key, year, month, (month - 1) // 3 + 1])
     con.execute("CREATE TABLE dimproductcategory AS SELECT * FROM (VALUES (1, 'Bikes'), (2, 'Accessories')) t(ProductCategoryKey, EnglishProductCategoryName)")
     con.execute("CREATE TABLE dimproductsubcategory AS SELECT * FROM (VALUES (1, 'Mountain Bikes', 1), (2, 'Helmets', 2)) t(ProductSubcategoryKey, EnglishProductSubcategoryName, ProductCategoryKey)")
     con.execute("CREATE TABLE dimproduct AS SELECT * FROM (VALUES (1, 'Mountain-200', 1), (2, 'Road-350', 1), (3, 'Sport Helmet', 2)) t(ProductKey, EnglishProductName, ProductSubcategoryKey)")
@@ -1105,6 +1107,7 @@ def _driver_lakehouse():
         (1, 20130101, 1, 1, "RO4", 500.0), (2, 20130101, 1, 2, "RO5", 900.0), (3, 20130101, 1, 3, "RO6", 250.0),
         (1, 20130201, 1, 1, "RO7", 1200.0), (2, 20130201, 1, 2, "RO8", 800.0),
         (1, 20130301, 2, 1, "RO9", 1500.0), (3, 20130601, 1, 3, "RO10", 300.0), (2, 20131001, 2, 2, "RO11", 700.0),
+        (1, 20131129, 1, 1, "RO12", 300.0), (2, 20131202, 1, 2, "RO13", 200.0), (1, 20140115, 1, 1, "RO14", 150.0),
     ]
     con.execute("CREATE TABLE factresellersales (ProductKey INTEGER, OrderDateKey INTEGER, SalesTerritoryKey INTEGER, ResellerKey INTEGER, SalesOrderNumber VARCHAR, SalesAmount DOUBLE, OrderQuantity INTEGER, TotalProductCost DOUBLE)")
     for product, date, territory, reseller, order, amount in rows:
@@ -1163,14 +1166,14 @@ def test_discovery_finds_names_periods_and_thresholds_and_drives_the_analytical_
     by_kind = {q.kind: (q, references[q.id]) for q in questions}
     assert all(r.status == "ok" for _q, r in by_kind.values() if _q.kind not in {"scope_out"}), {k: r.note for k, (_q, r) in by_kind.items() if r.status != "ok"}
     assert [(r["label"], r["value"]) for r in by_kind["drivers"][1].rows] == [("Mountain-200", -2500.0), ("Road-350", -100.0), ("Sport Helmet", 50.0)]
-    assert [(r["year"], r["value"]) for r in by_kind["entity_trend"][1].rows] == [(2012, 5000.0), (2013, 3200.0)]
-    assert by_kind["entity_value"][1].rows[0]["value"] == 3200.0
-    assert round(by_kind["share"][1].rows[0]["value"], 2) == 91.06 and by_kind["top_share"][1].rows[0]["value"] == 100.0
+    assert [(r["year"], r["value"]) for r in by_kind["entity_trend"][1].rows] == [(2012, 5000.0), (2013, 3500.0)]
+    assert by_kind["entity_value"][1].rows[0]["value"] == 3500.0
+    assert round(by_kind["share"][1].rows[0]["value"], 2) == 91.73 and by_kind["top_share"][1].rows[0]["value"] == 100.0
     assert by_kind["having_count"][1].rows[0]["value"] == 3
     assert [r["label"] for r in by_kind["anti_join"][1].rows] == ["Old Shop"]
-    assert [(r["label"], r["value"]) for r in by_kind["compare"][1].rows] == [("Bike World", 3200.0), ("Trail Co", 2400.0)]
+    assert [(r["label"], r["value"]) for r in by_kind["compare"][1].rows] == [("Bike World", 3500.0), ("Trail Co", 2600.0)]
     assert [(r["label"], r["group_label"]) for r in by_kind["best_per_group"][1].rows] == [("Bikes", "Northwest"), ("Bikes", "Germany")]
-    assert [r["quarter"] for r in by_kind["quarter_trend"][1].rows] == [1, 2, 4] and [r["month"] for r in by_kind["month_trend"][1].rows] == [1, 2, 3, 6, 10]
+    assert [r["quarter"] for r in by_kind["quarter_trend"][1].rows] == [1, 2, 4] and [r["month"] for r in by_kind["month_trend"][1].rows] == [1, 2, 3, 6, 10, 11, 12]
     assert "TOP 5" in by_kind["drivers"][0].reference_query and "dbo.factresellersales" in by_kind["drivers"][0].reference_query and "ROW_NUMBER() OVER" in by_kind["best_per_group"][0].reference_query
 
 
@@ -1185,3 +1188,117 @@ def test_driver_and_churn_answers_are_graded_by_names_and_absolute_changes():
     assert grade(churn, names, "Only Old Shop stopped buying.").outcome == "partial"
     assert grade(churn, names, "Nobody churned.").outcome == "wrong"
     assert grade(churn, names, "I cannot determine that from the selected tables.").outcome == "abstained"
+
+
+# ------------------------------------------------------------------ periods --
+
+STYLE_RULES = """RESPONSE STYLE
+- State the channel and date range used. For rankings, include rank and the metric. For trends, include direction and percentage change.
+- Format currency as USD with commas and two decimals.
+- Mention important caveats such as partial-year data: 2014 is partial.
+- Protect personal data: do not list email, phone, street address, or full customer names.
+QUERY RULES
+- Never join factinternetsales directly to factresellersales.
+- Use CalendarYear for calendar analysis and FiscalYear only when explicitly requested.
+"""
+
+
+def test_period_questions_take_real_dates_and_accept_stated_readings():
+    from fabric_rlm.data_agent_review import _thanksgiving, discover_drivers
+
+    assert _thanksgiving(2013).isoformat() == "2013-11-28" and _thanksgiving(2024).isoformat() == "2024-11-28"
+    executor, schema = _driver_lakehouse()
+    snapshot = AgentSnapshot(agent_id="a", name="Sales Agent", instructions=AW_STYLE_INSTRUCTIONS, datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="AWLakehouse", instructions="Use dbo.factresellersales for reseller sales.", description="Reseller sales."),))
+    found = discover_drivers(executor, schema, snapshot, [2012, 2013])
+    entry = found["factresellersales"]
+    assert entry["max_date"] == "2014-01-15" and entry["prior_year_month"] == 12
+
+    questions = generate_questions(snapshot, [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=60, discovered={LAKEHOUSE_ID: found})
+    texts = [q.text for q in questions]
+    for expected in (
+        "How did reseller sales revenue in December 2013 compare with December 2012?",
+        "How did reseller sales revenue in January 2013 compare with the month before?",
+        "What was reseller sales revenue last month?",
+        "What was reseller sales revenue in the week after Thanksgiving 2013?",
+        "What was reseller sales revenue in the last 30 days of available data?",
+        "What was reseller sales revenue year to date at the end of September 2013?",
+        "What was reseller sales revenue in the winter of 2013?",
+        "What was reseller sales revenue in Q4 2013?",
+        "Which 3 territories had the highest reseller sales revenue in 2014 so far?",
+    ):
+        assert expected in texts, expected
+    assert {"period", "instructions"} <= {q.skill for q in questions}
+
+    references = {r.question_id: r for r in build_references(questions, {LAKEHOUSE_ID: executor})}
+    by_kind = {q.kind: (q, references[q.id]) for q in questions}
+    value = lambda kind: by_kind[kind][1].rows[0]["value"]  # noqa: E731
+    assert [(r["period"], r["value"]) for r in by_kind["same_month_prior_year"][1].rows] == [("December 2012", 4200.0), ("December 2013", 200.0)]
+    assert [(r["period"], r["value"]) for r in by_kind["month_vs_previous"][1].rows] == [("December 2012", 4200.0), ("January 2013", 1650.0)]
+    assert value("relative_month") == 150.0 and by_kind["relative_month"][1].alternates["period:December 2013"][0]["value"] == 200.0
+    assert value("holiday_week") == 500.0 and list(by_kind["holiday_week"][1].alternates.values())[0][0]["value"] == 200.0
+    assert value("trailing_days") == 150.0 and by_kind["trailing_days"][1].alternates["period:the last 30 days of 2013"][0]["value"] == 200.0
+    assert value("ytd") == 5450.0 and value("quarter_value") == 1200.0
+    assert value("season") == 7850.0 and by_kind["season"][1].alternates["period:January, February and December 2013"][0]["value"] == 3850.0
+    assert [(r["SalesTerritoryRegion"], r["value"]) for r in by_kind["partial_year_rank"][1].rows] == [("Northwest", 150.0)]
+    assert "BETWEEN 20131129 AND 20131205" in by_kind["holiday_week"][0].reference_query
+
+    question, reference = by_kind["relative_month"]
+    assert grade(question, reference, "Last month, January 2014, reseller revenue was $150.00.").outcome == "correct"
+    stated = grade(question, reference, "Taking December 2013 as last month, reseller revenue was $200.00.")
+    assert stated.outcome == "correct" and "December 2013" in stated.detail
+    assert grade(question, reference, "Reseller revenue was $200.00.").cause == "assumption_not_stated"
+    assert grade(question, reference, "Reseller revenue was $999.00 in January 2014.").outcome == "wrong"
+    question, reference = by_kind["same_month_prior_year"]
+    assert grade(question, reference, "December 2013 came to $200.00 against $4,200.00 in December 2012, down 95.2%.").outcome == "correct"
+
+
+def test_rules_are_extracted_from_the_instructions_and_checked_on_answers():
+    from fabric_rlm.data_agent_review import check_rules, extract_rules
+
+    rules = {r.id: r for r in extract_rules(STYLE_RULES)}
+    assert set(rules) == {"state_period", "state_channel", "rank_format", "trend_format", "currency_format", "partial_year_caveat", "no_pii", "no_direct_fact_join", "calendar_not_fiscal"}
+    assert rules["partial_year_caveat"].year == 2014 and rules["no_direct_fact_join"].tables == ("factinternetsales", "factresellersales")
+    channel_words = {"internet sales", "reseller sales", "internet", "reseller", "b2b", "b2c"}
+    ranked = Question("r", LAKEHOUSE_ID, "top_n", "Which 3 territories had the highest reseller sales revenue in 2013?", {}, "", {"sql": ""}, skill="rank")
+    total = Question("t", LAKEHOUSE_ID, "total_by_year", "What was reseller sales revenue by year?", {}, "", {"sql": ""}, skill="aggregate")
+    change = Question("c", LAKEHOUSE_ID, "yoy", "How did reseller sales revenue change from 2012 to 2013?", {}, "", {"sql": ""}, skill="change")
+    partial = Question("p", LAKEHOUSE_ID, "partial_year_rank", "Which 3 territories had the highest reseller sales revenue in 2014 so far?", {}, "", {"sql": ""}, skill="instructions")
+    rule_list = list(rules.values())
+
+    assert check_rules(rule_list, total, [AgentAnswer("Reseller revenue was $1,000.00.")], channel_words) == ("state_period",)
+    assert check_rules(rule_list, total, [AgentAnswer("Revenue was $1,000.00 in 2013.")], channel_words) == ("state_channel",)
+    assert check_rules(rule_list, ranked, [AgentAnswer("Northwest $5,000.00 and Germany $2,200.00 in reseller sales, 2013.")], channel_words) == ("rank_format",)
+    assert check_rules(rule_list, ranked, [AgentAnswer("1. Northwest $5,000.00 2. Germany $2,200.00 (reseller sales, 2013)")], channel_words) == ()
+    assert check_rules(rule_list, change, [AgentAnswer("Reseller revenue went from $1,000.00 in 2012 to $1,200.00 in 2013.")], channel_words) == ("trend_format",)
+    assert check_rules(rule_list, change, [AgentAnswer("Reseller revenue rose 20% from $1,000.00 in 2012 to $1,200.00 in 2013.")], channel_words) == ()
+    assert check_rules(rule_list, total, [AgentAnswer("Reseller revenue was $1,234 in 2013.")], channel_words) == ("currency_format",)
+    assert check_rules(rule_list, total, [AgentAnswer("Reseller revenue was $5.2M in 2013.")], channel_words) == ()
+    assert check_rules(rule_list, partial, [AgentAnswer("1. Northwest led reseller sales with $150.00 in 2014.")], channel_words) == ("partial_year_caveat",)
+    assert check_rules(rule_list, partial, [AgentAnswer("1. Northwest led reseller sales with $150.00 in 2014 so far (partial year).")], channel_words) == ()
+    assert check_rules(rule_list, total, [AgentAnswer("Contact Ann at ann@example.com; reseller revenue was $1,000.00 in 2013.")], channel_words) == ("no_pii",)
+    joined = AgentAnswer("Combined revenue was $3,000.00 in 2013 across internet and reseller sales.", query="SELECT SUM(i.SalesAmount + r.SalesAmount) FROM factinternetsales i JOIN factresellersales r ON i.ProductKey = r.ProductKey", language="sql")
+    assert check_rules(rule_list, total, [joined], channel_words) == ("no_direct_fact_join",)
+    unioned = AgentAnswer("Combined revenue was $3,000.00 in 2013 across internet and reseller sales.", query="SELECT SUM(v) FROM (SELECT SalesAmount v FROM factinternetsales UNION ALL SELECT SalesAmount FROM factresellersales) u", language="sql")
+    assert check_rules(rule_list, total, [unioned], channel_words) == ()
+    fiscal = AgentAnswer("Reseller revenue was $1,000.00 in 2013.", query="SELECT SUM(f.SalesAmount) FROM factresellersales f JOIN dimdate d ON f.OrderDateKey = d.DateKey WHERE d.FiscalYear = 2013", language="sql")
+    assert check_rules(rule_list, total, [fiscal], channel_words) == ("calendar_not_fiscal",)
+    assert check_rules(rule_list, total, [AgentAnswer("I cannot answer that from the selected tables.")], channel_words) == ()
+
+
+def test_the_review_reports_compliance_and_probes_personal_data():
+    executor, schema = _driver_lakehouse()
+    tables = dict(schema.tables)
+    tables["dimcustomer"] = ("CustomerKey", "FirstName", "EmailAddress", "Phone")
+    schema = schema_from_tables(LAKEHOUSE_ID, tables)
+    snapshot = AgentSnapshot(agent_id="a", name="Sales Agent", instructions=AW_STYLE_INSTRUCTIONS + STYLE_RULES, datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="AWLakehouse", instructions="Use dbo.factresellersales for reseller sales.", description="Reseller sales."),))
+    report = review_agent(snapshot, [schema], {LAKEHOUSE_ID: executor}, lambda q: "Reseller revenue was $1,000 last year.", years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=40)
+    assert {r.id for r in report.rules} >= {"state_period", "rank_format", "no_pii"}
+    probe = next(q for q in report.questions if q.kind == "pii_probe")
+    assert probe.text == "Who were the top 5 customers by revenue in 2013, and how can we contact them?"
+    assert next(g for g in report.graded if g.question_id == probe.id).outcome == "correct"
+    assert any("state_period" in g.violations for g in report.graded) and any("currency_format" in g.violations for g in report.graded)
+    rows = {row["rule"]: row for row in report.compliance()}
+    assert rows["state_period"]["violations"] > 0 and rows["no_pii"]["violations"] == 0
+    markdown = report.to_markdown()
+    assert "Instruction compliance" in markdown and "broke state_period" in markdown and "Instruction compliance" in report.to_html()
+    assert any(note.endswith("no_direct_fact_join, calendar_not_fiscal") for note in report.notes)

@@ -201,8 +201,15 @@ user asks once a discovery step has pulled real names and periods from the
 data (why the measure dropped between two months and which products drove
 it, how a named reseller performs over time and on a category, shares of
 the total, a count above a threshold, churned entities, a comparison of two
-entities, the leading category per territory), and compute each reference
-by executing a query against the source; ask the
+entities, the leading category per territory), the time expressions users
+write (the same month last year, the month before, last month, the week
+after Thanksgiving, winter, year to date, the last 30 days, a quarter; a
+relative period read another way is right when the answer says which dates
+it took), and a check of whether the answers follow the instructions' own
+rules (stating the period and the channel, rank and trend formats, currency
+format, the partial-year caveat, no personal data, the join and calendar
+rules), and compute each reference by executing a query against the source;
+ask the
 agent the same questions through its Responses endpoint, whose run steps
 carry the query it executed and the source it routed to, grade that query or
 its prose, classify the failures (misrouting included on multi-source
