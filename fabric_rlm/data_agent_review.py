@@ -252,6 +252,10 @@ class SourceSchema:
     tables: Mapping[str, tuple[str, ...]]
     measures: tuple[str, ...] = ()
     relationships: tuple[tuple[str, str, str, str], ...] = ()  # from_table, from_col, to_table, to_col
+    types: Mapping[str, Mapping[str, str]] = field(default_factory=dict)  # table -> column -> type, when the profile knows
+
+    def column_type(self, table: str, column: str) -> str:
+        return str((self.types.get(table) or {}).get(column, "") or "").casefold()
 
     def table_names(self) -> set[str]:
         return {name.casefold() for name in self.tables}
@@ -275,12 +279,14 @@ def schema_from_tables(
     kind: str = "lakehouse",
     measures: Sequence[str] = (),
     relationships: Sequence[tuple[str, str, str, str]] = (),
+    types: Mapping[str, Mapping[str, str]] | None = None,
 ) -> SourceSchema:
     return SourceSchema(
         source_id=source_id,
         kind=kind,
         tables={str(name): tuple(str(c) for c in columns) for name, columns in tables.items()},
         measures=tuple(str(m) for m in measures),
+        types={str(t): {str(c): str(v) for c, v in cols.items()} for t, cols in (types or {}).items()},
         relationships=tuple(tuple(str(x) for x in r) for r in relationships),  # type: ignore[misc]
     )
 
@@ -308,11 +314,13 @@ def schema_from_profile(profile: Any, *, source_id: str | None = None) -> Source
         return SourceSchema(sid, "semantic_model", {t: tuple(c) for t, c in tables.items()}, measures, tuple(relationships))
     if family == "lakehouse":
         tables = {}
+        types: dict[str, dict[str, str]] = {}
         for name, entry in raw.items():
             columns = entry.get("columns") if isinstance(entry, Mapping) else None
             if isinstance(columns, Mapping):
                 tables[str(name)] = list(columns)
-        return SourceSchema(sid, "lakehouse", {t: tuple(c) for t, c in tables.items()})
+                types[str(name)] = {str(c): str(meta.get("lakehouse_type") or meta.get("type") or "") for c, meta in columns.items() if isinstance(meta, Mapping)}
+        return SourceSchema(sid, "lakehouse", {t: tuple(c) for t, c in tables.items()}, types=types)
     columns = [str(name) for name, entry in raw.items() if isinstance(entry, Mapping)]
     return SourceSchema(sid, family or "tabular", {sid: tuple(columns)})
 
@@ -1204,32 +1212,57 @@ def _heuristic_joins(schema: SourceSchema) -> dict[tuple[str, str], tuple[str, s
     joins: dict[tuple[str, str], tuple[str, str]] = {}
     tables = {t.casefold(): t for t in schema.tables}
     for table, columns in schema.tables.items():
+        prefix = table.rsplit(".", 1)[0] + "." if "." in table else ""
         for column in columns:
-            if not column.casefold().endswith("key") or column.casefold() == "datekey":
+            lowered = column.casefold()
+            if lowered in {"datekey", "id", "key"} or not re.search(r"_?(key|id)$|^id_", lowered):
                 continue
-            stem = column[:-3].casefold()
-            for candidate in (f"dim{stem}", stem, f"dim_{stem}", f"{stem}s"):
-                target = tables.get(candidate)
-                if target and target != table and column in schema.tables[target]:
-                    joins[(table, column)] = (target, column)
+            stem = re.sub(r"^id_|_?(key|id)$", "", lowered)
+            if not stem:
+                continue
+            found = None
+            for candidate in (f"dim{stem}", stem, f"dim_{stem}", f"{stem}s", f"{stem}es", f"dim{stem}s"):
+                for name in ((prefix + candidate, candidate) if prefix else (candidate,)):
+                    target = tables.get(name)
+                    if target and target != table and column in schema.tables[target]:
+                        found = target
+                        break
+                if found:
                     break
+            if found:
+                joins[(table, column)] = (found, column)
     return joins
 
 
 def _fact_tables(schema: SourceSchema) -> list[str]:
     facts = []
+    joins = _heuristic_joins(schema)
+    referenced = _referenced_tables(schema, joins)
     for table, columns in schema.tables.items():
-        measures = [c for c in columns if _MEASURE_HINT.search(c) and not _KEY_HINT.search(c)]
-        dates = [c for c in columns if _DATE_KEY.search(c)]
-        if measures and dates and (table.casefold().startswith("fact") or len(measures) >= 2):
+        measures = _measure_columns(schema, table)
+        if measures and not any(_MEASURE_HINT.search(c) for c in measures) and (table in referenced or table.casefold().startswith("dim")):
+            continue  # numeric columns on a table others reference are attributes of a dimension, not measures
+        dates = [c for c in columns if _is_time_column(schema, table, c)]
+        joined_time = any(
+            _is_time_column(schema, target[0], other_column) and not other_column.casefold().endswith("key")
+            for column in columns
+            for target in [joins.get((table, column))]
+            if target is not None
+            for other_column in schema.tables[target[0]]
+        )
+        if measures and (dates or joined_time) and (table.casefold().startswith("fact") or len(measures) >= 2):
             facts.append(table)
     return sorted(facts, key=lambda t: (not t.casefold().startswith("fact"), t))
 
 
 def _measure_columns(schema: SourceSchema, table: str) -> list[str]:
-    preferred = ("salesamount", "revenue", "amount", "totalproductcost", "orderquantity", "quantity", "units")
-    columns = [c for c in schema.tables[table] if _MEASURE_HINT.search(c) and not _KEY_HINT.search(c)]
-    return sorted(columns, key=lambda c: (next((i for i, p in enumerate(preferred) if p in c.casefold()), 99), c))
+    preferred = ("salesamount", "revenue", "amount", "sales", "price", "total", "net", "gross", "totalproductcost", "orderquantity", "quantity", "units", "value")
+    secondary = re.compile(r"(freight|tax|discount|shipping|fee|handling|cost)", re.IGNORECASE)
+    columns = [c for c in schema.tables[table] if _MEASURE_HINT.search(c) and not _KEY_HINT.search(c) and not _is_time_column(schema, table, c)]
+    if not columns and schema.types.get(table):
+        # names say nothing; the profile's types do
+        columns = [c for c in schema.tables[table] if _NUMERIC_TYPE.search(schema.column_type(table, c)) and not _is_key(c) and not _is_time_column(schema, table, c)]
+    return sorted(columns, key=lambda c: (next((i for i, p in enumerate(preferred) if p in c.casefold()), 99) + (50 if secondary.search(c) else 0), c))
 
 
 def _date_candidates(columns: Sequence[str]) -> list[str]:
@@ -1238,7 +1271,7 @@ def _date_candidates(columns: Sequence[str]) -> list[str]:
     A profile lists columns alphabetically, so the physical order cannot be
     relied on; ``DueDate`` must not win over ``OrderDateKey``.
     """
-    matches = [c for c in columns if _DATE_KEY.search(c)]
+    matches = [c for c in columns if _TIME_COLUMN.search(c)]
     lowered = lambda c: c.casefold()  # noqa: E731
     return sorted(
         matches,
@@ -1250,11 +1283,61 @@ def _date_candidates(columns: Sequence[str]) -> list[str]:
     )
 
 
-def _date_join(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]]) -> tuple[str, str, str, str] | None:
-    """(date column on the fact, date table, date key, year column)."""
-    for column in _date_candidates(schema.tables[table]):
+_TIME_COLUMN = re.compile(r"(date|timestamp|datetime|_at|_time|_on)(key)?$", re.IGNORECASE)
+_TIME_TYPE = re.compile(r"(timestamp|datetime|date)", re.IGNORECASE)  # Delta names, SQL names or arrow ``DataType<Timestamp(...)>`` and ``Date32``
+_NUMERIC_TYPE = re.compile(r"(int|long|double|float|decimal|numeric|real|number|short|byte)", re.IGNORECASE)
+_TEXT_TYPE = re.compile(r"(string|varchar|char|text|utf8)", re.IGNORECASE)
+_FREE_TEXT_HINT = re.compile(r"(comment|message|description|note|text|address|email|phone|url|zip|postal|guid|hash|token)", re.IGNORECASE)
+
+
+_ID_PREFIX = re.compile(r"^id_", re.IGNORECASE)
+
+
+def _is_key(column: str) -> bool:
+    """``CustomerKey``, ``customer_id`` or ``id_cliente``."""
+    return bool(_KEY_HINT.search(column)) or bool(_ID_PREFIX.match(column))
+
+
+def _is_time_column(schema: SourceSchema, table: str, column: str) -> bool:
+    """A time axis candidate: named like one, or typed as a date or timestamp."""
+    return bool(_TIME_COLUMN.search(column)) or bool(_TIME_TYPE.search(schema.column_type(table, column)))
+
+
+def _is_attribute(schema: SourceSchema, table: str, column: str) -> bool:
+    """A grouping column: named like one, or a text column that is not a key or a time."""
+    if _is_key(column) or _is_time_column(schema, table, column):
+        return False
+    if _ATTRIBUTE_HINT.search(column):
+        return True
+    return bool(_TEXT_TYPE.search(schema.column_type(table, column))) and not _FREE_TEXT_HINT.search(column)
+
+
+def _referenced_tables(schema: SourceSchema, joins: Mapping[tuple[str, str], tuple[str, str]]) -> set[str]:
+    return {target for (_table, _column), (target, _key) in joins.items()}
+_BUSINESS_DATE = re.compile(r"(order|purchase|sale|sales|transaction|invoice|created|event|activity|booking|visit)", re.IGNORECASE)
+_SECONDARY_DATE = re.compile(r"(ship|deliver|estimated|approved|limit|updated|modified|due|cancel|return|expir)", re.IGNORECASE)
+
+
+def _date_join(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]]) -> dict[str, Any] | None:
+    """The time axis of a fact, as the SQL renderers need it.
+
+    A date dimension with a year column (``column``, ``date_table``,
+    ``date_key``, ``year``, ``month``, ``quarter``), a timestamp on the fact
+    itself (``timestamp``), or a timestamp on a joined table such as the
+    order header for order lines (``timestamp`` plus ``timestamp_column`` on
+    ``date_table``). A dimension outranks a timestamp, a business date (order,
+    purchase, sale) outranks a secondary one (shipping, delivery, due).
+    """
+    columns = schema.tables[table]
+    date_tables = {t for t in schema.tables if re.search(r"(date|calendar)", t, re.IGNORECASE)}
+    candidates: list[tuple[int, int, dict[str, Any]]] = []
+    order = 0
+    time_columns = _date_candidates(columns) + [c for c in columns if _is_time_column(schema, table, c) and not _TIME_COLUMN.search(c)]
+    for column in time_columns:
+        order += 1
+        score = (2 if _BUSINESS_DATE.search(column) else 0) - (2 if _SECONDARY_DATE.search(column) else 0)
         target = joins.get((table, column))
-        if target is None:
+        if target is None and _DATE_KEY.search(column):
             for candidate in ("dimdate", "date", "dim_date", "calendar"):
                 for name in schema.tables:
                     if name.casefold() == candidate and "DateKey" in schema.tables[name]:
@@ -1262,13 +1345,84 @@ def _date_join(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str],
                         break
                 if target:
                     break
-        if target is None:
+        if target is not None:
+            date_table, date_key = target
+            dim_columns = schema.tables[date_table]
+            year = next((c for c in dim_columns if _YEAR_COLUMN.match(c)), None)
+            if year:
+                candidates.append((score + 4, order, {"column": column, "date_table": date_table, "date_key": date_key, "year": year, "month": next((c for c in dim_columns if _MONTH_COLUMN.match(c)), None), "quarter": next((c for c in dim_columns if _QUARTER_COLUMN.match(c)), None)}))
+                continue
+        if not column.casefold().endswith("key"):
+            candidates.append((score, order, {"column": column, "timestamp": True}))
+    for column in columns:
+        target = joins.get((table, column))
+        if target is None or _TIME_COLUMN.search(column):
             continue
-        date_table, date_key = target
-        year = next((c for c in schema.tables[date_table] if _YEAR_COLUMN.match(c)), None)
-        if year:
-            return column, date_table, date_key, year
+        other, key = target
+        if other in date_tables:
+            continue
+        for stamp in schema.tables[other]:
+            if _is_time_column(schema, other, stamp) and not stamp.casefold().endswith("key"):
+                order += 1
+                score = 1 + (2 if _BUSINESS_DATE.search(stamp) else 0) - (2 if _SECONDARY_DATE.search(stamp) else 0)
+                candidates.append((score, order, {"column": column, "date_table": other, "date_key": key, "timestamp": True, "timestamp_column": stamp}))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: (-c[0], c[1]))
+    return candidates[0][2]
+
+
+def _time_join(dt: Mapping[str, Any]) -> str | None:
+    if dt.get("date_table"):
+        return f"JOIN {dt['date_table']} d ON f.{dt['column']} = d.{dt['date_key']}"
     return None
+
+
+def _time_column(dt: Mapping[str, Any]) -> str:
+    if dt.get("timestamp") and dt.get("date_table"):
+        return f"d.{dt['timestamp_column']}"
+    return f"f.{dt['column']}"
+
+
+def _stamp(dt: Mapping[str, Any], dialect: str) -> str:
+    column = _time_column(dt)
+    return column if dialect == "tsql" else f"CAST({column} AS TIMESTAMP)"
+
+
+def _year_expr(dt: Mapping[str, Any], dialect: str) -> str:
+    if dt.get("year"):
+        return f"d.{dt['year']}"
+    return f"YEAR({_time_column(dt)})" if dialect == "tsql" else f"year({_stamp(dt, dialect)})"
+
+
+def _month_expr(dt: Mapping[str, Any], dialect: str) -> str | None:
+    if dt.get("month"):
+        return f"d.{dt['month']}"
+    if dt.get("timestamp"):
+        return f"MONTH({_time_column(dt)})" if dialect == "tsql" else f"month({_stamp(dt, dialect)})"
+    return None
+
+
+def _quarter_expr(dt: Mapping[str, Any], dialect: str) -> str | None:
+    if dt.get("quarter"):
+        return f"d.{dt['quarter']}"
+    if dt.get("timestamp"):
+        return f"DATEPART(QUARTER, {_time_column(dt)})" if dialect == "tsql" else f"quarter({_stamp(dt, dialect)})"
+    return None
+
+
+def _has_month(dt: Mapping[str, Any]) -> bool:
+    return bool(dt.get("month") or dt.get("timestamp"))
+
+
+def _has_quarter(dt: Mapping[str, Any]) -> bool:
+    return bool(dt.get("quarter") or dt.get("timestamp"))
+
+
+def _max_date_sql(fact: Mapping[str, Any]) -> str:
+    dt = fact["date"]
+    join = _time_join(dt)
+    return f"SELECT MAX({_time_column(dt)}) AS value FROM {fact['table']} f" + (f" {join}" if join else "")
 
 
 def _attributes(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]], excluded: Collection[str] = ()) -> list[tuple[str, str, str, str]]:
@@ -1282,7 +1436,7 @@ def _attributes(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str]
         if _mentions_excluded(dim_table, excluded):
             continue
         for attribute in schema.tables[dim_table]:
-            if _ATTRIBUTE_HINT.search(attribute) and not _KEY_HINT.search(attribute) and attribute != dim_key:
+            if _is_attribute(schema, dim_table, attribute) and attribute != dim_key:
                 found.append((column, dim_table, dim_key, attribute))
     return found
 
@@ -1336,10 +1490,13 @@ def _sql(spec: Mapping[str, Any], *, dialect: str) -> str:
         joins: list[str] = []
         conditions: list[str] = []
         dt = fact["date"]
-        joins.append(f"JOIN {dt['date_table']} d ON f.{dt['column']} = d.{dt['date_key']}")
+        time_join = _time_join(dt)
+        if time_join:
+            joins.append(time_join)
+        year_expr = _year_expr(dt, dialect)
         if by_year:
-            select.append(f"d.{dt['year']} AS year")
-            group.append(f"d.{dt['year']}")
+            select.append(f"{year_expr} AS year")
+            group.append(year_expr)
         if grouped or kind == "filter":
             attr = fact["attribute"]
             joins.append(f"JOIN {attr['dim_table']} a ON f.{attr['fact_key']} = a.{attr['dim_key']}")
@@ -1356,9 +1513,9 @@ def _sql(spec: Mapping[str, Any], *, dialect: str) -> str:
         else:
             select.append(f"SUM(f.{fact['measure']}) AS value")
         if by_year and spec.get("years"):
-            conditions.append(f"d.{dt['year']} IN ({', '.join(str(int(y)) for y in spec['years'])})")
+            conditions.append(f"{year_expr} IN ({', '.join(str(int(y)) for y in spec['years'])})")
         elif spec.get("year") is not None:
-            conditions.append(f"d.{dt['year']} = {int(spec['year'])}")
+            conditions.append(f"{year_expr} = {int(spec['year'])}")
         if kind == "filter":
             conditions.append(f"a.{fact['attribute']['column']} = {_sql_literal(spec['value'])}")
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -1681,7 +1838,7 @@ def attribute_paths(schema: SourceSchema, table: str, joins: Mapping[tuple[str, 
                 visited.add(dim_table)
                 new_hops = hops + [{"from_column": column, "table": dim_table, "key": dim_key}]
                 for attribute in schema.tables[dim_table]:
-                    if _ATTRIBUTE_HINT.search(attribute) and not _KEY_HINT.search(attribute) and attribute != dim_key:
+                    if _is_attribute(schema, dim_table, attribute) and attribute != dim_key:
                         paths.append({"hops": new_hops, "column": attribute, "alias": attribute})
                 next_frontier.append((dim_table, new_hops))
         frontier = next_frontier
@@ -1716,20 +1873,26 @@ class _Joins:
         return f"{previous}.{attr['column']}"
 
 
-def _period_condition(fact: Mapping[str, Any], period: Mapping[str, Any]) -> str:
+def _period_condition(fact: Mapping[str, Any], period: Mapping[str, Any], dialect: str = "duckdb") -> str:
     dt = fact["date"]
-    parts = [f"d.{dt['year']} = {int(period['year'])}"]
-    if period.get("month") is not None and fact.get("month"):
-        parts.append(f"d.{fact['month']} = {int(period['month'])}")
-    if period.get("quarter") is not None and fact.get("quarter"):
-        parts.append(f"d.{fact['quarter']} = {int(period['quarter'])}")
+    parts = [f"{_year_expr(dt, dialect)} = {int(period['year'])}"]
+    if period.get("month") is not None and _has_month(dt):
+        parts.append(f"{_month_expr(dt, dialect)} = {int(period['month'])}")
+    if period.get("quarter") is not None and _has_quarter(dt):
+        parts.append(f"{_quarter_expr(dt, dialect)} = {int(period['quarter'])}")
     return " AND ".join(parts)
 
 
 def _date_range_condition(fact: Mapping[str, Any], start: str, end: str, dialect: str) -> str:
-    """``start`` and ``end`` (ISO dates, inclusive) on the fact's own date column: an integer yyyymmdd key or a date."""
-    column = f"f.{fact['date']['column']}"
-    if str(fact["date"]["column"]).casefold().endswith("key"):
+    """``start`` and ``end`` (ISO dates, inclusive) on the time axis: a yyyymmdd key, a date column, or a timestamp."""
+    dt = fact["date"]
+    if dt.get("timestamp"):
+        column = _time_column(dt)
+        if dialect == "tsql":
+            return f"CAST({column} AS DATE) BETWEEN '{start}' AND '{end}'"
+        return f"CAST(CAST({column} AS TIMESTAMP) AS DATE) BETWEEN DATE '{start}' AND DATE '{end}'"
+    column = f"f.{dt['column']}"
+    if str(dt["column"]).casefold().endswith("key"):
         return f"{column} BETWEEN {start.replace('-', '')} AND {end.replace('-', '')}"
     return f"CAST({column} AS DATE) BETWEEN '{start}' AND '{end}'"
 
@@ -1741,7 +1904,7 @@ def _periods_condition(fact: Mapping[str, Any], periods: Sequence[Mapping[str, A
         if "start" in period:
             parts.append(_date_range_condition(fact, str(period["start"]), str(period["end"]), dialect))
         else:
-            parts.append(_period_condition(fact, period))
+            parts.append(_period_condition(fact, period, dialect))
     return " OR ".join(f"({p})" for p in parts) if len(parts) > 1 else parts[0]
 
 
@@ -1752,12 +1915,13 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
     dt = fact["date"]
     measure = f"SUM(f.{fact['measure']})"
     joins = _Joins()
-    base_joins = f"JOIN {dt['date_table']} d ON f.{dt['column']} = d.{dt['date_key']}"
+    base_joins = _time_join(dt) or ""
+    year_expr = _year_expr(dt, dialect)
     conditions: list[str] = []
     if spec.get("years"):
-        conditions.append(f"d.{dt['year']} IN ({', '.join(str(int(y)) for y in spec['years'])})")
+        conditions.append(f"{year_expr} IN ({', '.join(str(int(y)) for y in spec['years'])})")
     elif spec.get("year") is not None:
-        conditions.append(f"d.{dt['year']} = {int(spec['year'])}")
+        conditions.append(f"{year_expr} = {int(spec['year'])}")
     for item in spec.get("filters") or ():
         conditions.append(f"{joins.ref(item['attr'])} = {_sql_literal(item['value'])}")
     top = int(spec.get("top") or 10)
@@ -1770,18 +1934,20 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
         return f" WHERE {' AND '.join(all_conditions)}" if all_conditions else ""
 
     def from_clause() -> str:
-        return f"FROM {fact['table']} f {base_joins}{''.join(' ' + c for c in joins.clauses)}"
+        return f"FROM {fact['table']} f" + (f" {base_joins}" if base_joins else "") + "".join(" " + c for c in joins.clauses)
 
     if kind in {"month_series", "month_trend", "quarter_trend"}:
-        unit = fact["month"] if kind != "quarter_trend" else fact["quarter"]
+        unit = _month_expr(dt, dialect) if kind != "quarter_trend" else _quarter_expr(dt, dialect)
+        if unit is None:
+            raise ValueError(f"{kind} needs a month or quarter on the time axis")
         label = "month" if kind != "quarter_trend" else "quarter"
-        select = f"d.{dt['year']} AS year, d.{unit} AS {label}, {measure} AS value" if kind == "month_series" else f"d.{unit} AS {label}, {measure} AS value"
-        group = f"d.{dt['year']}, d.{unit}" if kind == "month_series" else f"d.{unit}"
+        select = f"{year_expr} AS year, {unit} AS {label}, {measure} AS value" if kind == "month_series" else f"{unit} AS {label}, {measure} AS value"
+        group = f"{year_expr}, {unit}" if kind == "month_series" else unit
         order = f"year, {label}" if kind == "month_series" else label
         return f"SELECT {select} {from_clause()}{where()} GROUP BY {group} ORDER BY {order}"
     if kind == "drivers":
         label = joins.ref(spec["attr"])
-        before, after = _period_condition(fact, spec["before"]), _period_condition(fact, spec["after"])
+        before, after = _period_condition(fact, spec["before"], dialect), _period_condition(fact, spec["after"], dialect)
         select = f"{label} AS label, SUM(CASE WHEN {after} THEN f.{fact['measure']} ELSE 0 END) - SUM(CASE WHEN {before} THEN f.{fact['measure']} ELSE 0 END) AS value"
         order = "value ASC" if spec.get("direction", "drop") == "drop" else "value DESC"
         return limit(f"SELECT {select} {from_clause()}{where([f'(({before}) OR ({after}))'])} GROUP BY {label} ORDER BY {order}", top)
@@ -1793,7 +1959,7 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
             selects.append(f"SELECT {_sql_literal(label)} AS period, {measure} AS value {from_clause()}{where([_periods_condition(fact, [period], dialect)])}")
         return " UNION ALL ".join(selects)
     if kind == "entity_trend":
-        return f"SELECT d.{dt['year']} AS year, {measure} AS value {from_clause()}{where()} GROUP BY d.{dt['year']} ORDER BY year"
+        return f"SELECT {year_expr} AS year, {measure} AS value {from_clause()}{where()} GROUP BY {year_expr} ORDER BY year"
     if kind == "entity_value":
         return f"SELECT {measure} AS value {from_clause()}{where()}"
     if kind == "share":
@@ -1802,7 +1968,7 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
     if kind == "top_share":
         label = joins.ref(spec["attr"])
         inner = limit(f"SELECT {measure} AS value {from_clause()}{where()} GROUP BY {label} ORDER BY value DESC", top)
-        total = f"SELECT {measure} FROM {fact['table']} f {base_joins}{where()}"
+        total = f"SELECT {measure} FROM {fact['table']} f" + (f" {base_joins}" if base_joins else "") + where()
         return f"SELECT 100.0 * (SELECT SUM(value) FROM ({inner}) t) / ({total}) AS value"
     if kind == "top_labels":
         label = joins.ref(spec["attr"])
@@ -1816,8 +1982,8 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
         return f"SELECT COUNT(*) AS value FROM ({inner}) t"
     if kind == "anti_join":
         label = joins.ref(spec["attr"])
-        present = f"SELECT DISTINCT {label} {from_clause()} WHERE d.{dt['year']} = {int(spec['other_year'])}"
-        return f"SELECT DISTINCT {label} AS label {from_clause()} WHERE d.{dt['year']} = {int(spec['year'])} AND {label} NOT IN ({present}) ORDER BY label"
+        present = f"SELECT DISTINCT {label} {from_clause()} WHERE {year_expr} = {int(spec['other_year'])}"
+        return f"SELECT DISTINCT {label} AS label {from_clause()} WHERE {year_expr} = {int(spec['year'])} AND {label} NOT IN ({present}) ORDER BY label"
     if kind == "compare":
         label = joins.ref(spec["attr"])
         values = ", ".join(_sql_literal(v) for v in spec["values"])
@@ -1853,6 +2019,9 @@ def _paths_by_role(paths: Sequence[Mapping[str, Any]], terms: Collection[str] = 
         chosen = pick(pattern, prefer_depth=depth)
         if chosen is not None:
             roles[role] = chosen
+    if not roles and paths:
+        # no name gives a role away; the nearest grouping column still lets the driver questions ask what led a change
+        roles["category"] = sorted(paths, key=lambda p: (len(p["hops"]), str(p["column"]).casefold()))[0]
     return roles
 
 
@@ -1880,15 +2049,7 @@ def discover_drivers(executor: Any, schema: SourceSchema, snapshot: AgentSnapsho
         measures = _measure_columns(schema, table)
         if not date or not measures:
             continue
-        date_columns = schema.tables[date[1]]
-        fact = {
-            "table": table,
-            "measure": measures[0],
-            "date": {"column": date[0], "date_table": date[1], "date_key": date[2], "year": date[3]},
-            "order_column": _order_column(schema, table),
-            "month": next((c for c in date_columns if _MONTH_COLUMN.match(c)), None),
-            "quarter": next((c for c in date_columns if _QUARTER_COLUMN.match(c)), None),
-        }
+        fact = {"table": table, "measure": measures[0], "date": date, "order_column": _order_column(schema, table)}
         roles = _paths_by_role(attribute_paths(schema, table, joins, excluded), terms)
         entry: dict[str, Any] = {"fact": fact, "roles": roles, "top": {}, "drop": None, "rise": None, "threshold": None, "errors": []}
 
@@ -1904,7 +2065,8 @@ def discover_drivers(executor: Any, schema: SourceSchema, snapshot: AgentSnapsho
             labels = [str(r["label"]) for r in rows if r.get("label") is not None]
             if labels:
                 entry["top"][role] = labels
-        if fact["month"] and len(years) >= 1:
+        series: list[tuple[int, int, float]] = []
+        if _has_month(date):
             span = [y for y in years if y >= latest - 1]
             rows = run({"kind": "month_series", "facts": [fact], "years": span})
             series = [(int(r["year"]), int(r["month"]), float(r["value"])) for r in rows if r.get("value") is not None]
@@ -1920,12 +2082,12 @@ def discover_drivers(executor: Any, schema: SourceSchema, snapshot: AgentSnapsho
                     best_rise = change
             entry["drop"], entry["rise"] = best_drop, best_rise
         try:
-            rows = executor.run({"kind": "sql", "sql": f"SELECT MAX(f.{fact['date']['column']}) AS value FROM {table} f"})
+            rows = executor.run({"kind": "sql", "sql": _max_date_sql(fact)})
             entry["max_date"] = _iso_date(rows[0]["value"]) if rows and rows[0].get("value") is not None else None
         except Exception as exc:  # noqa: BLE001
             entry["errors"].append(f"max_date: {type(exc).__name__}: {str(exc)[:160]}")
             entry["max_date"] = None
-        if fact["month"]:
+        if _has_month(date):
             # the latest month of the latest complete year that also has data in the year before
             series_months = {(y, m) for y, m, _v in series}
             entry["prior_year_month"] = next((m for m in range(12, 0, -1) if (latest, m) in series_months and (latest - 1, m) in series_months), None)
@@ -1976,10 +2138,10 @@ def _driver_questions(fact_entry: Mapping[str, Any], vocabulary: Vocabulary, sch
     cm = _channel_measure(channel, vocabulary.measure(fact["measure"]))
     words = {role: vocabulary.attribute(str(path["column"])) for role, path in roles.items()}
     base = {"facts": [fact]}
-    if fact.get("month"):
-        add("month_trend", f"How did {cm} move month by month in {latest}?", f"SUM({fact['measure']}) in {fact['table']} by {fact['month']} for {latest}", {**base, "kind": "month_trend", "year": latest})
-    if fact.get("quarter"):
-        add("quarter_trend", f"Which quarter of {latest} was the strongest for {cm}, and how did the quarters compare?", f"SUM({fact['measure']}) in {fact['table']} by {fact['quarter']} for {latest}", {**base, "kind": "quarter_trend", "year": latest})
+    if _has_month(fact["date"]):
+        add("month_trend", f"How did {cm} move month by month in {latest}?", f"SUM({fact['measure']}) in {fact['table']} by month for {latest}", {**base, "kind": "month_trend", "year": latest})
+    if _has_quarter(fact["date"]):
+        add("quarter_trend", f"Which quarter of {latest} was the strongest for {cm}, and how did the quarters compare?", f"SUM({fact['measure']}) in {fact['table']} by quarter for {latest}", {**base, "kind": "quarter_trend", "year": latest})
     drop = fact_entry.get("drop")
     driver_role = "product" if "product" in roles else ("category" if "category" in roles else None)
     if drop and driver_role:
@@ -2021,7 +2183,7 @@ def _period_questions(fact_entry: Mapping[str, Any], cm: str, years: Sequence[in
         spec = {**base, "kind": "range_value", "periods": list(periods)}
         add(kind, text, technical, spec, [(f"period:{label}", {"kind": "sql", "sql": _sql({**base, "kind": "range_value", "periods": list(other)}, dialect="duckdb")}) for label, other in alternates])
 
-    month = fact.get("month")
+    month = _has_month(fact["date"])
     prior = fact_entry.get("prior_year_month")
     if month and prior:
         name = calendar.month_name[prior]
@@ -2195,7 +2357,7 @@ def generate_questions(
             measures = _measure_columns(schema, table)
             if not date or not measures:
                 continue
-            per_fact.append({"table": table, "measure": measures[0], "date": {"column": date[0], "date_table": date[1], "date_key": date[2], "year": date[3]}, "attributes": _attributes(schema, table, joins, excluded), "order_column": _order_column(schema, table)})
+            per_fact.append({"table": table, "measure": measures[0], "date": date, "attributes": _attributes(schema, table, joins, excluded), "order_column": _order_column(schema, table)})
         if not per_fact or not source_years:
             continue
         count = 0
@@ -2453,8 +2615,25 @@ class LakehouseExecutor:
 
     def run(self, execution: Mapping[str, Any]) -> list[dict[str, Any]]:
         sql = str(execution["sql"])
-        used = [t for t in self._tables if re.search(rf"(?<![\w.]){re.escape(t)}(?![\w])", sql, re.IGNORECASE)]
-        kwargs: dict[str, Any] = {"sources": {t: t for t in used}}
+        sources: dict[str, str] = {}
+        bare_names = {t.split(".")[-1].casefold(): t for t in self._tables if "." in t}
+        for table in self._tables:
+            alias = re.sub(r"[^A-Za-z0-9_]", "_", table)
+            pattern = rf"(?<![\w.]){re.escape(table)}(?![\w])"
+            if re.search(pattern, sql, re.IGNORECASE):
+                if alias != table:
+                    sql = re.sub(pattern, alias, sql, flags=re.IGNORECASE)
+                sources[alias] = table
+        for bare, table in bare_names.items():
+            # the agent's own SQL names the table without its schema; the catalog names it with
+            alias = re.sub(r"[^A-Za-z0-9_]", "_", table)
+            if alias in sources or bare in {t.casefold() for t in self._tables}:
+                continue
+            pattern = rf"(?<![\w.]){re.escape(bare)}(?![\w])"
+            if re.search(pattern, sql, re.IGNORECASE):
+                sql = re.sub(pattern, alias, sql, flags=re.IGNORECASE)
+                sources[alias] = table
+        kwargs: dict[str, Any] = {"sources": sources}
         if self._timeout is not None:
             kwargs["timeout"] = self._timeout
         attempt = 0
@@ -2521,8 +2700,9 @@ def discover_years(executor: LakehouseExecutor, schema: SourceSchema, source: Ag
         date = _date_join(schema, table, joins)
         if not date:
             continue
-        column, date_table, date_key, year = date
-        rows = executor.run({"sql": f"SELECT d.{year} AS year, COUNT(*) AS n FROM {table} f JOIN {date_table} d ON f.{column} = d.{date_key} GROUP BY d.{year} ORDER BY d.{year}"})
+        year = _year_expr(date, "duckdb")
+        join = _time_join(date)
+        rows = executor.run({"sql": f"SELECT {year} AS year, COUNT(*) AS n FROM {table} f" + (f" {join}" if join else "") + f" GROUP BY {year} ORDER BY {year}"})
         counts = [(int(r["year"]), int(r["n"])) for r in rows if r.get("year") is not None]
         years = [y for y, _ in counts]
         if len(counts) >= 2 and counts[-1][1] < 0.5 * counts[-2][1]:
@@ -2557,7 +2737,7 @@ def explain_no_questions(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema
             continue
         for table in facts:
             if not _date_join(schema, table, joins):
-                notes.append(f"{label}: {table} has no join to a date table with a year column, so no period questions")
+                notes.append(f"{label}: {table} has no time axis (no date dimension with a year column, no date or timestamp column on it or on a joined table), so no period questions")
             if not _measure_columns(schema, table):
                 notes.append(f"{label}: {table} has no numeric measure column")
         if not (years or {}).get(schema.source_id):
@@ -3278,6 +3458,7 @@ def summarize_knowledge(knowledge: Any) -> dict[str, Any]:
     operations = [
         {
             "operation": str(getattr(op, "operation", "") or ""),
+            "objects": [str(v) for v in (((getattr(op, "parameter_schema", None) or {}).get("catalog_source") or {}).get("enum") or ())],
             "sources": [str(s) for s in (getattr(op, "required_sources", ()) or ())],
             "status": str(getattr(op, "status", "") or ""),
             "grain": str(getattr(op, "grain", "") or ""),
@@ -3399,7 +3580,8 @@ class ReviewReport:
             lines.append(f"- {src['source_id']} ({src['family']}, {src['status']}, role {src['role']}): {src['shape']}; schema fingerprint {src['schema_fingerprint']}; snapshot {src['snapshot_fingerprint']}{sensitive}")
         for op in k.get("operations", []):
             grain = f", grain {op['grain']}" if op.get("grain") else ""
-            lines.append(f"- operation {op['operation']} on {', '.join(op['sources'])} ({op['status']}{grain}); parameters: {', '.join(op['parameters']) or 'none'}")
+            objects = f" ({', '.join(op['objects'])})" if op.get("objects") else ""
+            lines.append(f"- operation {op['operation']}{objects} on {', '.join(op['sources'])} ({op['status']}{grain}); parameters: {', '.join(op['parameters']) or 'none'}")
         for lesson in k.get("lessons", []):
             lines.append(f"- lesson {lesson['kind']} on {lesson['subject']} ({lesson['status']}, {lesson['confidence']}): {lesson['rule']}")
         if k.get("events"):
@@ -3512,7 +3694,8 @@ class ReviewReport:
             if k.get("operations"):
                 parts.append("<h3>Registered operations</h3><table><tr><th>Operation</th><th>Sources</th><th>Status</th><th>Grain</th><th>Parameters</th></tr>")
                 for op in k["operations"]:
-                    parts.append(f"<tr><td><code>{esc(op['operation'])}</code></td><td>{esc(', '.join(op['sources']))}</td><td>{esc(op['status'])}</td><td>{esc(op['grain'])}</td><td>{esc(', '.join(op['parameters']))}</td></tr>")
+                    objects = f" {esc(', '.join(op['objects']))}" if op.get("objects") else ""
+                    parts.append(f"<tr><td><code>{esc(op['operation'])}</code>{objects}</td><td>{esc(', '.join(op['sources']))}</td><td>{esc(op['status'])}</td><td>{esc(op['grain'])}</td><td>{esc(', '.join(op['parameters']))}</td></tr>")
                 parts.append("</table>")
             if k.get("lessons"):
                 parts.append("<h3>Lessons</h3><table><tr><th>Kind</th><th>Subject</th><th>Status</th><th>Confidence</th><th>Rule</th></tr>")

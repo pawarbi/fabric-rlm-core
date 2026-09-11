@@ -97,6 +97,24 @@
   for the partial year and a request for customer contact details. The
   notebook asks 25 questions per source by default, spread round-robin
   across the skills.
+- **Any lakehouse shape.** The generator works from the shape of the data
+  rather than from one sample's names. A fact table is one with measures
+  and a time axis; the time axis is a date dimension with a year column, a
+  date or timestamp column on the fact, or one on a joined header table
+  (order lines through their order), and every period question renders
+  against whichever it found. Joins follow `<name>Key`, `<name>_id` and
+  `id_<name>` columns to the table that carries them, with or without a
+  schema prefix, and the executor maps `dbo.orders` to a safe alias and
+  back for the agent's SQL. When column names say nothing, the column types
+  the profile recorded decide: a timestamp or date column is a time axis, a
+  numeric column that is not a key is a measure, a text column that is not
+  a key, a time or free text is a grouping column, and the nearest grouping
+  column stands in for the category role so the driver questions still ask
+  what led a change. `SourceSchema.types` carries the types from
+  `schema_from_profile`. An empty evaluation now names the missing time
+  axis. Tested on an Olist-shaped lakehouse (timestamps on the order
+  header, `_id` keys, `dbo.` prefixes) and on one whose names carry no
+  English hint at all.
 
 ### Changed
 

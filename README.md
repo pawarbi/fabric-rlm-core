@@ -224,7 +224,13 @@ configuration: the scope in plain words, priorities that order the questions,
 definitions declared to the RLM, the reviewer's own questions with a query or
 an answer as ground truth (graded first), and notes every RLM task receives.
 When nothing can be evaluated, the report says why (year discovery, fact
-tables, date joins). Topics the agent's instructions put out of scope are
+tables, the time axis). The generator works from the shape of the data, not
+from one sample's names: a fact is a table with measures and a time axis, the
+time axis is a date dimension with a year column, a date or timestamp column on
+the fact, or one on a joined header table (order lines through their order),
+joins follow key and id columns to the table that carries them, and when the
+column names say nothing the column types the profile recorded decide what is
+a measure, a time column or a grouping column. Topics the agent's instructions put out of scope are
 not asked about, and a decline on one is graded as policy. The report renders
 as Markdown or as a self-contained HTML page, includes what `RLM.learn`
 recorded (profiles, registered operations, lessons), and with a language

@@ -702,7 +702,7 @@ def test_no_questions_is_explained_and_year_discovery_failures_are_reported():
 
     no_date = schema_from_tables(LAKEHOUSE_ID, {k: v for k, v in TABLES.items() if k != "dimdate"})
     notes = explain_no_questions(_snapshot(), [no_date], {})
-    assert any("factinternetsales has no join to a date table" in note for note in notes)
+    assert any("factinternetsales has no time axis" in note for note in notes)
     bare = AgentSnapshot(agent_id="a", name="Bare", instructions="Answer.", datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="lh", instructions="", description="d"),))
     dims_only = schema_from_tables(LAKEHOUSE_ID, {k: v for k, v in TABLES.items() if not k.startswith("fact")})
     assert any("no fact table recognised" in note for note in explain_no_questions(bare, [dims_only], {}))
@@ -1302,3 +1302,194 @@ def test_the_review_reports_compliance_and_probes_personal_data():
     markdown = report.to_markdown()
     assert "Instruction compliance" in markdown and "broke state_period" in markdown and "Instruction compliance" in report.to_html()
     assert any(note.endswith("no_direct_fact_join, calendar_not_fiscal") for note in report.notes)
+
+
+# ------------------------------------------------- a lakehouse without a date dimension --
+
+
+def _olist_lakehouse():
+    """An e-commerce lakehouse the Olist way: id-suffixed keys, timestamps on the order header, schema-prefixed table names."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("CREATE TABLE dbo_orders (order_id VARCHAR, customer_id VARCHAR, order_status VARCHAR, order_purchase_timestamp TIMESTAMP)")
+    con.execute("CREATE TABLE dbo_order_items (order_id VARCHAR, order_item_id INTEGER, product_id VARCHAR, seller_id VARCHAR, shipping_limit_date TIMESTAMP, price DOUBLE, freight_value DOUBLE)")
+    con.execute("CREATE TABLE dbo_products AS SELECT * FROM (VALUES ('p1', 'beleza_saude'), ('p2', 'informatica_acessorios'), ('p3', 'moveis_decoracao')) t(product_id, product_category_name)")
+    con.execute("CREATE TABLE dbo_customers AS SELECT * FROM (VALUES ('c1', 'sao paulo', 'SP'), ('c2', 'rio de janeiro', 'RJ'), ('c3', 'belo horizonte', 'MG')) t(customer_id, customer_city, customer_state)")
+    con.execute("CREATE TABLE dbo_sellers AS SELECT * FROM (VALUES ('s1', 'campinas', 'SP'), ('s2', 'curitiba', 'PR')) t(seller_id, seller_city, seller_state)")
+    orders = [
+        ("o1", "c1", "2016-10-05 10:00:00"), ("o2", "c1", "2017-01-10 10:00:00"), ("o3", "c2", "2017-03-15 10:00:00"), ("o4", "c3", "2017-06-20 10:00:00"),
+        ("o5", "c2", "2017-09-05 10:00:00"), ("o6", "c1", "2017-11-28 10:00:00"), ("o7", "c3", "2017-12-06 10:00:00"),
+        ("o8", "c2", "2018-02-14 10:00:00"), ("o9", "c1", "2018-05-30 10:00:00"), ("o10", "c3", "2018-08-20 10:00:00"),
+    ]
+    for order_id, customer, stamp in orders:
+        con.execute("INSERT INTO dbo_orders VALUES (?, ?, 'delivered', ?)", [order_id, customer, stamp])
+    items = [
+        ("o1", "p1", "s1", 100.0), ("o2", "p2", "s1", 250.0), ("o3", "p1", "s2", 120.0), ("o4", "p3", "s2", 300.0), ("o5", "p2", "s1", 260.0),
+        ("o6", "p1", "s1", 130.0), ("o7", "p3", "s2", 310.0), ("o8", "p2", "s1", 270.0), ("o9", "p1", "s1", 140.0), ("o10", "p3", "s2", 320.0),
+    ]
+    for order_id, product, seller, price in items:
+        con.execute("INSERT INTO dbo_order_items VALUES (?, 1, ?, ?, TIMESTAMP '2018-12-31 00:00:00', ?, ?)", [order_id, product, seller, price, price / 10])
+    seen: list[dict] = []
+
+    def query(sql, *, sources, timeout=None):
+        seen.append({"sql": sql, "sources": dict(sources)})
+        relation = con.execute(sql)
+        return {"columns": [d[0] for d in relation.description], "rows": relation.fetchall(), "truncated": False}
+
+    tables = {
+        "dbo.orders": ("order_id", "customer_id", "order_status", "order_purchase_timestamp"),
+        "dbo.order_items": ("order_id", "order_item_id", "product_id", "seller_id", "shipping_limit_date", "price", "freight_value"),
+        "dbo.products": ("product_id", "product_category_name"),
+        "dbo.customers": ("customer_id", "customer_city", "customer_state"),
+        "dbo.sellers": ("seller_id", "seller_city", "seller_state"),
+    }
+    return LakehouseExecutor(query, tables), schema_from_tables(LAKEHOUSE_ID, tables), seen
+
+
+def test_a_lakehouse_without_a_date_dimension_gets_its_time_axis_from_the_order_header():
+    from fabric_rlm.data_agent_review import _date_join, _heuristic_joins, _measure_columns, discover_drivers
+
+    executor, schema, seen = _olist_lakehouse()
+    joins = _heuristic_joins(schema)
+    assert joins[("dbo.order_items", "order_id")] == ("dbo.orders", "order_id") and joins[("dbo.order_items", "product_id")] == ("dbo.products", "product_id")
+    assert joins[("dbo.orders", "customer_id")] == ("dbo.customers", "customer_id") and ("dbo.order_items", "order_item_id") not in joins
+    date = _date_join(schema, "dbo.order_items", joins)
+    assert date["date_table"] == "dbo.orders" and date["timestamp_column"] == "order_purchase_timestamp" and date["column"] == "order_id" and date["timestamp"] is True
+    assert _measure_columns(schema, "dbo.order_items") == ["price", "freight_value"]
+
+    source = AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="Olist_Lakehouse", instructions="", description="")
+    snapshot = AgentSnapshot(agent_id="a", name="AW_BlindTest", instructions="", datasources=(source,))
+    years = discover_years(executor, schema, source, "")
+    assert years == [2016, 2017, 2018]
+    assert seen[-1]["sources"] == {"dbo_order_items": "dbo.order_items", "dbo_orders": "dbo.orders"} and "FROM dbo_order_items f JOIN dbo_orders d" in seen[-1]["sql"]
+
+    found = discover_drivers(executor, schema, snapshot, years)
+    entry = found["dbo.order_items"]
+    assert entry["errors"] == [] and entry["max_date"] == "2018-08-20" and entry["top"]["category"][0] == "moveis_decoracao"
+    questions = generate_questions(snapshot, [schema], years={LAKEHOUSE_ID: years}, top=3, limit_per_source=60, discovered={LAKEHOUSE_ID: found})
+    assert questions
+    total = next(q for q in questions if q.kind == "total_by_year")
+    assert "JOIN dbo.orders d ON f.order_id = d.order_id" in total.execution["sql"] and "year(CAST(d.order_purchase_timestamp AS TIMESTAMP)) AS year" in total.execution["sql"]
+    assert "YEAR(d.order_purchase_timestamp) AS year" in total.reference_query
+    references = {r.question_id: r for r in build_references(questions, {LAKEHOUSE_ID: executor})}
+    by_kind = {q.kind: (q, references[q.id]) for q in questions}
+    failed = {k: r.note for k, (_q, r) in by_kind.items() if r.status not in {"ok", "decline", "behaviour", "abstained"}}
+    assert not failed, failed
+    assert [(r["year"], r["value"]) for r in by_kind["total_by_year"][1].rows] == [(2016, 100.0), (2017, 1370.0), (2018, 730.0)]
+    assert [r["month"] for r in by_kind["month_trend"][1].rows] == [2, 5, 8]
+    assert by_kind["ytd"][1].rows[0]["value"] == 730.0 and by_kind["season"][1].rows[0]["value"] == 580.0 and by_kind["trailing_days"][1].rows[0]["value"] == 320.0
+    assert "CAST(CAST(d.order_purchase_timestamp AS TIMESTAMP) AS DATE) BETWEEN DATE '2018-01-01' AND DATE '2018-09-30'" in by_kind["ytd"][0].execution["sql"]
+    assert {"trend", "share", "leaders", "year to date", "season"} <= {q.skill for q in questions}
+
+
+def test_executor_maps_schema_prefixed_names_and_the_agents_bare_names_to_aliases():
+    executor, _schema, seen = _olist_lakehouse()
+    rows = executor.run({"sql": "SELECT COUNT(*) AS n FROM dbo.order_items"})
+    assert rows == [{"n": 10}] and seen[-1]["sources"] == {"dbo_order_items": "dbo.order_items"} and seen[-1]["sql"] == "SELECT COUNT(*) AS n FROM dbo_order_items"
+    rows = executor.run_agent_sql("SELECT COUNT(*) AS n FROM dbo.orders o JOIN dbo.order_items i ON o.order_id = i.order_id")
+    assert rows == [{"n": 10}] and set(seen[-1]["sources"]) == {"dbo_orders", "dbo_order_items"}
+
+
+def test_knowledge_summary_names_the_objects_of_an_operation():
+    from types import SimpleNamespace
+
+    from fabric_rlm.data_agent_review import summarize_knowledge
+
+    package = SimpleNamespace(package_id="p", sources=(), operations=(SimpleNamespace(operation="lakehouse.aggregate", required_sources=("lh",), status="active", grain="row", parameter_schema={"catalog_source": {"enum": ("dbo.orders",)}, "measure": {}}),), lessons=(), events=(), evidence=())
+    summary = summarize_knowledge(SimpleNamespace(package=package))
+    assert summary["operations"][0]["objects"] == ["dbo.orders"]
+
+
+# ------------------------------------------- column types decide when names say nothing --
+
+
+def test_schema_from_profile_keeps_the_column_types_the_profile_recorded():
+    from types import SimpleNamespace
+
+    from fabric_rlm.data_agent_review import _is_attribute, _is_time_column, _measure_columns, schema_from_profile
+
+    profile = SimpleNamespace(
+        family="lakehouse",
+        source_id="lh",
+        schema={
+            "pedidos": {"kind": "table", "columns": {"data_compra": {"type": "string", "lakehouse_type": "timestamp"}, "id_pedido": {"type": "string", "lakehouse_type": "string"}, "review_comment": {"type": "string", "lakehouse_type": "string"}, "situacao": {"type": "string", "lakehouse_type": "string"}, "valor": {"type": "number", "lakehouse_type": "double"}, "parcelas": {"type": "integer", "lakehouse_type": "int"}}},
+        },
+    )
+    schema = schema_from_profile(profile)
+    assert schema.types["pedidos"]["data_compra"] == "timestamp" and schema.column_type("pedidos", "valor") == "double" and schema.column_type("pedidos", "missing") == ""
+    assert _is_time_column(schema, "pedidos", "data_compra") and not _is_time_column(schema, "pedidos", "valor")
+    assert _measure_columns(schema, "pedidos") == ["parcelas", "valor"]
+    assert _is_attribute(schema, "pedidos", "situacao") and not _is_attribute(schema, "pedidos", "id_pedido") and not _is_attribute(schema, "pedidos", "data_compra")
+    assert not _is_attribute(schema, "pedidos", "review_comment")  # free text is not a grouping column
+    plain = schema_from_tables("lh", {"pedidos": ("id_pedido", "situacao", "valor")})
+    assert plain.types == {} and plain.column_type("pedidos", "valor") == "" and _measure_columns(plain, "pedidos") == []  # no type, no English hint, no measure
+
+
+def _portuguese_lakehouse():
+    """A lakehouse whose names carry no English hint at all: the profile's column types are all the generator has."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("CREATE TABLE pedidos (id_pedido VARCHAR, id_cliente VARCHAR, situacao VARCHAR, data_compra TIMESTAMP)")
+    con.execute("CREATE TABLE itens_pedido (id_pedido VARCHAR, id_produto VARCHAR, preco DOUBLE, frete DOUBLE)")
+    con.execute("CREATE TABLE produtos AS SELECT * FROM (VALUES ('p1', 'beleza'), ('p2', 'informatica'), ('p3', 'moveis')) t(id_produto, categoria)")
+    con.execute("CREATE TABLE clientes AS SELECT * FROM (VALUES ('c1', 'sao paulo', 'SP'), ('c2', 'curitiba', 'PR')) t(id_cliente, cidade, uf)")
+    orders = [("o1", "c1", "2017-01-10"), ("o2", "c2", "2017-04-15"), ("o3", "c1", "2017-05-20"), ("o4", "c2", "2017-10-05"), ("o5", "c1", "2018-02-14"), ("o6", "c2", "2018-05-30"), ("o7", "c1", "2018-10-20"), ("o8", "c2", "2018-11-03")]
+    for order_id, customer, day in orders:
+        con.execute("INSERT INTO pedidos VALUES (?, ?, 'entregue', ?)", [order_id, customer, f"{day} 10:00:00"])
+    items = [("o1", "p1", 100.0), ("o2", "p2", 250.0), ("o3", "p1", 120.0), ("o4", "p3", 300.0), ("o5", "p2", 260.0), ("o6", "p1", 130.0), ("o7", "p3", 310.0), ("o8", "p2", 90.0)]
+    for order_id, product, price in items:
+        con.execute("INSERT INTO itens_pedido VALUES (?, ?, ?, ?)", [order_id, product, price, price / 10])
+
+    def query(sql, *, sources, timeout=None):
+        relation = con.execute(sql)
+        return {"columns": [d[0] for d in relation.description], "rows": relation.fetchall(), "truncated": False}
+
+    tables = {
+        "pedidos": ("data_compra", "id_cliente", "id_pedido", "situacao"),
+        "itens_pedido": ("frete", "id_pedido", "id_produto", "preco"),
+        "produtos": ("categoria", "id_produto"),
+        "clientes": ("cidade", "id_cliente", "uf"),
+    }
+    types = {
+        "pedidos": {"data_compra": "timestamp", "id_cliente": "string", "id_pedido": "string", "situacao": "string"},
+        "itens_pedido": {"frete": "double", "id_pedido": "string", "id_produto": "string", "preco": "double"},
+        "produtos": {"categoria": "string", "id_produto": "string"},
+        "clientes": {"cidade": "string", "id_cliente": "string", "uf": "string"},
+    }
+    return LakehouseExecutor(query, tables), schema_from_tables(LAKEHOUSE_ID, tables, types=types)
+
+
+def test_a_lakehouse_with_no_english_names_is_reviewed_from_its_column_types():
+    from fabric_rlm.data_agent_review import _date_join, _fact_tables, _heuristic_joins, _measure_columns, _paths_by_role, attribute_paths, discover_drivers
+
+    executor, schema = _portuguese_lakehouse()
+    joins = _heuristic_joins(schema)
+    assert joins[("itens_pedido", "id_pedido")] == ("pedidos", "id_pedido") and joins[("itens_pedido", "id_produto")] == ("produtos", "id_produto") and joins[("pedidos", "id_cliente")] == ("clientes", "id_cliente")
+    assert _fact_tables(schema) == ["itens_pedido"]
+    assert _measure_columns(schema, "itens_pedido") == ["frete", "preco"]
+    assert _date_join(schema, "itens_pedido", joins) == {"column": "id_pedido", "date_table": "pedidos", "date_key": "id_pedido", "timestamp": True, "timestamp_column": "data_compra"}
+    paths = attribute_paths(schema, "itens_pedido", joins)
+    assert {p["column"] for p in paths} == {"categoria", "situacao", "cidade", "uf"}
+    assert _paths_by_role(paths)["category"]["column"] == "categoria"
+
+    untyped = schema_from_tables(LAKEHOUSE_ID, dict(schema.tables))
+    assert _fact_tables(untyped) == [] and _date_join(untyped, "itens_pedido", _heuristic_joins(untyped)) is None
+
+    source = AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="Vendas", instructions="", description="")
+    snapshot = AgentSnapshot(agent_id="a", name="Vendas Agent", instructions="", datasources=(source,))
+    years = discover_years(executor, schema, source, "")
+    assert years == [2017, 2018]
+    found = discover_drivers(executor, schema, snapshot, years)
+    entry = found["itens_pedido"]
+    assert entry["errors"] == [] and entry["max_date"] == "2018-11-03" and entry["top"]["category"][0] == "informatica" and entry["drop"]["before"] == {"year": 2018, "month": 10} and entry["drop"]["after"] == {"year": 2018, "month": 11}
+    questions = generate_questions(snapshot, [schema], years={LAKEHOUSE_ID: years}, top=3, limit_per_source=60, discovered={LAKEHOUSE_ID: found})
+    assert questions
+    total = next(q for q in questions if q.kind == "total_by_year")
+    assert "JOIN pedidos d ON f.id_pedido = d.id_pedido" in total.execution["sql"] and "year(CAST(d.data_compra AS TIMESTAMP)) AS year" in total.execution["sql"]
+    references = {r.question_id: r for r in build_references(questions, {LAKEHOUSE_ID: executor})}
+    failed = {q.kind: references[q.id].note for q in questions if references[q.id].status not in {"ok", "decline", "behaviour", "abstained"}}
+    assert not failed, failed
+    by_kind = {q.kind: (q, references[q.id]) for q in questions}
+    assert [(r["year"], r["value"]) for r in by_kind["total_by_year"][1].rows] == [(2017, 77.0), (2018, 79.0)]
+    assert {"drivers", "share", "trend"} <= {q.skill for q in questions}
+    assert all("categoria" in q.text or "itens pedido" in q.text.casefold() or "frete" in q.text.casefold() for q in questions if q.kind in {"drivers", "share"})

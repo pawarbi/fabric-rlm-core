@@ -308,8 +308,11 @@ if LM:
         import notebookutils
 
         os.environ["OPENROUTER_API_KEY"] = notebookutils.credentials.getSecret(KEY_VAULT_URL, KEY_VAULT_SECRET_NAME)
-    if not os.environ.get("OPENROUTER_API_KEY") and str(LM.get("model", "")).startswith("openrouter/"):
-        print("no OpenRouter key in the environment: set OPENROUTER_API_KEY or the Key Vault values; skipping the deeper analysis")
+    model = str(LM.get("model", ""))
+    provider = model.split("/", 1)[0] if "/" in model else "openai"
+    key_variable = {"openrouter": "OPENROUTER_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "azure": "AZURE_API_KEY", "gemini": "GEMINI_API_KEY"}.get(provider)
+    if key_variable and not os.environ.get(key_variable) and not LM.get("api_key"):
+        print(f"LM model {model!r} needs {key_variable} in the environment (or an api_key entry in LM); an OpenRouter model is spelled openrouter/<vendor>/<model> and takes the Key Vault values above. Skipping the deeper analysis.")
     else:
         from fabric_rlm.data_agent_review import deepen
 
