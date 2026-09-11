@@ -524,15 +524,22 @@ def check_rules(rules: Sequence[Rule], question: Question, answers: Sequence[Age
 
 
 _LEAF_ELEMENT = re.compile(r"(column|measure|parameter|returnvalue|field)", re.IGNORECASE)
-_TABLE_ELEMENT = re.compile(r"(table|view|function|entity|dataset)", re.IGNORECASE)
+_TABLE_ELEMENT = re.compile(r"(?:^|[._])(?:lakehouse|warehouse|kusto)?(table|entity|dataset)$", re.IGNORECASE)  # Table, LakehouseTable, lakehouse_tables.table; never the Tables container
+_VIEW_ELEMENT = re.compile(r"(?:^|[._])(?:lakehouse|warehouse)?(view|function|procedure)$", re.IGNORECASE)
+_CONTAINER_ELEMENT = re.compile(r"^(schemas|tables|views|functions|procedures|entities|datasets|folders|objects|databases|columns|measures)$", re.IGNORECASE)
+_SKIPPED_CONTAINER = re.compile(r"^(views|functions|procedures|columns|measures|parameters)$", re.IGNORECASE)  # holds no tables
 
 
 def _selected_table_paths(fetch: Callable[[str | None, str | None], Mapping[str, Any] | None]) -> list[str]:
     """Paths (``schema/table`` or ``table``) of the selected tables in a datasource's elements tree.
 
     ``fetch(root_id, continuation_token)`` returns one page of elements
-    (``{"value": [...], "continuationToken": ...}``). Columns and measures
-    are leaves; a container (a schema) is walked, a table is not.
+    (``{"value": [...], "continuationToken": ...}``). Fabric shapes a
+    lakehouse tree as ``Schemas`` > ``dbo`` > ``Tables`` | ``Views`` >
+    ``Table`` | ``View`` > columns: the structural containers (``Schemas``,
+    ``Tables``, ``Views``) are walked but not named, a schema names its
+    tables, a table is not walked (its children are its columns), and views
+    and functions are left out because the review reads Delta tables.
     """
     found: list[str] = []
 
@@ -550,15 +557,18 @@ def _selected_table_paths(fetch: Callable[[str | None, str | None], Mapping[str,
     def walk(root_id: str | None, prefix: str, depth: int) -> None:
         for element in children(root_id):
             kind = str(element.get("type") or "")
-            if _LEAF_ELEMENT.search(kind):
+            if _LEAF_ELEMENT.search(kind) or _VIEW_ELEMENT.search(kind) or _SKIPPED_CONTAINER.match(kind):
                 continue
             name = str(element.get("displayName") or element.get("name") or "")
-            path = f"{prefix}/{name}" if prefix else name
             selected = element.get("isSelected") if "isSelected" in element else element.get("is_selected")
-            if selected and name:
-                found.append(path)
-            if not _TABLE_ELEMENT.search(kind) and element.get("id") is not None and depth < 4:
-                walk(str(element["id"]), path, depth + 1)
+            if _TABLE_ELEMENT.search(kind):
+                if selected and name:
+                    found.append(f"{prefix}/{name}" if prefix else name)
+                continue
+            if element.get("id") is None or element.get("hasSubElements") is False or depth >= 5:
+                continue
+            path = prefix if _CONTAINER_ELEMENT.match(kind) else (f"{prefix}/{name}" if prefix else name)
+            walk(str(element["id"]), path, depth + 1)
 
     walk(None, "", 0)
     return found

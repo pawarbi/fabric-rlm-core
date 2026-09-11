@@ -115,6 +115,16 @@
   axis. Tested on an Olist-shaped lakehouse (timestamps on the order
   header, `_id` keys, `dbo.` prefixes) and on one whose names carry no
   English hint at all.
+- **The agent's selected tables.** Fabric lists a lakehouse datasource's
+  elements as `Schemas` > `dbo` > `Tables` | `Views` > `Table` | `View` >
+  columns; the reader walked the tree but took the `Tables` container for a
+  table and stopped there, so the selection came back unknown and the whole
+  lakehouse was profiled. The walk now passes through the structural
+  containers, names a table by its schema (`dbo/factinternetsales`), never
+  fetches a table's columns or a view, and the notebook scopes the lakehouse
+  to the selection whether it has schemas enabled (`Tables/dbo/<table>`) or
+  not (`Tables/<table>`, which the agent still lists under `dbo`), falling
+  back to every table only when neither layout resolves.
 
 ### Changed
 

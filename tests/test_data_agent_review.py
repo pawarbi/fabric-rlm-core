@@ -1493,3 +1493,54 @@ def test_a_lakehouse_with_no_english_names_is_reviewed_from_its_column_types():
     assert [(r["year"], r["value"]) for r in by_kind["total_by_year"][1].rows] == [(2017, 77.0), (2018, 79.0)]
     assert {"drivers", "share", "trend"} <= {q.skill for q in questions}
     assert all("categoria" in q.text or "itens pedido" in q.text.casefold() or "frete" in q.text.casefold() for q in questions if q.kind in {"drivers", "share"})
+
+
+# ------------------------------------------------ the elements tree as Fabric shapes it --
+
+
+def test_selected_tables_are_found_under_the_schemas_and_tables_containers():
+    """Fabric lists a lakehouse as Schemas > dbo > Tables | Views > Table | View > columns; only selected tables count."""
+    from fabric_rlm.data_agent_review import _selected_table_paths
+
+    def node(id, name, type, selected=False, sub=True):  # noqa: A002
+        return {"id": id, "displayName": name, "type": type, "isSelected": selected, "hasSubElements": sub, "state": "Available"}
+
+    tree = {
+        None: [node("U2NoZW1hcw==", "Schemas", "Schemas")],
+        "U2NoZW1hcw==": [node("s/dbo", "dbo", "Schema"), node("s/sales", "sales", "Schema")],
+        "s/dbo": [node("s/dbo/T", "Tables", "Tables"), node("s/dbo/V", "Views", "Views")],
+        "s/dbo/T": [node("t1", "factinternetsales", "Table", True), node("t2", "dimemployee", "Table"), node("t3", "dimdate", "Table", True)],
+        "s/dbo/V": [node("v1", "vw_internet_sales", "View", True)],
+        "s/sales": [node("s/sales/T", "Tables", "Tables"), node("s/sales/E", "Empty", "Folder", sub=False)],
+        "s/sales/T": [node("t4", "orders", "Table", True)],
+        "t1": [node("c1", "SalesAmount", "Column", True, sub=False)],
+        "v1": [node("c2", "SalesAmount", "Column", True, sub=False)],
+    }
+    fetched = []
+
+    def fetch(root_id, token):
+        fetched.append(root_id)
+        items = tree.get(root_id, [])
+        if root_id == "s/dbo/T" and token is None:
+            return {"value": items[:2], "continuationToken": "more"}  # a long table list is paged
+        if root_id == "s/dbo/T":
+            return {"value": items[2:]}
+        return {"value": items}
+
+    assert _selected_table_paths(fetch) == ["dbo/factinternetsales", "dbo/dimdate", "sales/orders"]
+    assert "t1" not in fetched and "v1" not in fetched and "s/dbo/V" not in fetched and "s/sales/E" not in fetched  # columns, views and empty folders are never fetched
+    assert fetched.count("s/dbo/T") == 2
+
+
+def test_selected_table_paths_accept_the_legacy_element_types():
+    from fabric_rlm.data_agent_review import _selected_table_paths
+
+    tree = {
+        None: [{"id": "s1", "displayName": "dbo", "type": "Schema", "isSelected": False}],
+        "s1": [
+            {"id": "t1", "displayName": "orders", "type": "lakehouse_tables.table", "is_selected": True},
+            {"id": "t2", "displayName": "vw_orders", "type": "lakehouse_tables.view", "is_selected": True},
+            {"id": "t3", "displayName": "customers", "type": "warehouse_tables.table", "is_selected": False},
+        ],
+    }
+    assert _selected_table_paths(lambda root_id, token: {"value": tree.get(root_id, [])}) == ["dbo/orders"]

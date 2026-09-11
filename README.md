@@ -217,9 +217,10 @@ agents); and render suggested instructions, descriptions and few-shots
 into a report. `examples/notebooks/rlm_data_agent_review.py` is the Fabric
 Python notebook (runtime 3.12) that runs the whole loop; applying the
 suggestions to the agent's draft stage is its last, explicit cell. The
-notebook scopes a lakehouse to the tables the agent has selected and raises
-the profile limits, since a lakehouse catalog is many tables rather than one
-file. A `ReviewContext` carries what the reviewer knows beyond the agent's
+notebook scopes a lakehouse to the tables the agent has selected (read from
+the datasource's elements tree, and resolved under either OneLake layout,
+with or without schemas) and raises the profile limits, since a lakehouse
+catalog is many tables rather than one file. A `ReviewContext` carries what the reviewer knows beyond the agent's
 configuration: the scope in plain words, priorities that order the questions,
 definitions declared to the RLM, the reviewer's own questions with a query or
 an answer as ground truth (graded first), and notes every RLM task receives.

@@ -168,6 +168,29 @@ context = ReviewContext(scope=SCOPE, priorities=tuple(PRIORITIES), definitions=d
 workspace_id = fabric.resolve_workspace_id(WORKSPACE_NAME) if WORKSPACE_NAME else fabric.get_workspace_id()
 items_by_workspace = {}
 
+def resolve_lakehouse(root, selected):
+    """The lakehouse scoped to the tables the agent has selected.
+
+    The agent lists a table as ``dbo/factinternetsales`` whether or not the
+    lakehouse has schemas enabled, so the schema-qualified OneLake path is
+    tried first, then the bare table name, then the whole lakehouse when the
+    selection is unknown or neither layout matches.
+    """
+    attempts = []
+    if selected:
+        attempts.append(("selected tables, schema-qualified", [f"Tables/{path}" for path in selected]))
+        attempts.append(("selected tables", [f"Tables/{path.rsplit('/', 1)[-1]}" for path in selected]))
+    attempts.append(("every table" if not selected else "every table; the selected paths did not resolve", None))
+    for label, scopes in attempts:
+        try:
+            return label, LakehouseSource(root, tables=scopes).resolve()
+        except Exception as exc:  # noqa: BLE001 - a scope that does not exist under this layout
+            if scopes is None:
+                raise
+            print(f"  {label}: {type(exc).__name__}: {str(exc)[:160]}")
+    raise RuntimeError("unreachable")
+
+
 sources, handles = {}, {}
 for source in snapshot.datasources:
     # a source can live in another workspace than the agent; bind it where it is
@@ -180,11 +203,9 @@ for source in snapshot.datasources:
     if source.kind == "lakehouse":
         # OneLake by ids: no name resolution, no spaces, no friendly-name suffix
         root = f"abfss://{source_workspace}@onelake.dfs.fabric.microsoft.com/{source.item_id}" if source.item_id else f"abfss://{fabric.resolve_workspace_name(source_workspace)}@onelake.dfs.fabric.microsoft.com/{item_name}.Lakehouse"
-        # only the tables the agent has selected; the whole lakehouse when the selection is unknown
-        scopes = [f"Tables/{table}" for table in source.selected_tables] or None
         t0 = time.time()
-        handle = LakehouseSource(root, tables=scopes).resolve()   # discover the catalog once; every query reuses it
-        print(f"{item_name}: {len(handle.catalog or ())} tables discovered in {round(time.time() - t0)} s")
+        label, handle = resolve_lakehouse(root, source.selected_tables)   # discover the catalog once; every query reuses it
+        print(f"{item_name}: {len(handle.catalog or ())} tables discovered ({label}) in {round(time.time() - t0)} s")
     elif source.kind == "semantic_model":
         handle = SemanticModel(item_name, workspace=source_workspace)
     else:
