@@ -55,15 +55,15 @@
 
 ### Changed
 
-- `LakehouseSource.query` reads a Delta table from its own Parquet files,
-  replayed from the transaction log (checkpoint plus later commits), and
-  uses the Delta reader only for tables whose features need it (deletion
-  vectors, column mapping, v2 checkpoints). Tables the Delta readers
-  reject, such as those with Spark `void` columns, now answer; a catalog
-  column no data file carries comes back as NULL. The file list is cached
-  per table while the log listing is unchanged. `LakehouseSource.query`
-  accepts a `timeout` (seconds, at most 600) for direct callers; a worker's
-  query keeps the 30-second default.
+- `LakehouseSource.query` keeps the Delta reader first and, when the reader
+  rejects a table (Spark `void` columns, which no data file carries), reads
+  the table's own data files as its transaction log lists them (the last
+  checkpoint plus later commits). A table whose features need the reader
+  (deletion vectors, column mapping, v2 checkpoints) is never read that way.
+  A catalog column no data file carries comes back as NULL; the rejection
+  and the file list are remembered per table while the log is unchanged.
+  `LakehouseSource.query` accepts a `timeout` (seconds, at most 600) for
+  direct callers; a worker's query keeps the 30-second default.
 
 ## 0.6.1 — 2026-09-10 — generalized run protocol and learning substrate
 

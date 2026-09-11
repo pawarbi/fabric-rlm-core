@@ -739,14 +739,50 @@ def _delta_source(name: str, path, columns) -> LakehouseSource:
     )
 
 
-def test_delta_tables_are_read_from_their_parquet_files(tmp_path) -> None:
+def _void_table(root, name: str, with_deletion_vectors: bool = False):
+    """A Delta table whose schema declares a Spark void column, which the Delta readers reject."""
+    pyarrow = pytest.importorskip("pyarrow")
+    parquet = pytest.importorskip("pyarrow.parquet")
+    table = root / name
+    (table / "_delta_log").mkdir(parents=True)
+    parquet.write_table(pyarrow.table({"id": [1, 2], "amount": [1.5, 2.5]}), str(table / "part-0.parquet"))
+    schema = {"type": "struct", "fields": [
+        {"name": "id", "type": "long", "nullable": True, "metadata": {}},
+        {"name": "amount", "type": "double", "nullable": True, "metadata": {}},
+        {"name": "tracking", "type": "void", "nullable": True, "metadata": {}},
+    ]}
+    protocol = {"minReaderVersion": 3, "minWriterVersion": 7, "readerFeatures": ["deletionVectors"], "writerFeatures": ["deletionVectors"]} if with_deletion_vectors else {"minReaderVersion": 1, "minWriterVersion": 2}
+    lines = [
+        {"protocol": protocol},
+        {"metaData": {"id": name, "format": {"provider": "parquet", "options": {}}, "schemaString": json.dumps(schema), "partitionColumns": [], "configuration": {}, "createdTime": 1}},
+        {"add": {"path": "part-0.parquet", "size": 1, "modificationTime": 1, "dataChange": True, "partitionValues": {}}},
+    ]
+    (table / "_delta_log" / "00000000000000000000.json").write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
+    return table
+
+
+def test_a_table_the_delta_reader_rejects_is_read_from_its_own_files(tmp_path) -> None:
+    pytest.importorskip("duckdb")
+    table = _void_table(tmp_path, "shipments")
+    source = _delta_source("shipments", table, [["id", "BIGINT"], ["amount", "DOUBLE"], ["tracking", "void"]])
+    result = source.query("SELECT COUNT(*) AS n, SUM(amount) AS total, COUNT(tracking) AS tracked FROM shipments", sources={"shipments": "shipments"})
+    assert result["rows"] == [[2, 4.0, 0]]
+    assert str(table) in lakehouse_module._DELTA_READER_REJECTED  # the failing reader attempt is not repeated
+
+    vectors = _void_table(tmp_path, "vectors", with_deletion_vectors=True)
+    source = _delta_source("vectors", vectors, [["id", "BIGINT"], ["amount", "DOUBLE"], ["tracking", "void"]])
+    with pytest.raises(RuntimeError, match="cannot stand in"):
+        source.query("SELECT COUNT(*) AS n FROM vectors", sources={"vectors": "vectors"})
+
+
+def test_delta_tables_go_through_the_delta_reader_with_missing_catalog_columns_as_null(tmp_path) -> None:
     deltalake = pytest.importorskip("deltalake")
     pyarrow = pytest.importorskip("pyarrow")
     pytest.importorskip("duckdb")
     table = tmp_path / "orders"
     deltalake.write_deltalake(str(table), pyarrow.table({"order_id": [1, 2], "amount": [10.0, 20.0]}))
     deltalake.write_deltalake(str(table), pyarrow.table({"order_id": [3], "amount": [5.0]}), mode="append")
-    # the catalog declares a column no data file carries (a Spark void column)
+    # the catalog declares a column the table does not have yet; it comes back as NULL
     source = _delta_source("orders", table, [["order_id", "BIGINT"], ["amount", "DOUBLE"], ["tracking", "void"]])
 
     result = source.query(

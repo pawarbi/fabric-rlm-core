@@ -842,22 +842,7 @@ def execute_lakehouse_query(
             path = _quote_literal(str(entry["path"]))
             missing_columns: list[str] = []
             if kind == "delta":
-                # The table's own data files, replayed from the transaction
-                # log; the Delta reader only for tables whose features need it.
-                try:
-                    files = _delta_parquet_files(con, str(entry["path"]))
-                except Exception:  # noqa: BLE001 - a log we cannot replay falls back to the reader
-                    files = None
-                if files is None:
-                    con.sql("INSTALL delta; LOAD delta;")
-                    relation = f"delta_scan({path})"
-                else:
-                    listed = ", ".join(_quote_literal(item) for item in files)
-                    relation = (
-                        f"read_parquet([{listed}], union_by_name=true, "
-                        "hive_partitioning=true)"
-                    )
-                    missing_columns = _columns_missing_from(con, relation, entry)
+                relation, missing_columns = _delta_relation(con, str(entry["path"]), entry)
             elif kind == "csv":
                 relation = f"read_csv_auto({path}, header=true)"
             elif kind == "parquet":
@@ -973,17 +958,58 @@ def _as_mapping(value: Any) -> Mapping[str, Any]:
     return {}
 
 
-def _delta_parquet_files(con: Any, table_path: str) -> list[str] | None:
+_DELTA_READER_REJECTED: dict[str, tuple[str, ...]] = {}
+
+
+def _delta_relation(con: Any, table_path: str, entry: Mapping[str, Any]) -> tuple[str, list[str]]:
+    """The DuckDB relation for a Delta table, and the catalog columns no data file carries.
+
+    The Delta reader comes first: it honours every table feature. When it
+    rejects the table (Spark ``void`` columns, which no data file carries),
+    the table's active data files are replayed from the transaction log and
+    read directly; a table whose features need the Delta reader is never
+    read that way. The rejection is remembered per table until its log
+    changes, so later queries skip the failing attempt.
+    """
+    try:
+        entries: Sequence[tuple[str, str, int]] | None = _delta_log_entries(table_path)
+        signature: tuple[str, ...] | None = tuple(sorted(name for name, _path, _size in entries or ()))
+    except Exception:  # noqa: BLE001 - without the log listing there is no replay either
+        entries, signature = None, None
+    reader_error: Exception | None = None
+    if signature is None or _DELTA_READER_REJECTED.get(table_path) != signature:
+        try:
+            con.sql("INSTALL delta; LOAD delta;")
+            relation = f"delta_scan({_quote_literal(table_path)})"
+            con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall()
+            return relation, _columns_missing_from(con, relation, entry)
+        except Exception as exc:  # noqa: BLE001 - the reader's rejection selects the fallback
+            reader_error = exc
+            if signature is not None:
+                _DELTA_READER_REJECTED[table_path] = signature
+    files = _delta_parquet_files(con, table_path, entries) if entries is not None else None
+    if files is None:
+        reason = f"{type(reader_error).__name__}: {str(reader_error)[:200]}" if reader_error is not None else "the transaction log could not be listed"
+        raise RuntimeError(
+            f"The Delta reader rejected {table_path!r} ({reason}) and its transaction log cannot stand in for it."
+        )
+    listed = ", ".join(_quote_literal(item) for item in files)
+    relation = f"read_parquet([{listed}], union_by_name=true, hive_partitioning=true)"
+    return relation, _columns_missing_from(con, relation, entry)
+
+
+def _delta_parquet_files(con: Any, table_path: str, entries: Sequence[tuple[str, str, int]] | None = None) -> list[str] | None:
     """The active data files of a Delta table, replayed from its transaction log.
 
-    Reading the files directly sidesteps reader limitations such as Spark
-    ``void`` columns, which the Delta readers reject and no data file
-    contains. Returns ``None`` when only the Delta reader can produce the
-    table: deletion vectors, column mapping, a v2 checkpoint, a gap in the
-    log, or more commits since the last checkpoint than the replay bound.
-    Results are cached per table for as long as the log listing is unchanged.
+    The fallback for tables the Delta reader rejects, such as those with
+    Spark ``void`` columns, which no data file contains. Returns ``None``
+    when only the Delta reader can produce the table: deletion vectors,
+    column mapping, a v2 checkpoint, a gap in the log, or more commits since
+    the last checkpoint than the replay bound. Results are cached per table
+    for as long as the log listing is unchanged.
     """
-    entries = _delta_log_entries(table_path)
+    if entries is None:
+        entries = _delta_log_entries(table_path)
     signature = tuple(sorted(name for name, _path, _size in entries))
     with _DELTA_FILES_LOCK:
         cached = _DELTA_FILES_CACHE.get(table_path)

@@ -982,3 +982,11 @@ def test_executor_retries_a_timed_out_query_and_the_verifier_does_not_repeat_bou
     assert seen[-1]["inputs"] is None
     _rlm_verifier({"model": "x"}, {LAKEHOUSE_ID: "handle"}, knowledge=None, max_turns=2, timeout=10)("q")
     assert seen[-1]["inputs"] == {LAKEHOUSE_ID: "handle"}
+
+
+def test_a_prose_reference_may_say_more_than_the_agent_was_asked():
+    question = Question("q", LAKEHOUSE_ID, "deep", "Which region led reseller sales in 2013?", {}, "", {"kind": "supplied_text", "text": "Southwest led with 6,377,499.28; Northwest 5,000,000.00; total 11,377,499.28"})
+    reference = Reference("q", "ok", ({"value": 6377499.28}, {"value": 5000000.0}, {"value": 11377499.28}))
+    assert grade(question, reference, "Southwest led with $6,377,499.28 in 2013.").outcome == "correct"
+    assert grade(question, reference, "Southwest led with $6,377,499.28 and Northwest with $4,000,000.00.").outcome == "partial"
+    assert grade(question, reference, "Southwest led with $1.00.").outcome == "wrong"

@@ -2032,6 +2032,15 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
         if _ABSTAIN_HINT.search(text or ""):
             return Graded(question.id, "abstained", "agent_abstained", "the agent declined a question the source answers", 0, len(expected))
         return Graded(question.id, "incomplete", "no_numbers", "no figures in the answer", 0, len(expected))
+    if expected and question.execution.get("kind") == "supplied_text":
+        # a prose reference may say more than the question asked; the agent is
+        # right when every figure it gave is in the reference
+        agent_figures = [n for n in numbers if not (float(n).is_integer() and 1900 <= n <= 2100)] or numbers
+        hits = sum(1 for n in agent_figures if any(_close(n, value) for value in expected))
+        if hits == len(agent_figures):
+            return Graded(question.id, "correct", "", f"every figure the agent gave ({hits}) is in the reference answer", hits, len(expected), False)
+        if hits:
+            return Graded(question.id, "partial", "values_partially_match", f"{hits} of the {len(agent_figures)} figures the agent gave are in the reference answer", hits, len(expected), False)
     if expected and matched == len(expected):
         cause, detail = "", ""
         if question.kind == "top_n":

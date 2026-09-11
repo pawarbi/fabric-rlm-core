@@ -53,6 +53,13 @@
 
 # CELL ********************
 
+import os
+
+# The Delta readers log every unfamiliar file they see in a transaction log at
+# warning level; this keeps that out of the notebook. It must be set before
+# the first import of the Delta libraries, which happens in the bind cell.
+os.environ.setdefault("RUST_LOG", "delta_kernel=error,deltalake=error")
+
 # --- configuration ---------------------------------------------------------
 AGENT_NAME = "Sales Agent RLM"        # the Data Agent to review (name or id)
 WORKSPACE_NAME = None                 # None = this notebook's workspace
@@ -135,8 +142,9 @@ if not any(source.selected_tables for source in snapshot.datasources):
 # profile and the questions cover what the agent sees; when the selection
 # cannot be read, the whole lakehouse is profiled. The profile limits are
 # raised because a lakehouse catalog is many tables, not one file. Lakehouse
-# queries read each table's Parquet files, resolved from the Delta log, so
-# tables the Delta readers reject (Spark `void` columns) still answer.
+# queries go through the Delta reader; a table the reader rejects (Spark
+# `void` columns, which no data file carries) is read from its own data files
+# as its transaction log lists them, so it still answers.
 
 # CELL ********************
 
@@ -288,7 +296,12 @@ for finding in report.findings:
 
 # CELL ********************
 
+import logging
 import os
+
+# The RLM logs every registered-operation plan its planner gets wrong before
+# it falls back to its own code; that fallback is normal, so only errors show.
+logging.getLogger("fabric_rlm.runtime").setLevel(logging.ERROR)
 
 if LM:
     if KEY_VAULT_URL and KEY_VAULT_SECRET_NAME and not os.environ.get("OPENROUTER_API_KEY"):
