@@ -1172,12 +1172,16 @@ def declared_from_snapshot(snapshot: AgentSnapshot, schemas: Sequence[SourceSche
 # Questions and references
 # --------------------------------------------------------------------------- #
 
-_MEASURE_HINT = re.compile(r"(amount|qty|quantity|units|revenue|sales|cost|price|margin|total|profit|value|hours|minutes|count)", re.IGNORECASE)
-_KEY_HINT = re.compile(r"(key|id)$", re.IGNORECASE)
+_MEASURE_HINT = re.compile(r"(amount|qty|quantity|units|revenue|sales|cost|price|margin|total|profit|value|hours|minutes|count|arr|mrr|usd|eur|gbp|calls|duration|balance|fee|charge|spend|volume)", re.IGNORECASE)
+_KEY_HINT = re.compile(r"(key|id)$", re.IGNORECASE)  # kept for callers outside this module; the module uses _is_key
+_KEY_FORMS = re.compile(r"(?:^|[_ ])(?:[Ii][Dd]|[Kk][Ee][Yy])$|[a-z0-9](?:Id|ID|Key|KEY)$")
+_KEY_STOPWORDS = frozenset({"paid", "unpaid", "prepaid", "valid", "invalid", "grid", "void", "avoid", "rapid", "solid", "liquid", "fluid", "acid", "hybrid", "said", "laid", "mid", "bid", "kid", "lid", "rid", "amid", "turkey", "monkey", "hockey", "jockey", "donkey", "whiskey", "journey", "period", "bandwidth"})
 _DATE_KEY = re.compile(r"date(key)?$", re.IGNORECASE)
 _YEAR_COLUMN = re.compile(r"^(calendar)?year$", re.IGNORECASE)
 _ATTRIBUTE_HINT = re.compile(r"(name|country|region|group|category|segment|type|class|status|city|state|line|plant)", re.IGNORECASE)
-_ORDER_ID_HINT = re.compile(r"(ordernumber|orderid|order_id|order_number|ticket_id|invoice)", re.IGNORECASE)
+_ORDER_ID_HINT = re.compile(r"(ordernumber|orderid|order_id|order_number|ticket_id|invoice|transaction)", re.IGNORECASE)
+_LOCAL_EXCLUDED = re.compile(r"(number|nbr|code|sku|email|url|website|uri|hash|uuid|guid)$", re.IGNORECASE)  # never a grouping column on a fact
+_FLAG_COLUMN = re.compile(r"^(?:is|has|was|can)_|flag$|^is[A-Z]", re.IGNORECASE)  # is_active, SalesPersonFlag: a yes or no, not a quantity
 _JOIN_LINE = re.compile(r"(?:dbo\.)?([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*(?:->|→|to|=)\s*(?:dbo\.)?([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)")
 
 
@@ -1218,20 +1222,30 @@ def _joins_from_instructions(text: str, schema: SourceSchema) -> dict[tuple[str,
 
 
 def _heuristic_joins(schema: SourceSchema) -> dict[tuple[str, str], tuple[str, str]]:
-    """``<Name>Key`` in a fact table to ``dim<name>.<Name>Key`` when that exists."""
+    """``<Name>Key``, ``<name>_id`` or ``id_<name>`` in a table to the table that carries the same column.
+
+    The target is ``dim<name>``, ``<name>``, ``<name>s``, ``<name>es`` or
+    ``<name>ies`` (company to companies), with the same schema prefix or
+    none, or the one table whose name ends with ``_<those>``
+    (``sales_customers`` for ``customerID``).
+    """
     joins: dict[tuple[str, str], tuple[str, str]] = {}
     tables = {t.casefold(): t for t in schema.tables}
     for table, columns in schema.tables.items():
         prefix = table.rsplit(".", 1)[0] + "." if "." in table else ""
         for column in columns:
             lowered = column.casefold()
-            if lowered in {"datekey", "id", "key"} or not re.search(r"_?(key|id)$|^id_", lowered):
+            if lowered in {"datekey", "id", "key"} or not _is_key(column):
                 continue
-            stem = re.sub(r"^id_|_?(key|id)$", "", lowered)
+            stem = re.sub(r"^id_|[_ ]?(?:id|key)$", "", lowered)
             if not stem:
                 continue
+            plural_forms = [stem, f"{stem}s", f"{stem}es"] + ([stem[:-1] + "ies"] if stem.endswith("y") else [])
+            own = table.rsplit(".", 1)[-1].casefold()
+            if own in plural_forms or own in {f"dim{stem}", f"dim_{stem}", f"dim{stem}s"}:
+                continue  # the table's own primary key (pedidos.id_pedido), not a reference to another table
             found = None
-            for candidate in (f"dim{stem}", stem, f"dim_{stem}", f"{stem}s", f"{stem}es", f"dim{stem}s"):
+            for candidate in [f"dim{stem}", f"dim_{stem}", f"dim{stem}s", *plural_forms]:
                 for name in ((prefix + candidate, candidate) if prefix else (candidate,)):
                     target = tables.get(name)
                     if target and target != table and column in schema.tables[target]:
@@ -1239,6 +1253,10 @@ def _heuristic_joins(schema: SourceSchema) -> dict[tuple[str, str], tuple[str, s
                         break
                 if found:
                     break
+            if not found:
+                suffixed = [t for lowered_name, t in tables.items() if t != table and column in schema.tables[t] and any(lowered_name.rsplit(".", 1)[-1].endswith("_" + form) for form in plural_forms)]
+                if len(suffixed) == 1:
+                    found = suffixed[0]
             if found:
                 joins[(table, column)] = (found, column)
     return joins
@@ -1249,12 +1267,12 @@ def _fact_tables(schema: SourceSchema) -> list[str]:
     joins = _heuristic_joins(schema)
     referenced = _referenced_tables(schema, joins)
     for table, columns in schema.tables.items():
-        if re.match(r"^(?:[a-z0-9_]+\.)?dim[_a-z]", table, re.IGNORECASE):
+        if re.match(r"^(?:[a-z0-9_]+\.)?dim[_a-z]", table, re.IGNORECASE) or re.search(r"(?:^|[._])(?:date|dates|calendar|time|dim_date)$", table, re.IGNORECASE):
             continue  # a dimension by name (dimproduct carries prices and a start date, and is still not a fact)
         measures = _measure_columns(schema, table)
         if measures and not any(_MEASURE_HINT.search(c) for c in measures) and table in referenced:
             continue  # numeric columns on a table others reference are attributes of a dimension, not measures
-        dates = [c for c in columns if _is_time_column(schema, table, c)]
+        dates = [c for c in columns if _is_time_column(schema, table, c) or (_PERIOD_COLUMN.search(c) and (not schema.types.get(table) or _TEXT_TYPE.search(schema.column_type(table, c))))]
         joined_time = any(
             _is_time_column(schema, target[0], other_column) and not other_column.casefold().endswith("key")
             for column in columns
@@ -1262,18 +1280,27 @@ def _fact_tables(schema: SourceSchema) -> list[str]:
             if target is not None
             for other_column in schema.tables[target[0]]
         )
-        if measures and (dates or joined_time) and (table.casefold().startswith("fact") or len(measures) >= 2):
+        references_dimension = any(joins.get((table, c)) is not None for c in columns)
+        if measures and (dates or joined_time) and (table.casefold().startswith("fact") or len(measures) >= 2 or references_dimension or _local_attributes(schema, table)):
             facts.append(table)
-    return sorted(facts, key=lambda t: (not t.casefold().startswith("fact"), t))
+
+    def richness(t: str) -> tuple[bool, int, int, str]:
+        # a fact named as one first; then the ones with the most grouping columns and measures
+        return (not t.casefold().startswith("fact"), -len(attribute_paths(schema, t, joins)), -len(_measure_columns(schema, t)), t)
+
+    return sorted(facts, key=richness)
 
 
 def _measure_columns(schema: SourceSchema, table: str) -> list[str]:
     preferred = ("salesamount", "revenue", "amount", "sales", "price", "total", "net", "gross", "totalproductcost", "orderquantity", "quantity", "units", "value")
     secondary = re.compile(r"(freight|tax|discount|shipping|fee|handling|cost)", re.IGNORECASE)
-    columns = [c for c in schema.tables[table] if _MEASURE_HINT.search(c) and not _KEY_HINT.search(c) and not _is_time_column(schema, table, c)]
+    def usable(c: str) -> bool:
+        return not _is_key(c) and not _is_time_column(schema, table, c) and not _PERIOD_COLUMN.search(c) and not _FLAG_COLUMN.search(c) and "bool" not in schema.column_type(table, c)
+
+    columns = [c for c in schema.tables[table] if _MEASURE_HINT.search(c) and usable(c)]
     if not columns and schema.types.get(table):
         # names say nothing; the profile's types do
-        columns = [c for c in schema.tables[table] if _NUMERIC_TYPE.search(schema.column_type(table, c)) and not _is_key(c) and not _is_time_column(schema, table, c)]
+        columns = [c for c in schema.tables[table] if _NUMERIC_TYPE.search(schema.column_type(table, c)) and usable(c)]
     return sorted(columns, key=lambda c: (next((i for i, p in enumerate(preferred) if p in c.casefold()), 99) + (50 if secondary.search(c) else 0), c))
 
 
@@ -1296,6 +1323,7 @@ def _date_candidates(columns: Sequence[str]) -> list[str]:
 
 
 _TIME_COLUMN = re.compile(r"(date|timestamp|datetime|_at|_time|_on)(key)?$", re.IGNORECASE)
+_PERIOD_COLUMN = re.compile(r"(?:^|[_ ])(?:quarter|year_?quarter|fiscal_quarter|period|fiscal_period|year_?month|month)$", re.IGNORECASE)  # 2024/Q1, 2024-03: a period written as text
 _TIME_TYPE = re.compile(r"(timestamp|datetime|date)", re.IGNORECASE)  # Delta names, SQL names or arrow ``DataType<Timestamp(...)>`` and ``Date32``
 _NUMERIC_TYPE = re.compile(r"(int|long|double|float|decimal|numeric|real|number|short|byte)", re.IGNORECASE)
 _TEXT_TYPE = re.compile(r"(string|varchar|char|text|utf8)", re.IGNORECASE)
@@ -1306,8 +1334,14 @@ _ID_PREFIX = re.compile(r"^id_", re.IGNORECASE)
 
 
 def _is_key(column: str) -> bool:
-    """``CustomerKey``, ``customer_id`` or ``id_cliente``."""
-    return bool(_KEY_HINT.search(column)) or bool(_ID_PREFIX.match(column))
+    """``CustomerKey``, ``customerID``, ``customer_id``, ``Customer ID``, ``id_cliente`` or ``customerid``; never ``amount_paid``."""
+    name = column.strip()
+    lowered = name.casefold()
+    if lowered in _KEY_STOPWORDS or lowered.rsplit("_", 1)[-1] in _KEY_STOPWORDS:
+        return False
+    if _ID_PREFIX.match(name) or _KEY_FORMS.search(name):
+        return True
+    return bool(re.fullmatch(r"[a-z]{3,}(?:id|key)", lowered)) and name == lowered
 
 
 def _is_time_column(schema: SourceSchema, table: str, column: str) -> bool:
@@ -1317,7 +1351,9 @@ def _is_time_column(schema: SourceSchema, table: str, column: str) -> bool:
 
 def _is_attribute(schema: SourceSchema, table: str, column: str) -> bool:
     """A grouping column: named like one, or a text column that is not a key or a time."""
-    if _is_key(column) or _is_time_column(schema, table, column):
+    if _is_key(column) or _is_time_column(schema, table, column) or _PERIOD_COLUMN.search(column):
+        return False  # keys and the time axis are never groupings
+    if _PERSONAL_HINT.search(column) and not re.search(r"(gender|marital|sexo|genero)", column, re.IGNORECASE):
         return False
     if _ATTRIBUTE_HINT.search(column):
         return True
@@ -1348,6 +1384,7 @@ def _date_join(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str],
     for column in time_columns:
         order += 1
         score = (2 if _BUSINESS_DATE.search(column) else 0) - (2 if _SECONDARY_DATE.search(column) else 0)
+        column_type = schema.column_type(table, column)
         target = joins.get((table, column))
         if target is None and _DATE_KEY.search(column):
             for candidate in ("dimdate", "date", "dim_date", "calendar"):
@@ -1364,8 +1401,15 @@ def _date_join(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str],
             if year:
                 candidates.append((score + 4, order, {"column": column, "date_table": date_table, "date_key": date_key, "year": year, "month": next((c for c in dim_columns if _MONTH_COLUMN.match(c)), None), "quarter": next((c for c in dim_columns if _QUARTER_COLUMN.match(c)), None)}))
                 continue
-        if not column.casefold().endswith("key"):
-            candidates.append((score, order, {"column": column, "timestamp": True}))
+        if column.casefold().endswith("key") and not _DATE_KEY.search(column):
+            continue
+        entry: dict[str, Any] = {"column": column, "timestamp": True}
+        if column.casefold().endswith("key") or _NUMERIC_TYPE.search(column_type):
+            entry["stored"] = "yyyymmdd"  # an integer date: 20240131, the way a date key is written
+            score -= 1
+        elif _TEXT_TYPE.search(column_type):
+            entry["stored"] = "text"
+        candidates.append((score, order, entry))
     for column in columns:
         target = joins.get((table, column))
         if target is None or _TIME_COLUMN.search(column):
@@ -1376,8 +1420,19 @@ def _date_join(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str],
         for stamp in schema.tables[other]:
             if _is_time_column(schema, other, stamp) and not stamp.casefold().endswith("key"):
                 order += 1
-                score = 1 + (2 if _BUSINESS_DATE.search(stamp) else 0) - (2 if _SECONDARY_DATE.search(stamp) else 0)
-                candidates.append((score, order, {"column": column, "date_table": other, "date_key": key, "timestamp": True, "timestamp_column": stamp}))
+                score = -3 + (2 if _BUSINESS_DATE.search(stamp) else 0) - (2 if _SECONDARY_DATE.search(stamp) else 0)  # a date on a joined table only when the fact has none worth using
+                entry = {"column": column, "date_table": other, "date_key": key, "timestamp": True, "timestamp_column": stamp}
+                stamp_type = schema.column_type(other, stamp)
+                if _NUMERIC_TYPE.search(stamp_type):
+                    entry["stored"] = "yyyymmdd"
+                elif _TEXT_TYPE.search(stamp_type):
+                    entry["stored"] = "text"
+                candidates.append((score, order, entry))
+    for column in columns:
+        # a period written as text (2024/Q1, 2024-03) is a time axis of its own, with no day grain
+        if _PERIOD_COLUMN.search(column) and not _is_time_column(schema, table, column) and (not schema.types.get(table) or _TEXT_TYPE.search(schema.column_type(table, column))):
+            order += 1
+            candidates.append((-1, order, {"column": column, "period": "month" if re.search(r"month|period", column, re.IGNORECASE) else "quarter"}))
     if not candidates:
         return None
     candidates.sort(key=lambda c: (-c[0], c[1]))
@@ -1386,49 +1441,76 @@ def _date_join(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str],
 
 def _time_join(dt: Mapping[str, Any]) -> str | None:
     if dt.get("date_table"):
-        return f"JOIN {dt['date_table']} d ON f.{dt['column']} = d.{dt['date_key']}"
+        return f"JOIN {dt['date_table']} d ON f.{_q(dt['column'])} = d.{_q(dt['date_key'])}"
     return None
 
 
 def _time_column(dt: Mapping[str, Any]) -> str:
     if dt.get("timestamp") and dt.get("date_table"):
-        return f"d.{dt['timestamp_column']}"
-    return f"f.{dt['column']}"
+        return f"d.{_q(dt['timestamp_column'])}"
+    return f"f.{_q(dt['column'])}"
 
 
 def _stamp(dt: Mapping[str, Any], dialect: str) -> str:
+    """The time axis as a timestamp: a date or timestamp column as it is, an integer 20240131 or a text date converted."""
     column = _time_column(dt)
+    stored = dt.get("stored")
+    if stored == "yyyymmdd":
+        return f"CONVERT(datetime, CAST({column} AS VARCHAR(8)), 112)" if dialect == "tsql" else f"CAST(strptime(CAST({column} AS VARCHAR), '%Y%m%d') AS TIMESTAMP)"
+    if stored == "text":
+        return f"TRY_CONVERT(datetime, {column})" if dialect == "tsql" else f"COALESCE(TRY_CAST({column} AS TIMESTAMP), TRY_STRPTIME({column}, '%Y%m%d'))"
     return column if dialect == "tsql" else f"CAST({column} AS TIMESTAMP)"
+
+
+def _period_part(dt: Mapping[str, Any], part: str, dialect: str) -> str:
+    """Year, quarter or month out of a period written as text (2024/Q1, 2024-Q1, 2024Q1, 2024-03, 202403)."""
+    column = f"f.{_q(dt['column'])}"
+    if part == "year":
+        return f"CAST(SUBSTRING({column}, PATINDEX('%[12][0-9][0-9][0-9]%', {column}), 4) AS INT)" if dialect == "tsql" else f"CAST(regexp_extract({column}, '([12][0-9]{{3}})', 1) AS INTEGER)"
+    if part == "quarter":
+        return f"CAST(SUBSTRING({column}, PATINDEX('%[Qq][1-4]%', {column}) + 1, 1) AS INT)" if dialect == "tsql" else f"CAST(regexp_extract({column}, '[Qq]([1-4])', 1) AS INTEGER)"
+    return f"CAST(RIGHT(REPLACE(REPLACE({column}, '-', ''), '/', ''), 2) AS INT)" if dialect == "tsql" else f"CAST(regexp_extract({column}, '[12][0-9]{{3}}[-/]?([01][0-9])', 1) AS INTEGER)"
 
 
 def _year_expr(dt: Mapping[str, Any], dialect: str) -> str:
     if dt.get("year"):
-        return f"d.{dt['year']}"
-    return f"YEAR({_time_column(dt)})" if dialect == "tsql" else f"year({_stamp(dt, dialect)})"
+        return f"d.{_q(dt['year'])}"
+    if dt.get("period"):
+        return _period_part(dt, "year", dialect)
+    return f"YEAR({_stamp(dt, dialect)})" if dialect == "tsql" else f"year({_stamp(dt, dialect)})"
 
 
 def _month_expr(dt: Mapping[str, Any], dialect: str) -> str | None:
     if dt.get("month"):
-        return f"d.{dt['month']}"
+        return f"d.{_q(dt['month'])}"
+    if dt.get("period") == "month":
+        return _period_part(dt, "month", dialect)
     if dt.get("timestamp"):
-        return f"MONTH({_time_column(dt)})" if dialect == "tsql" else f"month({_stamp(dt, dialect)})"
+        return f"MONTH({_stamp(dt, dialect)})" if dialect == "tsql" else f"month({_stamp(dt, dialect)})"
     return None
 
 
 def _quarter_expr(dt: Mapping[str, Any], dialect: str) -> str | None:
     if dt.get("quarter"):
-        return f"d.{dt['quarter']}"
+        return f"d.{_q(dt['quarter'])}"
+    if dt.get("period") == "quarter":
+        return _period_part(dt, "quarter", dialect)
     if dt.get("timestamp"):
-        return f"DATEPART(QUARTER, {_time_column(dt)})" if dialect == "tsql" else f"quarter({_stamp(dt, dialect)})"
+        return f"DATEPART(QUARTER, {_stamp(dt, dialect)})" if dialect == "tsql" else f"quarter({_stamp(dt, dialect)})"
     return None
 
 
 def _has_month(dt: Mapping[str, Any]) -> bool:
-    return bool(dt.get("month") or dt.get("timestamp"))
+    return bool(dt.get("month") or dt.get("timestamp") or dt.get("period") == "month")
 
 
 def _has_quarter(dt: Mapping[str, Any]) -> bool:
-    return bool(dt.get("quarter") or dt.get("timestamp"))
+    return bool(dt.get("quarter") or dt.get("timestamp") or dt.get("period") == "quarter")
+
+
+def _has_day(dt: Mapping[str, Any]) -> bool:
+    """Whether the axis can express a range of dates; a period written as text cannot."""
+    return not dt.get("period")
 
 
 def _max_date_sql(fact: Mapping[str, Any]) -> str:
@@ -1450,7 +1532,18 @@ def _attributes(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str]
         for attribute in schema.tables[dim_table]:
             if _is_attribute(schema, dim_table, attribute) and attribute != dim_key:
                 found.append((column, dim_table, dim_key, attribute))
+    for attribute in _local_attributes(schema, table):
+        found.append((None, table, None, attribute))  # type: ignore[arg-type]
     return found
+
+
+def _local_attributes(schema: SourceSchema, table: str) -> list[str]:
+    """Grouping columns on the fact table itself: a flat sales file has its categories on the same rows."""
+    return [
+        c
+        for c in schema.tables[table]
+        if _is_attribute(schema, table, c) and not _ORDER_ID_HINT.search(c) and not _LOCAL_EXCLUDED.search(c) and not _PERSONAL_HINT.search(c) and not _MEASURE_HINT.search(c)
+    ]
 
 
 _LANGUAGE_VARIANT = re.compile(r"^(spanish|french|german|italian|portuguese|dutch|japanese|chinese)", re.IGNORECASE)
@@ -1475,7 +1568,24 @@ def _diverse_attributes(attributes: Sequence[tuple[str, str, str, str]], terms: 
 
 
 def _order_column(schema: SourceSchema, table: str) -> str | None:
+    """The column whose distinct values are the things counted: the table's own key (payment_id on payments) before any order-like column."""
+    bare = table.rsplit(".", 1)[-1].casefold()
+    for column in schema.tables[table]:
+        stem = re.sub(r"^id_|[_ ]?(?:id|key)$", "", column.casefold())
+        if _is_key(column) and stem and bare in {stem, f"{stem}s", f"{stem}es", stem[:-1] + "ies" if stem.endswith("y") else stem} | {f"fact{stem}", f"fact_{stem}", f"fact{stem}s"}:
+            return column
     return next((c for c in schema.tables[table] if _ORDER_ID_HINT.search(c)), None)
+
+
+def _counted(channel: str, word: str) -> str:
+    """``reseller sales orders``, but ``invoices`` rather than ``invoices invoices``."""
+    return channel if channel == word or channel.endswith(" " + word) or channel.endswith(word) else f"{channel} {word}"
+
+
+def _q(name: Any) -> str:
+    """A column reference: bare when it is a plain identifier, double-quoted otherwise (DuckDB and T-SQL both accept that)."""
+    text = str(name)
+    return text if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text) else '"' + text.replace('"', '""') + '"'
 
 
 def _sql_literal(value: Any) -> str:
@@ -1509,27 +1619,30 @@ def _sql(spec: Mapping[str, Any], *, dialect: str) -> str:
         if by_year:
             select.append(f"{year_expr} AS year")
             group.append(year_expr)
+        ref = "f"
         if grouped or kind == "filter":
             attr = fact["attribute"]
-            joins.append(f"JOIN {attr['dim_table']} a ON f.{attr['fact_key']} = a.{attr['dim_key']}")
+            if attr.get("fact_key"):  # a grouping column on a dimension; on the fact itself it needs no join
+                joins.append(f"JOIN {attr['dim_table']} a ON f.{_q(attr['fact_key'])} = a.{_q(attr['dim_key'])}")
+                ref = "a"
         if grouped:
             attr = fact["attribute"]
-            select.append(f"a.{attr['column']} AS {attr['alias']}")
-            group.append(f"a.{attr['column']}")
+            select.append(f"{ref}.{_q(attr['column'])} AS {_q(attr['alias'])}")
+            group.append(f"{ref}.{_q(attr['column'])}")
         if kind in {"distinct_by_year", "distinct_orders_year"}:
-            select.append(f"COUNT(DISTINCT f.{fact['order_column']}) AS value")
+            select.append(f"COUNT(DISTINCT f.{_q(fact['order_column'])}) AS value")
         elif kind == "rowcount_year":
             select.append("COUNT(*) AS value")
         elif kind == "definition":
             select.append(f"{spec['expr']} AS value")
         else:
-            select.append(f"SUM(f.{fact['measure']}) AS value")
+            select.append(f"SUM(f.{_q(fact['measure'])}) AS value")
         if by_year and spec.get("years"):
             conditions.append(f"{year_expr} IN ({', '.join(str(int(y)) for y in spec['years'])})")
         elif spec.get("year") is not None:
             conditions.append(f"{year_expr} = {int(spec['year'])}")
         if kind == "filter":
-            conditions.append(f"a.{fact['attribute']['column']} = {_sql_literal(spec['value'])}")
+            conditions.append(f"{ref}.{_q(fact['attribute']['column'])} = {_sql_literal(spec['value'])}")
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         group_by = f" GROUP BY {', '.join(group)}" if group else ""
         return f"SELECT {', '.join(select)} FROM {fact['table']} f {' '.join(joins)}{where}{group_by}"
@@ -1672,6 +1785,7 @@ _SKILLS = {
     "drivers": "drivers",
     "entity_trend": "entity",
     "entity_value": "entity",
+    "fuzzy_value": "fuzzy",
     "share": "share",
     "top_share": "share",
     "having_count": "threshold",
@@ -1819,10 +1933,10 @@ def build_vocabulary(snapshot: AgentSnapshot, schema: SourceSchema, context: Rev
 
 _MONTH_COLUMN = re.compile(r"^(month|monthnumber|monthnumberofyear|calendarmonth|month_number|monthofyear)$", re.IGNORECASE)
 _QUARTER_COLUMN = re.compile(r"^(quarter|calendarquarter|quarter_number|quarterofyear)$", re.IGNORECASE)
-_ENTITY_HINT = re.compile(r"(reseller|customer|vendor|supplier|account|store|client|dealer|partner|employee|company|organization)name$", re.IGNORECASE)
-_PRODUCT_HINT = re.compile(r"(product|item|sku)name$", re.IGNORECASE)
-_CATEGORY_HINT = re.compile(r"(category|subcategory|segment|class)", re.IGNORECASE)
-_PLACE_HINT = re.compile(r"(territory|region|country|city|state|geography)", re.IGNORECASE)
+_ENTITY_HINT = re.compile(r"(reseller|customer|vendor|supplier|account|store|client|dealer|partner|employee|company|organization|franchise|merchant|brand|manufacturer|seller)[_ ]?name$|^name$", re.IGNORECASE)
+_PRODUCT_HINT = re.compile(r"(product|item|sku)[_ ]?name$|^(product|item|sku|plan|plan_name|feature)$", re.IGNORECASE)
+_CATEGORY_HINT = re.compile(r"(category|subcategory|segment|class|group|tier|sector|industry|module|department|family)", re.IGNORECASE)
+_PLACE_HINT = re.compile(r"(territory|region|country|city|state|geography|district|continent|market|area|zone|location|province)", re.IGNORECASE)
 
 
 def attribute_paths(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]], excluded: Collection[str] = (), *, max_depth: int = 3) -> list[dict[str, Any]]:
@@ -1856,12 +1970,22 @@ def attribute_paths(schema: SourceSchema, table: str, joins: Mapping[tuple[str, 
         frontier = next_frontier
         if not frontier:
             break
+    for attribute in _local_attributes(schema, table):
+        paths.append({"hops": [], "column": attribute, "alias": attribute})
     return paths
 
 
+def _path_table(path: Mapping[str, Any], fact: str) -> str:
+    """The table a grouping column lives on: the last hop's table, or the fact itself."""
+    hops = path.get("hops") or ()
+    return str(hops[-1]["table"]) if hops else fact
+
+
 def _hops(attr: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    if attr.get("hops"):
-        return list(attr["hops"])
+    if "hops" in attr:
+        return list(attr["hops"] or ())
+    if not attr.get("fact_key"):
+        return []  # a column on the fact itself
     return [{"from_column": attr["fact_key"], "table": attr["dim_table"], "key": attr["dim_key"]}]
 
 
@@ -1880,9 +2004,9 @@ class _Joins:
             if chain not in self._alias:
                 alias = f"a{len(self._alias) + 1}"
                 self._alias[chain] = alias
-                self.clauses.append(f"JOIN {hop['table']} {alias} ON {previous}.{hop['from_column']} = {alias}.{hop['key']}")
+                self.clauses.append(f"JOIN {hop['table']} {alias} ON {previous}.{_q(hop['from_column'])} = {alias}.{_q(hop['key'])}")
             previous = self._alias[chain]
-        return f"{previous}.{attr['column']}"
+        return f"{previous}.{_q(attr['column'])}"
 
 
 def _period_condition(fact: Mapping[str, Any], period: Mapping[str, Any], dialect: str = "duckdb") -> str:
@@ -1898,12 +2022,16 @@ def _period_condition(fact: Mapping[str, Any], period: Mapping[str, Any], dialec
 def _date_range_condition(fact: Mapping[str, Any], start: str, end: str, dialect: str) -> str:
     """``start`` and ``end`` (ISO dates, inclusive) on the time axis: a yyyymmdd key, a date column, or a timestamp."""
     dt = fact["date"]
+    if dt.get("period"):
+        raise ValueError("a period written as text has no day grain")
     if dt.get("timestamp"):
-        column = _time_column(dt)
+        if dt.get("stored") == "yyyymmdd" and not dt.get("date_table"):
+            return f"{_time_column(dt)} BETWEEN {start.replace('-', '')} AND {end.replace('-', '')}"
+        stamp = _stamp(dt, dialect)
         if dialect == "tsql":
-            return f"CAST({column} AS DATE) BETWEEN '{start}' AND '{end}'"
-        return f"CAST(CAST({column} AS TIMESTAMP) AS DATE) BETWEEN DATE '{start}' AND DATE '{end}'"
-    column = f"f.{dt['column']}"
+            return f"CAST({stamp} AS DATE) BETWEEN '{start}' AND '{end}'"
+        return f"CAST({stamp} AS DATE) BETWEEN DATE '{start}' AND DATE '{end}'"
+    column = f"f.{_q(dt['column'])}"
     if str(dt["column"]).casefold().endswith("key"):
         return f"{column} BETWEEN {start.replace('-', '')} AND {end.replace('-', '')}"
     return f"CAST({column} AS DATE) BETWEEN '{start}' AND '{end}'"
@@ -1925,7 +2053,7 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
     kind = spec["kind"]
     fact = spec["facts"][0]
     dt = fact["date"]
-    measure = f"SUM(f.{fact['measure']})"
+    measure = f"SUM(f.{_q(fact['measure'])})"
     joins = _Joins()
     base_joins = _time_join(dt) or ""
     year_expr = _year_expr(dt, dialect)
@@ -1960,7 +2088,7 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
     if kind == "drivers":
         label = joins.ref(spec["attr"])
         before, after = _period_condition(fact, spec["before"], dialect), _period_condition(fact, spec["after"], dialect)
-        select = f"{label} AS label, SUM(CASE WHEN {after} THEN f.{fact['measure']} ELSE 0 END) - SUM(CASE WHEN {before} THEN f.{fact['measure']} ELSE 0 END) AS value"
+        select = f"{label} AS label, SUM(CASE WHEN {after} THEN f.{_q(fact['measure'])} ELSE 0 END) - SUM(CASE WHEN {before} THEN f.{_q(fact['measure'])} ELSE 0 END) AS value"
         order = "value ASC" if spec.get("direction", "drop") == "drop" else "value DESC"
         return limit(f"SELECT {select} {from_clause()}{where([f'(({before}) OR ({after}))'])} GROUP BY {label} ORDER BY {order}", top)
     if kind == "range_value":
@@ -1976,7 +2104,7 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
         return f"SELECT {measure} AS value {from_clause()}{where()}"
     if kind == "share":
         part = joins.ref(spec["attr"])
-        return f"SELECT 100.0 * SUM(CASE WHEN {part} = {_sql_literal(spec['value'])} THEN f.{fact['measure']} ELSE 0 END) / {measure} AS value {from_clause()}{where()}"
+        return f"SELECT 100.0 * SUM(CASE WHEN {part} = {_sql_literal(spec['value'])} THEN f.{_q(fact['measure'])} ELSE 0 END) / {measure} AS value {from_clause()}{where()}"
     if kind == "top_share":
         label = joins.ref(spec["attr"])
         inner = limit(f"SELECT {measure} AS value {from_clause()}{where()} GROUP BY {label} ORDER BY value DESC", top)
@@ -1987,10 +2115,10 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
         return limit(f"SELECT {label} AS label, {measure} AS value {from_clause()}{where()} GROUP BY {label} ORDER BY value DESC", top)
     if kind == "entity_orders":
         label = joins.ref(spec["attr"])
-        return limit(f"SELECT {label} AS label, COUNT(DISTINCT f.{fact['order_column']}) AS value {from_clause()}{where()} GROUP BY {label} ORDER BY value DESC", top)
+        return limit(f"SELECT {label} AS label, COUNT(DISTINCT f.{_q(fact['order_column'])}) AS value {from_clause()}{where()} GROUP BY {label} ORDER BY value DESC", top)
     if kind == "having_count":
         label = joins.ref(spec["attr"])
-        inner = f"SELECT {label} AS label, COUNT(DISTINCT f.{fact['order_column']}) AS orders {from_clause()}{where()} GROUP BY {label} HAVING COUNT(DISTINCT f.{fact['order_column']}) > {int(spec['threshold'])}"
+        inner = f"SELECT {label} AS label, COUNT(DISTINCT f.{_q(fact['order_column'])}) AS orders {from_clause()}{where()} GROUP BY {label} HAVING COUNT(DISTINCT f.{_q(fact['order_column'])}) > {int(spec['threshold'])}"
         return f"SELECT COUNT(*) AS value FROM ({inner}) t"
     if kind == "anti_join":
         label = joins.ref(spec["attr"])
@@ -2020,7 +2148,7 @@ def _paths_by_role(paths: Sequence[Mapping[str, Any]], terms: Collection[str] = 
         return sorted(
             candidates,
             key=lambda p: (
-                -sum(1 for term in terms if term and term in f"{p['hops'][-1]['table']} {p['column']}".casefold()),
+                -sum(1 for term in terms if term and term in f"{p['hops'][-1]['table'] if p.get('hops') else ''} {p['column']}".casefold()),
                 not str(p["column"]).casefold().startswith("english"),
                 -len(p["hops"]) if prefer_depth == -1 else len(p["hops"]),
             ),
@@ -2113,6 +2241,188 @@ def discover_drivers(executor: Any, schema: SourceSchema, snapshot: AgentSnapsho
     return found
 
 
+class _HintBudget(Exception):
+    """The query budget for the hints is spent."""
+
+
+def discover_hints(
+    executor: Any,
+    schema: SourceSchema,
+    snapshot: AgentSnapshot,
+    years: Sequence[int] | None = None,
+    *,
+    discovered: Mapping[str, Mapping[str, Any]] | None = None,
+    context: ReviewContext | None = None,
+    facts: int = 2,
+    attributes: int = 6,
+    budget: int = 40,
+) -> list[Finding]:
+    """Hints from the data itself, as findings with basis ``"data"``: what neither the agent's author nor the agent would think to state.
+
+    Referential gaps (fact keys with no match, dimension keys that repeat),
+    values spelled in several cases or with padding (a lakehouse compares
+    case-sensitively), the vocabulary of small attributes (users say
+    "bikes" for the Bikes category), several date columns on a fact, partial
+    years and coverage, negative or missing measures, snowflaked join paths,
+    personal data on joined tables, a measure name shared by several facts.
+    Each finding's ``suggestion`` is the instruction line to add; the
+    reviewer decides. At most ``budget`` queries run; the hints that need
+    none always come. A single failed probe is skipped, never raised.
+    """
+    source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
+    instructions = (source.instructions if source else "") + "\n" + snapshot.instructions + ("\n" + context.text if context is not None else "")
+    joins = dict(_heuristic_joins(schema))
+    joins.update(_joins_from_instructions(instructions, schema))
+    excluded = excluded_terms(instructions)
+    terms = context.terms if context is not None else ()
+    date_tables = {t for t in schema.tables if re.search(r"(date|calendar)", t, re.IGNORECASE)}
+    all_facts = _fact_tables(schema)
+    fact_list = _scoped_facts(schema, instructions)[:facts]
+    hints: list[Finding] = []
+    seen: set[tuple[str, str, str]] = set()
+    spent = 0
+
+    def hint(code: str, severity: str, table: str, column: str, message: str, suggestion: str, *evidence: str) -> None:
+        key = (code, table, column)
+        if key in seen:
+            return
+        seen.add(key)
+        hints.append(Finding(code, severity, message, schema.source_id, tuple(e[:300] for e in evidence), suggestion, basis="data"))
+
+    def run(sql: str) -> list[dict[str, Any]]:
+        nonlocal spent
+        if spent >= budget:
+            raise _HintBudget
+        spent += 1
+        return executor.run({"kind": "sql", "sql": sql})
+
+    def attempt(sql: str) -> list[dict[str, Any]]:
+        try:
+            return run(sql)
+        except _HintBudget:
+            raise
+        except Exception:  # noqa: BLE001 - one failed probe is not a finding
+            return []
+
+    plans: list[tuple[str, Mapping[str, Any] | None, list[str], list[dict[str, Any]], dict[str, Mapping[str, Any]]]] = []
+    for table in fact_list:
+        date = _date_join(schema, table, joins)
+        measures = _measure_columns(schema, table)
+        paths = attribute_paths(schema, table, joins, excluded)
+        roles = _paths_by_role(paths, terms)
+        plans.append((table, date, measures, paths, roles))
+        columns = schema.tables[table]
+        # hints that need no query
+        time_columns = [c for c in columns if _is_time_column(schema, table, c)]
+        if date and len(time_columns) > 1:
+            others = [c for c in time_columns if c != date["column"]]
+            hint("date_choice", "info", table, date["column"], f"{table} has {len(time_columns)} date columns ({', '.join(time_columns[:5])}); the review dates a row by {date['column']}.", f"A {humanize_table(table)} row is dated by {date['column']}; use {', '.join(others[:3])} only when the user asks about that date.")
+        for column in measures[:2]:
+            others = [t for t in all_facts if t != table and column in schema.tables[t]]
+            if others:
+                hint("shared_measure", "info", table, column, f"{column} exists in {table} and {', '.join(others)}; a total of {humanize_column(column)} is ambiguous between them.", f"'{humanize_column(column).capitalize()}' on its own means {humanize_table(table)}; say '{humanize_table(others[0])}' for {others[0]}, or combine them when the user asks for the total across both.")
+        for path in roles.values():
+            if len(path.get("hops") or ()) >= 2:
+                chain = " -> ".join([table] + [str(h["table"]) for h in path["hops"]])
+                hint("join_path", "info", table, str(path["column"]), f"{path['column']} is {len(path['hops'])} joins away from {table}: {chain}.", f"To group {humanize_table(table)} by {humanize_column(str(path['column']))}, join " + ", then ".join(f"{h['from_column']} to {h['table']}.{h['key']}" for h in path["hops"]) + ".")
+        for dim in [table] + sorted({str(h["table"]) for p in paths for h in (p.get("hops") or ())}):
+            personal = [c for c in schema.tables[dim] if _PERSONAL_HINT.search(c)]
+            if personal:
+                hint("personal_data", "low", dim, "", f"{dim} carries personal data: {', '.join(personal[:6])}.", f"Do not return {', '.join(personal[:6])} from {dim}; answer with counts and totals instead.")
+        if date and not date.get("year") and not date.get("period"):
+            stamp_table = str(date.get("date_table") or table)
+            stamp = str(date.get("timestamp_column") or date["column"])
+            if _TEXT_TYPE.search(schema.column_type(stamp_table, stamp)):
+                hint("date_as_text", "low", stamp_table, stamp, f"{stamp_table}.{stamp} is stored as text, not as a date.", f"{stamp} is text; cast it to a date before filtering or grouping by period.")
+    # hints that ask the data
+    checked_dims: set[str] = set()
+    checked_attributes: set[tuple[str, str]] = set()
+    vocabularies = 0
+    try:
+        for table, date, measures, paths, roles in plans:
+            columns = schema.tables[table]
+            if date:
+                year_expr = _year_expr(date, "duckdb")
+                month_expr = _month_expr(date, "duckdb")
+                join = _time_join(date)
+                sql = f"SELECT MIN({year_expr}) AS first_year, MAX({year_expr}) AS last_year" + (f", MAX(CAST({year_expr} AS BIGINT) * 100 + CAST({month_expr} AS BIGINT)) AS last_month" if month_expr else "") + f" FROM {table} f" + (f" {join}" if join else "")
+                rows = attempt(sql)
+                if rows and rows[0].get("first_year") is not None and rows[0].get("last_year") is not None:
+                    first, last = int(rows[0]["first_year"]), int(rows[0]["last_year"])
+                    last_month = int(rows[0]["last_month"]) % 100 if rows[0].get("last_month") is not None else None
+                    if last_month and last_month < 12:
+                        hint("partial_year", "low", table, str(date["column"]), f"{table} covers {first} to {last}; {last} ends in {calendar.month_name[last_month]}.", f"Data for {last} is partial (through {calendar.month_name[last_month]}); say so when answering about {last}, and do not compare it with a full year.", sql)
+                    else:
+                        hint("coverage", "info", table, str(date["column"]), f"{table} covers {first} to {last}.", f"Data covers {first} to {last}; say so when a question asks about another period.", sql)
+            if measures:
+                m = measures[0]
+                sql = f"SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE {_q(m)} IS NULL) AS nulls, COUNT(*) FILTER (WHERE {_q(m)} < 0) AS negatives FROM {table}"
+                rows = attempt(sql)
+                if rows:
+                    n, nulls, negatives = (int(rows[0].get(k) or 0) for k in ("n", "nulls", "negatives"))
+                    if negatives:
+                        hint("negative_measure", "low", table, m, f"{m} is negative in {negatives:,} of {n:,} rows of {table}.", f"{humanize_column(m).capitalize()} has negative rows (returns or corrections); say whether totals include them.", sql)
+                    if nulls:
+                        hint("null_measure", "low", table, m, f"{m} is missing in {nulls:,} of {n:,} rows of {table}.", f"{humanize_column(m).capitalize()} is missing on some rows; say whether they are left out of counts and averages.", sql)
+            checked = 0
+            for column in columns:
+                target = joins.get((table, column))
+                if target is None or _DATE_KEY.search(column) or target[0] in date_tables or checked >= 6:
+                    continue
+                checked += 1
+                dim, key = target
+                sql = f"SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM {dim} d WHERE d.{_q(key)} = f.{_q(column)})) AS orphans FROM {table} f"  # no fan-out from a dimension key that repeats
+                rows = attempt(sql)
+                if rows and int(rows[0].get("orphans") or 0):
+                    n, orphans = int(rows[0].get("n") or 0), int(rows[0]["orphans"])
+                    pct = 100.0 * orphans / n if n else 0.0
+                    hint("join_orphans", "medium", table, column, f"{orphans:,} of {n:,} rows ({pct:.1f}%) of {table} have a {column} with no match in {dim}; an inner join drops them.", f"Join {table}.{column} to {dim}.{key} with a LEFT JOIN, or say that {pct:.1f}% of {humanize_table(table)} rows have no {humanize_table(dim)}.", sql)
+                if dim not in checked_dims:
+                    checked_dims.add(dim)
+                    sql = f"SELECT COUNT(*) - COUNT(DISTINCT {_q(key)}) AS duplicates FROM {dim}"
+                    rows = attempt(sql)
+                    dup = int(rows[0].get("duplicates") or 0) if rows else 0
+                    if dup:
+                        hint("duplicate_keys", "medium", dim, key, f"{dim}.{key} repeats {dup:,} time{'s' if dup != 1 else ''}; joining {table} to it multiplies rows.", f"When joining {dim}, keep one row per {key} (say which: the current or the latest one).", sql)
+            ordered = list(roles.values()) + [p for p in paths if all(p is not r for r in roles.values())]
+            entry = (discovered or {}).get(table) if discovered else None
+            top_category = list((entry.get("top") or {}).get("category") or []) if isinstance(entry, Mapping) else []
+            count = 0
+            for path in ordered:
+                dim, column = _path_table(path, table), str(path["column"])
+                if (dim, column) in checked_attributes:
+                    continue
+                if count >= attributes:
+                    break
+                checked_attributes.add((dim, column))
+                count += 1
+                q = _q(column)
+                sql = f"SELECT COUNT(DISTINCT {q}) AS distinct_values, COUNT(DISTINCT lower(ltrim(rtrim({q})))) AS normalized, COUNT(*) FILTER (WHERE {q} <> ltrim(rtrim({q}))) AS padded FROM {dim}"  # ltrim(rtrim()) rather than trim(): the read-only validator rejects the keyword form
+                rows = attempt(sql)
+                if not rows:
+                    continue
+                distinct, normalized, padded = (int(rows[0].get(k) or 0) for k in ("distinct_values", "normalized", "padded"))
+                if distinct > normalized:
+                    example_sql = f"SELECT string_agg(v, ' | ' ORDER BY v) AS variants FROM (SELECT DISTINCT {q} AS v, lower(ltrim(rtrim({q}))) AS k FROM {dim} WHERE {q} IS NOT NULL) t GROUP BY k HAVING COUNT(*) > 1 ORDER BY k LIMIT 3"
+                    examples = [str(r.get("variants")) for r in attempt(example_sql) if r.get("variants")]
+                    hint("case_variants", "medium", dim, column, f"{dim}.{column} spells {distinct - normalized} value(s) in more than one case or spacing (for example {'; '.join(examples) or 'see the query'}); lakehouse SQL compares case-sensitively, so a filter on one spelling misses the others.", f"Compare {column} with lower(trim({column})) = lower('<value>'), or normalise the values in {dim}.", sql, example_sql)
+                elif padded:
+                    hint("padded_values", "low", dim, column, f"{dim}.{column} has {padded:,} value(s) with leading or trailing spaces; an exact filter misses them.", f"Compare {column} with trim({column}), or trim the values in {dim}.", sql)
+                named_grouping = bool(_CATEGORY_HINT.search(column) or _PLACE_HINT.search(column) or re.search(r"(status|type|line|group|tier|level|channel|stage)", column, re.IGNORECASE))
+                if 0 < distinct <= (30 if named_grouping else 12) and not _ENTITY_HINT.search(column) and not _PRODUCT_HINT.search(column) and vocabularies < 6:
+                    values_sql = f"SELECT DISTINCT {q} AS value FROM {dim} WHERE {q} IS NOT NULL ORDER BY 1 LIMIT 30"
+                    values = list(dict.fromkeys(str(r.get("value")).strip() for r in attempt(values_sql) if r.get("value") is not None and str(r.get("value")).strip()))
+                    if values and any(re.search(r"[A-Za-z]", v) for v in values):  # a vocabulary of numbers helps nobody
+                        vocabularies += 1
+                        preferred = next((v for v in top_category if v in values and v.lower() != v), None)
+                        sample = preferred or next((v for v in values if v.lower() != v and re.search(r"[A-Za-z]", v)), None)
+                        example = f" (for example {sample.lower()} means {sample})" if sample else ""
+                        hint("vocabulary", "info", dim, column, f"{dim}.{column} has {distinct} values: {', '.join(values)}.", f"{humanize_column(column).capitalize()} values are {', '.join(values)}; match a user's word to them case-insensitively and accept singular or plural{example}.", values_sql)
+    except _HintBudget:
+        pass
+    return hints
+
+
 def _iso_date(value: Any) -> str | None:
     """A date as ISO text from a yyyymmdd key, a date, a datetime or ISO text."""
     if value is None:
@@ -2140,6 +2450,25 @@ def _month_name(period: Mapping[str, Any]) -> str:
     return f"{calendar.month_name[int(month)]} {int(period['year'])}" if month else str(period["year"])
 
 
+def _order_word(vocabulary: Vocabulary, column: str | None, *, singular: bool = False) -> str:
+    """What the distinct-count column counts: the instructions' word, else the column's own (tickets, transactions, invoices), else orders."""
+    word = vocabulary.orders
+    if word == "orders" and column:
+        lowered = column.casefold()
+        word = next((plural for stem, plural in (("ticket", "tickets"), ("transaction", "transactions"), ("invoice", "invoices"), ("payment", "payments"), ("receipt", "receipts"), ("booking", "bookings"), ("visit", "visits")) if stem in lowered), "orders")
+    return word[:-1] if singular and word.endswith("s") else word
+
+
+def _attribute_word(vocabulary: Vocabulary, path: Mapping[str, Any], fact: str) -> str:
+    """The business word for a grouping column; a column called plainly ``name`` takes its table's word (``franchise`` for ``sales_franchises.name``)."""
+    column = str(path["column"])
+    if column.casefold() == "name":
+        table = _path_table(path, fact)
+        word = humanize_table(table)
+        return word[:-1] if word.endswith("s") and len(word) > 3 else word
+    return vocabulary.attribute(column)
+
+
 def _driver_questions(fact_entry: Mapping[str, Any], vocabulary: Vocabulary, schema: SourceSchema, schema_prefix: str | None, years: Sequence[int], top: int, add: Callable[..., None]) -> None:
     """The driver-based and analytical questions for one fact, from what discovery found."""
     fact = fact_entry["fact"]
@@ -2148,7 +2477,7 @@ def _driver_questions(fact_entry: Mapping[str, Any], vocabulary: Vocabulary, sch
     latest = max(years)
     channel = vocabulary.table(fact["table"])
     cm = _channel_measure(channel, vocabulary.measure(fact["measure"]))
-    words = {role: vocabulary.attribute(str(path["column"])) for role, path in roles.items()}
+    words = {role: _attribute_word(vocabulary, path, fact["table"]) for role, path in roles.items()}
     base = {"facts": [fact]}
     if _has_month(fact["date"]):
         add("month_trend", f"How did {cm} move month by month in {latest}?", f"SUM({fact['measure']}) in {fact['table']} by month for {latest}", {**base, "kind": "month_trend", "year": latest})
@@ -2173,7 +2502,7 @@ def _driver_questions(fact_entry: Mapping[str, Any], vocabulary: Vocabulary, sch
             add("entity_value", f"How is {first} doing on {category_names[0]} in {latest}?", f"SUM({fact['measure']}) in {fact['table']} for {roles['entity']['column']} = {first!r} and {roles['category']['column']} = {category_names[0]!r} in {latest}", {**base, "kind": "entity_value", "year": latest, "filters": [{"attr": entity, "value": first}, {"attr": roles["category"], "value": category_names[0]}]})
         add("top_share", f"What share of {latest} {cm} did the top 10 {_plural(words['entity'])} bring in?", f"Share of SUM({fact['measure']}) in {fact['table']} for {latest} from the top 10 {roles['entity']['column']}", {**base, "kind": "top_share", "attr": entity, "year": latest, "top": 10})
         if fact_entry.get("threshold") and fact.get("order_column"):
-            add("having_count", f"How many {_plural(words['entity'])} placed more than {fact_entry['threshold']} {'order' if fact_entry['threshold'] == 1 else 'orders'} in {latest}?", f"Count of {roles['entity']['column']} with more than {fact_entry['threshold']} distinct {fact['order_column']} in {latest}", {**base, "kind": "having_count", "attr": entity, "year": latest, "threshold": fact_entry["threshold"]})
+            add("having_count", f"How many {_plural(words['entity'])} placed more than {fact_entry['threshold']} {_order_word(vocabulary, fact.get('order_column'), singular=fact_entry['threshold'] == 1)} in {latest}?", f"Count of {roles['entity']['column']} with more than {fact_entry['threshold']} distinct {fact['order_column']} in {latest}", {**base, "kind": "having_count", "attr": entity, "year": latest, "threshold": fact_entry["threshold"]})
         if len(years) >= 2:
             add("anti_join", f"Which {_plural(words['entity'])} bought in {years[-2]} but not in {latest}?", f"{roles['entity']['column']} present in {years[-2]} and absent in {latest} in {fact['table']}", {**base, "kind": "anti_join", "attr": entity, "year": years[-2], "other_year": latest})
         if len(names) >= 2:
@@ -2181,6 +2510,14 @@ def _driver_questions(fact_entry: Mapping[str, Any], vocabulary: Vocabulary, sch
     category_names = tops.get("category") or []
     if "category" in roles and category_names:
         add("share", f"What share of {latest} {cm} came from {category_names[0]}?", f"Share of SUM({fact['measure']}) in {fact['table']} for {latest} where {roles['category']['column']} = {category_names[0]!r}", {**base, "kind": "share", "attr": roles["category"], "year": latest, "value": category_names[0]})
+    if "category" in roles and category_names and category_names[0].lower() != category_names[0]:
+        exact = category_names[0]
+        add(
+            "fuzzy_value",
+            f"What was {cm} for {exact.lower()} in {latest}?",
+            f"SUM({fact['measure']}) in {fact['table']} for {latest} where {roles['category']['column']} = {exact!r}; the question spells it {exact.lower()!r}, as a user would",
+            {**base, "kind": "entity_value", "year": latest, "filters": [{"attr": roles["category"], "value": exact}]},
+        )
     _period_questions(fact_entry, cm, years, top, roles, words, add)
 
 
@@ -2192,6 +2529,8 @@ def _period_questions(fact_entry: Mapping[str, Any], cm: str, years: Sequence[in
     max_date = _dt.date.fromisoformat(fact_entry["max_date"]) if fact_entry.get("max_date") else None
 
     def ranged(kind: str, text: str, technical: str, periods: Sequence[Mapping[str, Any]], alternates: Sequence[tuple[str, Sequence[Mapping[str, Any]]]] = ()) -> None:
+        if not _has_day(fact["date"]) and any("start" in p for p in periods):
+            return  # a period written as text cannot express a range of dates
         spec = {**base, "kind": "range_value", "periods": list(periods)}
         add(kind, text, technical, spec, [(f"period:{label}", {"kind": "sql", "sql": _sql({**base, "kind": "range_value", "periods": list(other)}, dialect="duckdb")}) for label, other in alternates])
 
@@ -2274,9 +2613,9 @@ def _period_questions(fact_entry: Mapping[str, Any], cm: str, years: Sequence[in
     # instruction triggers: a partial year, and personal data
     place = roles.get("place")
     hops = list(place.get("hops") or ()) if place else []
-    if max_date and max_date.year > latest and place and len(hops) == 1:
+    if max_date and max_date.year > latest and place and len(hops) <= 1:
         partial = max_date.year
-        attribute = {"fact_key": hops[0]["from_column"], "dim_table": hops[0]["table"], "dim_key": hops[0]["key"], "column": place["column"], "alias": place["column"]}
+        attribute = {"fact_key": hops[0]["from_column"], "dim_table": hops[0]["table"], "dim_key": hops[0]["key"], "column": place["column"], "alias": place["column"]} if hops else {"fact_key": None, "dim_table": fact["table"], "dim_key": None, "column": place["column"], "alias": place["column"]}
         add(
             "partial_year_rank",
             f"Which {top} {_plural(words['place'])} had the highest {cm} in {partial} so far?",
@@ -2345,8 +2684,8 @@ def generate_questions(
     questions: list[Question] = []
     sources = {s.id: s for s in snapshot.datasources}
     supplied_target = next((s.source_id for s in schemas if s.kind != "semantic_model"), schemas[0].source_id if schemas else None)
-    # with terms to rank by, generate everything the schema supports and cut after ranking
-    generation_limit = 10_000 if context is not None and context.ranking_terms else limit_per_source
+    # generate everything the schema supports and cut after ranking, so a source with many facts still gets its trend, driver and period questions
+    generation_limit = 10_000
     for schema in schemas:
         source = sources.get(schema.source_id)
         source_years = list((years or {}).get(schema.source_id) or [])
@@ -2436,13 +2775,13 @@ def generate_questions(
             if fact["order_column"]:
                 add(
                     "distinct_by_year",
-                    f"How many {channel} {vocabulary.orders} were there per year {span_words}?",
+                    f"How many {_counted(channel, _order_word(vocabulary, fact.get('order_column')))} were there per year {span_words}?",
                     f"How many distinct {fact['order_column']} values (orders) does {fact['table']} have per year for {span_technical}?",
                     {"kind": "distinct_by_year", "facts": [base], "years": source_years},
                 )
                 add(
                     "distinct_orders_year",
-                    f"How many {channel} {vocabulary.orders} were placed in {latest}?",
+                    f"How many {_counted(channel, _order_word(vocabulary, fact.get('order_column')))} were placed in {latest}?",
                     f"How many distinct {fact['order_column']} values does {fact['table']} have for {latest} (not the row count)?",
                     {"kind": "distinct_orders_year", "facts": [base], "year": latest},
                     [("rowcount", {"kind": "sql", "sql": _sql({"kind": "rowcount_year", "facts": [base], "year": latest}, dialect="duckdb")})],
@@ -2456,7 +2795,7 @@ def generate_questions(
                 )
             for fact_key, dim_table, dim_key, attribute in _diverse_attributes(fact["attributes"], context.terms if context is not None else ())[:2]:
                 attr = {"fact_key": fact_key, "dim_table": dim_table, "dim_key": dim_key, "column": attribute, "alias": attribute}
-                word = vocabulary.attribute(attribute)
+                word = _attribute_word(vocabulary, {"column": attribute, "hops": [{"from_column": fact_key, "table": dim_table, "key": dim_key}] if fact_key else []}, fact["table"])
                 add(
                     "top_n",
                     f"Which {top} {_plural(word)} had the highest {cm} in {latest}?",
@@ -2559,7 +2898,7 @@ def derive_filter_questions(questions: Sequence[Question], references: Sequence[
         word = phrases.get("attribute") or humanize_column(attr["column"])
         spec = {"kind": "filter", "facts": [fact], "year": question.spec["year"], "value": label}
         prefix = "dbo" if "dbo." in question.reference_query else None
-        schema_tables = {fact["table"]: (), attr["dim_table"]: (), fact["date"]["date_table"]: ()}
+        schema_tables = {t: () for t in (fact["table"], attr.get("dim_table"), fact["date"].get("date_table")) if t}
         qid = f"{question.source_id}.f{seen[question.source_id]}"
         added_questions.append(
             Question(
@@ -2588,7 +2927,7 @@ def _semantic_questions(schema: SourceSchema, years: Sequence[int], *, top: int,
         for t, columns in schema.tables.items()
         if t != date_table
         for c in columns
-        if _ATTRIBUTE_HINT.search(c) and not _KEY_HINT.search(c)
+        if _ATTRIBUTE_HINT.search(c) and not _is_key(c)
     ][:3]
     count = 0
     for measure in list(schema.measures[:3]):
@@ -3284,7 +3623,11 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
         return Graded(question.id, "wrong", "values_differ", f"{present} of {len(labels)} names present", present, len(labels))
     if not numbers:
         if _ABSTAIN_HINT.search(text or ""):
+            if question.kind == "fuzzy_value":
+                return _fuzzy_failure(question, len(expected))
             return Graded(question.id, "abstained", "agent_abstained", "the agent declined a question the source answers", 0, len(expected))
+        if question.kind == "fuzzy_value":
+            return _fuzzy_failure(question, len(expected))
         return Graded(question.id, "incomplete", "no_numbers", "no figures in the answer", 0, len(expected))
     if expected and question.execution.get("kind") == "supplied_text":
         # a prose reference may say more than the question asked; the agent is
@@ -3351,7 +3694,14 @@ _CAUSE_GUIDANCE = {
     "answered_out_of_scope": "Decline questions on the topics the instructions put out of scope; never produce figures for them.",
     "assumption_not_stated": "When a period is relative or ambiguous (last month, winter, the week after a holiday), say which dates were used.",
     "personal_data_listed": "Never list email addresses, phone numbers or street addresses; summarise customers instead.",
+    "fuzzy_match_failed": "Match a user's word to the stored values case-insensitively and accept singular or plural (bikes means Bikes); the vocabulary in the data-source instructions lists the values.",
 }
+
+
+def _fuzzy_failure(question: Question, expected: int) -> Graded:
+    """A fuzzy-value question answered without a figure: the agent did not map the user's word to the stored value."""
+    exact = next((str(f.get("value")) for f in (question.spec.get("filters") or ()) if isinstance(f, Mapping)), "")
+    return Graded(question.id, "wrong", "fuzzy_match_failed", f"no figure for a value spelled as a user would; the stored value is {exact!r}", 0, expected)
 
 
 def suggest(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema], findings: Sequence[Finding], questions: Sequence[Question], references: Sequence[Reference], graded: Sequence[Graded]) -> Suggestions:
@@ -3390,6 +3740,13 @@ def suggest(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema], findings: 
         if schema and schema.relationships and "join" not in text.casefold():
             additions.append("## Join Paths")
             additions.extend(f"- Join '{a}'[{ac}] to '{b}'[{bc}]." for a, ac, b, bc in schema.relationships[:12])
+        data_lines: list[str] = []
+        for finding in findings:
+            if finding.basis == "data" and finding.source_id == source.id and finding.suggestion and f"- {finding.suggestion}" not in data_lines:
+                data_lines.append(f"- {finding.suggestion}")
+        if data_lines:
+            additions.append("## From the data (inferred by the review; confirm before applying)")
+            additions.extend(data_lines[:20])
         definitions_in_source = extract_definitions(text)
         used: list[str] = []
         for question in questions:
@@ -3439,7 +3796,11 @@ def _short_json(value: Any, limit: int = 240) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
-_PERSONAL_HINT = re.compile(r"(e_?mail|phone|mobile|fax|address|birth|\bdob\b|ssn|social_?security|passport|national_?id|tax_?id|salary|password|secret|token|credit|card_?number|iban|routing|first_?name|last_?name|middle_?name|full_?name|surname|gender|marital)", re.IGNORECASE)
+_PERSONAL_HINT = re.compile(
+    r"(e_?mail|phone|mobile|fax|address|birth|\bdob\b|ssn|social_?security|passport|national_?id|tax_?id|salary|password|secret|token|credit|card_?number|iban|routing|first_?name|last_?name|middle_?name|full_?name|surname|gender|marital"
+    r"|telefon|celular|endereco|direccion|adresse|nascimento|nacimiento|geburt|correo|courriel|\bcpf\b|\bcnpj\b|\bnif\b|\bdni\b|\brg\b|sexo|genero)",
+    re.IGNORECASE,
+)  # English first, then the tokens common in Portuguese, Spanish, French and German column names
 
 _KNOWLEDGE_USE = (
     "How the review uses it: the profile (tables, column types, joins) is the schema behind every generated question and its reference; "
@@ -3728,9 +4089,10 @@ class ReviewReport:
             parts.append(f"<tr><td>{esc(source.name or source.id)}</td><td>{esc(source.kind)}</td><td>{esc(shape)}</td><td>{len(source.selected_tables) if source.selected_tables else 'unknown'}</td><td>{len(source.fewshots)}</td><td>{len(source.instructions):,} chars</td><td>{'present' if source.description.strip() else 'missing'}</td></tr>")
         parts.append("</table>")
         parts.append("<h2>Findings</h2>")
-        if not self.findings:
+        setup_findings = [f for f in self.findings if f.basis != "data"]
+        if not setup_findings:
             parts.append('<div class="muted">No findings.</div>')
-        for f in self.findings:
+        for f in setup_findings:
             where = f' <span class="muted">({esc(_source_label(s, f.source_id))})</span>' if f.source_id else ""
             parts.append(f'<div class="card card-{esc(f.severity)}"><span class="badge sev-{esc(f.severity)}">{esc(f.severity)}</span><code>{esc(f.code)}</code>{where}<div>{esc(f.message)}</div>')
             if f.evidence:
@@ -3740,6 +4102,18 @@ class ReviewReport:
             if f.basis:
                 parts.append(f'<div class="muted">Basis: {esc(f.basis)}</div>')
             parts.append("</div>")
+        data_hints = [f for f in self.findings if f.basis == "data"]
+        if data_hints:
+            parts.append("<h2>Hints from the data</h2>")
+            parts.append('<div class="muted">Inferred from the data itself, not from the setup: referential gaps, spellings, vocabulary, coverage, personal data. The reviewer decides which become instructions or data fixes; the suggested data-source instructions carry them under "From the data".</div>')
+            for f in sorted(data_hints, key=lambda x: ("high", "medium", "low", "info").index(x.severity)):
+                where = f' <span class="muted">({esc(_source_label(s, f.source_id))})</span>' if f.source_id else ""
+                parts.append(f'<div class="card card-{esc(f.severity)}"><span class="badge sev-{esc(f.severity)}">{esc(f.severity)}</span><code>{esc(f.code)}</code>{where}<div>{esc(f.message)}</div>')
+                if f.evidence:
+                    parts.append("<ul>" + "".join(f"<li><code>{esc(e)}</code></li>" for e in f.evidence[:4]) + "</ul>")
+                if f.suggestion:
+                    parts.append(f"<div><b>Proposed instruction:</b> {esc(f.suggestion)}</div>")
+                parts.append("</div>")
         parts.append("<h2>Evaluation</h2>")
         counts = self.score()
         parts.append("<div>" + ("".join(f'<span class="chip out-{esc(k)}">{esc(k)}: {v}</span>' for k, v in sorted(counts.items())) or '<span class="muted">No questions.</span>') + "</div>")
@@ -3900,9 +4274,10 @@ class ReviewReport:
             lines.append(f"- {source.name or source.id} ({source.kind}): {shape}{selected}; {len(source.fewshots)} few-shots; {len(source.instructions):,} characters of instructions; description {'present' if source.description.strip() else 'missing'}.")
         lines.append("")
         lines.append("## Findings")
-        if not self.findings:
+        setup_findings = [f for f in self.findings if f.basis != "data"]
+        if not setup_findings:
             lines.append("- none")
-        for f in sorted(self.findings, key=lambda x: ("high", "medium", "low", "info").index(x.severity)):
+        for f in sorted(setup_findings, key=lambda x: ("high", "medium", "low", "info").index(x.severity)):
             lines.append(f"- **{f.severity}** `{f.code}`" + (f" ({f.source_id})" if f.source_id else "") + f": {f.message}")
             for e in f.evidence[:6]:
                 lines.append(f"    - {e}")
@@ -3911,6 +4286,15 @@ class ReviewReport:
             if f.basis:
                 lines.append(f"    - basis: {f.basis}")
         lines.append("")
+        data_hints = [f for f in self.findings if f.basis == "data"]
+        if data_hints:
+            lines.append("## Hints from the data")
+            lines.append("Inferred from the data itself, not from the setup; the reviewer decides which become instructions or data fixes.")
+            for f in sorted(data_hints, key=lambda x: ("high", "medium", "low", "info").index(x.severity)):
+                lines.append(f"- [{f.severity}] {f.code}: {f.message}")
+                if f.suggestion:
+                    lines.append(f"    - proposed instruction: {f.suggestion}")
+            lines.append("")
         lines.append("## Evaluation")
         counts = self.score()
         lines.append(", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "no questions")
@@ -4040,8 +4424,13 @@ def review_agent(
     repetitions: int = 1,
     context: ReviewContext | None = None,
     knowledge: Any = None,
+    hints: bool = True,
 ) -> ReviewReport:
     """The whole review: diagnose, generate, reference, ask, grade, suggest.
+
+    ``hints`` runs :func:`discover_hints` on every lakehouse source and adds
+    what it finds to the findings with basis ``"data"``; the suggested
+    data-source instructions carry their instruction lines.
 
     ``knowledge`` is what ``RLM.learn`` returned; the report summarises it.
 
@@ -4086,6 +4475,20 @@ def review_agent(
             for table, entry in discovered.get(schema.source_id, {}).items():
                 for error in entry.get("errors", []):
                     notes.append(f"{_source_label(snapshot, schema.source_id)}: discovery on {table}: {error}")
+    data_hints: list[Finding] = []
+    if hints:
+        for schema in schemas:
+            executor = executors.get(schema.source_id)
+            if executor is None or schema.kind == "semantic_model":
+                continue
+            started = time.monotonic()
+            try:
+                found_hints = discover_hints(executor, schema, snapshot, years.get(schema.source_id), discovered=discovered.get(schema.source_id), context=context)
+                data_hints.extend(found_hints)
+                notes.append(f"{_source_label(snapshot, schema.source_id)}: {len(found_hints)} hint(s) from the data in {round(time.monotonic() - started)} s")
+            except Exception as exc:  # noqa: BLE001 - hints are a bonus
+                notes.append(f"{_source_label(snapshot, schema.source_id)}: hints from the data failed: {type(exc).__name__}: {str(exc)[:200]}")
+    findings = tuple(findings) + tuple(data_hints)
     questions = generate_questions(snapshot, schemas, years=years, top=top, limit_per_source=limit_per_source, context=context, discovered=discovered)
     if not questions:
         notes.extend(explain_no_questions(snapshot, schemas, years))
@@ -4285,6 +4688,7 @@ def deepen(
             "Real names and periods in the data (ask about these by name, and about why things changed):\n" + "\n".join(facts_lines) if facts_lines else "",
             "Out-of-scope topics by the instructions: " + ", ".join(humanize_table(t) for t in sorted(excluded)) if excluded else "",
             "Schema digest:\n" + _schema_digest(report.schemas),
+            "Facts about the data the agent may not know (test whether it copes with them):\n" + "\n".join(f.message for f in report.findings if f.basis == "data") if any(f.basis == "data" for f in report.findings) else "",
             "Already asked:\n" + "\n".join(q.text for q in report.questions),
         ]
         if part

@@ -294,7 +294,7 @@ print("outcomes:", report.score())
 for note in report.notes:
     print("note:", note)
 for finding in report.findings:
-    print(f"[{finding.severity}] {finding.code}: {finding.message[:120]}")
+    print(f"[{finding.severity}] {finding.code}{' (from the data)' if finding.basis == 'data' else ''}: {finding.message[:120]}")
 
 # METADATA ********************
 

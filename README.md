@@ -208,7 +208,14 @@ relative period read another way is right when the answer says which dates
 it took), and a check of whether the answers follow the instructions' own
 rules (stating the period and the channel, rank and trend formats, currency
 format, the partial-year caveat, no personal data, the join and calendar
-rules), and compute each reference by executing a query against the source;
+rules), and compute each reference by executing a query against the source.
+It also asks the data what nobody would think to put in the instructions
+(keys with no match in their dimension, dimension keys that repeat, values
+spelled in several cases in a case-sensitive lakehouse, the vocabulary of
+small attributes so "bikes" maps to the Bikes category, partial years,
+negative measures, snowflaked join paths, personal data on joined tables) and
+proposes each as an instruction line the author confirms or turns into a
+data fix;
 ask the
 agent the same questions through its Responses endpoint, whose run steps
 carry the query it executed and the source it routed to, grade that query or
@@ -229,9 +236,14 @@ tables, the time axis). The generator works from the shape of the data, not
 from one sample's names: a fact is a table with measures and a time axis, the
 time axis is a date dimension with a year column, a date or timestamp column on
 the fact, or one on a joined header table (order lines through their order),
-joins follow key and id columns to the table that carries them, and when the
-column names say nothing the column types the profile recorded decide what is
-a measure, a time column or a grouping column. Topics the agent's instructions put out of scope are
+joins follow key and id columns to the table that carries them (irregular
+plurals and prefixed dimension tables included), grouping columns may sit on
+the fact itself, an integer or text date and a period written as text
+(2024/Q1) are time axes too, and when the column names say nothing the column
+types the profile recorded decide what is a measure, a time column or a
+grouping column. The generator was checked blind, with no agent and no
+instructions, on a SaaS schema, a bakery chain, a flat retail file and ARR
+tables keyed by quarter, as well as on AdventureWorks. Topics the agent's instructions put out of scope are
 not asked about, and a decline on one is graded as policy. The report renders
 as Markdown or as a self-contained HTML page and includes what `RLM.learn`
 recorded, read the way the review uses it: the selected tables as the RLM

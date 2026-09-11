@@ -137,6 +137,45 @@
   `RLM.enrich`, reports the lessons that appeared, and returns the enriched
   package as `report.learned_knowledge` for saving. `summarize_knowledge`
   takes the schemas and the snapshot for this.
+- **Hints from the data.** `discover_hints` asks the lakehouse a bounded
+  set of small questions nobody would think to put in the instructions and
+  turns the answers into findings with basis `data`, each with the
+  instruction line it suggests: fact keys with no match in their dimension
+  and dimension keys that repeat (an inner join drops or multiplies rows),
+  values spelled in several cases or with padding (a lakehouse compares
+  case-sensitively, so compare with `lower(trim(...))` or normalise the
+  data), the vocabulary of small attributes (users say "bikes" for the
+  Bikes category), several date columns on a fact, partial years and
+  coverage, negative or missing measures, snowflaked join paths, personal
+  data on joined tables, a measure name shared by several facts. The report
+  shows them under "Hints from the data", the suggested data-source
+  instructions carry them under "From the data (inferred by the review;
+  confirm before applying)", the RLM proposer hears them, and a
+  `fuzzy_value` question asks for the top category spelled as a user would
+  ("bikes"), graded `fuzzy_match_failed` when the agent cannot map it to
+  the stored value. `review_agent(hints=False)` turns it off.
+- **Tested on other data.** Running the blind pipeline (no agent, no
+  instructions) on a SaaS schema (CloudMetrics: companies, industries,
+  invoices, payments, subscriptions, usage logs), a bakery chain
+  (franchises, customers, transactions), a flat retail file with spaces in
+  its column names and an integer date, and ARR tables keyed by a text
+  quarter showed where the rules were still shaped by one sample, and the
+  rules changed: a key is a key by its form (`customerID`, `customer_id`,
+  `Customer ID`, `id_cliente`), never `amount_paid`; joins reach irregular
+  plurals (company to companies) and prefixed dimensions (`sales_customers`
+  for `customerID`) and skip a table's own primary key; a table with one
+  measure, a time axis and a reference to another table is a fact, and so is
+  a flat table whose grouping columns sit on its own rows; a fact's own date
+  outranks a joined table's; grouping columns on the fact itself are used
+  (product, payment method, status), never personal data; identifiers with
+  spaces are quoted; an integer date (20240131) and a text date are read
+  as dates; a period written as text (2024/Q1, 2024-03) is a time axis of
+  its own with year and quarter or month but no day grain; periods and flags
+  are never measures; a column called plainly `name` takes its table's word;
+  what is counted is named after the table's own key (tickets,
+  transactions, invoices); every question the schema supports is generated
+  before the limit is applied, so a source with many facts keeps its trend,
+  driver and period questions. Tests cover each of those shapes end to end.
 
 ### Changed
 

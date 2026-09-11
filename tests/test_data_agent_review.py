@@ -700,9 +700,11 @@ def test_no_questions_is_explained_and_year_discovery_failures_are_reported():
     assert any("no complete years were discovered" in note for note in report.notes)
     assert "Diagnostics:" in report.to_markdown()
 
-    no_date = schema_from_tables(LAKEHOUSE_ID, {k: v for k, v in TABLES.items() if k != "dimdate"})
+    keyed = schema_from_tables(LAKEHOUSE_ID, {k: v for k, v in TABLES.items() if k != "dimdate"})
+    assert not any("has no time axis" in note for note in explain_no_questions(_snapshot(), [keyed], {}))  # a date key without its dimension is still an integer date
+    no_date = schema_from_tables(LAKEHOUSE_ID, {k: (tuple(c for c in v if "Date" not in c) if k.startswith("fact") else v) for k, v in TABLES.items() if k != "dimdate"})
     notes = explain_no_questions(_snapshot(), [no_date], {})
-    assert any("factinternetsales has no time axis" in note for note in notes)
+    assert any("no fact table recognised" in note for note in notes)  # without any date column a table is not even a fact
     bare = AgentSnapshot(agent_id="a", name="Bare", instructions="Answer.", datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="lh", instructions="", description="d"),))
     dims_only = schema_from_tables(LAKEHOUSE_ID, {k: v for k, v in TABLES.items() if not k.startswith("fact")})
     assert any("no fact table recognised" in note for note in explain_no_questions(bare, [dims_only], {}))
@@ -800,7 +802,7 @@ def test_a_change_answer_is_right_by_the_change_or_by_both_totals_and_fewshots_u
     assert grade(question, reference, "Sales rose by 1,750 year over year.", agent_rows=[{"change": 1750.0}]).outcome == "correct"
     assert grade(question, reference, "Sales rose 50% year over year.", agent_rows=[{"change_pct": 50.0}]).outcome == "wrong"
 
-    questions = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=4)
+    questions = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=60)
     total = next(q for q in questions if q.kind == "total_by_year")
     assert "FROM dbo.factinternetsales" in total.reference_query and "JOIN dbo.dimdate" in total.reference_query
     assert "dbo." not in total.execution["sql"]
@@ -1672,3 +1674,318 @@ def test_the_verifier_captures_evidence_and_keeps_its_runs(monkeypatch):
     assert seen[-1]["capture_evidence"] is True and len(runs) == 2
     _rlm_verifier({"model": "x"}, {LAKEHOUSE_ID: "handle"}, knowledge=None, max_turns=2, timeout=10, results=runs)("q")
     assert "capture_evidence" not in seen[-1] and len(runs) == 4
+
+
+# ------------------------------------------------------------ hints from the data --
+
+
+def _messy_lakehouse():
+    """The reseller lakehouse with the defects a real one has: case variants, an orphan key, a duplicate dimension key, a negative amount, several date columns, personal data, a second fact sharing the measure name."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    months = [(2012, 10), (2012, 11), (2012, 12)] + [(2013, m) for m in range(1, 13)]
+    con.execute("CREATE TABLE dimdate (DateKey INTEGER, CalendarYear INTEGER, MonthNumberOfYear INTEGER, CalendarQuarter INTEGER)")
+    for year, month in months:
+        con.execute("INSERT INTO dimdate VALUES (?, ?, ?, ?)", [year * 10000 + month * 100 + 1, year, month, (month - 1) // 3 + 1])
+    con.execute("INSERT INTO dimdate VALUES (20140115, 2014, 1, 1)")
+    con.execute("CREATE TABLE dimproductcategory AS SELECT * FROM (VALUES (1, 'Bikes'), (2, 'Accessories')) t(ProductCategoryKey, EnglishProductCategoryName)")
+    con.execute("CREATE TABLE dimproductsubcategory AS SELECT * FROM (VALUES (1, 'Mountain Bikes', 1), (2, 'Helmets', 2)) t(ProductSubcategoryKey, EnglishProductSubcategoryName, ProductCategoryKey)")
+    con.execute("CREATE TABLE dimproduct AS SELECT * FROM (VALUES (1, 'Mountain-200', 1), (2, 'Road-350', 1), (3, 'Sport Helmet', 2), (3, 'Sport Helmet v2', 2)) t(ProductKey, EnglishProductName, ProductSubcategoryKey)")
+    con.execute("CREATE TABLE dimsalesterritory AS SELECT * FROM (VALUES (1, 'Northwest', 'United States', 'North America'), (2, 'Germany', 'Germany', 'Europe')) t(SalesTerritoryKey, SalesTerritoryRegion, SalesTerritoryCountry, SalesTerritoryGroup)")
+    con.execute("CREATE TABLE dimreseller AS SELECT * FROM (VALUES (1, 'Bike World', '555-0100'), (2, 'Trail Co', '555-0101'), (3, 'Pedal Shop', '555-0102'), (4, 'BIKE WORLD', '555-0100'), (5, ' Trail Co', '555-0101')) t(ResellerKey, ResellerName, Phone)")
+    rows = [
+        (1, 20121001, 20121005, 1, 1, "RO0a", 2000.0), (2, 20121101, 20121105, 1, 4, "RO0b", 400.0),
+        (1, 20121201, 20121205, 1, 1, "RO1", 3000.0), (2, 20121201, 20121205, 1, 2, "RO2", 1000.0), (3, 20121201, 20121205, 1, 3, "RO3", 200.0),
+        (1, 20130101, 20130105, 1, 1, "RO4", 500.0), (2, 20130101, 20130105, 1, 2, "RO5", 900.0), (3, 20130101, 20130105, 1, 3, "RO6", 250.0),
+        (1, 20130201, 20130205, 1, 1, "RO7", 1200.0), (2, 20130201, 20130205, 1, 2, "RO8", 800.0),
+        (1, 20130301, 20130305, 2, 1, "RO9", 1500.0), (3, 20130601, 20130605, 1, 3, "RO10", 300.0), (2, 20131001, 20131005, 2, 2, "RO11", 700.0),
+        (1, 20131201, 20131205, 1, 99, "RO12", 300.0), (2, 20131201, 20131205, 1, 2, "RO13", -50.0), (1, 20140115, 20140120, 1, 1, "RO14", 150.0),
+    ]
+    con.execute("CREATE TABLE factresellersales (ProductKey INTEGER, OrderDateKey INTEGER, ShipDateKey INTEGER, SalesTerritoryKey INTEGER, ResellerKey INTEGER, SalesOrderNumber VARCHAR, SalesAmount DOUBLE, OrderQuantity INTEGER)")
+    for product, order_date, ship_date, territory, reseller, order, amount in rows:
+        con.execute("INSERT INTO factresellersales VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [product, order_date, ship_date, territory, reseller, order, amount, 1])
+    con.execute("CREATE TABLE factinternetsales (ProductKey INTEGER, OrderDateKey INTEGER, SalesTerritoryKey INTEGER, SalesOrderNumber VARCHAR, SalesAmount DOUBLE, OrderQuantity INTEGER)")
+    con.execute("INSERT INTO factinternetsales VALUES (1, 20130101, 1, 'SO1', 100.0, 1), (2, 20130201, 2, 'SO2', 200.0, 1)")
+    calls = []
+
+    def query(sql, *, sources, timeout=None):
+        calls.append(sql)
+        relation = con.execute(sql)
+        return {"columns": [d[0] for d in relation.description], "rows": relation.fetchall(), "truncated": False}
+
+    tables = {
+        "dimdate": ("DateKey", "CalendarYear", "MonthNumberOfYear", "CalendarQuarter"),
+        "dimproductcategory": ("ProductCategoryKey", "EnglishProductCategoryName"),
+        "dimproductsubcategory": ("ProductSubcategoryKey", "EnglishProductSubcategoryName", "ProductCategoryKey"),
+        "dimproduct": ("ProductKey", "EnglishProductName", "ProductSubcategoryKey"),
+        "dimsalesterritory": ("SalesTerritoryKey", "SalesTerritoryRegion", "SalesTerritoryCountry", "SalesTerritoryGroup"),
+        "dimreseller": ("ResellerKey", "ResellerName", "Phone"),
+        "factresellersales": ("ProductKey", "OrderDateKey", "ShipDateKey", "SalesTerritoryKey", "ResellerKey", "SalesOrderNumber", "SalesAmount", "OrderQuantity"),
+        "factinternetsales": ("ProductKey", "OrderDateKey", "SalesTerritoryKey", "SalesOrderNumber", "SalesAmount", "OrderQuantity"),
+    }
+    return LakehouseExecutor(query, tables), schema_from_tables(LAKEHOUSE_ID, tables), calls
+
+
+def test_hints_from_the_data_name_what_nobody_would_think_to_state():
+    from fabric_rlm.data_agent_review import discover_hints
+
+    executor, schema, calls = _messy_lakehouse()
+    source = AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="AWLakehouse", instructions="Use dbo.factresellersales for reseller sales.", description="Reseller sales.")
+    snapshot = AgentSnapshot(agent_id="a", name="Sales Agent", instructions=AW_STYLE_INSTRUCTIONS, datasources=(source,))
+    hints = discover_hints(executor, schema, snapshot, [2012, 2013])
+    by_code = {}
+    for hint in hints:
+        by_code.setdefault(hint.code, []).append(hint)
+    assert all(h.basis == "data" and h.source_id == LAKEHOUSE_ID and h.suggestion for h in hints)
+    assert {"case_variants", "vocabulary", "join_orphans", "duplicate_keys", "negative_measure", "partial_year", "date_choice", "join_path", "personal_data", "shared_measure"} <= set(by_code), sorted(by_code)
+
+    case = by_code["case_variants"][0]
+    assert "dimreseller.ResellerName" in case.message and "BIKE WORLD | Bike World" in case.message and "case-sensitively" in case.message
+    assert case.suggestion == "Compare ResellerName with lower(trim(ResellerName)) = lower('<value>'), or normalise the values in dimreseller."
+    vocabulary = next(h for h in by_code["vocabulary"] if "EnglishProductCategoryName" in h.message)
+    assert "2 values: Accessories, Bikes" in vocabulary.message and "accessories means Accessories" in vocabulary.suggestion and "case-insensitively" in vocabulary.suggestion
+    orphans = by_code["join_orphans"][0]
+    assert "1 of 16 rows (6.2%) of factresellersales have a ResellerKey with no match in dimreseller" in orphans.message and orphans.suggestion.startswith("Join factresellersales.ResellerKey to dimreseller.ResellerKey with a LEFT JOIN")
+    assert "dimproduct.ProductKey repeats 1 time" in by_code["duplicate_keys"][0].message
+    assert "SalesAmount is negative in 1 of 16 rows of factresellersales" in by_code["negative_measure"][0].message
+    assert "factresellersales covers 2012 to 2014; 2014 ends in January" in by_code["partial_year"][0].message and "Data for 2014 is partial (through January)" in by_code["partial_year"][0].suggestion
+    assert "factresellersales has 2 date columns (OrderDateKey, ShipDateKey); the review dates a row by OrderDateKey" in by_code["date_choice"][0].message
+    assert "EnglishProductCategoryName is 3 joins away from factresellersales: factresellersales -> dimproduct -> dimproductsubcategory -> dimproductcategory" in by_code["join_path"][0].message
+    assert "dimreseller carries personal data: Phone" in by_code["personal_data"][0].message and "Do not return Phone from dimreseller" in by_code["personal_data"][0].suggestion
+    assert "SalesAmount exists in factresellersales and factinternetsales" in by_code["shared_measure"][0].message
+    assert len(calls) <= 40
+
+    limited_calls_before = len(calls)
+    few = discover_hints(executor, schema, snapshot, [2012, 2013], budget=3)
+    assert len(calls) - limited_calls_before == 3 and few  # the budget bounds the queries, the hints that need none still come
+
+
+def test_hints_reach_the_report_the_suggested_instructions_and_a_fuzzy_question():
+    executor, schema, _calls = _messy_lakehouse()
+    source = AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="AWLakehouse", instructions="Use dbo.factresellersales for reseller sales.", description="Reseller sales.")
+    snapshot = AgentSnapshot(agent_id="a", name="Sales Agent", instructions=AW_STYLE_INSTRUCTIONS, datasources=(source,))
+    asked = []
+
+    def agent(question):
+        asked.append(question)
+        return "I could not find a category named bikes." if "bikes" in question else "Reseller revenue was $1,000.00 in 2013."
+
+    report = review_agent(snapshot, [schema], {LAKEHOUSE_ID: executor}, agent, years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=40)
+    hints = [f for f in report.findings if f.basis == "data"]
+    assert hints and any(note.endswith("hint(s) from the data") or "hint(s) from the data in" in note for note in report.notes)
+    fuzzy = next(q for q in report.questions if q.kind == "fuzzy_value")
+    assert fuzzy.text == "What was reseller sales revenue for bikes in 2013?" and fuzzy.skill == "fuzzy" and "= 'Bikes'" in fuzzy.reference_query
+    reference = next(r for r in report.references if r.question_id == fuzzy.id)
+    assert reference.status == "ok" and reference.rows[0]["value"] == 5850.0
+    graded = next(g for g in report.graded if g.question_id == fuzzy.id)
+    assert graded.outcome == "wrong" and graded.cause == "fuzzy_match_failed" and "Bikes" in graded.detail
+    assert "BEHAVIOUR (from evaluation)" in report.suggestions.agent_instructions and "case-insensitively" in report.suggestions.agent_instructions
+    instructions = report.suggestions.datasource_instructions[LAKEHOUSE_ID]
+    assert "## From the data (inferred by the review; confirm before applying)" in instructions
+    assert "- Compare ResellerName with lower(trim(ResellerName))" in instructions and "bikes means Bikes" in instructions and "Data for 2014 is partial" in instructions
+    page = report.to_html()
+    assert "<h2>Hints from the data</h2>" in page and "BIKE WORLD | Bike World" in page and "Proposed instruction" in page
+    findings_section = page[page.index("<h2>Findings</h2>") : page.index("<h2>Hints from the data</h2>")]
+    assert "case_variants" not in findings_section  # hints are their own section, not setup findings
+    markdown = report.to_markdown()
+    assert "## Hints from the data" in markdown and "- [medium] case_variants:" in markdown
+
+    quiet = review_agent(snapshot, [schema], {LAKEHOUSE_ID: executor}, agent, years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=4, hints=False)
+    assert not [f for f in quiet.findings if f.basis == "data"] and "Hints from the data" not in quiet.to_html()
+
+
+def test_hints_generalise_to_a_lakehouse_with_no_english_names():
+    """No date dimension, id_ prefixed keys, Portuguese names: the hints still come from the shape and the types."""
+    from fabric_rlm.data_agent_review import discover_hints
+
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("CREATE TABLE pedidos (id_pedido VARCHAR, id_cliente VARCHAR, situacao VARCHAR, data_compra TIMESTAMP)")
+    con.execute("CREATE TABLE itens_pedido (id_pedido VARCHAR, id_produto VARCHAR, preco DOUBLE, frete DOUBLE)")
+    con.execute("CREATE TABLE produtos AS SELECT * FROM (VALUES ('p1', 'Beleza'), ('p2', 'informatica'), ('p3', 'moveis'), ('p3', 'moveis'), ('p4', 'beleza')) t(id_produto, categoria)")
+    con.execute("CREATE TABLE clientes AS SELECT * FROM (VALUES ('c1', 'sao paulo', 'SP', '11-5555'), ('c2', 'curitiba', 'PR', '41-5555')) t(id_cliente, cidade, uf, telefone)")
+    orders = [("o1", "c1", "2017-01-10"), ("o2", "c2", "2017-04-15"), ("o3", "c1", "2017-05-20"), ("o4", "c2", "2017-10-05"), ("o5", "c1", "2018-02-14"), ("o6", "c2", "2018-05-30"), ("o7", "c1", "2018-10-20"), ("o8", "c2", "2018-11-03")]
+    for order_id, customer, day in orders:
+        con.execute("INSERT INTO pedidos VALUES (?, ?, 'entregue', ?)", [order_id, customer, f"{day} 10:00:00"])
+    items = [("o1", "p1", 100.0), ("o2", "p2", 250.0), ("o3", "p1", 120.0), ("o4", "p3", 300.0), ("o5", "p2", 260.0), ("o6", "p9", 130.0), ("o7", "p3", 310.0), ("o8", "p4", -90.0)]
+    for order_id, product, price in items:
+        con.execute("INSERT INTO itens_pedido VALUES (?, ?, ?, ?)", [order_id, product, price, price / 10])
+
+    def query(sql, *, sources, timeout=None):
+        relation = con.execute(sql)
+        return {"columns": [d[0] for d in relation.description], "rows": relation.fetchall(), "truncated": False}
+
+    tables = {"pedidos": ("data_compra", "id_cliente", "id_pedido", "situacao"), "itens_pedido": ("frete", "id_pedido", "id_produto", "preco"), "produtos": ("categoria", "id_produto"), "clientes": ("cidade", "id_cliente", "telefone", "uf")}
+    types = {"pedidos": {"data_compra": "timestamp", "id_cliente": "string", "id_pedido": "string", "situacao": "string"}, "itens_pedido": {"frete": "double", "id_pedido": "string", "id_produto": "string", "preco": "double"}, "produtos": {"categoria": "string", "id_produto": "string"}, "clientes": {"cidade": "string", "id_cliente": "string", "telefone": "string", "uf": "string"}}
+    schema = schema_from_tables(LAKEHOUSE_ID, tables, types=types)
+    snapshot = AgentSnapshot(agent_id="a", name="Vendas Agent", instructions="", datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="Vendas", instructions="", description=""),))
+    hints = discover_hints(LakehouseExecutor(query, tables), schema, snapshot, [2017, 2018])
+    by_code = {}
+    for h in hints:
+        by_code.setdefault(h.code, []).append(h)
+    assert {"case_variants", "vocabulary", "join_orphans", "duplicate_keys", "negative_measure", "partial_year", "personal_data"} <= set(by_code), sorted(by_code)
+    by_code = {code: found[0] for code, found in by_code.items() if code != "vocabulary"} | {"vocabulary": next(h for h in by_code["vocabulary"] if "categoria" in h.message)}
+    assert "produtos.categoria" in by_code["case_variants"].message and "Beleza | beleza" in by_code["case_variants"].message
+    assert "1 of 8 rows (12.5%) of itens_pedido have a id_produto with no match in produtos" in by_code["join_orphans"].message
+    assert "produtos.id_produto repeats 1 time" in by_code["duplicate_keys"].message
+    assert "frete is negative in 1 of 8 rows of itens_pedido" in by_code["negative_measure"].message
+    assert "itens_pedido covers 2017 to 2018; 2018 ends in November" in by_code["partial_year"].message
+    assert "clientes carries personal data: telefone" in by_code["personal_data"].message
+    assert "produtos.categoria has 4 values: Beleza, beleza, informatica, moveis" in by_code["vocabulary"].message
+    assert "date_choice" not in by_code and "shared_measure" not in by_code and "join_path" not in by_code  # nothing invented for a shape that has none of those
+
+
+# ------------------------------------------------ the shapes the local datasets showed --
+
+
+def _duck(create: list[str]):
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    for statement in create:
+        con.execute(statement)
+
+    def query(sql, *, sources, timeout=None):
+        relation = con.execute(sql)
+        return {"columns": [d[0] for d in relation.description], "rows": relation.fetchall(), "truncated": False}
+
+    tables, types = {}, {}
+    for (name,) in con.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' ORDER BY 1").fetchall():
+        rows = con.execute(f'DESCRIBE "{name}"').fetchall()
+        tables[name] = tuple(r[0] for r in rows)
+        types[name] = {r[0]: str(r[1]) for r in rows}
+    return LakehouseExecutor(query, tables), schema_from_tables(LAKEHOUSE_ID, tables, types=types)
+
+
+def _blind(name="Blind"):
+    source = AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name=name, instructions="", description="")
+    return source, AgentSnapshot(agent_id="a", name=f"{name} agent", instructions="", datasources=(source,))
+
+
+def _run_blind(executor, schema, *, top=3, limit=40):
+    from fabric_rlm.data_agent_review import derive_filter_questions, discover_drivers, discover_hints
+
+    source, snapshot = _blind()
+    years = discover_years(executor, schema, source, "")
+    found = discover_drivers(executor, schema, snapshot, years)
+    questions = generate_questions(snapshot, [schema], years={LAKEHOUSE_ID: years}, top=top, limit_per_source=limit, discovered={LAKEHOUSE_ID: found})
+    questions, references = derive_filter_questions(questions, build_references(questions, {LAKEHOUSE_ID: executor}))
+    failed = {q.text: r.note for q, r in zip(questions, references) if r.status not in {"ok", "decline", "behaviour", "abstained"}}
+    hints = discover_hints(executor, schema, snapshot, years, discovered=found)
+    return years, found, questions, references, failed, hints
+
+
+def test_a_saas_schema_with_irregular_plurals_and_single_measure_facts():
+    """companies, industries, invoices, payments, subscriptions: no fact prefix, one measure per table, company to companies."""
+    from fabric_rlm.data_agent_review import _fact_tables, _heuristic_joins, _is_key, _paths_by_role, attribute_paths
+
+    executor, schema = _duck([
+        "CREATE TABLE industries AS SELECT * FROM (VALUES (1, 'Healthcare', 'Services'), (2, 'Finance', 'Services'), (3, 'Retail', 'Commerce')) t(industry_id, industry_name, sector)",
+        "CREATE TABLE companies AS SELECT * FROM (VALUES (1, 'Johnson LLC', 1, 'small', 'North America'), (2, 'Cooper PLC', 2, 'enterprise', 'Europe'), (3, 'Liu Ltd', 3, 'startup', 'Asia Pacific')) t(company_id, company_name, industry_id, company_size, region)",
+        "CREATE TABLE subscriptions (sub_id BIGINT, company_id BIGINT, plan_name VARCHAR, mrr DOUBLE, start_date DATE, end_date DATE, status VARCHAR, is_active BIGINT)",
+        "INSERT INTO subscriptions VALUES (1, 1, 'business', 600.0, DATE '2023-01-10', DATE '2024-01-09', 'expired', 0), (2, 2, 'enterprise', 2500.0, DATE '2023-03-01', NULL, 'active', 1), (3, 3, 'starter', 90.0, DATE '2024-02-14', NULL, 'active', 1), (4, 1, 'business', 650.0, DATE '2024-05-01', NULL, 'active', 1)",
+        "CREATE TABLE invoices (invoice_id BIGINT, company_id BIGINT, sub_id BIGINT, invoice_date DATE, amount_due DOUBLE, amount_paid DOUBLE, status VARCHAR)",
+        "INSERT INTO invoices VALUES (1, 1, 1, DATE '2023-02-01', 600.0, 600.0, 'paid'), (2, 2, 2, DATE '2023-04-01', 2500.0, 2500.0, 'paid'), (3, 2, 2, DATE '2024-04-01', 2500.0, 0.0, 'overdue'), (4, 3, 3, DATE '2024-03-01', 90.0, 90.0, 'paid'), (5, 1, 4, DATE '2024-06-01', 650.0, 650.0, 'paid')",
+        "CREATE TABLE payments (payment_id BIGINT, invoice_id BIGINT, payment_date DATE, amount DOUBLE, method VARCHAR)",
+        "INSERT INTO payments VALUES (1, 1, DATE '2023-02-09', 600.0, 'ach'), (2, 2, DATE '2023-04-15', 2500.0, 'wire'), (3, 4, DATE '2024-03-05', 90.0, 'credit_card'), (4, 5, DATE '2024-06-03', 650.0, 'ach')",
+    ])
+    assert _is_key("company_id") and _is_key("customerID") and _is_key("Customer ID") and not _is_key("amount_paid") and not _is_key("valid")
+    joins = _heuristic_joins(schema)
+    assert joins[("companies", "industry_id")] == ("industries", "industry_id") and joins[("subscriptions", "company_id")] == ("companies", "company_id") and joins[("payments", "invoice_id")] == ("invoices", "invoice_id")
+    assert ("companies", "company_id") not in joins and ("invoices", "invoice_id") not in joins  # a table's own key is not a reference
+    assert set(_fact_tables(schema)) == {"invoices", "payments", "subscriptions"}
+    paths = attribute_paths(schema, "subscriptions", joins)
+    roles = {r: p["column"] for r, p in _paths_by_role(paths).items()}
+    assert roles == {"entity": "company_name", "product": "plan_name", "category": "industry_name", "place": "region"}
+    assert {p["column"] for p in paths if not p["hops"]} == {"plan_name", "status"}  # groupings on the fact itself; is_active is a flag, not a grouping or a measure
+
+    years, found, questions, references, failed, hints = _run_blind(executor, schema, limit=80)
+    assert years == [2023, 2024] and not failed, failed
+    texts = [q.text for q in questions]
+    assert any(t.startswith("Which 3 plans had the highest subscriptions mrr") for t in texts) and any("by plan in 2024" in t for t in texts)
+    assert any("invoices amount due" in t for t in texts) and any(q.kind == "top_n" and "plans" in q.text for q in questions)
+    plan_rank = next(q for q in questions if q.kind == "top_n" and "plans" in q.text)
+    assert "JOIN" not in plan_rank.execution["sql"].split("WHERE")[0].replace("f.plan_name", "") or "a ON" not in plan_rank.execution["sql"]  # no join for a column on the fact
+    assert "f.plan_name" in plan_rank.execution["sql"]
+    codes = {h.code for h in hints}
+    assert "join_path" in codes and any("industry_name is 2 joins away from" in h.message for h in hints) and "vocabulary" in codes
+
+
+def test_a_bakehouse_schema_with_prefixed_dimensions_and_a_plain_name_column():
+    from fabric_rlm.data_agent_review import _fact_tables, _heuristic_joins, _paths_by_role, attribute_paths
+
+    executor, schema = _duck([
+        "CREATE TABLE sales_customers AS SELECT * FROM (VALUES (1, 'Kayla', 'kayla@example.org', 'Tokyo', 'Japan', 'female'), (2, 'Ana', 'ana@example.org', 'Sydney', 'Australia', 'female')) t(customerID, first_name, email_address, city, country, gender)",
+        "CREATE TABLE sales_franchises AS SELECT * FROM (VALUES (10, 'Golden Crumbs', 'San Francisco', 'US', 'XL'), (11, 'Baked Bliss', 'Sydney', 'AU', 'M')) t(franchiseID, name, city, country, size)",
+        "CREATE TABLE sales_transactions (transactionID BIGINT, customerID BIGINT, franchiseID BIGINT, dateTime TIMESTAMP, product VARCHAR, quantity BIGINT, totalPrice BIGINT, paymentMethod VARCHAR, cardNumber BIGINT)",
+        "INSERT INTO sales_transactions VALUES (1, 1, 10, TIMESTAMP '2024-01-14 12:00:00', 'Golden Gate Ginger', 8, 24, 'amex', 378154478982993), (2, 2, 11, TIMESTAMP '2024-02-02 09:00:00', 'Outback Oatmeal', 2, 10, 'visa', 4111111111111111), (3, 1, 11, TIMESTAMP '2024-03-09 15:30:00', 'Golden Gate Ginger', 4, 12, 'visa', 4111111111111111), (4, 2, 10, TIMESTAMP '2024-04-20 11:00:00', 'Austin Almond Biscotti', 1, 5, 'amex', 378154478982993)",
+    ])
+    joins = _heuristic_joins(schema)
+    assert joins[("sales_transactions", "customerID")] == ("sales_customers", "customerID") and joins[("sales_transactions", "franchiseID")] == ("sales_franchises", "franchiseID")
+    assert _fact_tables(schema) == ["sales_transactions"]
+    paths = attribute_paths(schema, "sales_transactions", joins)
+    columns = {p["column"] for p in paths}
+    assert {"product", "paymentMethod", "name", "city", "country", "gender", "size"} <= columns and "first_name" not in columns and "email_address" not in columns and "cardNumber" not in columns
+    roles = {r: p["column"] for r, p in _paths_by_role(paths).items()}
+    assert roles["entity"] == "name" and roles["product"] == "product" and roles["place"] in {"city", "country"}
+
+    years, found, questions, references, failed, hints = _run_blind(executor, schema)
+    assert years == [2024] and not failed, failed
+    assert found["sales_transactions"]["top"]["entity"] == ["Golden Crumbs", "Baked Bliss"]
+    texts = [q.text for q in questions]
+    assert any("top 10 sales franchises" in t for t in texts) and not any("names" in t for t in texts)  # a column called name takes its table's word
+    assert any(t.startswith("How many sales transactions were there per year") for t in texts)  # transactionID counts transactions, not "sales transactions transactions"
+    assert {h.code for h in hints} >= {"personal_data", "partial_year"} and any("sales_customers carries personal data: first_name, email_address" in h.message for h in hints)
+
+
+def test_a_flat_file_with_spaces_in_names_and_an_integer_date():
+    from fabric_rlm.data_agent_review import _date_join, _fact_tables, _heuristic_joins, _local_attributes, _measure_columns
+
+    executor, schema = _duck([
+        'CREATE TABLE sales ("Customer ID" BIGINT, "Major category name" VARCHAR, "Sales date" BIGINT, "Sales month" BIGINT, "Product code" VARCHAR, "Product Type" VARCHAR, "Unit" VARCHAR, "Sales quantity" DOUBLE, "Sales Amount" DOUBLE, "Promotion (Y/N)" VARCHAR)',
+        "INSERT INTO sales VALUES (7, 'Grain & oil', 20240101, 202401, 'DW-1', 'General merchandise', 'Bag', 1, 3.0, 'No'), (8, 'Daily fresh', 20240115, 202401, 'DW-2', 'Fresh Produce', 'KG', 2, 9.5, 'Yes'), (9, 'Daily fresh', 20240203, 202402, 'DW-3', 'Fresh Produce', 'kg', 1, 4.0, 'No'), (7, 'Grain & oil', 20240310, 202403, 'DW-1', 'General merchandise', 'Bag', 3, 9.0, 'No'), (8, 'Leisure', 20240322, 202403, 'DW-4', 'General merchandise', 'Piece', 1, 20.0, 'Yes'), (9, 'Daily fresh', 20240405, 202404, 'DW-2', 'Fresh Produce', 'KG', 1, 5.0, 'No')",
+    ])
+    joins = _heuristic_joins(schema)
+    assert joins == {} and _fact_tables(schema) == ["sales"]
+    assert _date_join(schema, "sales", joins) == {"column": "Sales date", "timestamp": True, "stored": "yyyymmdd"}
+    assert _measure_columns(schema, "sales") == ["Sales Amount", "Sales quantity"]  # not the month written as a number, not the customer id
+    assert set(_local_attributes(schema, "sales")) == {"Major category name", "Product Type", "Unit", "Promotion (Y/N)"}  # not the product code
+
+    years, found, questions, references, failed, hints = _run_blind(executor, schema, top=2)
+    assert years == [2024] and not failed, failed
+    assert found["sales"]["top"]["category"] == ["Leisure", "Daily fresh", "Grain & oil"] and found["sales"]["max_date"] == "2024-04-05"
+    total = next(q for q in questions if q.kind == "total_by_year")
+    assert '''SUM(f."Sales Amount")''' in total.execution["sql"] and '''strptime(CAST(f."Sales date" AS VARCHAR), '%Y%m%d')''' in total.execution["sql"]
+    assert '''CONVERT(datetime, CAST(f."Sales date" AS VARCHAR(8)), 112)''' in total.reference_query
+    by_kind = {q.kind: r for q, r in zip(questions, references)}
+    assert by_kind["total_by_year"].rows == ({"year": 2024, "value": 50.5},)
+    ranked = next(q for q in questions if q.kind == "top_n")
+    assert '''f."Major category name"''' in ranked.execution["sql"] and "JOIN" not in ranked.execution["sql"]
+    case = next(h for h in hints if h.code == "case_variants")
+    assert "sales.Unit" in case.message and "KG | kg" in case.message
+    assert any(h.code == "vocabulary" and "Major category name" in h.message for h in hints)
+
+
+def test_a_period_written_as_text_is_a_time_axis_without_a_day_grain():
+    from fabric_rlm.data_agent_review import _date_join, _fact_tables, _has_day, _heuristic_joins, _year_expr
+
+    executor, schema = _duck([
+        "CREATE TABLE segments_arr (product VARCHAR, region VARCHAR, customer_group VARCHAR, quarter VARCHAR, arr_usd DOUBLE, active_customers BIGINT)",
+        "INSERT INTO segments_arr VALUES ('Alteon', 'AMERICA', 'CARRIER', '2024/Q1', 1000.0, 24), ('Alteon', 'AMERICA', 'CARRIER', '2024/Q2', 1100.0, 25), ('Alteon', 'EMEA', 'ENTERPRISE', '2024/Q3', 900.0, 10), ('AppWall', 'EMEA', 'ENTERPRISE', '2024/Q4', 1500.0, 12), ('AppWall', 'APAC', 'TELCO', '2025/Q1', 1600.0, 13), ('Alteon', 'AMERICA', 'CARRIER', '2025/Q2', 1200.0, 26), ('AppWall', 'EMEA', 'ENTERPRISE', '2025/Q3', 1700.0, 14), ('DefensePro', 'APAC', 'TELCO', '2025/Q4', 400.0, 3)",
+    ])
+    joins = _heuristic_joins(schema)
+    assert _fact_tables(schema) == ["segments_arr"]
+    date = _date_join(schema, "segments_arr", joins)
+    assert date == {"column": "quarter", "period": "quarter"} and not _has_day(date)
+    assert _year_expr(date, "duckdb") == "CAST(regexp_extract(f.quarter, '([12][0-9]{3})', 1) AS INTEGER)"
+    assert _year_expr(date, "tsql") == "CAST(SUBSTRING(f.quarter, PATINDEX('%[12][0-9][0-9][0-9]%', f.quarter), 4) AS INT)"
+
+    years, found, questions, references, failed, hints = _run_blind(executor, schema, top=2)
+    assert years == [2024, 2025] and not failed, failed
+    kinds = {q.kind for q in questions}
+    assert {"total_by_year", "top_n", "quarter_trend", "share"} <= kinds
+    assert not kinds & {"holiday_week", "trailing_days", "ytd", "season", "relative_month", "month_trend"}  # nothing that needs a day or a month
+    by_kind = {q.kind: r for q, r in zip(questions, references)}
+    assert [(r["year"], r["value"]) for r in by_kind["total_by_year"].rows] == [(2024, 4500.0), (2025, 4900.0)]
+    assert [(r["quarter"], r["value"]) for r in by_kind["quarter_trend"].rows] == [(1, 1600.0), (2, 1200.0), (3, 1700.0), (4, 400.0)]
+    assert not any(h.code == "date_as_text" for h in hints) and not any(h.code == "vocabulary" and "quarter" in h.message for h in hints)
+    assert any(h.code == "coverage" and "2024 to 2025" in h.message for h in hints)
