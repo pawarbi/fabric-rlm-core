@@ -61,7 +61,7 @@ not in the harness, the notebook, or the model's own output.
 
 ### The result
 
-**The `.task` critical list is one item: F11.**
+**The `.task` critical list is one item: F11 — now fixed (PR #77).**
 
 That is the substantive finding of this partition, and it is a good one: it is
 consistent with cold `.task` scoring 91.7% on 24 unseen complex questions with
@@ -89,6 +89,46 @@ analytical question about such data is unanswerable. The identical message is
 the second half of the defect: the agent cannot tell "your query contains a
 comment marker" from "you used DELETE" from "your query is too long", which is
 consistent with the 35 gate rejections observed across 7/24 questions.
+
+#### F11, resolved — PR #77, branch `fix/catalog-query-literals`
+
+Both halves fixed, off `main` at `77bd8b4`, TDD with the tests confirmed red
+first. Classified **universal mechanism**: nothing in the fix encodes a dataset,
+a naming convention or a business concept — it corrects how SQL text is read.
+
+1. **Literal-aware scanning.** A new `_mask_quoted_spans()` blanks the inside of
+   string literals and quoted identifiers, and the marker scan runs on that copy,
+   so a marker is syntax only where it is syntax. Quoting the scanner does not
+   parse — an unterminated quote, an `E'...'` escape string, a `$$...$$`
+   dollar-quoted string — **fails closed**. The executed SQL is unchanged:
+   `_normalize_catalog_query` still returns the original, and the mask is a
+   separate string used only for scanning.
+2. **Per-cause messages.** `_query_error(reason)` carries a cause at each of the
+   eleven raise sites, including an unauthorized table that now lists the names
+   the query may read. The `"read-only catalog query"` prefix is unchanged.
+
+Verified after the fix:
+
+```
+PASS   SELECT * FROM t WHERE owner = 'Smith--Jones'
+PASS   SELECT * FROM t WHERE sku   = 'XY--01'
+PASS   SELECT * FROM t WHERE code  = 'A/*B'
+PASS   SELECT "a--b" FROM t
+BLOCK  SELECT * FROM t -- drop everything          : SQL comment markers are not allowed outside string literals
+BLOCK  SELECT * FROM read_csv_auto/**/('C:/...')   : SQL comment markers are not allowed outside string literals
+BLOCK  DELETE FROM t                               : a catalog query must begin with SELECT or WITH
+BLOCK  ''                                          : the query is empty
+BLOCK  SELECT * FROM t WHERE a = 'oops             : the query has an unterminated string literal
+```
+
+Security posture unchanged — every pre-existing rejection test still passes,
+including the load-bearing `read_csv_auto/**/(...)` obfuscation, and the DuckDB
+AST validation behind the gate is untouched. 17 new tests; the query file is 61
+passed; the full suite excluding `tests/behavior` exits 0.
+
+**Not re-measured.** The 35 rejections and the 331 s question were observed in
+the cold run; whether the fix moves those numbers is a live-run question and is
+recorded here as unmeasured, not as an improvement.
 
 ---
 
@@ -123,7 +163,7 @@ size-limit into a dead task; F16 lets an evasion be scored as an answer.
 
 | id | defect | class |
 |---|---|---|
-| **F11** | Query-gate rejections are indistinguishable across paths, and `--` is matched **inside string literals**, so a legitimate query containing `--` is rejected as a comment. | **universal mechanism** |
+| **F11** | ~~Query-gate rejections are indistinguishable across paths, and `--` is matched **inside string literals**, so a legitimate query containing `--` is rejected as a comment.~~ **Fixed — PR #77.** Severity was later raised to critical: the data is unfilterable, not merely awkward. | **universal mechanism** |
 | **D-2** | `_field_types` flattens all 21 lakehouse tables into **one unqualified column namespace**, so `grain` / `period_column` / `units` cannot be scoped per table. Only free-text `definitions` / `notes` scale to a multi-table alias. | **universal mechanism** |
 | **F15-4** | Silent zero-coverage: "no derived measures detected" is indistinguishable from "this model has none". A user cannot debug silence. | **universal mechanism** |
 | **V-1** | `verify.py:95` `_LEADING_CONJUNCTION` strips `and` / `&` but not `und` / `y` / `et`, so `"und Contoso"` ≠ `"Contoso"` — a scoring artifact, not a real disagreement. | **universal mechanism** |
