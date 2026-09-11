@@ -191,8 +191,13 @@ its sources, instructions, descriptions and few-shots; profile the sources
 with `RLM.learn`; check the setup against the documented guidance (schema
 names belong in data-source instructions, references must exist, definitions
 must not conflict between levels, descriptions drive routing, instructions
-truncate past about 4,600 characters); generate questions from the schemas
-and compute each reference by executing a query against the source; ask the
+truncate past about 4,600 characters); generate questions from the schemas,
+phrased the way a business user asks them with the words the agent's own
+instructions use, across the skills an author wants tested (aggregation,
+ranking, change, counts, a filter, a KPI from the definitions, the right
+measure column, an ambiguous total, a channel abbreviation, an out-of-scope
+topic the agent should decline), and compute each reference by executing a
+query against the source; ask the
 agent the same questions through its Responses endpoint, whose run steps
 carry the query it executed and the source it routed to, grade that query or
 its prose, classify the failures (misrouting included on multi-source

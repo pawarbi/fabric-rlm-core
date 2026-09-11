@@ -1083,6 +1083,8 @@ class Question:
     reference_query: str  # what a few-shot would carry: T-SQL for a lakehouse, DAX for a model
     execution: Mapping[str, Any] = field(default_factory=dict)  # what the executor runs
     alternates: tuple[tuple[str, Mapping[str, Any]], ...] = ()  # (label, execution) narrower scopes
+    skill: str = ""  # what the question tests: aggregate | rank | change | count | filter | kpi | measure | ambiguity | scope | supplied | proposed
+    technical: str = ""  # the same question in schema terms, for the report and the few-shot reader
 
 
 @dataclass(frozen=True)
@@ -1220,50 +1222,69 @@ def _order_column(schema: SourceSchema, table: str) -> str | None:
     return next((c for c in schema.tables[table] if _ORDER_ID_HINT.search(c)), None)
 
 
+def _sql_literal(value: Any) -> str:
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _sql(spec: Mapping[str, Any], *, dialect: str) -> str:
     """Render a lakehouse question spec as T-SQL (few-shots) or DuckDB (execution)."""
     kind = spec["kind"]
     top = spec.get("top")
     facts: list[Mapping[str, Any]] = spec["facts"]
     by_year = kind in {"total_by_year", "distinct_by_year", "yoy", "combined_total_by_year"}
+    grouped = kind in {"top_n", "breakdown"}
 
     def per_fact(fact: Mapping[str, Any]) -> str:
         select: list[str] = []
         group: list[str] = []
         joins: list[str] = []
+        conditions: list[str] = []
         dt = fact["date"]
         joins.append(f"JOIN {dt['date_table']} d ON f.{dt['column']} = d.{dt['date_key']}")
         if by_year:
             select.append(f"d.{dt['year']} AS year")
             group.append(f"d.{dt['year']}")
-        if kind in {"top_n", "breakdown"}:
+        if grouped or kind == "filter":
             attr = fact["attribute"]
             joins.append(f"JOIN {attr['dim_table']} a ON f.{attr['fact_key']} = a.{attr['dim_key']}")
+        if grouped:
+            attr = fact["attribute"]
             select.append(f"a.{attr['column']} AS {attr['alias']}")
             group.append(f"a.{attr['column']}")
-        if kind == "distinct_by_year":
+        if kind in {"distinct_by_year", "distinct_orders_year"}:
             select.append(f"COUNT(DISTINCT f.{fact['order_column']}) AS value")
+        elif kind == "rowcount_year":
+            select.append("COUNT(*) AS value")
+        elif kind == "definition":
+            select.append(f"{spec['expr']} AS value")
         else:
             select.append(f"SUM(f.{fact['measure']}) AS value")
-        where = ""
         if by_year and spec.get("years"):
-            where = f" WHERE d.{dt['year']} IN ({', '.join(str(int(y)) for y in spec['years'])})"
+            conditions.append(f"d.{dt['year']} IN ({', '.join(str(int(y)) for y in spec['years'])})")
         elif spec.get("year") is not None:
-            where = f" WHERE d.{dt['year']} = {int(spec['year'])}"
-        return f"SELECT {', '.join(select)} FROM {fact['table']} f {' '.join(joins)}{where} GROUP BY {', '.join(group)}"
+            conditions.append(f"d.{dt['year']} = {int(spec['year'])}")
+        if kind == "filter":
+            conditions.append(f"a.{fact['attribute']['column']} = {_sql_literal(spec['value'])}")
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        group_by = f" GROUP BY {', '.join(group)}" if group else ""
+        return f"SELECT {', '.join(select)} FROM {fact['table']} f {' '.join(joins)}{where}{group_by}"
 
-    order = "ORDER BY value DESC" if kind in {"top_n", "breakdown"} else "ORDER BY year"
+    order = "ORDER BY value DESC" if grouped else ("ORDER BY year" if by_year else "")
     if len(facts) == 1:
         body = per_fact(facts[0])
     else:
         union = " UNION ALL ".join(f"({per_fact(fact)})" for fact in facts)
-        keys = "year" if by_year else facts[0]["attribute"]["alias"]
-        body = f"SELECT {keys}, SUM(value) AS value FROM ({union}) u GROUP BY {keys}"
+        keys = "year" if by_year else (facts[0]["attribute"]["alias"] if grouped else None)
+        body = f"SELECT {keys}, SUM(value) AS value FROM ({union}) u GROUP BY {keys}" if keys else f"SELECT SUM(value) AS value FROM ({union}) u"
     if kind == "top_n" and top:
         if dialect == "tsql":
             return body.replace("SELECT ", f"SELECT TOP {int(top)} ", 1) + f" {order}"
         return f"{body} {order} LIMIT {int(top)}"
-    return f"{body} {order}"
+    return f"{body} {order}".rstrip()
 
 
 def _dax(spec: Mapping[str, Any]) -> str:
@@ -1299,7 +1320,7 @@ def _supplied_questions(context: ReviewContext | None, source_id: str) -> list[Q
         else:
             execution = {"kind": "supplied_text", "text": expected_text}
             reference_query = ""
-        supplied.append(Question(id=f"{source_id}.u{number}", source_id=source_id, kind="supplied", text=str(text), spec={"kind": "supplied", "expected": expected_text}, reference_query=reference_query, execution=execution))
+        supplied.append(Question(id=f"{source_id}.u{number}", source_id=source_id, kind="supplied", text=str(text), spec={"kind": "supplied", "expected": expected_text}, reference_query=reference_query, execution=execution, skill="supplied"))
     return supplied
 
 
@@ -1309,13 +1330,26 @@ def _priority_score(question: Question, terms: Sequence[str], emphasised: Sequen
 
 
 def _prioritised(generated: Sequence[Question], context: ReviewContext | None, limit: int) -> list[Question]:
-    """Questions that mention the most of the reviewer's terms first (emphasised terms count double), then generation order, cut to the limit and renumbered."""
+    """The questions to keep under the limit: every skill represented, the reviewer's terms first within each.
+
+    Questions are scored by the terms they mention (emphasised terms count
+    double), grouped by skill, and taken round-robin across the skills in
+    score order, so a small limit still covers the matrix. The kept
+    questions are renumbered in the order they are asked.
+    """
     terms = context.ranking_terms if context is not None else ()
-    if not terms:
-        return list(generated)[:limit]
     emphasised = context.emphasised if context is not None and not context.priorities else ()
-    ranked = sorted(enumerate(generated), key=lambda item: (-_priority_score(item[1], terms, emphasised), item[0]))
-    chosen = [question for _index, question in ranked][:limit]
+    ranked = sorted(enumerate(generated), key=lambda item: (-_priority_score(item[1], terms, emphasised) if terms else 0, item[0]))
+    groups: dict[str, list[Question]] = {}
+    for _index, question in ranked:
+        groups.setdefault(question.skill or question.kind, []).append(question)
+    chosen: list[Question] = []
+    while len(chosen) < limit and any(groups.values()):
+        for skill in list(groups):
+            if groups[skill]:
+                chosen.append(groups[skill].pop(0))
+                if len(chosen) >= limit:
+                    break
     return [replace(question, id=re.sub(r"\.q\d+$", f".q{number}", question.id)) for number, question in enumerate(chosen, start=1)]
 
 
@@ -1328,6 +1362,202 @@ def _with_table_prefix(sql: str, schema: SourceSchema, prefix: str | None) -> st
     return sql
 
 
+_COMMON_WORDS = frozenset(
+    """sales sale reseller resellers internet online web store stores retail wholesale customer customers client clients
+    product products item items sku order orders territory territories region regions country countries state states
+    city cities geography date dates calendar year years month months quarter quarters week day days time period
+    amount quantity qty units unit price cost costs revenue margin profit tax freight discount promotion promotions
+    category categories subcategory subcategories employee employees vendor vendors supplier suppliers account accounts
+    invoice invoices ticket tickets line lines plant plants asset assets inventory stock shipment shipments return
+    returns payment payments budget budgets quota quotas forecast forecasts actual actuals survey response responses
+    call center calls campaign campaigns channel channels currency currencies scenario scenarios organization
+    organizations department departments finance financial detail details header headers transaction transactions
+    summary total totals daily weekly monthly yearly annual group groups class type types status name names key keys
+    code codes description descriptions log logs event events session sessions user users visit visits page pages
+    click clicks lead leads opportunity opportunities contract contracts subscription subscriptions plan plans
+    location locations site sites warehouse warehouses machine machines device devices sensor sensors reading readings
+    result results score scores rating ratings review reviews registry alias aliases color colors size sizes""".split()
+)
+_LANGUAGE_PREFIX = re.compile(r"^(english|spanish|french|german|italian|portuguese|dutch|japanese|chinese)", re.IGNORECASE)
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_TABLE_PREFIX = re.compile(r"^(fact|dim|tbl|vw|stg|v)_?(?=[a-z])", re.IGNORECASE)
+_COLUMN_SUFFIX = re.compile(r"\s+(name|key|id|code)$", re.IGNORECASE)
+_QUOTED_SYNONYMS = re.compile(r'((?:"[^"]+"\s*,?\s*(?:or|and)?\s*)+)(?:uses|use|refers? to|means?|maps? to)\s+(?:dbo\.)?([A-Za-z_][A-Za-z0-9_]*)', re.IGNORECASE)
+_USE_FOR = re.compile(r"\b([A-Z][A-Za-z0-9_]+)\s+for\s+([a-z][a-z ]{2,24}?)(?=,|\.|;| and |$)")
+_SUM_DEF = re.compile(r"\b([A-Za-z][A-Za-z ]{2,30}?)\s*=\s*SUM\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", re.IGNORECASE)
+_MEANS = re.compile(r"\b([A-Za-z][A-Za-z ]{1,30}?)\s+means\s+([A-Za-z_][A-Za-z0-9_]*)\b", re.IGNORECASE)
+_ORDER_DEF = re.compile(r"\ban? ([a-z]+) is a distinct ([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
+_ABBREVIATION = re.compile(r"^[A-Z][A-Z0-9]{1,4}$")
+_TABLE_DESC = re.compile(r"(?:dbo\.)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([A-Z][A-Z0-9]{1,4})\b")
+_FORMULA_WORDS = frozenset({"sum", "count", "distinct", "avg", "min", "max", "nullif", "coalesce", "case", "when", "then", "else", "end", "and", "or", "not", "as", "cast", "float", "decimal", "int", "bigint", "double", "round", "abs"})
+_SKILLS = {
+    "total_by_year": "aggregate",
+    "combined_total_by_year": "aggregate",
+    "breakdown": "aggregate",
+    "top_n": "rank",
+    "yoy": "change",
+    "distinct_by_year": "count",
+    "distinct_orders_year": "count",
+    "filter": "filter",
+    "definition": "kpi",
+    "total_year": "measure",
+    "ambiguous_total": "ambiguity",
+    "abbreviation": "ambiguity",
+    "scope_out": "scope",
+    "supplied": "supplied",
+    "deep": "proposed",
+}
+
+
+def _segment(run: str, words: Collection[str]) -> list[str]:
+    """Split a lowercase run such as ``resellersales`` into known words, the fewest unknown letters first, then the fewest pieces."""
+    n = len(run)
+    best: list[tuple[int, int, list[str]] | None] = [None] * (n + 1)
+    best[0] = (0, 0, [])
+    for i in range(n):
+        current = best[i]
+        if current is None:
+            continue
+        unknown, pieces, parts = current
+        for j in range(i + 3, n + 1):
+            if run[i:j] in words:
+                candidate = (unknown, pieces + 1, parts + [run[i:j]])
+                if best[j] is None or candidate[:2] < best[j][:2]:
+                    best[j] = candidate
+        # one unknown letter, merged into the previous unknown piece
+        merged = parts[:-1] + [parts[-1] + run[i]] if parts and parts[-1] not in words else parts + [run[i]]
+        candidate = (unknown + 1, len(merged), merged)
+        if best[i + 1] is None or candidate[:2] < best[i + 1][:2]:
+            best[i + 1] = candidate
+    final = best[n]
+    return final[2] if final is not None else [run]
+
+
+def humanize_table(name: str, words: Collection[str] = _COMMON_WORDS) -> str:
+    """``factresellersales`` to ``reseller sales``, ``dimsalesterritory`` to ``sales territory``."""
+    base = name.split(".")[-1]
+    if len(base) > 5:
+        base = _TABLE_PREFIX.sub("", base)
+    tokens = [t for t in re.split(r"[_\s]+", _CAMEL.sub(" ", base)) if t]
+    out: list[str] = []
+    for token in tokens:
+        lowered = token.casefold()
+        if len(lowered) > 4 and lowered not in words:
+            out.extend(_segment(lowered, words))
+        else:
+            out.append(lowered)
+    return " ".join(out) or name
+
+
+def humanize_column(name: str) -> str:
+    """``EnglishProductName`` to ``product``, ``SalesTerritoryRegion`` to ``sales territory region``."""
+    base = name.rsplit("[", 1)[-1].rstrip("]") if "[" in name else name.split(".")[-1]
+    base = _LANGUAGE_PREFIX.sub("", base.strip("'"))
+    text = " ".join(t for t in re.split(r"[_\s]+", _CAMEL.sub(" ", base)) if t).casefold()
+    trimmed = _COLUMN_SUFFIX.sub("", text)
+    return trimmed or text or name
+
+
+def _plural(term: str) -> str:
+    if term.endswith("y") and not term.endswith(("ay", "ey", "oy", "uy")):
+        return term[:-1] + "ies"
+    if term.endswith(("s", "x", "ch", "sh")):
+        return term + "es"
+    return term + "s"
+
+
+@dataclass(frozen=True)
+class Vocabulary:
+    """Business words for schema names, taken from the instructions and the context, so questions read as a user would ask them."""
+
+    tables: Mapping[str, str] = field(default_factory=dict)  # table -> phrase ("factresellersales" -> "reseller sales")
+    measures: Mapping[str, str] = field(default_factory=dict)  # column -> term ("SalesAmount" -> "revenue")
+    attributes: Mapping[str, str] = field(default_factory=dict)  # column -> term ("SalesTerritoryRegion" -> "territory")
+    abbreviations: Mapping[str, str] = field(default_factory=dict)  # table -> abbreviation ("factresellersales" -> "B2B")
+    orders: str = "orders"
+
+    def table(self, name: str) -> str:
+        return self.tables.get(name) or humanize_table(name)
+
+    def measure(self, column: str) -> str:
+        return self.measures.get(column) or humanize_column(column)
+
+    def attribute(self, column: str) -> str:
+        return self.attributes.get(column) or humanize_column(column)
+
+    def lines(self) -> list[str]:
+        """The vocabulary as brief lines for an RLM prompt."""
+        out = [f"{phrase} = table {table}" for table, phrase in self.tables.items()]
+        out += [f"{term} = column {column}" for column, term in {**self.measures, **self.attributes}.items()]
+        out += [f"{abbreviation} = {self.table(table)}" for table, abbreviation in self.abbreviations.items()]
+        return out
+
+
+def build_vocabulary(snapshot: AgentSnapshot, schema: SourceSchema, context: ReviewContext | None = None) -> Vocabulary:
+    """The words the agent's own instructions use for its tables and columns."""
+    source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
+    text = "\n".join([source.instructions if source else "", source.description if source else "", snapshot.instructions, context.text if context is not None else ""])
+    words = set(_COMMON_WORDS) | {w.casefold() for w in re.findall(r"[A-Za-z]{3,}", text)}
+    by_lower = {t.casefold(): t for t in schema.tables}
+    columns = {c.casefold(): c for cols in schema.tables.values() for c in cols}
+    tables = {t: humanize_table(t, words) for t in schema.tables}
+    abbreviations: dict[str, str] = {}
+    for match in _QUOTED_SYNONYMS.finditer(text):
+        table = by_lower.get(match.group(2).casefold())
+        if table is None:
+            continue
+        phrases = [p.strip() for p in re.findall(r'"([^"]+)"', match.group(1)) if p.strip()]
+        if phrases:
+            tables[table] = phrases[0].casefold()
+        for phrase in phrases:
+            token = next((w for w in phrase.split() if _ABBREVIATION.match(w)), None)
+            if token and table not in abbreviations:
+                abbreviations[table] = token
+    for match in _TABLE_DESC.finditer(text):
+        table = by_lower.get(match.group(1).casefold())
+        if table is not None:
+            abbreviations.setdefault(table, match.group(2))
+    measures: dict[str, str] = {}
+    for column, term in _USE_FOR.findall(text):
+        if column.casefold() in columns:
+            measures.setdefault(columns[column.casefold()], term.strip())
+    for term, column in _SUM_DEF.findall(text):
+        if column.casefold() in columns:
+            measures.setdefault(columns[column.casefold()], term.strip().casefold())
+    attributes: dict[str, str] = {}
+    for term, column in _MEANS.findall(text):
+        if column.casefold() in columns and term.strip():
+            attributes.setdefault(columns[column.casefold()], term.strip().split()[-1].casefold())
+    orders = "orders"
+    order_definition = _ORDER_DEF.search(text)
+    if order_definition:
+        orders = _plural(order_definition.group(1).casefold())
+    return Vocabulary(tables, measures, attributes, abbreviations, orders)
+
+
+def _channel_measure(channel: str, measure: str) -> str:
+    """``internet sales`` with ``sales amount`` reads ``internet sales amount``; with ``revenue`` it reads ``internet sales revenue``."""
+    channel_words, measure_words = channel.split(), measure.split()
+    if channel_words and measure_words and channel_words[-1] == measure_words[0]:
+        return " ".join(channel_words + measure_words[1:])
+    return f"{channel} {measure}"
+
+
+def _period(years: Sequence[int]) -> str:
+    return f"in {years[0]}" if len(years) == 1 else f"from {years[0]} to {years[-1]}"
+
+
+def _definition_expression(body: str, columns: Collection[str]) -> str | None:
+    """A definition such as ``SUM(SalesAmount) / COUNT(DISTINCT SalesOrderNumber)`` as a qualified SQL expression, or None."""
+    if not _CALCULATION.search(body) or re.search(r"\b(select|from|where)\b", body, re.IGNORECASE):
+        return None
+    known = {c.casefold(): c for c in columns}
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", body):
+        if token.casefold() not in _FORMULA_WORDS and token.casefold() not in known:
+            return None
+    return re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", lambda m: f"f.{known[m.group(1).casefold()]}" if m.group(1).casefold() in known else m.group(1), body).strip().rstrip(".")
+
+
 def generate_questions(
     snapshot: AgentSnapshot,
     schemas: Sequence[SourceSchema],
@@ -1337,8 +1567,14 @@ def generate_questions(
     limit_per_source: int = 8,
     context: ReviewContext | None = None,
 ) -> tuple[Question, ...]:
-    """Questions the sources can answer, each with the query that answers it.
+    """Questions the sources can answer, phrased as a business user asks them, each with the query that answers it.
 
+    The generated set covers what a data agent's author needs to know:
+    aggregation by period and by attribute, ranking, change between years,
+    distinct counts, a KPI from the instructions' own definitions, the right
+    measure column for a term the instructions map (units, cost, freight),
+    an ambiguous total across channels, a channel abbreviation, and a topic
+    the instructions put out of scope, where the right answer is to decline.
     ``years`` maps a source id to the complete years its data covers (see
     :func:`discover_years`); without it the period questions are skipped.
     ``context`` scopes the facts by the tables its text names, puts the
@@ -1364,6 +1600,7 @@ def generate_questions(
         joins.update(_joins_from_instructions(instructions, schema))
         excluded = excluded_terms(instructions)
         schema_prefix = "dbo" if re.search(r"\bdbo\.", (source.instructions if source else "") + snapshot.instructions) else None
+        vocabulary = build_vocabulary(snapshot, schema, context)
         facts = _scoped_facts(schema, instructions)
         per_fact = []
         for table in facts:
@@ -1377,37 +1614,197 @@ def generate_questions(
         count = 0
         shared = [f for f in per_fact if f["measure"] == per_fact[0]["measure"]]
         latest = max(source_years)
-        span = f"{source_years[0]} to {source_years[-1]}" if len(source_years) > 1 else str(source_years[0])
+        span_words = _period(source_years)
+        span_technical = f"{source_years[0]} to {source_years[-1]}" if len(source_years) > 1 else str(source_years[0])
         prefix = f"{schema.source_id}"
 
-        def add(kind: str, text: str, spec: Mapping[str, Any], alternates: Sequence[tuple[str, Mapping[str, Any]]] = ()) -> None:
+        def add(kind: str, text: str, technical: str, spec: Mapping[str, Any], alternates: Sequence[tuple[str, Mapping[str, Any]]] = ()) -> None:
             nonlocal count
             if count >= generation_limit:
                 return
             count += 1
-            questions.append(Question(id=f"{prefix}.q{count}", source_id=schema.source_id, kind=kind, text=text, spec=spec, reference_query=_with_table_prefix(_sql(spec, dialect="tsql"), schema, schema_prefix), execution={"kind": "sql", "sql": _sql(spec, dialect="duckdb")}, alternates=tuple(alternates)))
+            questions.append(
+                Question(
+                    id=f"{prefix}.q{count}",
+                    source_id=schema.source_id,
+                    kind=kind,
+                    text=text,
+                    spec=spec,
+                    reference_query=_with_table_prefix(_sql(spec, dialect="tsql"), schema, schema_prefix),
+                    execution={"kind": "sql", "sql": _sql(spec, dialect="duckdb")},
+                    alternates=tuple(alternates),
+                    skill=_SKILLS.get(kind, kind),
+                    technical=technical,
+                )
+            )
 
         measure_name = per_fact[0]["measure"]
+        measure_word = vocabulary.measure(measure_name)
         if len(shared) > 1:
             bare = [{k: v for k, v in f.items() if k != "attributes"} for f in shared]
+            channels = " and ".join(vocabulary.table(f["table"]) for f in shared)
             spec = {"kind": "combined_total_by_year", "facts": bare, "years": source_years}
             alternates = [(f["table"], {"kind": "sql", "sql": _sql({**spec, "facts": [f]}, dialect="duckdb")}) for f in bare]
-            add("combined_total_by_year", f"What was total {measure_name} by year for {span}, across {' and '.join(f['table'] for f in shared)} combined?", spec, alternates)
+            add(
+                "combined_total_by_year",
+                f"What was total {measure_word} by year {span_words}, {channels} combined?",
+                f"What was total {measure_name} by year for {span_technical}, across {' and '.join(f['table'] for f in shared)} combined?",
+                spec,
+                alternates,
+            )
+            # the same total with the channel left unsaid: the instructions decide what "total" means
+            single = {"kind": "combined_total_by_year", "facts": bare, "years": [latest]}
+            add(
+                "ambiguous_total",
+                f"What was total {measure_word} in {latest}?",
+                f"What was total {measure_name} in {latest} across {' and '.join(f['table'] for f in shared)}, channel unspecified?",
+                single,
+                [(f["table"], {"kind": "sql", "sql": _sql({**single, "facts": [f]}, dialect="duckdb")}) for f in bare],
+            )
         for fact in per_fact:
             base = {k: v for k, v in fact.items() if k != "attributes"}
-            add("total_by_year", f"What was total {fact['measure']} in {fact['table']} by year for {span}?", {"kind": "total_by_year", "facts": [base], "years": source_years})
+            channel = vocabulary.table(fact["table"])
+            measure = vocabulary.measure(fact["measure"])
+            cm = _channel_measure(channel, measure)
+            add(
+                "total_by_year",
+                f"What was {cm} by year {span_words}?",
+                f"What was total {fact['measure']} in {fact['table']} by year for {span_technical}?",
+                {"kind": "total_by_year", "facts": [base], "years": source_years},
+            )
             if fact["order_column"]:
-                add("distinct_by_year", f"How many distinct {fact['order_column']} values (orders) does {fact['table']} have per year for {span}?", {"kind": "distinct_by_year", "facts": [base], "years": source_years})
+                add(
+                    "distinct_by_year",
+                    f"How many {channel} {vocabulary.orders} were there per year {span_words}?",
+                    f"How many distinct {fact['order_column']} values (orders) does {fact['table']} have per year for {span_technical}?",
+                    {"kind": "distinct_by_year", "facts": [base], "years": source_years},
+                )
+                add(
+                    "distinct_orders_year",
+                    f"How many {channel} {vocabulary.orders} were placed in {latest}?",
+                    f"How many distinct {fact['order_column']} values does {fact['table']} have for {latest} (not the row count)?",
+                    {"kind": "distinct_orders_year", "facts": [base], "year": latest},
+                    [("rowcount", {"kind": "sql", "sql": _sql({"kind": "rowcount_year", "facts": [base], "year": latest}, dialect="duckdb")})],
+                )
             if len(source_years) >= 2:
-                add("yoy", f"What was the year-over-year change in total {fact['measure']} in {fact['table']} from {source_years[-2]} to {source_years[-1]}?", {"kind": "yoy", "facts": [base], "years": source_years[-2:]})
+                add(
+                    "yoy",
+                    f"How did {cm} change from {source_years[-2]} to {source_years[-1]}?",
+                    f"What was the year-over-year change in total {fact['measure']} in {fact['table']} from {source_years[-2]} to {source_years[-1]}?",
+                    {"kind": "yoy", "facts": [base], "years": source_years[-2:]},
+                )
             for fact_key, dim_table, dim_key, attribute in _diverse_attributes(fact["attributes"], context.terms if context is not None else ())[:2]:
                 attr = {"fact_key": fact_key, "dim_table": dim_table, "dim_key": dim_key, "column": attribute, "alias": attribute}
-                add("top_n", f"What are the top {top} {attribute} values by {fact['measure']} in {fact['table']} for {latest}?", {"kind": "top_n", "facts": [{**base, "attribute": attr}], "year": latest, "top": top})
-                add("breakdown", f"What was total {fact['measure']} in {fact['table']} by {attribute} for {latest}?", {"kind": "breakdown", "facts": [{**base, "attribute": attr}], "year": latest})
+                word = vocabulary.attribute(attribute)
+                add(
+                    "top_n",
+                    f"Which {top} {_plural(word)} had the highest {cm} in {latest}?",
+                    f"What are the top {top} {attribute} values by {fact['measure']} in {fact['table']} for {latest}?",
+                    {"kind": "top_n", "facts": [{**base, "attribute": attr}], "year": latest, "top": top, "phrases": {"cm": cm, "attribute": word}},
+                )
+                add(
+                    "breakdown",
+                    f"What was {cm} by {word} in {latest}?",
+                    f"What was total {fact['measure']} in {fact['table']} by {attribute} for {latest}?",
+                    {"kind": "breakdown", "facts": [{**base, "attribute": attr}], "year": latest},
+                )
+            # the right measure column for a term the instructions map (units, cost, freight)
+            other = next(((column, term) for column, term in vocabulary.measures.items() if column != fact["measure"] and column in schema.tables[fact["table"]] and column.casefold() != fact["measure"].casefold()), None)
+            if other:
+                column, term = other
+                add(
+                    "total_year",
+                    f"What were total {term} for {channel} in {latest}?",
+                    f"What was SUM({column}) in {fact['table']} for {latest}?",
+                    {"kind": "total_year", "facts": [{**base, "measure": column}], "year": latest},
+                    [(f"measure:{fact['measure']}", {"kind": "sql", "sql": _sql({"kind": "total_year", "facts": [base], "year": latest}, dialect="duckdb")})],
+                )
+            # a KPI the instructions define as a formula over this fact's columns
+            for name, body in extract_definitions(instructions).items():
+                expression = _definition_expression(body, schema.tables[fact["table"]])
+                if expression and not re.fullmatch(r"(SUM|COUNT|AVG|MIN|MAX)\(\s*(?:DISTINCT\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\)", body.strip().rstrip("."), re.IGNORECASE):  # a single aggregate is a measure word, not a KPI
+                    add(
+                        "definition",
+                        f"What was the {name.casefold()} for {channel} in {latest}?",
+                        f"What is {body} over {fact['table']} for {latest}?",
+                        {"kind": "definition", "facts": [base], "year": latest, "expr": expression, "term": name},
+                    )
+                    break
+            # a channel abbreviation the instructions define
+            abbreviation = vocabulary.abbreviations.get(fact["table"])
+            if abbreviation:
+                others = [f for f in per_fact if f["table"] != fact["table"]]
+                add(
+                    "abbreviation",
+                    f"What was {abbreviation} {measure} in {latest}?",
+                    f"What was total {fact['measure']} in {fact['table']} for {latest} ({abbreviation} means {fact['table']})?",
+                    {"kind": "total_year", "facts": [base], "year": latest},
+                    [(f"channel:{o['table']}", {"kind": "sql", "sql": _sql({"kind": "total_year", "facts": [{k: v for k, v in o.items() if k != 'attributes'}], "year": latest}, dialect="duckdb")}) for o in others],
+                )
+        # a topic the instructions put out of scope: the right answer is to decline
+        for table in excluded_tables(schema, instructions)[:2]:
+            phrase = humanize_table(table)
+            text = f"What was the {phrase} for {latest}?" if table.casefold().startswith("fact") else f"Which {_plural(phrase)} were used most in {latest}?"
+            if count >= generation_limit:
+                break
+            count += 1
+            questions.append(Question(id=f"{prefix}.q{count}", source_id=schema.source_id, kind="scope_out", text=text, spec={"kind": "scope_out", "table": table, "year": latest}, reference_query="", execution={"kind": "expect_decline"}, skill="scope", technical=f"A question on {table}, which the instructions put out of scope; the agent should decline."))
         generated = questions[start:]
         del questions[start:]
         questions.extend(_prioritised(generated, context, limit_per_source))
     return tuple(questions)
+
+
+def derive_filter_questions(questions: Sequence[Question], references: Sequence[Reference], *, per_source: int = 1) -> tuple[tuple[Question, ...], tuple[Reference, ...]]:
+    """A filtered total per source from the first ranked reference: the top row's label becomes the filter, its value the reference.
+
+    No query runs: the ranking already computed the value. The question
+    tests whether the agent applies a literal filter on an attribute.
+    """
+    added_questions: list[Question] = []
+    added_references: list[Reference] = []
+    ref_by_id = {r.question_id: r for r in references}
+    seen: dict[str, int] = {}
+    for question in questions:
+        reference = ref_by_id.get(question.id)
+        if question.kind != "top_n" or reference is None or reference.status != "ok" or not reference.rows:
+            continue
+        if seen.get(question.source_id, 0) >= per_source:
+            continue
+        fact = dict(question.spec["facts"][0])
+        attr = fact["attribute"]
+        row = reference.rows[0]
+        label = row.get(attr["alias"])
+        raw = row.get("value")
+        if label is None or raw is None or isinstance(raw, (bool, str)):
+            continue
+        try:
+            value = float(raw)  # DuckDB sums a DECIMAL column to a Decimal
+        except (TypeError, ValueError):
+            continue
+        seen[question.source_id] = seen.get(question.source_id, 0) + 1
+        phrases = question.spec.get("phrases") or {}
+        cm = phrases.get("cm") or humanize_column(fact["measure"])
+        word = phrases.get("attribute") or humanize_column(attr["column"])
+        spec = {"kind": "filter", "facts": [fact], "year": question.spec["year"], "value": label}
+        prefix = "dbo" if "dbo." in question.reference_query else None
+        schema_tables = {fact["table"]: (), attr["dim_table"]: (), fact["date"]["date_table"]: ()}
+        qid = f"{question.source_id}.f{seen[question.source_id]}"
+        added_questions.append(
+            Question(
+                id=qid,
+                source_id=question.source_id,
+                kind="filter",
+                text=f"What was {cm} for {word} {label} in {question.spec['year']}?",
+                spec=spec,
+                reference_query=_with_table_prefix(_sql(spec, dialect="tsql"), SourceSchema(question.source_id, "lakehouse", schema_tables), prefix),
+                execution={"kind": "supplied_rows", "rows": [{"value": value}]},
+                skill="filter",
+                technical=f"SUM({fact['measure']}) in {fact['table']} where {attr['column']} = {label!r} for {question.spec['year']}",
+            )
+        )
+        added_references.append(Reference(qid, "ok", ({"value": value},), "from the ranked reference"))
+    return tuple(questions) + tuple(added_questions), tuple(references) + tuple(added_references)
 
 
 def _semantic_questions(schema: SourceSchema, years: Sequence[int], *, top: int, limit: int) -> list[Question]:
@@ -1429,7 +1826,7 @@ def _semantic_questions(schema: SourceSchema, years: Sequence[int], *, top: int,
         if year_ref and years:
             spec = {"kind": "total_by_year", "measure": measure, "groupby": [year_ref], "filters": {year_ref: list(years)}}
             count += 1
-            questions.append(Question(id=f"{schema.source_id}.q{count}", source_id=schema.source_id, kind="total_by_year", text=f"What was {measure} by year for {years[0]} to {years[-1]}?", spec=spec, reference_query=_dax(spec), execution={"kind": "aggregate", "measures": [measure], "groupby": [year_ref], "filters": {year_ref: list(years)}}))
+            questions.append(Question(id=f"{schema.source_id}.q{count}", source_id=schema.source_id, kind="total_by_year", text=f"What was {measure} by year {_period(list(years))}?", spec=spec, reference_query=_dax(spec), execution={"kind": "aggregate", "measures": [measure], "groupby": [year_ref], "filters": {year_ref: list(years)}}, skill="aggregate", technical=f"What was {measure} by year for {years[0]} to {years[-1]}?"))
         for attribute in attributes[:2]:
             if count >= limit:
                 break
@@ -1437,7 +1834,8 @@ def _semantic_questions(schema: SourceSchema, years: Sequence[int], *, top: int,
             spec = {"kind": "top_n", "measure": measure, "groupby": [attribute], "filters": filters, "top": top}
             count += 1
             period = f" in {max(years)}" if years else ""
-            questions.append(Question(id=f"{schema.source_id}.q{count}", source_id=schema.source_id, kind="top_n", text=f"What are the top {top} {attribute} by {measure}{period}?", spec=spec, reference_query=_dax(spec), execution={"kind": "aggregate", "measures": [measure], "groupby": [attribute], "filters": filters, "order_by": measure, "top": top}))
+            word = humanize_column(attribute.split("[", 1)[-1])
+            questions.append(Question(id=f"{schema.source_id}.q{count}", source_id=schema.source_id, kind="top_n", text=f"Which {top} {_plural(word)} had the highest {measure}{period}?", spec=spec, reference_query=_dax(spec), execution={"kind": "aggregate", "measures": [measure], "groupby": [attribute], "filters": filters, "order_by": measure, "top": top}, skill="rank", technical=f"What are the top {top} {attribute} by {measure}{period}?"))
     return questions
 
 
@@ -1575,6 +1973,12 @@ def build_references(questions: Sequence[Question], executors: Mapping[str, Any]
     references: list[Reference] = []
     for question in questions:
         executor = executors.get(question.source_id)
+        if question.execution.get("kind") == "expect_decline":
+            references.append(Reference(question.id, "decline", note="the instructions put this topic out of scope; the right answer declines"))
+            continue
+        if question.execution.get("kind") == "supplied_rows":
+            references.append(Reference(question.id, "ok", tuple(dict(r) for r in question.execution.get("rows") or ()), "from the ranked reference"))
+            continue
         if question.execution.get("kind") == "supplied_text":
             figures = _reference_figures(str(question.execution.get("text", "")))
             if figures:
@@ -1978,6 +2382,17 @@ def _rows_match(reference: Sequence[Mapping[str, Any]], candidate: Sequence[Mapp
     return len(expected) == len(got) and all(_close(g, e) for g, e in zip(got, expected))
 
 
+def _alternate_cause(label: str) -> tuple[str, str]:
+    """The cause an alternate reference names: a narrower channel, the wrong measure, a row count, the wrong channel."""
+    if label.startswith("measure:"):
+        return "wrong_measure", f"the sum of {label.split(':', 1)[1]}, not the measure the question and the definitions name"
+    if label == "rowcount":
+        return "row_count_not_distinct", "the row count, not the distinct order count the definitions name"
+    if label.startswith("channel:"):
+        return "wrong_channel", f"{label.split(':', 1)[1]}, not the channel the abbreviation names"
+    return "narrower_scope", f"{label} alone, not the combined scope asked for"
+
+
 def _grade_change(question: Question, reference: Reference, text: str, agent_rows: Sequence[Mapping[str, Any]] | None) -> Graded | None:
     """A year-over-year answer is right when it carries the change (absolute or percent) or both yearly totals."""
     totals = [float(row["value"]) for row in reference.rows if isinstance(row.get("value"), (int, float)) and not isinstance(row.get("value"), bool)]
@@ -2001,6 +2416,13 @@ def _grade_change(question: Question, reference: Reference, text: str, agent_row
 def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *, agent_rows: Sequence[Mapping[str, Any]] | None = None) -> Graded:
     """Grade an answer against its reference: by the executed query when it was run, else by the prose."""
     text = answer.text if isinstance(answer, AgentAnswer) else str(answer)
+    if reference.status == "decline":
+        # the instructions put the topic out of scope: declining is right, figures are wrong
+        if _numbers_in(text):
+            return Graded(question.id, "wrong", "answered_out_of_scope", "the instructions put this topic out of scope, yet the answer carries figures")
+        if _ABSTAIN_HINT.search(text or ""):
+            return Graded(question.id, "correct", "declined_as_instructed", "the topic is out of scope by the instructions and the agent declined")
+        return Graded(question.id, "incomplete", "no_decline", "the topic is out of scope by the instructions; the answer neither declines nor gives figures")
     if reference.status != "ok":
         if reference.status == "abstained":
             # the source holds no rows for this question: saying so is right,
@@ -2021,7 +2443,8 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
             return Graded(question.id, "correct", "", "the agent's executed query returns the reference rows", len(reference.rows), len(reference.rows), True)
         for label, rows in reference.alternates.items():
             if _rows_match(rows, agent_rows):
-                return Graded(question.id, "wrong", "narrower_scope", f"the agent's query returns {label} alone, not the combined scope asked for", 0, len(reference.rows), True)
+                cause, detail = _alternate_cause(label)
+                return Graded(question.id, "wrong", cause, f"the agent's query returns {detail}", 0, len(reference.rows), True)
         if len(agent_rows) < len(reference.rows):
             return Graded(question.id, "partial" if agent_rows else "wrong", "missing_rows", f"the agent's query returns {len(agent_rows)} rows, the reference {len(reference.rows)}", len(agent_rows), len(reference.rows), True)
         # fall through to the prose: the query differs, the prose says how much
@@ -2054,7 +2477,8 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
     for label, rows in reference.alternates.items():
         alternate = _reference_values(rows)
         if alternate and sum(1 for v in alternate if any(_close(n, v) for n in numbers)) == len(alternate):
-            return Graded(question.id, "wrong", "narrower_scope", f"the figures match {label} alone, not the combined scope asked for", matched, len(expected), agent_rows is not None)
+            cause, detail = _alternate_cause(label)
+            return Graded(question.id, "wrong", cause, f"the figures match {detail}", matched, len(expected), agent_rows is not None)
     if expected and matched >= 0.5 * len(expected):
         labels = _labels(reference.rows)
         if question.kind == "top_n" and labels and any(text.find(label) < 0 for label in labels):
@@ -2086,6 +2510,10 @@ _CAUSE_GUIDANCE = {
     "answered_without_data": "When the query returns no rows, say that the source has no data for that scope; do not produce figures.",
     "inconsistent": "Give the same answer to the same question: prefer the authoritative table named in the source instructions.",
     "misrouted": "Choose the data source by topic: name which source answers which subjects, and keep each source's description specific to its subjects.",
+    "wrong_measure": "Use the column the definitions name for each measure word (units, cost, tax, freight); never substitute revenue for a quantity or a count.",
+    "row_count_not_distinct": "Count orders as distinct order numbers, never as rows.",
+    "wrong_channel": "Map channel words and abbreviations to their fact table before querying, as the definitions state (for example B2B to reseller sales, B2C to internet sales).",
+    "answered_out_of_scope": "Decline questions on the topics the instructions put out of scope; never produce figures for them.",
 }
 
 
@@ -2288,6 +2716,23 @@ class ReviewReport:
             counts[g.outcome] = counts.get(g.outcome, 0) + 1
         return counts
 
+    def by_skill(self) -> dict[str, dict[str, int]]:
+        """Outcome counts per skill the questions test, in the order the skills first appear."""
+        grade_by_id = {g.question_id: g for g in self.graded}
+        table: dict[str, dict[str, int]] = {}
+        for q in self.questions:
+            skill = q.skill or q.kind
+            counts = table.setdefault(skill, {"questions": 0, "correct": 0, "partial": 0, "wrong": 0, "other": 0})
+            counts["questions"] += 1
+            g = grade_by_id.get(q.id)
+            if g is None:
+                counts["other"] += 1
+            elif g.outcome in counts:
+                counts[g.outcome] += 1
+            else:
+                counts["other"] += 1
+        return table
+
     def _knowledge_lines(self) -> list[str]:
         k = self.knowledge or {}
         lines = [
@@ -2355,8 +2800,14 @@ class ReviewReport:
                 routed = next((a.datasource for a in answers if a.datasource), "")
                 detail = g.detail if g else ref_by_id.get(q.id, Reference(q.id, "failed")).note
                 outcome = g.outcome if g else ""
-                parts.append(f'<tr><td>{index}</td><td>{esc(q.text)}</td><td class="out-{esc(outcome)}">{esc(outcome)}</td><td>{esc(g.cause if g else "")}</td><td>{esc(detail)}</td><td>{"yes" if query else "no"}</td><td>{esc(routed)}</td></tr>')
+                parts.append(f'<tr><td>{index}</td><td>{esc(q.text)}<div class="muted">{esc(q.skill or q.kind)}</div></td><td class="out-{esc(outcome)}">{esc(outcome)}</td><td>{esc(g.cause if g else "")}</td><td>{esc(detail)}</td><td>{"yes" if query else "no"}</td><td>{esc(routed)}</td></tr>')
             parts.append("</table>")
+            by_skill = self.by_skill()
+            if by_skill:
+                parts.append("<h3>Outcomes by skill</h3><table><tr><th>Skill</th><th>Questions</th><th>Correct</th><th>Partial</th><th>Wrong</th><th>Other</th></tr>")
+                for skill, counts in by_skill.items():
+                    parts.append(f"<tr><td>{esc(skill)}</td><td>{counts['questions']}</td><td>{counts['correct']}</td><td>{counts['partial']}</td><td>{counts['wrong']}</td><td>{counts['other']}</td></tr>")
+                parts.append("</table>")
             for index, q in enumerate(self.questions, start=1):
                 answers = self.answers.get(q.id, ())
                 reference = ref_by_id.get(q.id)
@@ -2370,6 +2821,8 @@ class ReviewReport:
                         step_counts = Counter(st.name for st in a.steps if st.name)
                         functions = ", ".join(f"{name} x{n}" if n > 1 else name for name, n in sorted(step_counts.items())) or "unnamed"
                         body.append(f'<div class="muted">{len(a.steps)} step(s): {esc(functions)}; routed to: {esc(a.datasource or "unknown")}; status: {esc(a.status)}</div>')
+                if q.technical:
+                    body.append(f'<div class="muted">In schema terms: {esc(q.technical)}</div>')
                 if q.reference_query:
                     body.append(f"<div><b>Reference query:</b></div><pre>{esc(q.reference_query)}</pre>")
                 if reference is not None and reference.rows:
@@ -2481,6 +2934,15 @@ class ReviewReport:
             detail = (g.detail if g else ref_by_id.get(q.id, Reference(q.id, "failed")).note)[:80]
             lines.append(f"| {q.id} | {q.text} | {g.outcome if g else ''} | {g.cause if g else ''} | {detail} | {'yes' if query else 'no'} | {routed} |")
         lines.append("")
+        by_skill = self.by_skill()
+        if by_skill:
+            lines.append("Outcomes by skill:")
+            lines.append("")
+            lines.append("| skill | questions | correct | partial | wrong | other |")
+            lines.append("|---|---|---|---|---|---|")
+            for skill, counts in by_skill.items():
+                lines.append(f"| {skill} | {counts['questions']} | {counts['correct']} | {counts['partial']} | {counts['wrong']} | {counts['other']} |")
+            lines.append("")
         if self.analysis:
             lines.append("## Analysis (RLM)")
             grade_by_id = {g.question_id: g for g in self.graded}
@@ -2611,7 +3073,7 @@ def review_agent(
     questions = generate_questions(snapshot, schemas, years=years, top=top, limit_per_source=limit_per_source, context=context)
     if not questions:
         notes.extend(explain_no_questions(snapshot, schemas, years))
-    references = build_references(questions, executors)
+    questions, references = derive_filter_questions(questions, build_references(questions, executors))
     ref_by_id = {r.question_id: r for r in references}
     answers: dict[str, tuple[AgentAnswer, ...]] = {}
     graded: list[Graded] = []
@@ -2662,9 +3124,13 @@ def _schema_digest(schemas: Sequence[SourceSchema], *, tables: int = 40, columns
 
 
 _PROPOSE_TASK = (
-    "Propose questions a business user would ask this data agent. Use the scope, the priorities and "
-    "the schema digest in the brief. Each question must be answerable from the sources with one "
-    "aggregate, ranking, comparison or trend, must say which period it means, and must not repeat a "
+    "Propose questions a business user would ask this data agent, written the way such a user writes: "
+    "plain business language, never a table or column name, using the business terms in the brief for "
+    "channels, measures and attributes. Spread them over the skills a data agent's author wants tested: "
+    "a filtered total, a ranking, a comparison between two periods, a ratio or KPI the definitions state, "
+    "a phrasing that uses an abbreviation or an ambiguous term the instructions define, and one topic the "
+    "instructions put out of scope (where the right answer declines). Each question must say which period "
+    "it means, must be answerable from the sources (except the out-of-scope one), and must not repeat a "
     "question already asked. Return exactly the requested count as a list of plain strings."
 )
 _EXPLAIN_TASK = (
@@ -2704,7 +3170,7 @@ def _rlm_explainer(lm: Any, *, timeout: float) -> Callable[[Mapping[str, Any]], 
     def explain(case: Mapping[str, Any]) -> Mapping[str, str]:
         from .runtime import RLM
 
-        result = RLM.task(_EXPLAIN_TASK, inputs=dict(case), outputs={"explanation": str, "proposed_change": str}, lm=lm, max_turns=3, timeout=timeout).run()
+        result = RLM.task(_EXPLAIN_TASK, inputs=dict(case), outputs={"explanation": str, "proposed_change": str}, lm=lm, max_turns=4, timeout=timeout).run()
         payload = result.payload or {}
         return {"explanation": str(payload.get("explanation", "") or ""), "proposed_change": str(payload.get("proposed_change", "") or "")}
 
@@ -2748,12 +3214,22 @@ def deepen(
         explain = explain or _rlm_explainer(lm, timeout=timeout)
     notes = list(report.notes)
     target = next((s.source_id for s in report.schemas if s.kind != "semantic_model"), report.schemas[0].source_id if report.schemas else "source")
+    vocabulary_lines: list[str] = []
+    excluded: set[str] = set()
+    for schema in report.schemas:
+        if schema.kind == "semantic_model":
+            continue
+        vocabulary_lines.extend(build_vocabulary(report.snapshot, schema, context).lines())
+        source = next((s for s in report.snapshot.datasources if s.id == schema.source_id), None)
+        excluded.update(excluded_tables(schema, (source.instructions if source else "") + "\n" + report.snapshot.instructions))
     brief = "\n\n".join(
         part
         for part in [
             context.as_prompt() if context else "",
             f"Agent instructions:\n{report.snapshot.instructions[:3000]}",
             *(f"Source {s.name or s.id} instructions:\n{s.instructions[:2000]}" for s in report.snapshot.datasources),
+            "Business terms (use these words, not the schema names):\n" + "\n".join(vocabulary_lines[:60]),
+            "Out-of-scope topics by the instructions: " + ", ".join(humanize_table(t) for t in sorted(excluded)) if excluded else "",
             "Schema digest:\n" + _schema_digest(report.schemas),
             "Already asked:\n" + "\n".join(q.text for q in report.questions),
         ]
@@ -2775,7 +3251,7 @@ def deepen(
             verdict, answer = verify(text)
         except Exception as exc:  # noqa: BLE001
             verdict, answer = "failed", f"{type(exc).__name__}: {str(exc)[:200]}"
-        question = Question(id=qid, source_id=target, kind="deep", text=text, spec={"kind": "deep", "verdict": verdict, "reference_answer": answer[:2000]}, reference_query="", execution={"kind": "supplied_text", "text": answer})
+        question = Question(id=qid, source_id=target, kind="deep", text=text, spec={"kind": "deep", "verdict": verdict, "reference_answer": answer[:2000]}, reference_query="", execution={"kind": "supplied_text", "text": answer}, skill="proposed")
         figures = _reference_figures(answer) if verdict != "failed" else []
         if figures:
             reference = Reference(qid, "ok", tuple({"value": figure} for figure in figures), f"RLM reference ({verdict}): {answer[:160]}")

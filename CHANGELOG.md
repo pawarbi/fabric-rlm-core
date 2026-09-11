@@ -52,6 +52,20 @@
   and a decline on one is `abstained_by_policy`; a year-over-year answer is
   right by the change or by both totals; few-shot SQL carries the `dbo.`
   prefix when the agent uses it; answers record whether their query ran.
+- **Natural questions across a skill matrix.** Generated questions read as
+  a business user asks them, with the words the agent's own instructions
+  use for tables, measures and attributes (channel synonyms in quotes,
+  `Use X for units`, `Revenue = SUM(...)`, `territory means ...`,
+  abbreviations such as B2B); the schema phrasing stays on the question for
+  the report. The set now covers aggregation, ranking, change, distinct
+  counts, a literal filter derived from the ranked reference, a KPI from
+  the instructions' own formula, the right measure column for a mapped
+  term, an ambiguous total across channels, a channel abbreviation, and an
+  out-of-scope topic where declining is the right answer; each question
+  carries its skill and the report counts outcomes by skill. Alternates
+  name their cause (`wrong_measure`, `row_count_not_distinct`,
+  `wrong_channel`, `answered_out_of_scope`). The RLM proposer is told to
+  write plain business questions over the same skills.
 
 ### Changed
 

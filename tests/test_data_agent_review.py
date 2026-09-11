@@ -289,15 +289,15 @@ def test_review_runs_end_to_end_with_a_scripted_agent():
     snapshot = _snapshot()
 
     def ask(question: str):
-        if question.startswith("What was total SalesAmount by year") and "combined" in question:
+        if question.endswith("combined?"):
             return AgentAnswer("2012: $100.00; 2013: $375.00")  # internet only: narrower scope
-        if question.startswith("What are the top"):
+        if question.startswith("Which 3 products"):
             return AgentAnswer("Road-350 2,000 then Mountain-200 2,500 then Sport Helmet 50", query="SELECT TOP 3 a.EnglishProductName, SUM(f.SalesAmount) AS value FROM dbo.factinternetsales f JOIN dbo.dimdate d ON f.OrderDateKey = d.DateKey JOIN dbo.dimproduct a ON f.ProductKey = a.ProductKey WHERE d.CalendarYear = 2013 GROUP BY a.EnglishProductName ORDER BY value DESC", language="sql")
-        if "distinct" in question:
+        if "orders were there per year" in question:
             return AgentAnswer("I cannot determine orders from the selected tables.")
         return AgentAnswer("The values are 1,100.00 for 2012 and 2,850.00 for 2013; 100.00 and 350.00; 1,000.00 and 2,500.00; 2,750.00 and 350.00; 2,500 and 1,000 and 2,000 and 350 and 500 and 50")
 
-    report = review_agent(snapshot, [schema], {LAKEHOUSE_ID: executor}, ask, top=3, limit_per_source=6)
+    report = review_agent(snapshot, [schema], {LAKEHOUSE_ID: executor}, ask, top=3, limit_per_source=12)
     outcomes = {g.question_id: g for g in report.graded}
     combined = outcomes[report.questions[0].id]
     assert combined.outcome == "wrong" and combined.cause == "narrower_scope"
@@ -394,10 +394,10 @@ def test_questions_stay_within_the_facts_the_instructions_name():
     tables["dimorganization"] = ("OrganizationKey", "OrganizationName")
     schema = schema_from_tables(LAKEHOUSE_ID, tables)
     questions = generate_questions(_snapshot(), [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=20)
-    assert questions and all("factfinance" not in q.text for q in questions)
+    assert questions and all("factfinance" not in q.technical for q in questions)
     unnamed = AgentSnapshot(agent_id="a", name="Bare", instructions="Answer questions.", datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="lh", instructions="", description="d"),))
     everything = generate_questions(unnamed, [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=40)
-    assert any("factfinance" in q.text for q in everything)
+    assert any("factfinance" in q.technical for q in everything)
 
 
 def test_plain_words_are_not_unknown_references():
@@ -411,7 +411,7 @@ def test_plain_words_are_not_unknown_references():
 
 def test_single_year_questions_read_naturally_and_no_data_answers_are_wrong():
     questions = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2013]}, top=3)
-    assert all("2013 to 2013" not in q.text for q in questions) and any("for 2013" in q.text for q in questions)
+    assert all("2013 to 2013" not in q.technical for q in questions) and any("for 2013" in q.technical for q in questions)
     no_rows = Reference("q", "abstained", note="the query returned no rows")
     assert grade(_question(), no_rows, "There are no records for that period.").outcome == "correct"
     invented = grade(_question(), no_rows, "Total revenue was $1,250,000 in that period.")
@@ -547,7 +547,7 @@ def test_grouping_attributes_span_dimensions_and_prefer_english_names():
     tables["dimproduct"] = ("ProductKey", "SpanishProductName", "EnglishProductName", "FrenchProductName", "ProductSubcategoryKey")
     schema = schema_from_tables(LAKEHOUSE_ID, tables)
     questions = generate_questions(_snapshot(), [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=40)
-    texts = [q.text for q in questions]
+    texts = [q.technical for q in questions]
     assert any("EnglishProductName" in t for t in texts) and any("SalesTerritoryRegion" in t for t in texts)
     assert not any("SpanishProductName" in t or "FrenchProductName" in t for t in texts)
 
@@ -731,10 +731,10 @@ def test_context_scopes_prioritises_and_leads_with_supplied_questions():
     questions = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=4, context=context)
     assert [q.kind for q in questions[:3]] == ["supplied"] * 3 and questions[0].id.endswith(".u1")
     generated = [q for q in questions if q.kind != "supplied"]
-    assert len(generated) == 4 and all("factresellersales" in q.text for q in generated)
+    assert len(generated) == 4 and all("factresellersales" in q.technical for q in generated)
 
     plain = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=4)
-    assert len(plain) == 4 and not all("factresellersales" in q.text for q in plain)
+    assert len(plain) == 4 and not all("factresellersales" in q.technical for q in plain)
 
     executor = _duckdb_executor()
     references = {r.question_id: r for r in build_references(questions[:3], {LAKEHOUSE_ID: executor})}
@@ -772,9 +772,9 @@ def test_out_of_scope_topics_are_not_asked_about_and_declines_on_them_are_policy
     assert excluded_tables(schema, with_policy.instructions) == ["dimpromotion", "factsalesquota"]
 
     questions = generate_questions(with_policy, [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=40)
-    assert questions and not any("Promotion" in q.text or "quota" in q.text.casefold() for q in questions)
+    assert questions and not any("Promotion" in q.technical or "quota" in q.technical.casefold() for q in questions if q.kind != "scope_out")
     without = generate_questions(_snapshot(), [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=40)
-    assert any("EnglishPromotionCategory" in q.text for q in without)
+    assert any("EnglishPromotionCategory" in q.technical for q in without)
 
     question = Question("q", LAKEHOUSE_ID, "top_n", "What are the top 3 EnglishPromotionCategory values by SalesAmount?", {}, "", {"sql": ""})
     declined = Graded("q", "abstained", "agent_abstained", "the agent declined a question the source answers")
@@ -789,7 +789,7 @@ def test_out_of_scope_topics_are_not_asked_about_and_declines_on_them_are_policy
     context = ReviewContext(scope="Reseller performance by product and territory")
     assert {"reseller", "performance", "product", "territory"} <= set(context.terms) and context.ranking_terms == context.terms
     ranked = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=3, context=context)
-    assert all("factresellersales" in q.text for q in ranked)
+    assert all("factresellersales" in q.technical for q in ranked)
 
 
 def test_a_change_answer_is_right_by_the_change_or_by_both_totals_and_fewshots_use_dbo():
@@ -944,7 +944,7 @@ def test_emphasised_scope_terms_rank_first_and_questions_are_renumbered():
     assert "reseller" in context.emphasised and "internet" not in context.emphasised
     questions = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=4, context=context)
     assert [q.id.rsplit(".", 1)[-1] for q in questions] == ["q1", "q2", "q3", "q4"]
-    assert all("factresellersales" in q.text for q in questions)
+    assert all("factresellersales" in q.technical for q in questions)
 
 
 def test_executor_retries_a_timed_out_query_and_the_verifier_does_not_repeat_bound_inputs(monkeypatch):
@@ -990,3 +990,94 @@ def test_a_prose_reference_may_say_more_than_the_agent_was_asked():
     assert grade(question, reference, "Southwest led with $6,377,499.28 in 2013.").outcome == "correct"
     assert grade(question, reference, "Southwest led with $6,377,499.28 and Northwest with $4,000,000.00.").outcome == "partial"
     assert grade(question, reference, "Southwest led with $1.00.").outcome == "wrong"
+
+
+# ------------------------------------------------------- natural language --
+
+AW_STYLE_INSTRUCTIONS = """SCOPE
+- "Internet sales" or "online sales" uses factinternetsales only. "Reseller sales", "dealer sales", or "B2B sales" uses factresellersales only.
+- Region means SalesTerritoryGroup; territory means SalesTerritoryRegion; country means SalesTerritoryCountry.
+- An order is a distinct SalesOrderNumber, not a row count.
+- Use SalesAmount for revenue, OrderQuantity for units, TotalProductCost for product cost.
+- Revenue = SUM(SalesAmount).
+- Average order value = SUM(SalesAmount) / COUNT(DISTINCT SalesOrderNumber).
+- Do not claim promotions or quotas because those tables are not in scope.
+"""
+
+
+def test_vocabulary_comes_from_the_instructions():
+    from fabric_rlm.data_agent_review import build_vocabulary, humanize_column, humanize_table
+
+    assert humanize_table("factresellersales") == "reseller sales" and humanize_table("dimsalesterritory") == "sales territory"
+    assert humanize_table("dbo.factinternetsales") == "internet sales" and humanize_table("code_registry") == "code registry"
+    assert humanize_column("EnglishProductName") == "product" and humanize_column("SalesTerritoryRegion") == "sales territory region"
+    assert humanize_column("BusinessType") == "business type" and humanize_column("'Product'[Category]") == "category"
+
+    snapshot = AgentSnapshot(agent_id="a", name="Sales Agent", instructions=AW_STYLE_INSTRUCTIONS, datasources=_snapshot().datasources)
+    vocabulary = build_vocabulary(snapshot, _schemas()[0])
+    assert vocabulary.tables["factresellersales"] == "reseller sales" and vocabulary.tables["factinternetsales"] == "internet sales"
+    assert vocabulary.abbreviations["factresellersales"] == "B2B" and vocabulary.abbreviations["factinternetsales"] == "B2C"
+    assert vocabulary.measures["SalesAmount"] == "revenue" and vocabulary.measures["OrderQuantity"] == "units" and vocabulary.measures["TotalProductCost"] == "product cost"
+    assert vocabulary.attributes["SalesTerritoryRegion"] == "territory" and vocabulary.attributes["SalesTerritoryGroup"] == "region"
+    assert vocabulary.orders == "orders" and any(line.startswith("B2B = reseller sales") for line in vocabulary.lines())
+
+
+def test_questions_read_as_a_business_user_asks_them_and_cover_the_skills():
+    import re
+
+    tables = dict(TABLES)
+    tables["dimpromotion"] = ("PromotionKey", "EnglishPromotionCategory")
+    tables["factsalesquota"] = ("SalesQuotaKey", "DateKey", "SalesAmountQuota", "CalendarYear")
+    schema = schema_from_tables(LAKEHOUSE_ID, tables)
+    snapshot = AgentSnapshot(agent_id="a", name="Sales Agent", instructions=AW_STYLE_INSTRUCTIONS, datasources=_snapshot().datasources)
+    questions = generate_questions(snapshot, [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=40)
+    texts = [q.text for q in questions]
+    assert not any(re.search(r"fact\w+|dim\w+|SalesAmount|[a-z][A-Z]", t) for t in texts), texts
+    for expected in (
+        "What was total revenue by year from 2012 to 2013, internet sales and reseller sales combined?",
+        "What was total revenue in 2013?",
+        "How did reseller sales revenue change from 2012 to 2013?",
+        "Which 3 territories had the highest reseller sales revenue in 2013?",
+        "What was reseller sales revenue by product in 2013?",
+        "How many reseller sales orders were placed in 2013?",
+        "What were total units for reseller sales in 2013?",
+        "What was the average order value for reseller sales in 2013?",
+        "What was B2B revenue in 2013?",
+        "Which promotions were used most in 2013?",
+        "What was the sales quota for 2013?",
+    ):
+        assert expected in texts, expected
+    skills = {q.skill for q in questions}
+    assert {"aggregate", "rank", "change", "count", "kpi", "measure", "ambiguity", "scope"} <= skills
+    definition = next(q for q in questions if q.kind == "definition")
+    assert "SUM(f.SalesAmount) / COUNT(DISTINCT f.SalesOrderNumber) AS value" in definition.execution["sql"]
+    assert all(q.technical for q in questions)
+
+
+def test_declines_measures_and_row_counts_are_graded_by_their_cause():
+    question = Question("s", LAKEHOUSE_ID, "scope_out", "Which promotions were used most in 2013?", {}, "", {"kind": "expect_decline"}, skill="scope")
+    decline = Reference("s", "decline", note="out of scope")
+    assert grade(question, decline, "I cannot answer questions about promotions; they are out of scope for this agent.").outcome == "correct"
+    assert grade(question, decline, "The top promotion brought $1,250,000.").cause == "answered_out_of_scope"
+    assert grade(question, decline, "Here is what I found.").outcome == "incomplete"
+
+    units = Question("u", LAKEHOUSE_ID, "total_year", "What were total units for reseller sales in 2013?", {}, "", {"sql": ""}, (("measure:SalesAmount", {"sql": ""}),), skill="measure")
+    reference = Reference("u", "ok", ({"value": 1500.0},), alternates={"measure:SalesAmount": ({"value": 2850.0},)})
+    assert grade(units, reference, "Reseller sales came to $2,850.00 in 2013.").cause == "wrong_measure"
+    orders = Question("o", LAKEHOUSE_ID, "distinct_orders_year", "How many reseller sales orders were placed in 2013?", {}, "", {"sql": ""}, (("rowcount", {"sql": ""}),), skill="count")
+    reference = Reference("o", "ok", ({"value": 300.0},), alternates={"rowcount": ({"value": 1200.0},)})
+    assert grade(orders, reference, "There were 1,200 orders.").cause == "row_count_not_distinct"
+
+
+def test_the_review_derives_a_filter_question_and_reports_by_skill():
+    executor = _duckdb_executor()
+    report = review_agent(_snapshot(), _schemas(), {LAKEHOUSE_ID: executor}, lambda q: "no idea", years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=12)
+    filtered = [q for q in report.questions if q.kind == "filter"]
+    ranked = next(q for q in report.questions if q.kind == "top_n")
+    top_row = next(r for r in report.references if r.question_id == ranked.id).rows[0]
+    leader = top_row["EnglishProductName"]
+    assert filtered and filtered[0].text == f"What was internet sales revenue for product {leader} in 2013?"
+    reference = next(r for r in report.references if r.question_id == filtered[0].id)
+    assert reference.status == "ok" and reference.rows[0]["value"] == float(top_row["value"])
+    assert f"WHERE d.CalendarYear = 2013 AND a.EnglishProductName = '{leader}'" in filtered[0].reference_query
+    assert "filter" in report.by_skill() and "Outcomes by skill:" in report.to_markdown() and "Outcomes by skill" in report.to_html()
