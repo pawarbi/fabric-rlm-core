@@ -29,6 +29,7 @@ _MAX_QUERY_RESULT_BYTES = 5 * 1024 * 1024
 _QUERY_FETCH_BATCH_ROWS = 1
 _QUERY_MEMORY_LIMIT = "256MB"
 _QUERY_TIMEOUT_SECONDS = 30.0
+_MAX_QUERY_TIMEOUT_SECONDS = 600.0
 _MAX_DELTA_LOG_BYTES = 4 * 1024 * 1024
 _MAX_DELTA_LOG_FILES = 1_000
 _SAFE_ALIAS = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -358,12 +359,15 @@ class LakehouseSource:
         *,
         sources: Mapping[str, str],
         max_rows: int = 1_000,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Run bounded read-only SQL against named entries in this catalog.
 
         In an isolated RLM worker the query is transparently delegated to the
         trusted parent process, so Fabric credentials never enter generated
-        code. Direct callers execute in the current process.
+        code. Direct callers execute in the current process. ``timeout`` is
+        the execution deadline in seconds for a direct caller (default 30);
+        a worker's query keeps the default.
         """
 
         resolved = self.resolve()
@@ -380,6 +384,7 @@ class LakehouseSource:
             sql=sql,
             sources=sources,
             max_rows=max_rows,
+            timeout=timeout,
         )
 
     def __rlm_describe__(self) -> str:
@@ -760,11 +765,18 @@ def execute_lakehouse_query(
     sql: str,
     sources: Mapping[str, str],
     max_rows: int = 1_000,
+    timeout: float | None = None,
 ) -> dict[str, Any]:
     """Execute a catalog-bounded query in the trusted calling process."""
 
     if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows <= 0:
         raise ValueError("LakehouseSource.query max_rows must be a positive integer.")
+    if timeout is None:
+        deadline_seconds = _QUERY_TIMEOUT_SECONDS
+    else:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0 or timeout > _MAX_QUERY_TIMEOUT_SECONDS:
+            raise ValueError(f"LakehouseSource.query timeout must be between 0 and {_MAX_QUERY_TIMEOUT_SECONDS:.0f} seconds.")
+        deadline_seconds = float(timeout)
     if max_rows > _MAX_QUERY_ROWS:
         raise ValueError(
             f"LakehouseSource.query max_rows must be at most {_MAX_QUERY_ROWS}."
@@ -866,7 +878,7 @@ def execute_lakehouse_query(
             deadline_reached.set()
             con.interrupt()
 
-        timer = threading.Timer(_QUERY_TIMEOUT_SECONDS, interrupt_query)
+        timer = threading.Timer(deadline_seconds, interrupt_query)
         timer.daemon = True
         timer.start()
         cursor = con.execute(

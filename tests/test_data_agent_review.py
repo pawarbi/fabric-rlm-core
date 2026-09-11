@@ -945,3 +945,40 @@ def test_emphasised_scope_terms_rank_first_and_questions_are_renumbered():
     questions = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=4, context=context)
     assert [q.id.rsplit(".", 1)[-1] for q in questions] == ["q1", "q2", "q3", "q4"]
     assert all("factresellersales" in q.text for q in questions)
+
+
+def test_executor_retries_a_timed_out_query_and_the_verifier_does_not_repeat_bound_inputs(monkeypatch):
+    import fabric_rlm.verify as verify_module
+    from fabric_rlm.data_agent_review import _rlm_verifier
+
+    calls = []
+
+    def flaky(sql, *, sources, timeout=None):
+        calls.append(timeout)
+        if len(calls) == 1:
+            raise TimeoutError("deadline")
+        return {"columns": ["n"], "rows": [[3]], "truncated": False}
+
+    executor = LakehouseExecutor(flaky, TABLES, timeout=120)
+    assert executor.run({"sql": "SELECT COUNT(*) AS n FROM factinternetsales"}) == [{"n": 3}] and calls == [120, 120]
+
+    def always(sql, *, sources):
+        raise TimeoutError("x")
+
+    with pytest.raises(TimeoutError):
+        LakehouseExecutor(always, TABLES, retries=0).run({"sql": "SELECT 1"})
+
+    seen = []
+
+    class Result:
+        payload = {"answer": "Total was 1,100."}
+
+    def fake_verified_task(task, **kwargs):
+        seen.append(kwargs)
+        return type("Verified", (), {"result": Result(), "verdict": "agree"})()
+
+    monkeypatch.setattr(verify_module, "verified_task", fake_verified_task)
+    assert _rlm_verifier({"model": "x"}, {LAKEHOUSE_ID: object()}, knowledge=object(), max_turns=2, timeout=10)("q") == ("agree", "Total was 1,100.")
+    assert seen[-1]["inputs"] is None
+    _rlm_verifier({"model": "x"}, {LAKEHOUSE_ID: "handle"}, knowledge=None, max_turns=2, timeout=10)("q")
+    assert seen[-1]["inputs"] == {LAKEHOUSE_ID: "handle"}

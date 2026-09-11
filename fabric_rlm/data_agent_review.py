@@ -1450,15 +1450,26 @@ class LakehouseExecutor:
     each name to itself.
     """
 
-    def __init__(self, query: Callable[..., Any], tables: Iterable[str]) -> None:
+    def __init__(self, query: Callable[..., Any], tables: Iterable[str], *, timeout: float | None = None, retries: int = 1) -> None:
         self._query = query
         self._tables = list(tables)
+        self._timeout = timeout  # passed to the query callable when set (LakehouseSource.query accepts it)
+        self._retries = max(0, int(retries))  # a timed-out query is retried once: the file list is cached by then
 
     def run(self, execution: Mapping[str, Any]) -> list[dict[str, Any]]:
         sql = str(execution["sql"])
         used = [t for t in self._tables if re.search(rf"(?<![\w.]){re.escape(t)}(?![\w])", sql, re.IGNORECASE)]
-        result = self._query(sql, sources={t: t for t in used})
-        return _rows(result)
+        kwargs: dict[str, Any] = {"sources": {t: t for t in used}}
+        if self._timeout is not None:
+            kwargs["timeout"] = self._timeout
+        attempt = 0
+        while True:
+            try:
+                return _rows(self._query(sql, **kwargs))
+            except TimeoutError:
+                attempt += 1
+                if attempt > self._retries:
+                    raise
 
     def run_agent_sql(self, sql: str) -> list[dict[str, Any]]:
         """Run a query the agent generated (T-SQL) after the small translation DuckDB needs."""
@@ -2672,7 +2683,8 @@ def _rlm_verifier(lm: Any, handles: Mapping[str, Any], knowledge: Any, *, max_tu
     def verify(question: str) -> tuple[str, str]:
         from .verify import verified_task
 
-        verified = verified_task(question, outputs=["answer"], inputs=dict(handles), knowledge=knowledge, lm=lm, max_turns=max_turns, timeout=timeout)
+        # a bound knowledge package brings its own source handles; naming them again as inputs is a conflict
+        verified = verified_task(question, outputs=["answer"], inputs=None if knowledge is not None else dict(handles), knowledge=knowledge, lm=lm, max_turns=max_turns, timeout=timeout)
         answer = (verified.result.payload or {}).get("answer", "")
         return str(verified.verdict), "" if answer is None else str(answer)
 

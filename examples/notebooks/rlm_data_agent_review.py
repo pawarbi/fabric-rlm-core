@@ -195,7 +195,7 @@ executors = {}
 for source_id, (source, handle) in handles.items():
     schema = next(s for s in schemas if s.source_id == source_id)
     if source.kind == "lakehouse":
-        executors[source_id] = LakehouseExecutor(handle.query, schema.tables)
+        executors[source_id] = LakehouseExecutor(handle.query, schema.tables, timeout=180)   # references may join two facts; 30 s is the worker default
     else:
         executors[source_id] = SemanticModelExecutor(handle.aggregate)
 
@@ -400,9 +400,8 @@ if FREEFORM_QUESTION and LM:
     task = FREEFORM_QUESTION + ("\n\n" + context.as_prompt() if context.as_prompt() else "")   # the RLM gets your scope and notes
     reference = verified_task(
         task,
-        inputs={source_id: handle for source_id, (_, handle) in handles.items()},
         outputs=["answer"],
-        knowledge=knowledge,
+        knowledge=knowledge,          # the package brings the bound source handles with it
         lm=LM,
         max_turns=8,
         timeout=300,

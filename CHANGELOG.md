@@ -61,7 +61,9 @@
   vectors, column mapping, v2 checkpoints). Tables the Delta readers
   reject, such as those with Spark `void` columns, now answer; a catalog
   column no data file carries comes back as NULL. The file list is cached
-  per table while the log listing is unchanged.
+  per table while the log listing is unchanged. `LakehouseSource.query`
+  accepts a `timeout` (seconds, at most 600) for direct callers; a worker's
+  query keeps the 30-second default.
 
 ## 0.6.1 — 2026-09-10 — generalized run protocol and learning substrate
 

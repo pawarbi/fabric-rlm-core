@@ -853,3 +853,16 @@ def test_checkpoints_seed_the_replay(tmp_path) -> None:
     # a commit missing between the checkpoint and the newest log entry: leave it to the Delta reader
     (log / "00000000000000000013.json").write_text('{"add":{"path":"later.parquet","size":1,"modificationTime":1,"dataChange":true}}\n', encoding="utf-8")
     assert lakehouse_module._delta_parquet_files(duckdb.connect(), str(tmp_path / "cp")) is None
+
+
+def test_query_timeout_is_validated_and_passed_to_the_deadline(tmp_path) -> None:
+    csv_path = tmp_path / "companies.csv"
+    csv_path.write_text("region,mrr\nNorth America,10.5\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.companies", "path": str(csv_path), "columns": [["region", "VARCHAR"], ["mrr", "DOUBLE"]]}],
+    )
+    assert source.query("SELECT SUM(mrr) AS total FROM companies", sources={"companies": "files.companies"}, timeout=120)["rows"] == [[10.5]]
+    for bad in (0, -1, True, 10_000):
+        with pytest.raises(ValueError, match="timeout"):
+            source.query("SELECT 1 FROM companies", sources={"companies": "files.companies"}, timeout=bad)
