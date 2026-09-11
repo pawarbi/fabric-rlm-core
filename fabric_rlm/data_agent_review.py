@@ -41,6 +41,7 @@ a notebook and SDK implementations for use inside one.
 
 from __future__ import annotations
 
+import calendar
 import html
 import json
 import re
@@ -1233,6 +1234,8 @@ def _sql_literal(value: Any) -> str:
 def _sql(spec: Mapping[str, Any], *, dialect: str) -> str:
     """Render a lakehouse question spec as T-SQL (few-shots) or DuckDB (execution)."""
     kind = spec["kind"]
+    if kind in _EXTENDED_KINDS:
+        return _sql_extended(spec, dialect=dialect)
     top = spec.get("top")
     facts: list[Mapping[str, Any]] = spec["facts"]
     by_year = kind in {"total_by_year", "distinct_by_year", "yoy", "combined_total_by_year"}
@@ -1406,6 +1409,17 @@ _SKILLS = {
     "scope_out": "scope",
     "supplied": "supplied",
     "deep": "proposed",
+    "month_trend": "trend",
+    "quarter_trend": "trend",
+    "drivers": "drivers",
+    "entity_trend": "entity",
+    "entity_value": "entity",
+    "share": "share",
+    "top_share": "share",
+    "having_count": "threshold",
+    "anti_join": "churn",
+    "compare": "compare",
+    "best_per_group": "leaders",
 }
 
 
@@ -1535,6 +1549,311 @@ def build_vocabulary(snapshot: AgentSnapshot, schema: SourceSchema, context: Rev
     return Vocabulary(tables, measures, attributes, abbreviations, orders)
 
 
+_MONTH_COLUMN = re.compile(r"^(month|monthnumber|monthnumberofyear|calendarmonth|month_number|monthofyear)$", re.IGNORECASE)
+_QUARTER_COLUMN = re.compile(r"^(quarter|calendarquarter|quarter_number|quarterofyear)$", re.IGNORECASE)
+_ENTITY_HINT = re.compile(r"(reseller|customer|vendor|supplier|account|store|client|dealer|partner|employee|company|organization)name$", re.IGNORECASE)
+_PRODUCT_HINT = re.compile(r"(product|item|sku)name$", re.IGNORECASE)
+_CATEGORY_HINT = re.compile(r"(category|subcategory|segment|class)", re.IGNORECASE)
+_PLACE_HINT = re.compile(r"(territory|region|country|city|state|geography)", re.IGNORECASE)
+
+
+def attribute_paths(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]], excluded: Collection[str] = (), *, max_depth: int = 3) -> list[dict[str, Any]]:
+    """Every grouping column reachable from a fact through one or more dimension joins.
+
+    A path is ``{"hops": [{"from_column", "table", "key"}, ...], "column", "alias"}``;
+    the first hop leaves the fact, later hops follow key columns of the
+    dimension just joined (product to subcategory to category). Date tables
+    and out-of-scope tables are not entered.
+    """
+    paths: list[dict[str, Any]] = []
+    date_tables = {t for t in schema.tables if re.search(r"(date|calendar|time)", t, re.IGNORECASE)}
+    frontier: list[tuple[str, list[dict[str, str]]]] = [(table, [])]
+    visited = {table}
+    for _depth in range(max_depth):
+        next_frontier: list[tuple[str, list[dict[str, str]]]] = []
+        for current, hops in frontier:
+            for column in schema.tables[current]:
+                target = joins.get((current, column))
+                if target is None or _DATE_KEY.search(column):
+                    continue
+                dim_table, dim_key = target
+                if dim_table in visited or dim_table in date_tables or _mentions_excluded(dim_table, excluded):
+                    continue
+                visited.add(dim_table)
+                new_hops = hops + [{"from_column": column, "table": dim_table, "key": dim_key}]
+                for attribute in schema.tables[dim_table]:
+                    if _ATTRIBUTE_HINT.search(attribute) and not _KEY_HINT.search(attribute) and attribute != dim_key:
+                        paths.append({"hops": new_hops, "column": attribute, "alias": attribute})
+                next_frontier.append((dim_table, new_hops))
+        frontier = next_frontier
+        if not frontier:
+            break
+    return paths
+
+
+def _hops(attr: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    if attr.get("hops"):
+        return list(attr["hops"])
+    return [{"from_column": attr["fact_key"], "table": attr["dim_table"], "key": attr["dim_key"]}]
+
+
+class _Joins:
+    """JOIN clauses for a set of attribute paths, one alias per distinct hop chain."""
+
+    def __init__(self) -> None:
+        self.clauses: list[str] = []
+        self._alias: dict[tuple[tuple[str, str, str], ...], str] = {}
+
+    def ref(self, attr: Mapping[str, Any]) -> str:
+        previous = "f"
+        chain: tuple[tuple[str, str, str], ...] = ()
+        for hop in _hops(attr):
+            chain = chain + ((str(hop["from_column"]), str(hop["table"]), str(hop["key"])),)
+            if chain not in self._alias:
+                alias = f"a{len(self._alias) + 1}"
+                self._alias[chain] = alias
+                self.clauses.append(f"JOIN {hop['table']} {alias} ON {previous}.{hop['from_column']} = {alias}.{hop['key']}")
+            previous = self._alias[chain]
+        return f"{previous}.{attr['column']}"
+
+
+def _period_condition(fact: Mapping[str, Any], period: Mapping[str, Any]) -> str:
+    dt = fact["date"]
+    parts = [f"d.{dt['year']} = {int(period['year'])}"]
+    if period.get("month") is not None and fact.get("month"):
+        parts.append(f"d.{fact['month']} = {int(period['month'])}")
+    if period.get("quarter") is not None and fact.get("quarter"):
+        parts.append(f"d.{fact['quarter']} = {int(period['quarter'])}")
+    return " AND ".join(parts)
+
+
+def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
+    """Render the analytical kinds: trends by month or quarter, drivers of a change, entities, shares, thresholds, churn, comparisons, leaders."""
+    kind = spec["kind"]
+    fact = spec["facts"][0]
+    dt = fact["date"]
+    measure = f"SUM(f.{fact['measure']})"
+    joins = _Joins()
+    base_joins = f"JOIN {dt['date_table']} d ON f.{dt['column']} = d.{dt['date_key']}"
+    conditions: list[str] = []
+    if spec.get("years"):
+        conditions.append(f"d.{dt['year']} IN ({', '.join(str(int(y)) for y in spec['years'])})")
+    elif spec.get("year") is not None:
+        conditions.append(f"d.{dt['year']} = {int(spec['year'])}")
+    for item in spec.get("filters") or ():
+        conditions.append(f"{joins.ref(item['attr'])} = {_sql_literal(item['value'])}")
+    top = int(spec.get("top") or 10)
+
+    def limit(sql: str, n: int) -> str:
+        return sql.replace("SELECT ", f"SELECT TOP {n} ", 1) if dialect == "tsql" else f"{sql} LIMIT {n}"
+
+    def where(extra: Sequence[str] = ()) -> str:
+        all_conditions = [*conditions, *extra]
+        return f" WHERE {' AND '.join(all_conditions)}" if all_conditions else ""
+
+    def from_clause() -> str:
+        return f"FROM {fact['table']} f {base_joins}{''.join(' ' + c for c in joins.clauses)}"
+
+    if kind in {"month_series", "month_trend", "quarter_trend"}:
+        unit = fact["month"] if kind != "quarter_trend" else fact["quarter"]
+        label = "month" if kind != "quarter_trend" else "quarter"
+        select = f"d.{dt['year']} AS year, d.{unit} AS {label}, {measure} AS value" if kind == "month_series" else f"d.{unit} AS {label}, {measure} AS value"
+        group = f"d.{dt['year']}, d.{unit}" if kind == "month_series" else f"d.{unit}"
+        order = f"year, {label}" if kind == "month_series" else label
+        return f"SELECT {select} {from_clause()}{where()} GROUP BY {group} ORDER BY {order}"
+    if kind == "drivers":
+        label = joins.ref(spec["attr"])
+        before, after = _period_condition(fact, spec["before"]), _period_condition(fact, spec["after"])
+        select = f"{label} AS label, SUM(CASE WHEN {after} THEN f.{fact['measure']} ELSE 0 END) - SUM(CASE WHEN {before} THEN f.{fact['measure']} ELSE 0 END) AS value"
+        order = "value ASC" if spec.get("direction", "drop") == "drop" else "value DESC"
+        return limit(f"SELECT {select} {from_clause()}{where([f'(({before}) OR ({after}))'])} GROUP BY {label} ORDER BY {order}", top)
+    if kind == "entity_trend":
+        return f"SELECT d.{dt['year']} AS year, {measure} AS value {from_clause()}{where()} GROUP BY d.{dt['year']} ORDER BY year"
+    if kind == "entity_value":
+        return f"SELECT {measure} AS value {from_clause()}{where()}"
+    if kind == "share":
+        part = joins.ref(spec["attr"])
+        return f"SELECT 100.0 * SUM(CASE WHEN {part} = {_sql_literal(spec['value'])} THEN f.{fact['measure']} ELSE 0 END) / {measure} AS value {from_clause()}{where()}"
+    if kind == "top_share":
+        label = joins.ref(spec["attr"])
+        inner = limit(f"SELECT {measure} AS value {from_clause()}{where()} GROUP BY {label} ORDER BY value DESC", top)
+        total = f"SELECT {measure} FROM {fact['table']} f {base_joins}{where()}"
+        return f"SELECT 100.0 * (SELECT SUM(value) FROM ({inner}) t) / ({total}) AS value"
+    if kind == "top_labels":
+        label = joins.ref(spec["attr"])
+        return limit(f"SELECT {label} AS label, {measure} AS value {from_clause()}{where()} GROUP BY {label} ORDER BY value DESC", top)
+    if kind == "entity_orders":
+        label = joins.ref(spec["attr"])
+        return limit(f"SELECT {label} AS label, COUNT(DISTINCT f.{fact['order_column']}) AS value {from_clause()}{where()} GROUP BY {label} ORDER BY value DESC", top)
+    if kind == "having_count":
+        label = joins.ref(spec["attr"])
+        inner = f"SELECT {label} AS label, COUNT(DISTINCT f.{fact['order_column']}) AS orders {from_clause()}{where()} GROUP BY {label} HAVING COUNT(DISTINCT f.{fact['order_column']}) > {int(spec['threshold'])}"
+        return f"SELECT COUNT(*) AS value FROM ({inner}) t"
+    if kind == "anti_join":
+        label = joins.ref(spec["attr"])
+        present = f"SELECT DISTINCT {label} {from_clause()} WHERE d.{dt['year']} = {int(spec['other_year'])}"
+        return f"SELECT DISTINCT {label} AS label {from_clause()} WHERE d.{dt['year']} = {int(spec['year'])} AND {label} NOT IN ({present}) ORDER BY label"
+    if kind == "compare":
+        label = joins.ref(spec["attr"])
+        values = ", ".join(_sql_literal(v) for v in spec["values"])
+        return f"SELECT {label} AS label, {measure} AS value {from_clause()}{where([f'{label} IN ({values})'])} GROUP BY {label} ORDER BY value DESC"
+    if kind == "best_per_group":
+        group_ref, label_ref = joins.ref(spec["group"]), joins.ref(spec["attr"])
+        inner = f"SELECT {label_ref} AS label, {group_ref} AS group_label, {measure} AS value, ROW_NUMBER() OVER (PARTITION BY {group_ref} ORDER BY {measure} DESC) AS rn {from_clause()}{where()} GROUP BY {group_ref}, {label_ref}"
+        return f"SELECT label, group_label, value FROM ({inner}) t WHERE rn = 1 ORDER BY value DESC"
+    raise ValueError(f"unknown question kind {kind!r}")
+
+
+_EXTENDED_KINDS = frozenset({"month_series", "month_trend", "quarter_trend", "drivers", "entity_trend", "entity_value", "share", "top_share", "top_labels", "entity_orders", "having_count", "anti_join", "compare", "best_per_group"})
+
+
+def _paths_by_role(paths: Sequence[Mapping[str, Any]], terms: Collection[str] = ()) -> dict[str, Mapping[str, Any]]:
+    """The path to use for each role a question needs: who (entity), what (product), group (category), where (place)."""
+
+    def pick(pattern: re.Pattern[str], *, prefer_depth: int | None = None) -> Mapping[str, Any] | None:
+        candidates = [p for p in paths if pattern.search(str(p["column"])) and not _LANGUAGE_VARIANT.match(str(p["column"]))]
+        if not candidates:
+            return None
+        return sorted(
+            candidates,
+            key=lambda p: (
+                -sum(1 for term in terms if term and term in f"{p['hops'][-1]['table']} {p['column']}".casefold()),
+                not str(p["column"]).casefold().startswith("english"),
+                -len(p["hops"]) if prefer_depth == -1 else len(p["hops"]),
+            ),
+        )[0]
+
+    roles: dict[str, Mapping[str, Any]] = {}
+    for role, pattern, depth in (("entity", _ENTITY_HINT, None), ("product", _PRODUCT_HINT, None), ("category", _CATEGORY_HINT, -1), ("place", _PLACE_HINT, None)):
+        chosen = pick(pattern, prefer_depth=depth)
+        if chosen is not None:
+            roles[role] = chosen
+    return roles
+
+
+def discover_drivers(executor: Any, schema: SourceSchema, snapshot: AgentSnapshot, years: Sequence[int], context: ReviewContext | None = None, *, facts: int = 2) -> dict[str, dict[str, Any]]:
+    """Real names and periods from the data, per fact table, for the driver-based questions.
+
+    A handful of small queries per fact: the top names for each role (who,
+    what, category, where) in the latest complete year, the month series
+    over the last two complete years (for the largest drop and rise between
+    consecutive months), and the order counts per entity (for a threshold).
+    Failures are recorded, never raised.
+    """
+    source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
+    instructions = (source.instructions if source else "") + "\n" + snapshot.instructions + ("\n" + context.text if context is not None else "")
+    joins = dict(_heuristic_joins(schema))
+    joins.update(_joins_from_instructions(instructions, schema))
+    excluded = excluded_terms(instructions)
+    terms = context.terms if context is not None else ()
+    found: dict[str, dict[str, Any]] = {}
+    if not years:
+        return found
+    latest = max(years)
+    for table in _scoped_facts(schema, instructions)[:facts]:
+        date = _date_join(schema, table, joins)
+        measures = _measure_columns(schema, table)
+        if not date or not measures:
+            continue
+        date_columns = schema.tables[date[1]]
+        fact = {
+            "table": table,
+            "measure": measures[0],
+            "date": {"column": date[0], "date_table": date[1], "date_key": date[2], "year": date[3]},
+            "order_column": _order_column(schema, table),
+            "month": next((c for c in date_columns if _MONTH_COLUMN.match(c)), None),
+            "quarter": next((c for c in date_columns if _QUARTER_COLUMN.match(c)), None),
+        }
+        roles = _paths_by_role(attribute_paths(schema, table, joins, excluded), terms)
+        entry: dict[str, Any] = {"fact": fact, "roles": roles, "top": {}, "drop": None, "rise": None, "threshold": None, "errors": []}
+
+        def run(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
+            try:
+                return executor.run({"kind": "sql", "sql": _sql_extended(spec, dialect="duckdb")})
+            except Exception as exc:  # noqa: BLE001 - discovery is best effort
+                entry["errors"].append(f"{spec['kind']}: {type(exc).__name__}: {str(exc)[:160]}")
+                return []
+
+        for role, path in roles.items():
+            rows = run({"kind": "top_labels", "facts": [fact], "attr": path, "year": latest, "top": 3})
+            labels = [str(r["label"]) for r in rows if r.get("label") is not None]
+            if labels:
+                entry["top"][role] = labels
+        if fact["month"] and len(years) >= 1:
+            span = [y for y in years if y >= latest - 1]
+            rows = run({"kind": "month_series", "facts": [fact], "years": span})
+            series = [(int(r["year"]), int(r["month"]), float(r["value"])) for r in rows if r.get("value") is not None]
+            best_drop, best_rise = None, None
+            for (y1, m1, v1), (y2, m2, v2) in zip(series, series[1:]):
+                consecutive = (y2 == y1 and m2 == m1 + 1) or (y2 == y1 + 1 and m1 == 12 and m2 == 1)
+                if not consecutive or not v1:
+                    continue
+                change = {"before": {"year": y1, "month": m1}, "after": {"year": y2, "month": m2}, "before_value": v1, "after_value": v2, "delta": v2 - v1}
+                if v2 < v1 and (best_drop is None or change["delta"] < best_drop["delta"]):
+                    best_drop = change
+                if v2 > v1 and (best_rise is None or change["delta"] > best_rise["delta"]):
+                    best_rise = change
+            entry["drop"], entry["rise"] = best_drop, best_rise
+        if fact["order_column"] and "entity" in roles:
+            rows = run({"kind": "entity_orders", "facts": [fact], "attr": roles["entity"], "year": latest, "top": 20})
+            counts = sorted((int(r["value"]) for r in rows if r.get("value") is not None), reverse=True)
+            if len(counts) >= 3:
+                tenth = counts[min(9, len(counts) - 1)]
+                entry["threshold"] = max(1, tenth - 1) if tenth > 1 else None
+        found[table] = entry
+    return found
+
+
+def _month_name(period: Mapping[str, Any]) -> str:
+    month = period.get("month")
+    return f"{calendar.month_name[int(month)]} {int(period['year'])}" if month else str(period["year"])
+
+
+def _driver_questions(fact_entry: Mapping[str, Any], vocabulary: Vocabulary, schema: SourceSchema, schema_prefix: str | None, years: Sequence[int], top: int, add: Callable[..., None]) -> None:
+    """The driver-based and analytical questions for one fact, from what discovery found."""
+    fact = fact_entry["fact"]
+    roles = fact_entry["roles"]
+    tops = fact_entry["top"]
+    latest = max(years)
+    channel = vocabulary.table(fact["table"])
+    cm = _channel_measure(channel, vocabulary.measure(fact["measure"]))
+    words = {role: vocabulary.attribute(str(path["column"])) for role, path in roles.items()}
+    base = {"facts": [fact]}
+    if fact.get("month"):
+        add("month_trend", f"How did {cm} move month by month in {latest}?", f"SUM({fact['measure']}) in {fact['table']} by {fact['month']} for {latest}", {**base, "kind": "month_trend", "year": latest})
+    if fact.get("quarter"):
+        add("quarter_trend", f"Which quarter of {latest} was the strongest for {cm}, and how did the quarters compare?", f"SUM({fact['measure']}) in {fact['table']} by {fact['quarter']} for {latest}", {**base, "kind": "quarter_trend", "year": latest})
+    drop = fact_entry.get("drop")
+    driver_role = "product" if "product" in roles else ("category" if "category" in roles else None)
+    if drop and driver_role:
+        add(
+            "drivers",
+            f"Why did {cm} drop from {_month_name(drop['before'])} to {_month_name(drop['after'])}, and which {_plural(words[driver_role])} drove the drop?",
+            f"Change in SUM({fact['measure']}) in {fact['table']} between {_month_name(drop['before'])} and {_month_name(drop['after'])} by {roles[driver_role]['column']}, largest decreases first",
+            {**base, "kind": "drivers", "attr": roles[driver_role], "before": drop["before"], "after": drop["after"], "direction": "drop", "top": 5},
+        )
+    entity = roles.get("entity")
+    names = tops.get("entity") or []
+    if entity and names:
+        first = names[0]
+        add("entity_trend", f"How has {first} performed year by year on {cm}?", f"SUM({fact['measure']}) in {fact['table']} by year for {roles['entity']['column']} = {first!r}", {**base, "kind": "entity_trend", "years": list(years), "filters": [{"attr": entity, "value": first}]})
+        category_names = tops.get("category") or []
+        if "category" in roles and category_names:
+            add("entity_value", f"How is {first} doing on {category_names[0]} in {latest}?", f"SUM({fact['measure']}) in {fact['table']} for {roles['entity']['column']} = {first!r} and {roles['category']['column']} = {category_names[0]!r} in {latest}", {**base, "kind": "entity_value", "year": latest, "filters": [{"attr": entity, "value": first}, {"attr": roles["category"], "value": category_names[0]}]})
+        add("top_share", f"What share of {latest} {cm} did the top 10 {_plural(words['entity'])} bring in?", f"Share of SUM({fact['measure']}) in {fact['table']} for {latest} from the top 10 {roles['entity']['column']}", {**base, "kind": "top_share", "attr": entity, "year": latest, "top": 10})
+        if fact_entry.get("threshold") and fact.get("order_column"):
+            add("having_count", f"How many {_plural(words['entity'])} placed more than {fact_entry['threshold']} {'order' if fact_entry['threshold'] == 1 else 'orders'} in {latest}?", f"Count of {roles['entity']['column']} with more than {fact_entry['threshold']} distinct {fact['order_column']} in {latest}", {**base, "kind": "having_count", "attr": entity, "year": latest, "threshold": fact_entry["threshold"]})
+        if len(years) >= 2:
+            add("anti_join", f"Which {_plural(words['entity'])} bought in {years[-2]} but not in {latest}?", f"{roles['entity']['column']} present in {years[-2]} and absent in {latest} in {fact['table']}", {**base, "kind": "anti_join", "attr": entity, "year": years[-2], "other_year": latest})
+        if len(names) >= 2:
+            add("compare", f"How did {names[0]} and {names[1]} compare on {cm} in {latest}?", f"SUM({fact['measure']}) in {fact['table']} for {roles['entity']['column']} in ({names[0]!r}, {names[1]!r}) in {latest}", {**base, "kind": "compare", "attr": entity, "year": latest, "values": names[:2]})
+    category_names = tops.get("category") or []
+    if "category" in roles and category_names:
+        add("share", f"What share of {latest} {cm} came from {category_names[0]}?", f"Share of SUM({fact['measure']}) in {fact['table']} for {latest} where {roles['category']['column']} = {category_names[0]!r}", {**base, "kind": "share", "attr": roles["category"], "year": latest, "value": category_names[0]})
+    if "place" in roles and "category" in roles:
+        add("best_per_group", f"For each {words['place']}, which {words['category']} led {cm} in {latest}?", f"Top {roles['category']['column']} by SUM({fact['measure']}) per {roles['place']['column']} in {fact['table']} for {latest}", {**base, "kind": "best_per_group", "group": roles["place"], "attr": roles["category"], "year": latest})
+
+
 def _channel_measure(channel: str, measure: str) -> str:
     """``internet sales`` with ``sales amount`` reads ``internet sales amount``; with ``revenue`` it reads ``internet sales revenue``."""
     channel_words, measure_words = channel.split(), measure.split()
@@ -1566,8 +1885,17 @@ def generate_questions(
     top: int = 10,
     limit_per_source: int = 8,
     context: ReviewContext | None = None,
+    discovered: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None,
 ) -> tuple[Question, ...]:
     """Questions the sources can answer, phrased as a business user asks them, each with the query that answers it.
+
+    ``discovered`` maps a source id to what :func:`discover_drivers` found
+    per fact table (real names, the month the measure dropped, an order
+    threshold); with it the set adds the driver-based questions: a monthly
+    or quarterly trend, why the measure dropped and which products drove it,
+    how a named entity performs over time and on a category, shares of the
+    total, a count above a threshold, churned entities, a comparison of two
+    entities, and the leading category per place.
 
     The generated set covers what a data agent's author needs to know:
     aggregation by period and by attribute, ranking, change between years,
@@ -1741,6 +2069,10 @@ def generate_questions(
                     {"kind": "total_year", "facts": [base], "year": latest},
                     [(f"channel:{o['table']}", {"kind": "sql", "sql": _sql({"kind": "total_year", "facts": [{k: v for k, v in o.items() if k != 'attributes'}], "year": latest}, dialect="duckdb")}) for o in others],
                 )
+        for fact in per_fact:
+            entry = ((discovered or {}).get(schema.source_id) or {}).get(fact["table"])
+            if entry:
+                _driver_questions(entry, vocabulary, schema, schema_prefix, source_years, top, add)
         # a topic the instructions put out of scope: the right answer is to decline
         for table in excluded_tables(schema, instructions)[:2]:
             phrase = humanize_table(table)
@@ -2382,6 +2714,10 @@ def _rows_match(reference: Sequence[Mapping[str, Any]], candidate: Sequence[Mapp
     return len(expected) == len(got) and all(_close(g, e) for g, e in zip(got, expected))
 
 
+_RANKED_KINDS = frozenset({"top_n", "drivers"})
+_LABELLED_KINDS = frozenset({"top_n", "drivers", "anti_join", "best_per_group", "compare"})
+
+
 def _alternate_cause(label: str) -> tuple[str, str]:
     """The cause an alternate reference names: a narrower channel, the wrong measure, a row count, the wrong channel."""
     if label.startswith("measure:"):
@@ -2450,7 +2786,21 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
         # fall through to the prose: the query differs, the prose says how much
     numbers = _numbers_in(text)
     expected = _reference_values(reference.rows)
+    if question.kind == "drivers":
+        # a drop is reported as a positive amount as often as a negative one
+        numbers = [abs(n) for n in numbers]
+        expected = [abs(v) for v in expected]
     matched = sum(1 for value in expected if any(_close(n, value) for n in numbers))
+    if question.kind in _LABELLED_KINDS and not expected:
+        labels = _labels(reference.rows)
+        present = sum(1 for label in labels if text.find(label) >= 0)
+        if labels and present == len(labels):
+            return Graded(question.id, "correct", "", f"all {len(labels)} names present", present, len(labels))
+        if labels and present >= 0.5 * len(labels):
+            return Graded(question.id, "partial", "missing_rows", f"{len(labels) - present} of {len(labels)} names absent", present, len(labels))
+        if _ABSTAIN_HINT.search(text or "") and not present:
+            return Graded(question.id, "abstained", "agent_abstained", "the agent declined a question the source answers", 0, len(labels))
+        return Graded(question.id, "wrong", "values_differ", f"{present} of {len(labels)} names present", present, len(labels))
     if not numbers:
         if _ABSTAIN_HINT.search(text or ""):
             return Graded(question.id, "abstained", "agent_abstained", "the agent declined a question the source answers", 0, len(expected))
@@ -2466,12 +2816,12 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
             return Graded(question.id, "partial", "values_partially_match", f"{hits} of the {len(agent_figures)} figures the agent gave are in the reference answer", hits, len(expected), False)
     if expected and matched == len(expected):
         cause, detail = "", ""
-        if question.kind == "top_n":
+        if question.kind in _LABELLED_KINDS:
             labels = _labels(reference.rows)
             positions = [text.find(label) for label in labels]
             if any(p < 0 for p in positions):
-                cause, detail = "missing_rows", f"{sum(1 for p in positions if p < 0)} of {len(labels)} ranked items absent"
-            elif positions != sorted(positions):
+                cause, detail = "missing_rows", f"{sum(1 for p in positions if p < 0)} of {len(labels)} named items absent"
+            elif question.kind in _RANKED_KINDS and positions != sorted(positions):
                 cause, detail = "unsorted_ranking", "ranked items appear out of order"
         return Graded(question.id, "correct" if not cause else "partial", cause, detail, matched, len(expected), agent_rows is not None)
     for label, rows in reference.alternates.items():
@@ -2481,7 +2831,7 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
             return Graded(question.id, "wrong", cause, f"the figures match {detail}", matched, len(expected), agent_rows is not None)
     if expected and matched >= 0.5 * len(expected):
         labels = _labels(reference.rows)
-        if question.kind == "top_n" and labels and any(text.find(label) < 0 for label in labels):
+        if question.kind in _LABELLED_KINDS and labels and any(text.find(label) < 0 for label in labels):
             return Graded(question.id, "partial", "missing_rows", f"{matched} of {len(expected)} values present; some ranked items absent", matched, len(expected), agent_rows is not None)
         return Graded(question.id, "partial", "values_partially_match", f"{matched} of {len(expected)} values present", matched, len(expected), agent_rows is not None)
     return Graded(question.id, "wrong", "values_differ", f"{matched} of {len(expected)} reference values present; the answer's figures do not match the source", matched, len(expected), agent_rows is not None)
@@ -2709,6 +3059,7 @@ class ReviewReport:
     context: ReviewContext | None = None
     knowledge: Mapping[str, Any] | None = None  # summarize_knowledge(RLM.learn(...))
     analysis: tuple[Analysis, ...] = ()  # the RLM's explanations, from deepen()
+    discovered: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None  # discover_drivers() per source
 
     def score(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -3070,7 +3421,18 @@ def review_agent(
                 except Exception as exc:  # noqa: BLE001 - the reason is the diagnostic
                     years[schema.source_id] = []
                     notes.append(f"{label}: year discovery failed: {type(exc).__name__}: {str(exc)[:300]}")
-    questions = generate_questions(snapshot, schemas, years=years, top=top, limit_per_source=limit_per_source, context=context)
+    discovered: dict[str, dict[str, dict[str, Any]]] = {}
+    for schema in schemas:
+        executor = executors.get(schema.source_id)
+        if isinstance(executor, LakehouseExecutor) and years.get(schema.source_id):
+            try:
+                discovered[schema.source_id] = discover_drivers(executor, schema, snapshot, years[schema.source_id], context)
+            except Exception as exc:  # noqa: BLE001 - the templated set still works without it
+                notes.append(f"{_source_label(snapshot, schema.source_id)}: discovery of names and periods failed: {type(exc).__name__}: {str(exc)[:200]}")
+            for table, entry in discovered.get(schema.source_id, {}).items():
+                for error in entry.get("errors", []):
+                    notes.append(f"{_source_label(snapshot, schema.source_id)}: discovery on {table}: {error}")
+    questions = generate_questions(snapshot, schemas, years=years, top=top, limit_per_source=limit_per_source, context=context, discovered=discovered)
     if not questions:
         notes.extend(explain_no_questions(snapshot, schemas, years))
     questions, references = derive_filter_questions(questions, build_references(questions, executors))
@@ -3104,7 +3466,7 @@ def review_agent(
             final = grades[0]
         graded.append(_with_policy(_with_routing(final, question, collected, snapshot), question, collected, excluded_by_source.get(question.source_id, ())))
     suggestions = suggest(snapshot, schemas, findings, questions, references, graded)
-    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context, knowledge=summarize_knowledge(knowledge) if knowledge is not None else None)
+    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context, knowledge=summarize_knowledge(knowledge) if knowledge is not None else None, discovered=discovered)
 
 
 # --------------------------------------------------------------------------- #
@@ -3128,8 +3490,9 @@ _PROPOSE_TASK = (
     "plain business language, never a table or column name, using the business terms in the brief for "
     "channels, measures and attributes. Spread them over the skills a data agent's author wants tested: "
     "a filtered total, a ranking, a comparison between two periods, a ratio or KPI the definitions state, "
-    "a phrasing that uses an abbreviation or an ambiguous term the instructions define, and one topic the "
-    "instructions put out of scope (where the right answer declines). Each question must say which period "
+    "a phrasing that uses an abbreviation or an ambiguous term the instructions define, a driver question "
+    "(why a figure moved and which products or customers drove it), a question about a named entity from the "
+    "brief, and one topic the instructions put out of scope (where the right answer declines). Each question must say which period "
     "it means, must be answerable from the sources (except the out-of-scope one), and must not repeat a "
     "question already asked. Return exactly the requested count as a list of plain strings."
 )
@@ -3222,6 +3585,14 @@ def deepen(
         vocabulary_lines.extend(build_vocabulary(report.snapshot, schema, context).lines())
         source = next((s for s in report.snapshot.datasources if s.id == schema.source_id), None)
         excluded.update(excluded_tables(schema, (source.instructions if source else "") + "\n" + report.snapshot.instructions))
+    facts_lines: list[str] = []
+    for entries in (report.discovered or {}).values():
+        for table, entry in entries.items():
+            for role, names in (entry.get("top") or {}).items():
+                facts_lines.append(f"{humanize_table(table)}, top {role}: {', '.join(names)}")
+            if entry.get("drop"):
+                drop = entry["drop"]
+                facts_lines.append(f"{humanize_table(table)} dropped from {_month_name(drop['before'])} to {_month_name(drop['after'])}")
     brief = "\n\n".join(
         part
         for part in [
@@ -3229,6 +3600,7 @@ def deepen(
             f"Agent instructions:\n{report.snapshot.instructions[:3000]}",
             *(f"Source {s.name or s.id} instructions:\n{s.instructions[:2000]}" for s in report.snapshot.datasources),
             "Business terms (use these words, not the schema names):\n" + "\n".join(vocabulary_lines[:60]),
+            "Real names and periods in the data (ask about these by name, and about why things changed):\n" + "\n".join(facts_lines) if facts_lines else "",
             "Out-of-scope topics by the instructions: " + ", ".join(humanize_table(t) for t in sorted(excluded)) if excluded else "",
             "Schema digest:\n" + _schema_digest(report.schemas),
             "Already asked:\n" + "\n".join(q.text for q in report.questions),

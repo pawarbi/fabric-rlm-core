@@ -66,6 +66,22 @@
   name their cause (`wrong_measure`, `row_count_not_distinct`,
   `wrong_channel`, `answered_out_of_scope`). The RLM proposer is told to
   write plain business questions over the same skills.
+- **Driver-based questions from discovered names and periods.**
+  `discover_drivers` runs a few small queries per fact table (top names
+  per role: entity, product, category, place; the month series for the
+  largest drop and rise between consecutive months; order counts per
+  entity for a threshold), and the generator turns them into the
+  questions a user actually asks, each with an executable reference:
+  a monthly and a quarterly trend, why the measure dropped between two
+  months and which products drove it (a decomposition, largest decreases
+  first), how a named entity performs year by year and on a category,
+  the share of a category and of the top 10 entities, a count of entities
+  above an order threshold, entities that bought one year and not the next,
+  a comparison of the two top entities, and the leading category per place
+  (a window function). Grouping columns are reached through several
+  dimension joins (product to subcategory to category). Answers to named
+  questions are graded by the names present; drops by absolute change.
+  The RLM proposer receives the discovered names and the drop period.
 
 ### Changed
 

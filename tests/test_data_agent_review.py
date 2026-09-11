@@ -1081,3 +1081,107 @@ def test_the_review_derives_a_filter_question_and_reports_by_skill():
     assert reference.status == "ok" and reference.rows[0]["value"] == float(top_row["value"])
     assert f"WHERE d.CalendarYear = 2013 AND a.EnglishProductName = '{leader}'" in filtered[0].reference_query
     assert "filter" in report.by_skill() and "Outcomes by skill:" in report.to_markdown() and "Outcomes by skill" in report.to_html()
+
+
+# ------------------------------------------------------------------ drivers --
+
+
+def _driver_lakehouse():
+    """A reseller lakehouse with months, a snowflaked product category, four resellers and a visible December-to-January drop."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    months = [(2012, 10), (2012, 11), (2012, 12)] + [(2013, m) for m in range(1, 13)]
+    con.execute("CREATE TABLE dimdate (DateKey INTEGER, CalendarYear INTEGER, MonthNumberOfYear INTEGER, CalendarQuarter INTEGER)")
+    for year, month in months:
+        con.execute("INSERT INTO dimdate VALUES (?, ?, ?, ?)", [year * 10000 + month * 100 + 1, year, month, (month - 1) // 3 + 1])
+    con.execute("CREATE TABLE dimproductcategory AS SELECT * FROM (VALUES (1, 'Bikes'), (2, 'Accessories')) t(ProductCategoryKey, EnglishProductCategoryName)")
+    con.execute("CREATE TABLE dimproductsubcategory AS SELECT * FROM (VALUES (1, 'Mountain Bikes', 1), (2, 'Helmets', 2)) t(ProductSubcategoryKey, EnglishProductSubcategoryName, ProductCategoryKey)")
+    con.execute("CREATE TABLE dimproduct AS SELECT * FROM (VALUES (1, 'Mountain-200', 1), (2, 'Road-350', 1), (3, 'Sport Helmet', 2)) t(ProductKey, EnglishProductName, ProductSubcategoryKey)")
+    con.execute("CREATE TABLE dimsalesterritory AS SELECT * FROM (VALUES (1, 'Northwest', 'United States', 'North America'), (2, 'Germany', 'Germany', 'Europe')) t(SalesTerritoryKey, SalesTerritoryRegion, SalesTerritoryCountry, SalesTerritoryGroup)")
+    con.execute("CREATE TABLE dimreseller AS SELECT * FROM (VALUES (1, 'Bike World'), (2, 'Trail Co'), (3, 'Pedal Shop'), (4, 'Old Shop')) t(ResellerKey, ResellerName)")
+    rows = [
+        (1, 20121001, 1, 1, "RO0a", 2000.0), (2, 20121101, 1, 4, "RO0b", 400.0),
+        (1, 20121201, 1, 1, "RO1", 3000.0), (2, 20121201, 1, 2, "RO2", 1000.0), (3, 20121201, 1, 3, "RO3", 200.0),
+        (1, 20130101, 1, 1, "RO4", 500.0), (2, 20130101, 1, 2, "RO5", 900.0), (3, 20130101, 1, 3, "RO6", 250.0),
+        (1, 20130201, 1, 1, "RO7", 1200.0), (2, 20130201, 1, 2, "RO8", 800.0),
+        (1, 20130301, 2, 1, "RO9", 1500.0), (3, 20130601, 1, 3, "RO10", 300.0), (2, 20131001, 2, 2, "RO11", 700.0),
+    ]
+    con.execute("CREATE TABLE factresellersales (ProductKey INTEGER, OrderDateKey INTEGER, SalesTerritoryKey INTEGER, ResellerKey INTEGER, SalesOrderNumber VARCHAR, SalesAmount DOUBLE, OrderQuantity INTEGER, TotalProductCost DOUBLE)")
+    for product, date, territory, reseller, order, amount in rows:
+        con.execute("INSERT INTO factresellersales VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [product, date, territory, reseller, order, amount, 1, amount * 0.6])
+
+    def query(sql, *, sources):
+        relation = con.execute(sql)
+        return {"columns": [d[0] for d in relation.description], "rows": relation.fetchall(), "truncated": False}
+
+    tables = {
+        "factresellersales": ("ProductKey", "OrderDateKey", "SalesTerritoryKey", "ResellerKey", "SalesOrderNumber", "SalesAmount", "OrderQuantity", "TotalProductCost"),
+        "dimdate": ("DateKey", "CalendarYear", "MonthNumberOfYear", "CalendarQuarter"),
+        "dimproduct": TABLES["dimproduct"],
+        "dimproductsubcategory": TABLES["dimproductsubcategory"],
+        "dimproductcategory": TABLES["dimproductcategory"],
+        "dimsalesterritory": TABLES["dimsalesterritory"],
+        "dimreseller": TABLES["dimreseller"],
+    }
+    return LakehouseExecutor(query, tables), schema_from_tables(LAKEHOUSE_ID, tables)
+
+
+def test_discovery_finds_names_periods_and_thresholds_and_drives_the_analytical_questions():
+    from fabric_rlm.data_agent_review import attribute_paths, discover_drivers, _heuristic_joins
+
+    executor, schema = _driver_lakehouse()
+    snapshot = AgentSnapshot(agent_id="a", name="Sales Agent", instructions=AW_STYLE_INSTRUCTIONS, datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="AWLakehouse", instructions="Use dbo.factresellersales for reseller sales. Product hierarchy: dimproduct.ProductSubcategoryKey -> dimproductsubcategory.ProductSubcategoryKey -> dimproductcategory.ProductCategoryKey", description="Reseller sales."),))
+    paths = attribute_paths(schema, "factresellersales", _heuristic_joins(schema))
+    assert any(p["column"] == "EnglishProductCategoryName" and len(p["hops"]) == 3 for p in paths)
+
+    found = discover_drivers(executor, schema, snapshot, [2012, 2013])
+    entry = found["factresellersales"]
+    assert entry["errors"] == []
+    assert entry["top"]["entity"] == ["Bike World", "Trail Co", "Pedal Shop"] and entry["top"]["category"] == ["Bikes", "Accessories"]
+    assert entry["drop"]["before"] == {"year": 2012, "month": 12} and entry["drop"]["after"] == {"year": 2013, "month": 1} and entry["drop"]["delta"] == -2550.0
+    assert entry["threshold"] == 1
+
+    questions = generate_questions(snapshot, [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=60, discovered={LAKEHOUSE_ID: found})
+    texts = [q.text for q in questions]
+    for expected in (
+        "How did reseller sales revenue move month by month in 2013?",
+        "Which quarter of 2013 was the strongest for reseller sales revenue, and how did the quarters compare?",
+        "Why did reseller sales revenue drop from December 2012 to January 2013, and which products drove the drop?",
+        "How has Bike World performed year by year on reseller sales revenue?",
+        "How is Bike World doing on Bikes in 2013?",
+        "What share of 2013 reseller sales revenue did the top 10 resellers bring in?",
+        "How many resellers placed more than 1 order in 2013?",
+        "Which resellers bought in 2012 but not in 2013?",
+        "How did Bike World and Trail Co compare on reseller sales revenue in 2013?",
+        "What share of 2013 reseller sales revenue came from Bikes?",
+        "For each territory, which product category led reseller sales revenue in 2013?",
+    ):
+        assert expected in texts, expected
+    assert {"trend", "drivers", "entity", "share", "threshold", "churn", "compare", "leaders"} <= {q.skill for q in questions}
+
+    references = {r.question_id: r for r in build_references(questions, {LAKEHOUSE_ID: executor})}
+    by_kind = {q.kind: (q, references[q.id]) for q in questions}
+    assert all(r.status == "ok" for _q, r in by_kind.values() if _q.kind not in {"scope_out"}), {k: r.note for k, (_q, r) in by_kind.items() if r.status != "ok"}
+    assert [(r["label"], r["value"]) for r in by_kind["drivers"][1].rows] == [("Mountain-200", -2500.0), ("Road-350", -100.0), ("Sport Helmet", 50.0)]
+    assert [(r["year"], r["value"]) for r in by_kind["entity_trend"][1].rows] == [(2012, 5000.0), (2013, 3200.0)]
+    assert by_kind["entity_value"][1].rows[0]["value"] == 3200.0
+    assert round(by_kind["share"][1].rows[0]["value"], 2) == 91.06 and by_kind["top_share"][1].rows[0]["value"] == 100.0
+    assert by_kind["having_count"][1].rows[0]["value"] == 3
+    assert [r["label"] for r in by_kind["anti_join"][1].rows] == ["Old Shop"]
+    assert [(r["label"], r["value"]) for r in by_kind["compare"][1].rows] == [("Bike World", 3200.0), ("Trail Co", 2400.0)]
+    assert [(r["label"], r["group_label"]) for r in by_kind["best_per_group"][1].rows] == [("Bikes", "Northwest"), ("Bikes", "Germany")]
+    assert [r["quarter"] for r in by_kind["quarter_trend"][1].rows] == [1, 2, 4] and [r["month"] for r in by_kind["month_trend"][1].rows] == [1, 2, 3, 6, 10]
+    assert "TOP 5" in by_kind["drivers"][0].reference_query and "dbo.factresellersales" in by_kind["drivers"][0].reference_query and "ROW_NUMBER() OVER" in by_kind["best_per_group"][0].reference_query
+
+
+def test_driver_and_churn_answers_are_graded_by_names_and_absolute_changes():
+    drivers = Question("d", LAKEHOUSE_ID, "drivers", "Why did revenue drop?", {}, "", {"sql": ""}, skill="drivers")
+    reference = Reference("d", "ok", ({"label": "Mountain-200", "value": -2500.0}, {"label": "Road-350", "value": -100.0}))
+    assert grade(drivers, reference, "Revenue fell by 2,550: Mountain-200 was down 2,500 and Road-350 down 100.").outcome == "correct"
+    assert grade(drivers, reference, "Road-350 fell by 100 and Mountain-200 by 2,500.").cause == "unsorted_ranking"
+    churn = Question("c", LAKEHOUSE_ID, "anti_join", "Which resellers bought in 2012 but not in 2013?", {}, "", {"sql": ""}, skill="churn")
+    names = Reference("c", "ok", ({"label": "Old Shop"}, {"label": "Corner Bikes"}))
+    assert grade(churn, names, "Old Shop and Corner Bikes did not buy in 2013.").outcome == "correct"
+    assert grade(churn, names, "Only Old Shop stopped buying.").outcome == "partial"
+    assert grade(churn, names, "Nobody churned.").outcome == "wrong"
+    assert grade(churn, names, "I cannot determine that from the selected tables.").outcome == "abstained"
