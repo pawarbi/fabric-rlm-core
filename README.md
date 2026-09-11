@@ -209,6 +209,12 @@ it took), and a check of whether the answers follow the instructions' own
 rules (stating the period and the channel, rank and trend formats, currency
 format, the partial-year caveat, no personal data, the join and calendar
 rules), and compute each reference by executing a query against the source.
+With a sweep budget the review also measures what moved: every fact's
+measures across every grouping and the comparisons the time axis supports,
+each material change decomposed and classified (one group carries it, a few
+do, or the groups moved in proportion to their size), the leading group
+drilled one level further, every figure recomputed by an independent query,
+and volume or coverage changes flagged apart from changes in rate.
 It also asks the data what nobody would think to put in the instructions
 (keys with no match in their dimension, dimension keys that repeat, values
 spelled in several cases in a case-sensitive lakehouse, the vocabulary of

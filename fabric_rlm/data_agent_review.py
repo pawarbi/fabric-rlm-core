@@ -1172,7 +1172,7 @@ def declared_from_snapshot(snapshot: AgentSnapshot, schemas: Sequence[SourceSche
 # Questions and references
 # --------------------------------------------------------------------------- #
 
-_MEASURE_HINT = re.compile(r"(amount|qty|quantity|units|revenue|sales|cost|price|margin|total|profit|value|hours|minutes|count|arr|mrr|usd|eur|gbp|calls|duration|balance|fee|charge|spend|volume)", re.IGNORECASE)
+_MEASURE_HINT = re.compile(r"(amount|qty|quantity|units|revenue|sales|cost|price|margin|total|profit|value|hours|minutes|count|arr|mrr|usd|eur|gbp|calls|duration|balance|fee|charge|spend|volume|score|rating)", re.IGNORECASE)
 _KEY_HINT = re.compile(r"(key|id)$", re.IGNORECASE)  # kept for callers outside this module; the module uses _is_key
 _KEY_FORMS = re.compile(r"(?:^|[_ ])(?:[Ii][Dd]|[Kk][Ee][Yy])$|[a-z0-9](?:Id|ID|Key|KEY)$")
 _KEY_STOPWORDS = frozenset({"paid", "unpaid", "prepaid", "valid", "invalid", "grid", "void", "avoid", "rapid", "solid", "liquid", "fluid", "acid", "hybrid", "said", "laid", "mid", "bid", "kid", "lid", "rid", "amid", "turkey", "monkey", "hockey", "jockey", "donkey", "whiskey", "journey", "period", "bandwidth"})
@@ -1295,7 +1295,16 @@ def _measure_columns(schema: SourceSchema, table: str) -> list[str]:
     preferred = ("salesamount", "revenue", "amount", "sales", "price", "total", "net", "gross", "totalproductcost", "orderquantity", "quantity", "units", "value")
     secondary = re.compile(r"(freight|tax|discount|shipping|fee|handling|cost)", re.IGNORECASE)
     def usable(c: str) -> bool:
-        return not _is_key(c) and not _is_time_column(schema, table, c) and not _PERIOD_COLUMN.search(c) and not _FLAG_COLUMN.search(c) and "bool" not in schema.column_type(table, c)
+        return (
+            not _is_key(c)
+            and not _is_time_column(schema, table, c)
+            and not _PERIOD_COLUMN.search(c)
+            and not _FLAG_COLUMN.search(c)
+            and not _LOCAL_EXCLUDED.search(c)
+            and not _ORDER_ID_HINT.search(c)
+            and "bool" not in schema.column_type(table, c)
+            and not _TEXT_TYPE.search(schema.column_type(table, c))
+        )
 
     columns = [c for c in schema.tables[table] if _MEASURE_HINT.search(c) and usable(c)]
     if not columns and schema.types.get(table):
@@ -3997,6 +4006,7 @@ class ReviewReport:
     discovered: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None  # discover_drivers() per source
     rules: tuple[Rule, ...] = ()  # the instructions' checkable rules, see extract_rules
     learned_knowledge: Any = None  # the package after RLM.enrich over the deeper analysis runs, see deepen(); save it to reuse the lessons
+    sweeps: tuple[Any, ...] = ()  # fabric_rlm.sweep.Sweep per lakehouse source, when review_agent ran with a sweep budget
 
     def compliance(self) -> list[dict[str, Any]]:
         """Per rule: how many answers it applied to, how many broke it, and which questions."""
@@ -4114,6 +4124,10 @@ class ReviewReport:
                 if f.suggestion:
                     parts.append(f"<div><b>Proposed instruction:</b> {esc(f.suggestion)}</div>")
                 parts.append("</div>")
+        for swept in self.sweeps:
+            parts.append(f"<h2>What moved ({esc(_source_label(s, swept.source_id))})</h2>")
+            parts.append('<div class="muted">Every figure was computed by the source and recomputed by an independent query. The classification says whether a change is carried by one group, a few, or spread in proportion to size.</div>')
+            parts.append(swept.to_html())
         parts.append("<h2>Evaluation</h2>")
         counts = self.score()
         parts.append("<div>" + ("".join(f'<span class="chip out-{esc(k)}">{esc(k)}: {v}</span>' for k, v in sorted(counts.items())) or '<span class="muted">No questions.</span>') + "</div>")
@@ -4295,6 +4309,11 @@ class ReviewReport:
                 if f.suggestion:
                     lines.append(f"    - proposed instruction: {f.suggestion}")
             lines.append("")
+        for swept in self.sweeps:
+            lines.append(f"## What moved ({_source_label(s, swept.source_id)})")
+            lines.append("Every figure below was computed by the source and recomputed by an independent query; the classification says whether a change is carried by one group, a few, or spread in proportion to size.")
+            lines.append(swept.to_markdown())
+            lines.append("")
         lines.append("## Evaluation")
         counts = self.score()
         lines.append(", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "no questions")
@@ -4425,12 +4444,15 @@ def review_agent(
     context: ReviewContext | None = None,
     knowledge: Any = None,
     hints: bool = True,
+    sweep_budget: int = 0,
 ) -> ReviewReport:
     """The whole review: diagnose, generate, reference, ask, grade, suggest.
 
     ``hints`` runs :func:`discover_hints` on every lakehouse source and adds
     what it finds to the findings with basis ``"data"``; the suggested
-    data-source instructions carry their instruction lines.
+    data-source instructions carry their instruction lines. A positive
+    ``sweep_budget`` runs :func:`fabric_rlm.sweep.sweep` on every lakehouse
+    source with that many queries and reports what moved.
 
     ``knowledge`` is what ``RLM.learn`` returned; the report summarises it.
 
@@ -4489,6 +4511,23 @@ def review_agent(
             except Exception as exc:  # noqa: BLE001 - hints are a bonus
                 notes.append(f"{_source_label(snapshot, schema.source_id)}: hints from the data failed: {type(exc).__name__}: {str(exc)[:200]}")
     findings = tuple(findings) + tuple(data_hints)
+    sweeps: list[Any] = []
+    if sweep_budget > 0:
+        from .sweep import sweep as run_sweep, verify_sweep
+
+        for schema in schemas:
+            executor = executors.get(schema.source_id)
+            if executor is None or schema.kind == "semantic_model" or not years.get(schema.source_id):
+                continue
+            started = time.monotonic()
+            try:
+                swept = run_sweep(executor, schema, snapshot, years[schema.source_id], context=context, budget=sweep_budget)
+                mismatches = verify_sweep(swept, executor)
+                sweeps.append(swept)
+                notes.append(f"{_source_label(snapshot, schema.source_id)}: sweep found {len(swept.findings)} material movement(s) in {swept.queries} queries and {round(time.monotonic() - started)} s; {len(mismatches)} figure(s) failed to recompute")
+                notes.extend(f"{_source_label(snapshot, schema.source_id)}: sweep mismatch: {m}" for m in mismatches[:5])
+            except Exception as exc:  # noqa: BLE001 - the sweep is a bonus
+                notes.append(f"{_source_label(snapshot, schema.source_id)}: sweep failed: {type(exc).__name__}: {str(exc)[:200]}")
     questions = generate_questions(snapshot, schemas, years=years, top=top, limit_per_source=limit_per_source, context=context, discovered=discovered)
     if not questions:
         notes.extend(explain_no_questions(snapshot, schemas, years))
@@ -4536,7 +4575,7 @@ def review_agent(
         source_rules = rules_by_source.get(question.source_id, ())
         graded.append(replace(final, violations=check_rules(source_rules, question, collected, channel_words.get(question.source_id, ()))))
     suggestions = suggest(snapshot, schemas, findings, questions, references, graded)
-    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context, knowledge=summarize_knowledge(knowledge, schemas, snapshot) if knowledge is not None else None, discovered=discovered, rules=tuple(r for rules in rules_by_source.values() for r in rules))
+    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context, knowledge=summarize_knowledge(knowledge, schemas, snapshot) if knowledge is not None else None, discovered=discovered, rules=tuple(r for rules in rules_by_source.values() for r in rules), sweeps=tuple(sweeps))
 
 
 # --------------------------------------------------------------------------- #
@@ -4689,6 +4728,7 @@ def deepen(
             "Out-of-scope topics by the instructions: " + ", ".join(humanize_table(t) for t in sorted(excluded)) if excluded else "",
             "Schema digest:\n" + _schema_digest(report.schemas),
             "Facts about the data the agent may not know (test whether it copes with them):\n" + "\n".join(f.message for f in report.findings if f.basis == "data") if any(f.basis == "data" for f in report.findings) else "",
+            "What moved in the data, measured by the source (ask why, and whether the agent finds the same drivers):\n" + "\n".join(line for swept in report.sweeps for line in swept.lines()[:12]) if report.sweeps else "",
             "Already asked:\n" + "\n".join(q.text for q in report.questions),
         ]
         if part

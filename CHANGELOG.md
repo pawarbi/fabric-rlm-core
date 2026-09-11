@@ -176,6 +176,25 @@
   transactions, invoices); every question the schema supports is generated
   before the limit is applied, so a source with many facts keeps its trend,
   driver and period questions. Tests cover each of those shapes end to end.
+- **What moved: a budgeted sweep** (`fabric_rlm.sweep`). For every fact in
+  scope, `sweep` takes the measures the schema exposes, the comparisons the
+  time axis supports (the latest month against the month before, the same
+  month a year earlier, the latest complete year against the previous one)
+  and every grouping path the joins reach, measures each movement with one
+  query per grouping, decomposes the material ones by every path, and
+  classifies each decomposition: one group carries it, a few do, groups
+  moved in proportion to their size so the path explains nothing, or groups
+  moved both ways. The leading group of the most concentrated decomposition
+  is drilled one level further. Scores, ratings and rates are averaged, not
+  summed. Every figure in the ledger carries the query that produced it and
+  an independent per-period query that recomputes it (`verify_sweep`); a
+  movement whose row count moved as much as its value is flagged as volume
+  or coverage rather than rate, a small base and an incomplete last month
+  are flagged too. No model is involved. `review_agent(sweep_budget=N)` runs
+  it per lakehouse source, the report gains a "What moved" section in both
+  renderings, the RLM proposer hears the findings, and the notebook runs it
+  with `SWEEP_BUDGET`. Measures no longer include order numbers, codes or
+  text columns.
 
 ### Changed
 

@@ -66,6 +66,7 @@ WORKSPACE_NAME = None                 # None = this notebook's workspace
 STAGE = "staging"                     # "staging" reviews the draft configuration, "published" the live one
 REPETITIONS = 1                       # 3 before believing a delta
 QUESTIONS_PER_SOURCE = 25             # spread round-robin across the skills
+SWEEP_BUDGET = 60                     # queries the "What moved" sweep may run per lakehouse source (0 skips it; about 10 s per query over OneLake)
 TOP_N = 10
 APPLY_SUGGESTIONS = False             # True writes to the agent's DRAFT stage (never published)
 REPORT_PATH = "/lakehouse/default/Files/data_agent_review.md"  # or None to skip saving
@@ -289,8 +290,13 @@ report = review_agent(
     repetitions=REPETITIONS,
     context=context,
     knowledge=knowledge,
+    sweep_budget=SWEEP_BUDGET,
 )
 print("outcomes:", report.score())
+for swept in report.sweeps:
+    print(f"what moved: {len(swept.findings)} material movement(s) from {len(swept.ledger)} measured figures in {swept.queries} queries")
+    for line in swept.lines()[:8]:
+        print("  " + line)
 for note in report.notes:
     print("note:", note)
 for finding in report.findings:
