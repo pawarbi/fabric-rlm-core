@@ -40,6 +40,18 @@
   missing date joins), names the source after its item, treats only
   schema-shaped tokens as schema mentions, and picks the order date key
   over due or ship dates whatever the column order.
+- **HTML report, learned knowledge, deeper analysis.** `ReviewReport.to_html`
+  renders the review as a self-contained page (findings as cards, graded
+  questions with the agent's answer, its query, the reference query and
+  rows, the run steps). The report summarises what `RLM.learn` recorded
+  (profiles, fingerprints, registered operations, lessons, events).
+  `deepen` uses the RLM with a language model to propose questions from the
+  scope, verifies each reference with two blind solves, asks the agent, and
+  explains every question that is not correct with a proposed change.
+  Topics the instructions put out of scope are excluded from generation
+  and a decline on one is `abstained_by_policy`; a year-over-year answer is
+  right by the change or by both totals; few-shot SQL carries the `dbo.`
+  prefix when the agent uses it; answers record whether their query ran.
 
 ### Changed
 

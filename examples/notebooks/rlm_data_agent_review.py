@@ -72,6 +72,14 @@ DEFINITIONS = {}      # e.g. {"gross margin": "SUM(SalesAmount - TotalProductCos
 KNOWN_QUESTIONS = []  # your own ground truth, graded first: [("Total internet sales in 2013?", "SELECT SUM(SalesAmount) FROM dbo.factinternetsales f JOIN dbo.dimdate d ON f.OrderDateKey = d.DateKey WHERE d.CalendarYear = 2013")]
 NOTES = ""            # e.g. "2014 is partial; customer names are PII"
 
+# --- the RLM's language model, for the deeper analysis (optional) -------------
+# The OpenRouter key is read from the environment, or from a Key Vault secret
+# through notebookutils; it is never written into the notebook.
+LM = None                      # e.g. {"model": "openrouter/z-ai/glm-5.3-flash", "cache": False}
+KEY_VAULT_URL = None           # e.g. "https://<vault>.vault.azure.net/" holding the secret named below
+KEY_VAULT_SECRET_NAME = None   # the secret that holds the OpenRouter key
+DEEP_QUESTIONS = 4             # RLM-proposed questions with verified references; 0 to skip them
+
 # METADATA ********************
 
 # META {
@@ -251,6 +259,7 @@ report = review_agent(
     limit_per_source=QUESTIONS_PER_SOURCE,
     repetitions=REPETITIONS,
     context=context,
+    knowledge=knowledge,
 )
 print("outcomes:", report.score())
 for note in report.notes:
@@ -267,18 +276,69 @@ for finding in report.findings:
 
 # MARKDOWN ********************
 
+# ## 3b. Deeper analysis with the RLM (optional)
+#
+# With a language model configured, the RLM proposes questions from your
+# scope and priorities that the templates cannot, computes each reference
+# with two blind solves over the sources that must agree (`verified_task`),
+# asks the agent, and grades. It then explains every question that is not
+# correct and proposes the smallest instruction or few-shot change. Set
+# `LM` in the configuration cell; the OpenRouter key comes from the
+# environment or from the Key Vault secret named there.
+
+# CELL ********************
+
+import os
+
+if LM:
+    if KEY_VAULT_URL and KEY_VAULT_SECRET_NAME and not os.environ.get("OPENROUTER_API_KEY"):
+        import notebookutils
+
+        os.environ["OPENROUTER_API_KEY"] = notebookutils.credentials.getSecret(KEY_VAULT_URL, KEY_VAULT_SECRET_NAME)
+    if not os.environ.get("OPENROUTER_API_KEY") and str(LM.get("model", "")).startswith("openrouter/"):
+        print("no OpenRouter key in the environment: set OPENROUTER_API_KEY or the Key Vault values; skipping the deeper analysis")
+    else:
+        from fabric_rlm.data_agent_review import deepen
+
+        report = deepen(
+            report,
+            lm=LM,
+            handles={source_id: handle for source_id, (_, handle) in handles.items()},
+            knowledge=knowledge,
+            ask=asker,
+            questions=DEEP_QUESTIONS,
+            context=context,
+        )
+        print("outcomes after the deeper analysis:", report.score())
+        for item in report.analysis:
+            print(f"- {item.question_id}: {item.explanation[:200]}")
+else:
+    print("LM is not set; skipping the deeper analysis")
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "jupyter_python"
+# META }
+
+# MARKDOWN ********************
+
 # ## 4. The report
 
 # CELL ********************
 
-from IPython.display import Markdown, display
+from IPython.display import HTML, display
 
-markdown = report.to_markdown()
-display(Markdown(markdown))
+page = report.to_html()
+display(HTML(page))
 if REPORT_PATH:
+    html_path = REPORT_PATH[:-3] + ".html" if REPORT_PATH.endswith(".md") else REPORT_PATH + ".html"
+    with open(html_path, "w", encoding="utf-8") as handle:
+        handle.write(page)
     with open(REPORT_PATH, "w", encoding="utf-8") as handle:
-        handle.write(markdown)
-    print("saved", REPORT_PATH)
+        handle.write(report.to_markdown())
+    print("saved", html_path, "and", REPORT_PATH)
 
 # METADATA ********************
 
@@ -332,8 +392,7 @@ else:
 
 # CELL ********************
 
-FREEFORM_QUESTION = None   # e.g. "Which product subcategories had the highest gross margin in 2013?"
-LM = None                  # e.g. {"model": "openrouter/z-ai/glm-5.3-flash", "cache": False}
+FREEFORM_QUESTION = None   # e.g. "Which product subcategories had the highest gross margin in 2013?"; uses LM from the configuration cell
 
 if FREEFORM_QUESTION and LM:
     from fabric_rlm import verified_task

@@ -41,6 +41,7 @@ a notebook and SDK implementations for use inside one.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import time
@@ -48,7 +49,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -151,6 +152,16 @@ class AgentSnapshot:
     workspace_id: str | None = None
 
 
+_EMPHASIS = re.compile(r"(focus|focus(ed|es|ing)?|priorit(y|ies|ise|ize)|important|especially|mainly|primarily|key)", re.IGNORECASE)
+_CONTEXT_STOP = {"focus", "identifying", "identify", "related", "issues", "issue", "under", "review", "agent", "questions", "question", "about", "with", "from", "that", "this", "kpis", "kpi", "their", "these", "those", "which", "what", "into", "only", "also", "such", "more", "most", "less", "than", "over", "between", "through", "during", "include", "including", "well"}
+
+
+def _singular(word: str) -> str:
+    if len(word) > 4 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
+
+
 @dataclass(frozen=True)
 class ReviewContext:
     """What the reviewer states about the agent beyond its configuration.
@@ -180,6 +191,38 @@ class ReviewContext:
     def text(self) -> str:
         """Scope, priorities and notes as one text, for scoping tables and joins."""
         return "\n".join([self.scope, *self.priorities, self.notes])
+
+    @property
+    def terms(self) -> tuple[str, ...]:
+        """Lowercase singular terms from the priorities and the scope, for ranking attributes and questions."""
+        words: list[str] = []
+        for text in (*self.priorities, self.scope):
+            for word in re.findall(r"[A-Za-z][A-Za-z_]{3,}", text):
+                lowered = word.casefold()
+                if lowered in _STOPWORDS or lowered in _CONTEXT_STOP:
+                    continue
+                words.append(_singular(lowered))
+        return tuple(dict.fromkeys(words))
+
+    @property
+    def ranking_terms(self) -> tuple[str, ...]:
+        """The priorities when stated, else the scope's terms."""
+        stated = tuple(p.strip().casefold() for p in self.priorities if p.strip())
+        return stated or self.terms
+
+    @property
+    def emphasised(self) -> tuple[str, ...]:
+        """Terms from the scope sentences that say focus, priority or important; they weigh double when ranking."""
+        words: list[str] = []
+        for sentence in self.scope.replace(chr(10), ". ").split("."):
+            if not _EMPHASIS.search(sentence):
+                continue
+            for word in re.findall(r"[A-Za-z][A-Za-z_]{3,}", sentence):
+                lowered = word.casefold()
+                if lowered in _STOPWORDS or lowered in _CONTEXT_STOP or _EMPHASIS.fullmatch(lowered):
+                    continue
+                words.append(_singular(lowered))
+        return tuple(dict.fromkeys(words))
 
     def as_prompt(self) -> str:
         """The context as a block for an RLM task prompt; empty when nothing was stated."""
@@ -514,7 +557,7 @@ class SdkAgentReader:
             for handle in management.list_datasources(stage=self.stage):
                 entry = handle.get_configuration(stage=self.stage) or {}
                 reference = _item_reference(entry)
-                name = entry.get("displayName") or entry.get("name") or _resolve_item_name(reference.get("itemId"), reference.get("workspaceId"))
+                source_name = entry.get("displayName") or entry.get("name") or _resolve_item_name(reference.get("itemId"), reference.get("workspaceId"))
                 try:
                     shots = _fewshot_records(handle.get_fewshots(stage=self.stage))
                 except Exception:  # noqa: BLE001 - few-shots are optional
@@ -525,7 +568,7 @@ class SdkAgentReader:
                         selected = _selected_table_paths(lambda root_id, token, h=handle: h.get_elements(stage=self.stage, root_id=root_id, continuation_token=token))
                     except Exception:  # noqa: BLE001 - the elements are a bonus; the whole source is reviewed without them
                         selected = []
-                sources.append(_source_from_entry(entry, shots, fallback_id=str(getattr(handle, "_id", "") or ""), name=name, selected_tables=selected))
+                sources.append(_source_from_entry(entry, shots, fallback_id=str(getattr(handle, "_id", "") or ""), name=source_name, selected_tables=selected))
             return AgentSnapshot(
                 agent_id=str(agent_id),
                 name=str(name),
@@ -636,7 +679,7 @@ def _schema_mentions(line: str, schemas: Sequence[SourceSchema]) -> dict[str, li
         hits = sorted({c for c in candidates if c.casefold() in known and c.casefold() not in _STOPWORDS and len(c) > 2})
         strong = [c for c in hits if _schema_shaped(c, schema)]
         if strong:
-            found[schema.source_id] = strong + [c for c in hits if c not in strong]
+            found[schema.source_id] = strong
     return found
 
 
@@ -669,9 +712,45 @@ def _tables_named_in(text: str, schema: SourceSchema) -> list[str]:
     return named
 
 
+_OUT_OF_SCOPE = re.compile(r"(out[- ]of[- ]scope|not in scope|not configured|do not claim|don't claim|do not answer|cannot answer|not available)", re.IGNORECASE)
+_SCOPE_STOP = {"those", "tables", "table", "required", "business", "definitions", "definition", "because", "scope", "claim", "answer", "questions", "question", "about", "data", "source", "sources", "configured", "available", "these", "their", "other", "with", "from", "that", "this", "when", "such", "there", "what", "which", "into", "only", "also", "them", "they", "will", "have", "does", "your", "please", "respond", "request", "requests", "related", "remain", "remains", "level", "ask", "asking", "topics", "topic", "instead", "since", "were", "been", "being", "does", "cannot", "would", "should", "could", "agent", "model", "lakehouse", "warehouse"}
+
+
+def excluded_terms(instructions: str) -> set[str]:
+    """Topics the instructions declare out of scope, as lowercase singular terms.
+
+    Lines such as "Do not claim order status, returns, inventory, promotions
+    or quotas because those tables are not in scope" name topics the agent is
+    told to decline; tables named after them are not asked about, and a
+    declined question on them is graded as policy, not as a failure.
+    """
+    terms: set[str] = set()
+    for line in _lines(instructions):
+        if not _OUT_OF_SCOPE.search(line):
+            continue
+        for word in re.findall(r"[A-Za-z][A-Za-z_]{3,}", line):
+            lowered = word.casefold()
+            if lowered in _SCOPE_STOP or lowered in _STOPWORDS or _OUT_OF_SCOPE.search(lowered):
+                continue
+            terms.add(_singular(lowered))
+    return terms
+
+
+def _mentions_excluded(name: str, excluded: Collection[str]) -> bool:
+    lowered = name.casefold()
+    return any(term and term in lowered for term in excluded)
+
+
+def excluded_tables(schema: SourceSchema, instructions: str) -> list[str]:
+    """Tables of the schema named after a topic the instructions put out of scope."""
+    excluded = excluded_terms(instructions)
+    return sorted(t for t in schema.tables if _mentions_excluded(t, excluded))
+
+
 def _scoped_facts(schema: SourceSchema, instructions: str) -> list[str]:
-    """Fact tables in the agent's declared scope first; all of them when it names none."""
-    facts = _fact_tables(schema)
+    """Fact tables in the agent's declared scope first; all of them when it names none; never an out-of-scope one."""
+    excluded = excluded_terms(instructions)
+    facts = [t for t in _fact_tables(schema) if not _mentions_excluded(t, excluded)]
     named = _tables_named_in(instructions, schema)
     in_scope = [t for t in named if t in facts]
     return in_scope or facts
@@ -1100,14 +1179,16 @@ def _date_join(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str],
     return None
 
 
-def _attributes(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]]) -> list[tuple[str, str, str, str]]:
-    """(fact key, dim table, dim key, attribute column) for grouping."""
+def _attributes(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]], excluded: Collection[str] = ()) -> list[tuple[str, str, str, str]]:
+    """(fact key, dim table, dim key, attribute column) for grouping; never through an out-of-scope dimension."""
     found = []
     for column in schema.tables[table]:
         target = joins.get((table, column))
         if target is None or _DATE_KEY.search(column):
             continue
         dim_table, dim_key = target
+        if _mentions_excluded(dim_table, excluded):
+            continue
         for attribute in schema.tables[dim_table]:
             if _ATTRIBUTE_HINT.search(attribute) and not _KEY_HINT.search(attribute) and attribute != dim_key:
                 found.append((column, dim_table, dim_key, attribute))
@@ -1117,9 +1198,14 @@ def _attributes(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str]
 _LANGUAGE_VARIANT = re.compile(r"^(spanish|french|german|italian|portuguese|dutch|japanese|chinese)", re.IGNORECASE)
 
 
-def _diverse_attributes(attributes: Sequence[tuple[str, str, str, str]]) -> list[tuple[str, str, str, str]]:
-    """Grouping attributes with one per dimension table first, English names before translated variants."""
-    ranked = sorted(attributes, key=lambda a: (bool(_LANGUAGE_VARIANT.match(a[3])), not a[3].casefold().startswith("english")))
+def _diverse_attributes(attributes: Sequence[tuple[str, str, str, str]], terms: Collection[str] = ()) -> list[tuple[str, str, str, str]]:
+    """Grouping attributes with one per dimension table first, the reviewer's terms first, English names before translated variants."""
+
+    def score(attribute: tuple[str, str, str, str]) -> int:
+        haystack = f"{attribute[1]} {attribute[3]}".casefold()
+        return sum(1 for term in terms if term and term in haystack)
+
+    ranked = sorted(attributes, key=lambda a: (-score(a), bool(_LANGUAGE_VARIANT.match(a[3])), not a[3].casefold().startswith("english")))
     chosen: list[tuple[str, str, str, str]] = []
     seen: set[str] = set()
     for attribute in ranked:
@@ -1217,17 +1303,29 @@ def _supplied_questions(context: ReviewContext | None, source_id: str) -> list[Q
     return supplied
 
 
-def _matches_priority(question: Question, priorities: Sequence[str]) -> bool:
+def _priority_score(question: Question, terms: Sequence[str], emphasised: Sequence[str] = ()) -> int:
     haystack = f"{question.text} {json.dumps(question.spec, default=str)}".casefold()
-    return any(p.strip() and p.strip().casefold() in haystack for p in priorities)
+    return sum(1 for term in terms if term and term in haystack) + sum(1 for term in emphasised if term and term in haystack)
 
 
 def _prioritised(generated: Sequence[Question], context: ReviewContext | None, limit: int) -> list[Question]:
-    """Questions that mention a priority first, then the rest in generation order, cut to the limit."""
-    if context is None or not context.priorities:
+    """Questions that mention the most of the reviewer's terms first (emphasised terms count double), then generation order, cut to the limit and renumbered."""
+    terms = context.ranking_terms if context is not None else ()
+    if not terms:
         return list(generated)[:limit]
-    ranked = sorted(enumerate(generated), key=lambda item: (not _matches_priority(item[1], context.priorities), item[0]))
-    return [question for _index, question in ranked][:limit]
+    emphasised = context.emphasised if context is not None and not context.priorities else ()
+    ranked = sorted(enumerate(generated), key=lambda item: (-_priority_score(item[1], terms, emphasised), item[0]))
+    chosen = [question for _index, question in ranked][:limit]
+    return [replace(question, id=re.sub(r"\.q\d+$", f".q{number}", question.id)) for number, question in enumerate(chosen, start=1)]
+
+
+def _with_table_prefix(sql: str, schema: SourceSchema, prefix: str | None) -> str:
+    """Table names with the schema prefix the agent uses (``dbo.``), for few-shots that read like its own SQL."""
+    if not prefix:
+        return sql
+    for table in schema.tables:
+        sql = re.sub(rf"(?<![\w.]){re.escape(table)}(?![\w])", f"{prefix}.{table}", sql)
+    return sql
 
 
 def generate_questions(
@@ -1250,7 +1348,8 @@ def generate_questions(
     questions: list[Question] = []
     sources = {s.id: s for s in snapshot.datasources}
     supplied_target = next((s.source_id for s in schemas if s.kind != "semantic_model"), schemas[0].source_id if schemas else None)
-    generation_limit = limit_per_source * 4 if context is not None and context.priorities else limit_per_source
+    # with terms to rank by, generate everything the schema supports and cut after ranking
+    generation_limit = 10_000 if context is not None and context.ranking_terms else limit_per_source
     for schema in schemas:
         source = sources.get(schema.source_id)
         source_years = list((years or {}).get(schema.source_id) or [])
@@ -1263,6 +1362,8 @@ def generate_questions(
         instructions = (source.instructions if source else "") + "\n" + snapshot.instructions + ("\n" + context.text if context is not None else "")
         joins = dict(_heuristic_joins(schema))
         joins.update(_joins_from_instructions(instructions, schema))
+        excluded = excluded_terms(instructions)
+        schema_prefix = "dbo" if re.search(r"\bdbo\.", (source.instructions if source else "") + snapshot.instructions) else None
         facts = _scoped_facts(schema, instructions)
         per_fact = []
         for table in facts:
@@ -1270,7 +1371,7 @@ def generate_questions(
             measures = _measure_columns(schema, table)
             if not date or not measures:
                 continue
-            per_fact.append({"table": table, "measure": measures[0], "date": {"column": date[0], "date_table": date[1], "date_key": date[2], "year": date[3]}, "attributes": _attributes(schema, table, joins), "order_column": _order_column(schema, table)})
+            per_fact.append({"table": table, "measure": measures[0], "date": {"column": date[0], "date_table": date[1], "date_key": date[2], "year": date[3]}, "attributes": _attributes(schema, table, joins, excluded), "order_column": _order_column(schema, table)})
         if not per_fact or not source_years:
             continue
         count = 0
@@ -1284,7 +1385,7 @@ def generate_questions(
             if count >= generation_limit:
                 return
             count += 1
-            questions.append(Question(id=f"{prefix}.q{count}", source_id=schema.source_id, kind=kind, text=text, spec=spec, reference_query=_sql(spec, dialect="tsql"), execution={"kind": "sql", "sql": _sql(spec, dialect="duckdb")}, alternates=tuple(alternates)))
+            questions.append(Question(id=f"{prefix}.q{count}", source_id=schema.source_id, kind=kind, text=text, spec=spec, reference_query=_with_table_prefix(_sql(spec, dialect="tsql"), schema, schema_prefix), execution={"kind": "sql", "sql": _sql(spec, dialect="duckdb")}, alternates=tuple(alternates)))
 
         measure_name = per_fact[0]["measure"]
         if len(shared) > 1:
@@ -1299,7 +1400,7 @@ def generate_questions(
                 add("distinct_by_year", f"How many distinct {fact['order_column']} values (orders) does {fact['table']} have per year for {span}?", {"kind": "distinct_by_year", "facts": [base], "years": source_years})
             if len(source_years) >= 2:
                 add("yoy", f"What was the year-over-year change in total {fact['measure']} in {fact['table']} from {source_years[-2]} to {source_years[-1]}?", {"kind": "yoy", "facts": [base], "years": source_years[-2:]})
-            for fact_key, dim_table, dim_key, attribute in _diverse_attributes(fact["attributes"])[:2]:
+            for fact_key, dim_table, dim_key, attribute in _diverse_attributes(fact["attributes"], context.terms if context is not None else ())[:2]:
                 attr = {"fact_key": fact_key, "dim_table": dim_table, "dim_key": dim_key, "column": attribute, "alias": attribute}
                 add("top_n", f"What are the top {top} {attribute} values by {fact['measure']} in {fact['table']} for {latest}?", {"kind": "top_n", "facts": [{**base, "attribute": attr}], "year": latest, "top": top})
                 add("breakdown", f"What was total {fact['measure']} in {fact['table']} by {attribute} for {latest}?", {"kind": "breakdown", "facts": [{**base, "attribute": attr}], "year": latest})
@@ -1464,7 +1565,7 @@ def build_references(questions: Sequence[Question], executors: Mapping[str, Any]
     for question in questions:
         executor = executors.get(question.source_id)
         if question.execution.get("kind") == "supplied_text":
-            figures = _numbers_in(str(question.execution.get("text", "")))
+            figures = _reference_figures(str(question.execution.get("text", "")))
             if figures:
                 references.append(Reference(question.id, "ok", tuple({"value": figure} for figure in figures), "figures of the supplied answer"))
             else:
@@ -1516,6 +1617,15 @@ class AgentAnswer:
     seconds: float = 0.0
     steps: tuple[AgentStep, ...] = ()  # the run steps, for the insight section of the report
     status: str = "completed"
+    executed: bool = True  # False when the steps show a query generated but no execution
+
+
+def _executed(steps: Sequence[AgentStep]) -> bool:
+    """Whether the run executed a query: an execute step exists, or the steps carry no names to tell."""
+    names = [s.name for s in steps if s.name]
+    if not names:
+        return True
+    return any(re.search(r"(execut|run_query|query_execution)", name, re.IGNORECASE) for name in names)
 
 
 def _field(value: Any, name: str, default: Any = None) -> Any:
@@ -1690,7 +1800,7 @@ class ResponsesAgentAsker:
         status = str(_field(response, "status", "completed") or "completed").lower()
         if status != "completed" and not text:
             text = f"ERROR: response ended with status {status}"
-        return AgentAnswer(text=text, query=query, language=language, datasource=datasource, seconds=round(time.time() - started, 1), steps=steps, status=status)
+        return AgentAnswer(text=text, query=query, language=language, datasource=datasource, seconds=round(time.time() - started, 1), steps=steps, status=status, executed=_executed(steps))
 
 
 class AssistantsAgentAsker:
@@ -1755,7 +1865,7 @@ class AssistantsAgentAsker:
         query, language, datasource = _steps_summary(steps)
         if run.status != "completed" and not text:
             text = f"ERROR: run ended with status {run.status}"
-        return AgentAnswer(text=text, query=query, language=language, datasource=datasource, seconds=round(time.time() - started, 1), steps=tuple(steps), status=str(run.status))
+        return AgentAnswer(text=text, query=query, language=language, datasource=datasource, seconds=round(time.time() - started, 1), steps=tuple(steps), status=str(run.status), executed=_executed(steps))
 
 
 def _query_in(text: str) -> str | None:
@@ -1804,6 +1914,13 @@ class Graded:
     query_checked: bool = False
 
 
+def _reference_figures(text: str) -> list[float]:
+    """The figures of a prose reference: its numbers without the years it names, unless years are all it has."""
+    numbers = _numbers_in(text)
+    figures = [n for n in numbers if not (float(n).is_integer() and 1900 <= n <= 2100)]
+    return figures or numbers
+
+
 def _numbers_in(text: str) -> list[float]:
     out = []
     for match in _TEXT_NUMBER.finditer(text or ""):
@@ -1850,6 +1967,26 @@ def _rows_match(reference: Sequence[Mapping[str, Any]], candidate: Sequence[Mapp
     return len(expected) == len(got) and all(_close(g, e) for g, e in zip(got, expected))
 
 
+def _grade_change(question: Question, reference: Reference, text: str, agent_rows: Sequence[Mapping[str, Any]] | None) -> Graded | None:
+    """A year-over-year answer is right when it carries the change (absolute or percent) or both yearly totals."""
+    totals = [float(row["value"]) for row in reference.rows if isinstance(row.get("value"), (int, float)) and not isinstance(row.get("value"), bool)]
+    if len(totals) != 2:
+        return None
+    first, last = totals
+    observed = list(_numbers_in(text))
+    for row in agent_rows or ():
+        observed.extend(float(v) for v in row.values() if isinstance(v, (int, float)) and not isinstance(v, bool))
+    if not observed:
+        return None
+    delta = last - first
+    candidates = [delta, -delta]
+    if first:
+        candidates.extend([delta / first, delta / first * 100, -delta / first, -delta / first * 100])
+    if any(_close(n, c) for n in observed for c in candidates if c) or (any(_close(n, first) for n in observed) and any(_close(n, last) for n in observed)):
+        return Graded(question.id, "correct", "", "the change or both yearly totals match the reference", 2, 2, agent_rows is not None)
+    return None
+
+
 def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *, agent_rows: Sequence[Mapping[str, Any]] | None = None) -> Graded:
     """Grade an answer against its reference: by the executed query when it was run, else by the prose."""
     text = answer.text if isinstance(answer, AgentAnswer) else str(answer)
@@ -1863,6 +2000,11 @@ def grade(question: Question, reference: Reference, answer: AgentAnswer | str, *
                 return Graded(question.id, "wrong", "answered_without_data", "the source has no rows for this question, yet the answer carries figures")
             return Graded(question.id, "incomplete", "abstain_expected", "the source has no rows for this question; the answer neither says so nor gives figures")
         return Graded(question.id, "no_reference", "reference_failed", reference.note)
+    if question.kind == "yoy":
+        verdict = _grade_change(question, reference, text, agent_rows)
+        if verdict is not None:
+            return verdict
+        agent_rows = None  # a one-row change is not a missing row; the prose says how much
     if agent_rows is not None:
         if _rows_match(reference.rows, agent_rows):
             return Graded(question.id, "correct", "", "the agent's executed query returns the reference rows", len(reference.rows), len(reference.rows), True)
@@ -1994,6 +2136,117 @@ def suggest(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema], findings: 
     return Suggestions("\n".join(agent_lines).strip(), datasource_instructions, datasource_descriptions, fewshots, tuple(notes))
 
 
+@dataclass(frozen=True)
+class Analysis:
+    """The RLM's explanation of one graded question and the change it proposes."""
+
+    question_id: str
+    question: str
+    explanation: str
+    proposed_change: str = ""
+
+
+def _short_json(value: Any, limit: int = 240) -> str:
+    try:
+        text = json.dumps(value, default=str, sort_keys=True)
+    except (TypeError, ValueError):
+        text = str(value)
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def summarize_knowledge(knowledge: Any) -> dict[str, Any]:
+    """What ``RLM.learn`` recorded, as plain data for the report: profiles, operations, lessons, events."""
+    package = getattr(knowledge, "package", knowledge)
+    sources: list[dict[str, Any]] = []
+    for profile in getattr(package, "sources", ()) or ():
+        schema = getattr(profile, "schema", None) or {}
+        family = str(getattr(profile, "family", "") or "")
+        if family == "lakehouse":
+            counts = [len(entry.get("columns") or {}) for entry in schema.values() if isinstance(entry, Mapping)]
+            shape = f"{len(counts)} tables, {sum(counts)} columns"
+        elif family == "semantic_model":
+            shape = f"{len(schema.get('columns') or {})} columns, {len(schema.get('measures') or {})} measures, {len(schema.get('relationships') or {})} relationships"
+        else:
+            shape = f"{sum(1 for entry in schema.values() if isinstance(entry, Mapping))} columns"
+        diagnostics = getattr(profile, "diagnostics", None) or {}
+        sources.append(
+            {
+                "source_id": str(getattr(profile, "source_id", "") or ""),
+                "family": family,
+                "status": str(getattr(profile, "status", "") or ""),
+                "role": str(getattr(profile, "role", "") or ""),
+                "shape": shape,
+                "schema_fingerprint": str(getattr(profile, "schema_fingerprint", "") or "")[:12],
+                "snapshot_fingerprint": str(getattr(profile, "snapshot_fingerprint", "") or "")[:12],
+                "sensitive_columns": [str(c) for c in (getattr(profile, "sensitive_columns", ()) or ())],
+                "diagnostics": {str(k): v for k, v in diagnostics.items() if isinstance(v, (str, int, float, bool))} if isinstance(diagnostics, Mapping) else {},
+            }
+        )
+    operations = [
+        {
+            "operation": str(getattr(op, "operation", "") or ""),
+            "sources": [str(s) for s in (getattr(op, "required_sources", ()) or ())],
+            "status": str(getattr(op, "status", "") or ""),
+            "grain": str(getattr(op, "grain", "") or ""),
+            "parameters": sorted(str(k) for k in (getattr(op, "parameter_schema", None) or {})),
+        }
+        for op in getattr(package, "operations", ()) or ()
+    ]
+    lessons = [
+        {
+            "kind": str(getattr(lesson, "kind", "") or ""),
+            "subject": str(getattr(lesson, "subject", "") or ""),
+            "status": str(getattr(lesson, "status", "") or ""),
+            "confidence": str(getattr(lesson, "confidence", "") or ""),
+            "rule": _short_json(getattr(lesson, "structured_rule", None) or {}),
+            "basis": [str(b) for b in (getattr(lesson, "basis", ()) or ())],
+        }
+        for lesson in getattr(package, "lessons", ()) or ()
+    ]
+    events = Counter(str(getattr(event, "event_type", "") or "") for event in (getattr(package, "events", ()) or ()))
+    return {
+        "package_id": str(getattr(package, "package_id", "") or ""),
+        "sources": sources,
+        "operations": operations,
+        "lessons": lessons,
+        "events": dict(sorted(events.items())),
+        "evidence": len(getattr(package, "evidence", ()) or ()),
+    }
+
+
+def _cell(value: Any) -> str:
+    if isinstance(value, bool) or value is None:
+        return "" if value is None else str(value)
+    if isinstance(value, int):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    return str(value)
+
+
+_HTML_STYLE = """<style>
+.rlm-review { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1f2933; max-width: 1150px; line-height: 1.45; }
+.rlm-review h1 { font-size: 1.6em; margin: 0 0 4px 0; }
+.rlm-review h2 { font-size: 1.2em; margin: 22px 0 8px 0; border-bottom: 1px solid #d9dee3; padding-bottom: 4px; }
+.rlm-review h3 { font-size: 1em; margin: 14px 0 6px 0; }
+.rlm-review .muted { color: #616e7c; }
+.rlm-review table { border-collapse: collapse; width: 100%; font-size: 0.92em; margin: 8px 0; }
+.rlm-review th, .rlm-review td { border: 1px solid #d9dee3; padding: 5px 8px; text-align: left; vertical-align: top; }
+.rlm-review th { background: #f0f3f5; }
+.rlm-review .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 0.8em; font-weight: 600; color: #fff; margin-right: 6px; }
+.rlm-review .sev-high { background: #c0392b; } .rlm-review .sev-medium { background: #d68910; } .rlm-review .sev-low { background: #2e86c1; } .rlm-review .sev-info { background: #7f8c8d; }
+.rlm-review .out-correct { background: #e6f4ea; } .rlm-review .out-partial { background: #fff4e0; } .rlm-review .out-wrong { background: #fdecea; }
+.rlm-review .out-abstained, .rlm-review .out-incomplete, .rlm-review .out-no_reference { background: #f0f3f5; }
+.rlm-review .chip { display: inline-block; padding: 2px 10px; border-radius: 12px; margin: 0 6px 6px 0; font-size: 0.9em; border: 1px solid #d9dee3; }
+.rlm-review .card { border: 1px solid #d9dee3; border-left: 4px solid #7f8c8d; border-radius: 4px; padding: 8px 12px; margin: 8px 0; }
+.rlm-review .card-high { border-left-color: #c0392b; } .rlm-review .card-medium { border-left-color: #d68910; } .rlm-review .card-low { border-left-color: #2e86c1; }
+.rlm-review pre { background: #f6f8fa; border: 1px solid #d9dee3; border-radius: 4px; padding: 8px; overflow-x: auto; white-space: pre-wrap; font-size: 0.85em; margin: 4px 0 8px 0; }
+.rlm-review code { background: #f0f3f5; padding: 1px 4px; border-radius: 3px; }
+.rlm-review details { margin: 4px 0; } .rlm-review summary { cursor: pointer; }
+.rlm-review ul { margin: 4px 0 4px 18px; padding: 0; }
+</style>"""
+
+
 @dataclass
 class ReviewReport:
     snapshot: AgentSnapshot
@@ -2006,12 +2259,158 @@ class ReviewReport:
     suggestions: Suggestions
     notes: tuple[str, ...] = ()  # diagnostics: year discovery, why no questions
     context: ReviewContext | None = None
+    knowledge: Mapping[str, Any] | None = None  # summarize_knowledge(RLM.learn(...))
+    analysis: tuple[Analysis, ...] = ()  # the RLM's explanations, from deepen()
 
     def score(self) -> dict[str, int]:
         counts: dict[str, int] = {}
         for g in self.graded:
             counts[g.outcome] = counts.get(g.outcome, 0) + 1
         return counts
+
+    def _knowledge_lines(self) -> list[str]:
+        k = self.knowledge or {}
+        lines = [
+            "## What the RLM learned",
+            f"Package {k.get('package_id', '')}: {len(k.get('sources', []))} source(s) profiled, {len(k.get('operations', []))} registered operation(s), {len(k.get('lessons', []))} lesson(s), {k.get('evidence', 0)} evidence record(s).",
+        ]
+        for src in k.get("sources", []):
+            sensitive = f"; sensitive columns: {', '.join(src['sensitive_columns'][:8])}" if src.get("sensitive_columns") else ""
+            lines.append(f"- {src['source_id']} ({src['family']}, {src['status']}, role {src['role']}): {src['shape']}; schema fingerprint {src['schema_fingerprint']}; snapshot {src['snapshot_fingerprint']}{sensitive}")
+        for op in k.get("operations", []):
+            grain = f", grain {op['grain']}" if op.get("grain") else ""
+            lines.append(f"- operation {op['operation']} on {', '.join(op['sources'])} ({op['status']}{grain}); parameters: {', '.join(op['parameters']) or 'none'}")
+        for lesson in k.get("lessons", []):
+            lines.append(f"- lesson {lesson['kind']} on {lesson['subject']} ({lesson['status']}, {lesson['confidence']}): {lesson['rule']}")
+        if k.get("events"):
+            lines.append("- events: " + ", ".join(f"{name} x{n}" for name, n in k["events"].items()))
+        lines.append("")
+        return lines
+
+    def to_html(self) -> str:
+        """The report as one self-contained HTML fragment (inline style), for a notebook or a file."""
+        esc = html.escape
+        s = self.snapshot
+        by_source = {x.source_id: x for x in self.schemas}
+        ref_by_id = {r.question_id: r for r in self.references}
+        grade_by_id = {g.question_id: g for g in self.graded}
+        parts = [_HTML_STYLE, '<div class="rlm-review">', f"<h1>Data Agent review: {esc(s.name)}</h1>"]
+        parts.append(f'<div class="muted">Stage: {esc(s.stage)}. Agent instructions: {len(s.instructions):,} characters. Sources: {len(s.datasources)}.</div>')
+        if self.context:
+            parts.append("<h2>Scope and context (stated by the reviewer)</h2><ul>")
+            parts.extend(f"<li>{esc(line)}</li>" for line in self.context.as_prompt().splitlines())
+            if self.context.questions:
+                parts.append(f"<li>Supplied questions: {len(self.context.questions)} (graded first)</li>")
+            parts.append("</ul>")
+        parts.append("<h2>Sources</h2><table><tr><th>Source</th><th>Kind</th><th>Profile</th><th>Selected for the agent</th><th>Few-shots</th><th>Instructions</th><th>Description</th></tr>")
+        for source in s.datasources:
+            schema = by_source.get(source.id)
+            shape = f"{len(schema.tables)} tables" + (f", {len(schema.measures)} measures" if schema and schema.measures else "") if schema else "not profiled"
+            parts.append(f"<tr><td>{esc(source.name or source.id)}</td><td>{esc(source.kind)}</td><td>{esc(shape)}</td><td>{len(source.selected_tables) if source.selected_tables else 'unknown'}</td><td>{len(source.fewshots)}</td><td>{len(source.instructions):,} chars</td><td>{'present' if source.description.strip() else 'missing'}</td></tr>")
+        parts.append("</table>")
+        parts.append("<h2>Findings</h2>")
+        if not self.findings:
+            parts.append('<div class="muted">No findings.</div>')
+        for f in self.findings:
+            where = f' <span class="muted">({esc(_source_label(s, f.source_id))})</span>' if f.source_id else ""
+            parts.append(f'<div class="card card-{esc(f.severity)}"><span class="badge sev-{esc(f.severity)}">{esc(f.severity)}</span><code>{esc(f.code)}</code>{where}<div>{esc(f.message)}</div>')
+            if f.evidence:
+                parts.append("<ul>" + "".join(f"<li>{esc(e)}</li>" for e in f.evidence[:12]) + "</ul>")
+            if f.suggestion:
+                parts.append(f"<div><b>Suggestion:</b> {esc(f.suggestion)}</div>")
+            if f.basis:
+                parts.append(f'<div class="muted">Basis: {esc(f.basis)}</div>')
+            parts.append("</div>")
+        parts.append("<h2>Evaluation</h2>")
+        counts = self.score()
+        parts.append("<div>" + ("".join(f'<span class="chip out-{esc(k)}">{esc(k)}: {v}</span>' for k, v in sorted(counts.items())) or '<span class="muted">No questions.</span>') + "</div>")
+        if self.notes:
+            parts.append("<div><b>Diagnostics</b><ul>" + "".join(f"<li>{esc(n)}</li>" for n in self.notes) + "</ul></div>")
+        if self.questions:
+            parts.append("<table><tr><th>#</th><th>Question</th><th>Outcome</th><th>Cause</th><th>Detail</th><th>Query</th><th>Routed to</th></tr>")
+            for index, q in enumerate(self.questions, start=1):
+                g = grade_by_id.get(q.id)
+                answers = self.answers.get(q.id, ())
+                query = next((a.query for a in answers if a.query), None)
+                routed = next((a.datasource for a in answers if a.datasource), "")
+                detail = g.detail if g else ref_by_id.get(q.id, Reference(q.id, "failed")).note
+                outcome = g.outcome if g else ""
+                parts.append(f'<tr><td>{index}</td><td>{esc(q.text)}</td><td class="out-{esc(outcome)}">{esc(outcome)}</td><td>{esc(g.cause if g else "")}</td><td>{esc(detail)}</td><td>{"yes" if query else "no"}</td><td>{esc(routed)}</td></tr>')
+            parts.append("</table>")
+            for index, q in enumerate(self.questions, start=1):
+                answers = self.answers.get(q.id, ())
+                reference = ref_by_id.get(q.id)
+                body: list[str] = []
+                for attempt, a in enumerate(answers, start=1):
+                    label = f" {attempt}" if len(answers) > 1 else ""
+                    body.append(f"<div><b>Agent answer{label}</b> ({a.seconds}s):</div><pre>{esc(a.text[:3000])}</pre>")
+                    if a.query:
+                        body.append(f"<div><b>Agent query</b> ({esc(a.language or 'unknown')}{'' if a.executed else ', generated but not executed'}):</div><pre>{esc(a.query[:3000])}</pre>")
+                    if a.steps:
+                        step_counts = Counter(st.name for st in a.steps if st.name)
+                        functions = ", ".join(f"{name} x{n}" if n > 1 else name for name, n in sorted(step_counts.items())) or "unnamed"
+                        body.append(f'<div class="muted">{len(a.steps)} step(s): {esc(functions)}; routed to: {esc(a.datasource or "unknown")}; status: {esc(a.status)}</div>')
+                if q.reference_query:
+                    body.append(f"<div><b>Reference query:</b></div><pre>{esc(q.reference_query)}</pre>")
+                if reference is not None and reference.rows:
+                    columns = list(reference.rows[0].keys())
+                    body.append("<div><b>Reference rows</b>" + (f' <span class="muted">(first 10 of {len(reference.rows)})</span>' if len(reference.rows) > 10 else "") + "</div>")
+                    body.append("<table><tr>" + "".join(f"<th>{esc(str(c))}</th>" for c in columns) + "</tr>" + "".join("<tr>" + "".join(f"<td>{esc(_cell(row.get(c)))}</td>" for c in columns) + "</tr>" for row in reference.rows[:10]) + "</table>")
+                elif reference is not None:
+                    body.append(f'<div class="muted">Reference {esc(reference.status)}: {esc(reference.note)}</div>')
+                parts.append(f"<details><summary>{index}. {esc(q.text)}</summary>" + "".join(body) + "</details>")
+        if self.analysis:
+            parts.append("<h2>Analysis (RLM)</h2>")
+            for item in self.analysis:
+                g = grade_by_id.get(item.question_id)
+                verdict = f' <span class="chip out-{esc(g.outcome)}">{esc(g.outcome)}{", " + esc(g.cause) if g.cause else ""}</span>' if g else ""
+                change = f"<div><b>Proposed change:</b> {esc(item.proposed_change)}</div>" if item.proposed_change else ""
+                parts.append(f'<div class="card"><div><b>{esc(item.question)}</b>{verdict}</div><div>{esc(item.explanation)}</div>{change}</div>')
+        if self.knowledge:
+            k = self.knowledge
+            parts.append("<h2>What the RLM learned</h2>")
+            parts.append(f'<div class="muted">Package {esc(str(k.get("package_id", "")))}: {len(k.get("sources", []))} source(s) profiled, {len(k.get("operations", []))} registered operation(s), {len(k.get("lessons", []))} lesson(s), {k.get("evidence", 0)} evidence record(s).</div>')
+            if k.get("sources"):
+                parts.append("<table><tr><th>Source</th><th>Family</th><th>Status</th><th>Role</th><th>Profile</th><th>Schema fingerprint</th><th>Snapshot</th><th>Sensitive columns</th></tr>")
+                for src in k["sources"]:
+                    parts.append(f"<tr><td>{esc(src['source_id'])}</td><td>{esc(src['family'])}</td><td>{esc(src['status'])}</td><td>{esc(src['role'])}</td><td>{esc(src['shape'])}</td><td><code>{esc(src['schema_fingerprint'])}</code></td><td><code>{esc(src['snapshot_fingerprint'])}</code></td><td>{esc(', '.join(src.get('sensitive_columns', [])[:8]))}</td></tr>")
+                parts.append("</table>")
+            if k.get("operations"):
+                parts.append("<h3>Registered operations</h3><table><tr><th>Operation</th><th>Sources</th><th>Status</th><th>Grain</th><th>Parameters</th></tr>")
+                for op in k["operations"]:
+                    parts.append(f"<tr><td><code>{esc(op['operation'])}</code></td><td>{esc(', '.join(op['sources']))}</td><td>{esc(op['status'])}</td><td>{esc(op['grain'])}</td><td>{esc(', '.join(op['parameters']))}</td></tr>")
+                parts.append("</table>")
+            if k.get("lessons"):
+                parts.append("<h3>Lessons</h3><table><tr><th>Kind</th><th>Subject</th><th>Status</th><th>Confidence</th><th>Rule</th></tr>")
+                for lesson in k["lessons"]:
+                    parts.append(f"<tr><td>{esc(lesson['kind'])}</td><td>{esc(lesson['subject'])}</td><td>{esc(lesson['status'])}</td><td>{esc(lesson['confidence'])}</td><td><code>{esc(lesson['rule'])}</code></td></tr>")
+                parts.append("</table>")
+            if k.get("events"):
+                parts.append('<div class="muted">Events: ' + esc(", ".join(f"{name} x{n}" for name, n in k["events"].items())) + "</div>")
+        parts.append("<h2>Suggested changes</h2>")
+        if self.suggestions.agent_instructions:
+            parts.append(f"<h3>Agent instructions</h3><pre>{esc(self.suggestions.agent_instructions)}</pre>")
+        for source in s.datasources:
+            text = self.suggestions.datasource_instructions.get(source.id)
+            description = self.suggestions.datasource_descriptions.get(source.id)
+            shots = self.suggestions.fewshots.get(source.id, ())
+            if not (text or description or shots):
+                continue
+            parts.append(f"<h3>{esc(source.name or source.id)}</h3>")
+            if description:
+                parts.append(f"<div><b>Description:</b> {esc(description)}</div>")
+            if text:
+                parts.append(f"<div><b>Data-source instructions:</b></div><pre>{esc(text)}</pre>")
+            if shots:
+                parts.append(f"<div><b>Few-shots ({len(shots)}):</b></div>")
+                for shot in shots:
+                    parts.append(f"<div>Q: {esc(shot.question)}</div><pre>{esc(shot.query)}</pre>")
+        if self.suggestions.notes:
+            parts.append("<ul>" + "".join(f"<li>{esc(n)}</li>" for n in self.suggestions.notes) + "</ul>")
+        parts.append("<h2>Method</h2>")
+        parts.append('<div class="muted">References were computed by executing generated queries against the sources, never by a model; supplied and RLM-proposed questions carry the reference the reviewer or the verified RLM solve gave. Grades compare the agent\'s executed query where the run steps exposed it, else its prose figures, with a 0.5% tolerance. Repeat the evaluation three times before believing a delta.</div>')
+        parts.append("</div>")
+        return "\n".join(parts)
 
     def to_markdown(self) -> str:
         s = self.snapshot
@@ -2062,6 +2461,17 @@ class ReviewReport:
             detail = (g.detail if g else ref_by_id.get(q.id, Reference(q.id, "failed")).note)[:80]
             lines.append(f"| {q.id} | {q.text} | {g.outcome if g else ''} | {g.cause if g else ''} | {detail} | {'yes' if query else 'no'} | {routed} |")
         lines.append("")
+        if self.analysis:
+            lines.append("## Analysis (RLM)")
+            grade_by_id = {g.question_id: g for g in self.graded}
+            for item in self.analysis:
+                g = grade_by_id.get(item.question_id)
+                verdict = f" ({g.outcome}{', ' + g.cause if g and g.cause else ''})" if g else ""
+                lines.append(f"- {item.question_id}{verdict}: {item.question}")
+                lines.append(f"    - {item.explanation}")
+                if item.proposed_change:
+                    lines.append(f"    - proposed change: {item.proposed_change}")
+            lines.append("")
         if any(a.steps for answers in self.answers.values() for a in answers):
             lines.append("## Agent run steps")
             lines.append("What the agent did per question: the functions it called, the language of the query it executed, the source it routed to.")
@@ -2069,9 +2479,12 @@ class ReviewReport:
                 for attempt, a in enumerate(self.answers.get(q.id, ()), start=1):
                     if not a.steps:
                         continue
-                    names = sorted({s.name for s in a.steps if s.name})
-                    lines.append(f"- {q.id} (attempt {attempt}): {len(a.steps)} step(s); functions: {', '.join(names) or 'none'}; query language: {a.language or 'none'}; routed to: {a.datasource or 'unknown'}; status: {a.status}; {a.seconds}s")
+                    counts = Counter(s.name for s in a.steps if s.name)
+                    functions = ", ".join(f"{name} x{n}" if n > 1 else name for name, n in sorted(counts.items())) or "none"
+                    lines.append(f"- {q.id} (attempt {attempt}): {len(a.steps)} step(s); functions: {functions}; query language: {a.language or 'none'}; executed: {'yes' if a.executed else 'no'}; routed to: {a.datasource or 'unknown'}; status: {a.status}; {a.seconds}s")
             lines.append("")
+        if self.knowledge:
+            lines.extend(self._knowledge_lines())
         lines.append("## Suggested changes")
         lines.append("### Agent instructions")
         lines.append("```")
@@ -2119,6 +2532,15 @@ def _with_routing(graded: Graded, question: Question, answers: Sequence[AgentAns
     return replace(graded, cause="misrouted", detail=detail[:200])
 
 
+def _with_policy(graded: Graded, question: Question, answers: Sequence[AgentAnswer], excluded: Collection[str]) -> Graded:
+    """A declined question on a topic the instructions exclude is policy; SQL generated but not executed is said."""
+    if graded.outcome == "abstained" and excluded and _mentions_excluded(question.text, excluded):
+        graded = replace(graded, cause="abstained_by_policy", detail="the instructions put this topic out of scope, and the agent declined")
+    if graded.outcome in {"abstained", "incomplete", "wrong", "partial"} and any(a.query and not a.executed for a in answers):
+        graded = replace(graded, detail=f"{graded.detail}; SQL was generated but not executed".strip("; "))
+    return graded
+
+
 def review_agent(
     snapshot: AgentSnapshot,
     schemas: Sequence[SourceSchema],
@@ -2130,8 +2552,11 @@ def review_agent(
     limit_per_source: int = 8,
     repetitions: int = 1,
     context: ReviewContext | None = None,
+    knowledge: Any = None,
 ) -> ReviewReport:
     """The whole review: diagnose, generate, reference, ask, grade, suggest.
+
+    ``knowledge`` is what ``RLM.learn`` returned; the report summarises it.
 
     ``context`` is what the reviewer states about the agent (scope,
     priorities, definitions, own questions, notes); see :class:`ReviewContext`.
@@ -2142,6 +2567,14 @@ def review_agent(
     """
     findings = diagnose(snapshot, schemas)
     notes: list[str] = []
+    excluded_by_source: dict[str, set[str]] = {}
+    for schema in schemas:
+        source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
+        instructions = (source.instructions if source else "") + "\n" + snapshot.instructions
+        excluded_by_source[schema.source_id] = excluded_terms(instructions)
+        left_out = excluded_tables(schema, instructions)
+        if left_out:
+            notes.append(f"{_source_label(snapshot, schema.source_id)}: out of scope by the instructions, not asked about: {', '.join(left_out)}")
     if years is None:
         years = {}
         for schema in schemas:
@@ -2174,7 +2607,7 @@ def review_agent(
             collected.append(answer)
             agent_rows = None
             executor = executors.get(question.source_id)
-            if answer.query and answer.language == "sql" and isinstance(executor, LakehouseExecutor):
+            if answer.query and answer.executed and answer.language == "sql" and isinstance(executor, LakehouseExecutor):
                 try:
                     agent_rows = executor.run_agent_sql(answer.query)
                 except Exception:  # noqa: BLE001 - the agent's SQL may not run outside its endpoint
@@ -2187,9 +2620,192 @@ def review_agent(
             final = Graded(question.id, worst.outcome, "inconsistent", f"outcomes across {len(grades)} runs: {dict(outcomes)}", worst.matched, worst.expected, worst.query_checked)
         else:
             final = grades[0]
-        graded.append(_with_routing(final, question, collected, snapshot))
+        graded.append(_with_policy(_with_routing(final, question, collected, snapshot), question, collected, excluded_by_source.get(question.source_id, ())))
     suggestions = suggest(snapshot, schemas, findings, questions, references, graded)
-    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context)
+    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context, knowledge=summarize_knowledge(knowledge) if knowledge is not None else None)
+
+
+# --------------------------------------------------------------------------- #
+# Deeper analysis with the RLM: proposed questions with verified references,
+# explanations of the failures
+# --------------------------------------------------------------------------- #
+
+
+def _schema_digest(schemas: Sequence[SourceSchema], *, tables: int = 40, columns: int = 24) -> str:
+    lines = []
+    for schema in schemas:
+        for name, cols in list(schema.tables.items())[:tables]:
+            lines.append(f"{name}: {', '.join(list(cols)[:columns])}{', ...' if len(cols) > columns else ''}")
+        if schema.measures:
+            lines.append(f"measures: {', '.join(schema.measures[:columns])}")
+    return "\n".join(lines)
+
+
+_PROPOSE_TASK = (
+    "Propose questions a business user would ask this data agent. Use the scope, the priorities and "
+    "the schema digest in the brief. Each question must be answerable from the sources with one "
+    "aggregate, ranking, comparison or trend, must say which period it means, and must not repeat a "
+    "question already asked. Return exactly the requested count as a list of plain strings."
+)
+_EXPLAIN_TASK = (
+    "Explain, in at most three sentences, why the agent's answer differs from the reference for this "
+    "question, using the agent's query, the reference query and the reference rows. Then propose the "
+    "smallest change to the agent instructions, the data-source instructions or a few-shot that would "
+    "make the agent answer correctly; quote the line to add or change."
+)
+
+
+def _rlm_proposer(lm: Any, *, max_turns: int, timeout: float) -> Callable[[str, int], list[str]]:
+    def propose(brief: str, count: int) -> list[str]:
+        from .runtime import RLM
+
+        result = RLM.task(_PROPOSE_TASK, inputs={"brief": brief, "count": count}, outputs={"questions": list}, lm=lm, max_turns=max_turns, timeout=timeout).run()
+        raw = (result.payload or {}).get("questions") or []
+        if isinstance(raw, str):
+            raw = [line.strip("-* ") for line in raw.splitlines()]
+        return [str(q).strip() for q in raw if str(q).strip()][:count]
+
+    return propose
+
+
+def _rlm_verifier(lm: Any, handles: Mapping[str, Any], knowledge: Any, *, max_turns: int, timeout: float) -> Callable[[str], tuple[str, str]]:
+    def verify(question: str) -> tuple[str, str]:
+        from .verify import verified_task
+
+        verified = verified_task(question, outputs=["answer"], inputs=dict(handles), knowledge=knowledge, lm=lm, max_turns=max_turns, timeout=timeout)
+        answer = (verified.result.payload or {}).get("answer", "")
+        return str(verified.verdict), "" if answer is None else str(answer)
+
+    return verify
+
+
+def _rlm_explainer(lm: Any, *, timeout: float) -> Callable[[Mapping[str, Any]], Mapping[str, str]]:
+    def explain(case: Mapping[str, Any]) -> Mapping[str, str]:
+        from .runtime import RLM
+
+        result = RLM.task(_EXPLAIN_TASK, inputs=dict(case), outputs={"explanation": str, "proposed_change": str}, lm=lm, max_turns=3, timeout=timeout).run()
+        payload = result.payload or {}
+        return {"explanation": str(payload.get("explanation", "") or ""), "proposed_change": str(payload.get("proposed_change", "") or "")}
+
+    return explain
+
+
+def deepen(
+    report: ReviewReport,
+    *,
+    lm: Any = None,
+    handles: Mapping[str, Any] | None = None,
+    knowledge: Any = None,
+    ask: Callable[[str], Any] | None = None,
+    questions: int = 4,
+    context: ReviewContext | None = None,
+    max_turns: int = 8,
+    timeout: float = 300.0,
+    explain_limit: int = 6,
+    propose: Callable[[str, int], list[str]] | None = None,
+    verify: Callable[[str], tuple[str, str]] | None = None,
+    explain: Callable[[Mapping[str, Any]], Mapping[str, str]] | None = None,
+) -> ReviewReport:
+    """Deeper analysis with the RLM, on top of a review.
+
+    The RLM proposes ``questions`` natural questions from the scope, the
+    priorities and the schema; each gets a reference from ``verified_task``
+    (two blind solves over the sources that must agree, reconciled on
+    disagreement), the agent is asked, and the answer is graded against the
+    figures of the verified answer. Then the RLM explains every question
+    that is not correct and proposes the smallest change. ``propose``,
+    ``verify`` and ``explain`` can be supplied for testing; the defaults use
+    the RLM with ``lm``. Supplied ground truth outranks generated ground
+    truth, and both outrank the RLM's: proposed questions come last.
+    """
+    context = context or report.context
+    if propose is None or verify is None or explain is None:
+        if lm is None:
+            raise ValueError("deepen needs an lm, or propose, verify and explain callables")
+        propose = propose or _rlm_proposer(lm, max_turns=4, timeout=timeout)
+        verify = verify or _rlm_verifier(lm, handles or {}, knowledge, max_turns=max_turns, timeout=timeout)
+        explain = explain or _rlm_explainer(lm, timeout=timeout)
+    notes = list(report.notes)
+    target = next((s.source_id for s in report.schemas if s.kind != "semantic_model"), report.schemas[0].source_id if report.schemas else "source")
+    brief = "\n\n".join(
+        part
+        for part in [
+            context.as_prompt() if context else "",
+            f"Agent instructions:\n{report.snapshot.instructions[:3000]}",
+            *(f"Source {s.name or s.id} instructions:\n{s.instructions[:2000]}" for s in report.snapshot.datasources),
+            "Schema digest:\n" + _schema_digest(report.schemas),
+            "Already asked:\n" + "\n".join(q.text for q in report.questions),
+        ]
+        if part
+    )
+    proposed: list[str] = []
+    if questions > 0:
+        try:
+            proposed = propose(brief, questions)
+        except Exception as exc:  # noqa: BLE001 - the reason is the diagnostic
+            notes.append(f"the RLM could not propose questions: {type(exc).__name__}: {str(exc)[:200]}")
+    new_questions: list[Question] = []
+    new_references: list[Reference] = []
+    new_answers: dict[str, tuple[AgentAnswer, ...]] = {}
+    new_graded: list[Graded] = []
+    for number, text in enumerate(proposed, start=1):
+        qid = f"{target}.d{number}"
+        try:
+            verdict, answer = verify(text)
+        except Exception as exc:  # noqa: BLE001
+            verdict, answer = "failed", f"{type(exc).__name__}: {str(exc)[:200]}"
+        question = Question(id=qid, source_id=target, kind="deep", text=text, spec={"kind": "deep", "verdict": verdict, "reference_answer": answer[:2000]}, reference_query="", execution={"kind": "supplied_text", "text": answer})
+        figures = _reference_figures(answer) if verdict != "failed" else []
+        if figures:
+            reference = Reference(qid, "ok", tuple({"value": figure} for figure in figures), f"RLM reference ({verdict}): {answer[:160]}")
+        elif verdict == "failed":
+            reference = Reference(qid, "failed", note=f"the RLM solves did not agree: {answer[:160]}")
+        else:
+            reference = Reference(qid, "failed", note=f"the RLM's answer carries no figures: {answer[:160]}")
+        new_questions.append(question)
+        new_references.append(reference)
+        if ask is None:
+            new_graded.append(Graded(qid, "no_reference", "not_asked", "no asker was given"))
+            continue
+        try:
+            raw = ask(text)
+            agent = raw if isinstance(raw, AgentAnswer) else AgentAnswer(text=str(raw))
+        except Exception as exc:  # noqa: BLE001 - an agent error is an outcome
+            agent = AgentAnswer(text=f"ERROR: {type(exc).__name__}: {exc}")
+        new_answers[qid] = (agent,)
+        new_graded.append(_with_routing(grade(question, reference, agent), question, [agent], report.snapshot))
+    all_questions = tuple(report.questions) + tuple(new_questions)
+    all_references = tuple(report.references) + tuple(new_references)
+    all_answers: dict[str, tuple[AgentAnswer, ...]] = {**dict(report.answers), **new_answers}
+    all_graded = tuple(report.graded) + tuple(new_graded)
+    ref_by_id = {r.question_id: r for r in all_references}
+    analysis = list(report.analysis)
+    explained = {a.question_id for a in analysis}
+    candidates = [g for g in all_graded if g.outcome not in {"correct", "no_reference"} and g.question_id not in explained][:explain_limit]
+    for g in candidates:
+        question = next(q for q in all_questions if q.id == g.question_id)
+        answers = all_answers.get(g.question_id, ())
+        reference = ref_by_id.get(g.question_id)
+        source = next((s for s in report.snapshot.datasources if s.id == question.source_id), None)
+        case = {
+            "question": question.text,
+            "outcome": g.outcome,
+            "cause": g.cause,
+            "detail": g.detail,
+            "agent_answer": (answers[0].text if answers else "")[:3000],
+            "agent_query": (answers[0].query if answers else "") or "",
+            "reference_query": question.reference_query,
+            "reference_rows": json.dumps([dict(r) for r in (reference.rows if reference else ())][:10], default=str),
+            "agent_instructions": report.snapshot.instructions[:3000],
+            "source_instructions": (source.instructions if source else "")[:3000],
+        }
+        try:
+            verdict = explain(case)
+            analysis.append(Analysis(g.question_id, question.text, str(verdict.get("explanation", "") or ""), str(verdict.get("proposed_change", "") or "")))
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"the RLM could not explain {g.question_id}: {type(exc).__name__}: {str(exc)[:200]}")
+    suggestions = suggest(report.snapshot, report.schemas, report.findings, all_questions, all_references, all_graded)
+    return replace(report, questions=all_questions, references=all_references, answers=all_answers, graded=all_graded, suggestions=suggestions, notes=tuple(notes), analysis=tuple(analysis))
 
 
 # --------------------------------------------------------------------------- #

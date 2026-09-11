@@ -749,3 +749,199 @@ def test_context_scopes_prioritises_and_leads_with_supplied_questions():
     report = review_agent(_snapshot(), _schemas(), {LAKEHOUSE_ID: executor}, lambda q: "no idea", years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=2, context=context)
     markdown = report.to_markdown()
     assert "## Scope and context" in markdown and "Supplied questions: 3" in markdown and report.questions[0].kind == "supplied"
+
+
+# ------------------------------------------------------------------- policy --
+
+
+def test_out_of_scope_topics_are_not_asked_about_and_declines_on_them_are_policy():
+    from fabric_rlm.data_agent_review import ReviewContext, _with_policy, excluded_tables, excluded_terms, Graded
+
+    line = "- Do not claim order status, cancellations, returns, inventory, promotions, quotas, reviews, or profitability because those tables or required business definitions are not in scope."
+    terms = excluded_terms(line)
+    assert {"promotion", "quota", "inventory", "return", "review"} <= terms
+    assert not {"table", "business", "definition", "scope", "claim"} & terms
+    assert excluded_terms("- Do not combine customer and reseller identities.") == set()
+
+    tables = dict(TABLES)
+    tables["factinternetsales"] = TABLES["factinternetsales"] + ("PromotionKey",)
+    tables["dimpromotion"] = ("PromotionKey", "EnglishPromotionCategory")
+    tables["factsalesquota"] = ("SalesQuotaKey", "DateKey", "SalesAmountQuota", "CalendarYear")
+    schema = schema_from_tables(LAKEHOUSE_ID, tables)
+    with_policy = AgentSnapshot(agent_id="a", name="Sales Agent", instructions=AGENT_INSTRUCTIONS + "\n" + line, datasources=_snapshot().datasources)
+    assert excluded_tables(schema, with_policy.instructions) == ["dimpromotion", "factsalesquota"]
+
+    questions = generate_questions(with_policy, [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=40)
+    assert questions and not any("Promotion" in q.text or "quota" in q.text.casefold() for q in questions)
+    without = generate_questions(_snapshot(), [schema], years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=40)
+    assert any("EnglishPromotionCategory" in q.text for q in without)
+
+    question = Question("q", LAKEHOUSE_ID, "top_n", "What are the top 3 EnglishPromotionCategory values by SalesAmount?", {}, "", {"sql": ""})
+    declined = Graded("q", "abstained", "agent_abstained", "the agent declined a question the source answers")
+    generated_only = [AgentAnswer("This is out of scope.", query="SELECT 1", executed=False)]
+    graded = _with_policy(declined, question, generated_only, terms)
+    assert graded.cause == "abstained_by_policy" and "not executed" in graded.detail
+    assert _with_policy(declined, question, generated_only, set()).cause == "agent_abstained"
+
+    report = review_agent(with_policy, [schema], {LAKEHOUSE_ID: _duckdb_executor()}, lambda q: "no", years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=2)
+    assert any("out of scope by the instructions, not asked about: dimpromotion, factsalesquota" in note for note in report.notes)
+
+    context = ReviewContext(scope="Reseller performance by product and territory")
+    assert {"reseller", "performance", "product", "territory"} <= set(context.terms) and context.ranking_terms == context.terms
+    ranked = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=3, context=context)
+    assert all("factresellersales" in q.text for q in ranked)
+
+
+def test_a_change_answer_is_right_by_the_change_or_by_both_totals_and_fewshots_use_dbo():
+    question = Question("q", LAKEHOUSE_ID, "yoy", "What was the year-over-year change?", {}, "", {"sql": ""})
+    reference = Reference("q", "ok", ({"year": 2012, "value": 1100.0}, {"year": 2013, "value": 2850.0}))
+    assert grade(question, reference, "Sales grew from $1,100.00 in 2012 to $2,850.00 in 2013.").outcome == "correct"
+    assert grade(question, reference, "Sales rose 159.1% year over year.").outcome == "correct"
+    assert grade(question, reference, "Sales rose by 1,750 year over year.", agent_rows=[{"change": 1750.0}]).outcome == "correct"
+    assert grade(question, reference, "Sales rose 50% year over year.", agent_rows=[{"change_pct": 50.0}]).outcome == "wrong"
+
+    questions = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=4)
+    total = next(q for q in questions if q.kind == "total_by_year")
+    assert "FROM dbo.factinternetsales" in total.reference_query and "JOIN dbo.dimdate" in total.reference_query
+    assert "dbo." not in total.execution["sql"]
+    bare = AgentSnapshot(agent_id="a", name="Bare", instructions="Answer.", datasources=(AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="lh", instructions="Use the tables.", description="d"),))
+    plain = generate_questions(bare, _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=4)
+    assert "dbo." not in plain[0].reference_query
+
+
+def test_answers_know_whether_their_query_ran():
+    from fabric_rlm.data_agent_review import AgentStep, Graded, ReviewReport, _executed
+
+    assert _executed(()) is True
+    assert _executed((AgentStep("function_call", "analyze.database.nl2code"), AgentStep("function_call", "analyze.database.execute"))) is True
+    assert _executed((AgentStep("function_call", "analyze.database.nl2code"), AgentStep("function_call", "trace.analyze_lakehouse_tables"))) is False
+
+    snapshot, schemas = _snapshot(), _schemas()
+    answer = AgentAnswer("I cannot answer that.", query="SELECT 1", language="sql", steps=(AgentStep("function_call", "analyze.database.nl2code"), AgentStep("function_call", "analyze.database.nl2code")), executed=False)
+    report = ReviewReport(snapshot, tuple(schemas), (), (_question(),), (Reference("q", "ok", ({"year": 2012, "value": 1.0},)),), {"q": (answer,)}, (Graded("q", "abstained", "agent_abstained", "x"),), suggest(snapshot, schemas, (), (), (), ()))
+    text = report.to_markdown()
+    assert "analyze.database.nl2code x2" in text and "executed: no" in text
+
+
+# ------------------------------------------------------- html, learned, deep --
+
+
+def test_html_report_escapes_and_lists_every_section():
+    from types import SimpleNamespace
+
+    from fabric_rlm.data_agent_review import AgentStep, Analysis, Graded, ReviewContext, ReviewReport, summarize_knowledge
+
+    package = SimpleNamespace(
+        package_id="pkg-1",
+        sources=(
+            SimpleNamespace(
+                source_id=LAKEHOUSE_ID,
+                family="lakehouse",
+                status="active",
+                role="numeric_evidence",
+                schema={"factinternetsales": {"columns": {"SalesAmount": {"type": "double"}}}, "dimdate": {"columns": {"DateKey": {"type": "bigint"}, "CalendarYear": {"type": "int"}}}},
+                schema_fingerprint="abcdef0123456789",
+                snapshot_fingerprint="0123456789abcdef",
+                sensitive_columns=("dimcustomer.EmailAddress",),
+                diagnostics={"tables": 2},
+            ),
+        ),
+        operations=(SimpleNamespace(operation="lakehouse.aggregate", required_sources=(LAKEHOUSE_ID,), status="active", grain="row", parameter_schema={"measure": {}, "catalog_source": {}}),),
+        lessons=(SimpleNamespace(kind="declared_definition", subject="Revenue", status="active", confidence="high", structured_rule={"definition": "SUM(SalesAmount)"}, basis=("declared",)),),
+        events=(SimpleNamespace(event_type="profile.created"), SimpleNamespace(event_type="profile.created")),
+        evidence=(),
+    )
+    summary = summarize_knowledge(SimpleNamespace(package=package))
+    assert summary["sources"][0]["shape"] == "2 tables, 3 columns" and summary["operations"][0]["operation"] == "lakehouse.aggregate"
+    assert summary["lessons"][0]["subject"] == "Revenue" and summary["events"] == {"profile.created": 2}
+
+    snapshot, schemas = _snapshot(), _schemas()
+    question = Question("q", LAKEHOUSE_ID, "top_n", "Top <b>3</b> products?", {}, "SELECT TOP 3 x FROM t", {"sql": ""})
+    answer = AgentAnswer("Mountain-200 & Road-350", query="SELECT 1", language="sql", datasource="AWLakehouse", steps=(AgentStep("function_call", "analyze.database.execute"),))
+    report = ReviewReport(
+        snapshot,
+        tuple(schemas),
+        diagnose(snapshot, schemas),
+        (question,),
+        (Reference("q", "ok", ({"EnglishProductName": "Mountain-200", "value": 2500.0},)),),
+        {"q": (answer,)},
+        (Graded("q", "partial", "missing_rows", "one absent"),),
+        suggest(snapshot, schemas, (), (), (), ()),
+        notes=("AWLakehouse: complete years [2012, 2013]",),
+        context=ReviewContext(scope="Sales by product"),
+        knowledge=summary,
+        analysis=(Analysis("q", "Top <b>3</b> products?", "The agent ranked by quantity.", "Add: rank by SalesAmount."),),
+    )
+    page = report.to_html()
+    assert page.startswith("<style>") and "Top &lt;b&gt;3&lt;/b&gt; products?" in page and "Mountain-200 &amp; Road-350" in page
+    for marker in (
+        "<h2>Scope and context",
+        "<h2>Sources</h2>",
+        "<h2>Findings</h2>",
+        "sev-medium",
+        "<h2>Evaluation</h2>",
+        'class="out-partial"',
+        "<details>",
+        "Reference rows",
+        "<h2>Analysis (RLM)</h2>",
+        "Add: rank by SalesAmount.",
+        "<h2>What the RLM learned</h2>",
+        "lakehouse.aggregate",
+        "<h2>Suggested changes</h2>",
+        "<h2>Method</h2>",
+    ):
+        assert marker in page, marker
+    markdown = report.to_markdown()
+    assert "## What the RLM learned" in markdown and "## Analysis (RLM)" in markdown and "declared_definition on Revenue" in markdown
+
+
+def test_deepen_adds_verified_questions_and_explanations_with_fakes():
+    from fabric_rlm.data_agent_review import deepen
+
+    executor = _duckdb_executor()
+    base = review_agent(_snapshot(), _schemas(), {LAKEHOUSE_ID: executor}, lambda q: "no idea", years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=2)
+    briefs = []
+
+    def propose(brief, count):
+        briefs.append(brief)
+        return ["What was internet revenue in 2013?", "How many customers bought in 2013?", "Unverifiable?"][:count]
+
+    def verify(question):
+        if "revenue" in question:
+            return "agree", "Internet revenue in 2013 was $2,850.00."
+        if "customers" in question:
+            return "reconciled", "There were 3 customers."
+        return "failed", "the analysts disagreed"
+
+    def ask(question):
+        return "It was 2,850 dollars." if "revenue" in question else "I do not know."
+
+    explained = []
+
+    def explain(case):
+        explained.append(case["question"])
+        return {"explanation": f"Explanation for {case['question']}", "proposed_change": "Add a few-shot."}
+
+    deeper = deepen(base, questions=3, ask=ask, propose=propose, verify=verify, explain=explain)
+    assert len(deeper.questions) == len(base.questions) + 3 and [q.kind for q in deeper.questions[-3:]] == ["deep"] * 3
+    assert "Schema digest:" in briefs[0] and "Already asked:" in briefs[0]
+    by_id = {g.question_id: g for g in deeper.graded}
+    d1, d2, d3 = [q.id for q in deeper.questions[-3:]]
+    assert by_id[d1].outcome == "correct"
+    assert by_id[d2].outcome in {"wrong", "incomplete", "abstained"}
+    assert by_id[d3].outcome == "no_reference"
+    explained_ids = {a.question_id for a in deeper.analysis}
+    assert d2 in explained_ids and d3 not in explained_ids and all(a.explanation.startswith("Explanation for") for a in deeper.analysis)
+    assert "## Analysis (RLM)" in deeper.to_markdown() and "Add a few-shot." in deeper.to_html()
+    with pytest.raises(ValueError):
+        deepen(base, questions=1)
+
+
+def test_emphasised_scope_terms_rank_first_and_questions_are_renumbered():
+    from fabric_rlm.data_agent_review import ReviewContext
+
+    context = ReviewContext(scope="Internet and reseller sales by product and territory. Focus is on reseller performance.")
+    assert "reseller" in context.emphasised and "internet" not in context.emphasised
+    questions = generate_questions(_snapshot(), _schemas(), years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=4, context=context)
+    assert [q.id.rsplit(".", 1)[-1] for q in questions] == ["q1", "q2", "q3", "q4"]
+    assert all("factresellersales" in q.text for q in questions)

@@ -207,7 +207,13 @@ configuration: the scope in plain words, priorities that order the questions,
 definitions declared to the RLM, the reviewer's own questions with a query or
 an answer as ground truth (graded first), and notes every RLM task receives.
 When nothing can be evaluated, the report says why (year discovery, fact
-tables, date joins).
+tables, date joins). Topics the agent's instructions put out of scope are
+not asked about, and a decline on one is graded as policy. The report renders
+as Markdown or as a self-contained HTML page, includes what `RLM.learn`
+recorded (profiles, registered operations, lessons), and with a language
+model `deepen` adds RLM-proposed questions whose references come from two
+blind solves that must agree, plus an explanation and a proposed change for
+every question that is not correct.
 
 A package can also carry what earlier runs learned about a source. Every turn
 records its source calls as typed telemetry (the grain a semantic-model query
