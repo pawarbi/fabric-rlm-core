@@ -1544,3 +1544,131 @@ def test_selected_table_paths_accept_the_legacy_element_types():
         ],
     }
     assert _selected_table_paths(lambda root_id, token: {"value": tree.get(root_id, [])}) == ["dbo/orders"]
+
+
+# ------------------------------------------------- what the RLM learned, made useful --
+
+
+def _aw_package(lakehouse_id=LAKEHOUSE_ID):
+    from types import SimpleNamespace
+
+    columns = lambda *names: {n: {"type": "string" if n.endswith("Name") or "Email" in n or "Phone" in n else "double"} for n in names}  # noqa: E731
+    return SimpleNamespace(
+        package_id="pkg-aw",
+        sources=(
+            SimpleNamespace(
+                source_id=lakehouse_id,
+                family="lakehouse",
+                status="candidate",
+                role="numeric_evidence",
+                schema={
+                    "factinternetsales": {"columns": {**columns("SalesAmount", "OrderQuantity"), "OrderDateKey": {"type": "bigint"}, "ProductKey": {"type": "bigint"}, "CustomerKey": {"type": "bigint"}}},
+                    "dimdate": {"columns": {"DateKey": {"type": "bigint"}, "CalendarYear": {"type": "int"}, "MonthNumberOfYear": {"type": "int"}}},
+                    "dimcustomer": {"columns": {"CustomerKey": {"type": "bigint"}, **columns("FirstName", "EmailAddress", "Phone")}},
+                    "dimproduct": {"columns": {"ProductKey": {"type": "bigint"}, **columns("EnglishProductName")}},
+                    "factcallcenter": {"columns": {"DateKey": {"type": "bigint"}, "TotalOperators": {"type": "int"}, "Calls": {"type": "int"}}},
+                },
+                schema_fingerprint="abcdef0123456789",
+                snapshot_fingerprint="0123456789abcdef",
+                sensitive_columns=(),
+                diagnostics={"catalog_entry_count": 5},
+            ),
+        ),
+        operations=tuple(
+            SimpleNamespace(operation="lakehouse.aggregate", required_sources=(lakehouse_id,), status="active", grain="lakehouse_aggregate_result", parameter_schema={"aggregate": {}, "catalog_source": {"enum": (table,)}, "groupby": {}, "measure": {}})
+            for table in ("factinternetsales", "dimcustomer", "dimproduct", "factcallcenter")
+        ),
+        lessons=(SimpleNamespace(lesson_id="l1", kind="semantic_fact", subject="Revenue", status="active", confidence="high", structured_rule={"definition": "SUM(SalesAmount)"}, basis=("declared",)),),
+        events=(SimpleNamespace(event_type="profile.created"),),
+        evidence=(),
+    )
+
+
+def test_knowledge_summary_describes_the_selected_tables_as_the_generator_sees_them():
+    from types import SimpleNamespace
+
+    from fabric_rlm.data_agent_review import ReviewReport, summarize_knowledge
+
+    package = _aw_package()
+    source = AgentDataSource(id=LAKEHOUSE_ID, kind="lakehouse", name="AWLakehouse", instructions="", description="Sales.", selected_tables=("dbo/factinternetsales", "dbo/dimdate", "dbo/dimcustomer", "dbo/dimproduct"))
+    snapshot = AgentSnapshot(agent_id="a", name="Sales Agent", instructions="Answer.", datasources=(source,))
+    summary = summarize_knowledge(SimpleNamespace(package=package), snapshot=snapshot)
+    src = summary["sources"][0]
+    assert src["selected"] == 4 and src["shape"] == "5 tables, 17 columns"
+    tables = {t["table"]: t for t in src["tables"]}
+    assert [t["table"] for t in src["tables"]][:1] == ["factinternetsales"]  # selected facts first
+    fact = tables["factinternetsales"]
+    assert fact["selected"] is True and fact["fact"] is True and fact["time_axis"] == "dimdate.CalendarYear via OrderDateKey" and fact["measures"] == ["SalesAmount", "OrderQuantity"] and fact["operation"] is True
+    assert tables["dimcustomer"]["personal"] == ["FirstName", "EmailAddress", "Phone"] and tables["dimcustomer"]["fact"] is False and tables["dimcustomer"]["measures"] == []
+    assert tables["dimdate"]["operation"] is False and tables["factcallcenter"]["selected"] is False and tables["factcallcenter"]["fact"] is True
+    assert summary["operation_kinds"] == [{"operation": "lakehouse.aggregate", "count": 4, "parameters": ["aggregate", "catalog_source", "groupby", "measure"], "objects": 4, "sources": [LAKEHOUSE_ID]}]
+    assert summary["learned"] == [] and summary["runs"] == 0 and summary["lessons"][0]["id"] == "l1"
+
+    unknown = summarize_knowledge(SimpleNamespace(package=package))  # no snapshot: every table, selection unknown
+    assert unknown["sources"][0]["selected"] == 0 and all(t["selected"] is None for t in unknown["sources"][0]["tables"])
+
+    report = ReviewReport(snapshot, (schema_from_tables(LAKEHOUSE_ID, {}),), (), (), (), {}, (), suggest(snapshot, [], (), (), (), ()), knowledge=summary)
+    page = report.to_html()
+    assert "Selected tables as the RLM sees them" in page and "dimdate.CalendarYear via OrderDateKey" in page and "FirstName, EmailAddress, Phone" in page
+    assert "<td>4</td><td>4</td>" in page and "How the review uses it" in page and "no registered operation for dimdate" in page
+    assert "Learned from this review" not in page
+    markdown = report.to_markdown()
+    assert "- factinternetsales: 5 columns, fact; time axis dimdate.CalendarYear via OrderDateKey; measures SalesAmount, OrderQuantity; aggregate operation registered" in markdown
+    assert "- operation lakehouse.aggregate x4 covering 4 object(s)" in markdown and "4 tables selected for the agent" in markdown
+
+
+def test_deepen_lets_the_package_learn_from_the_verified_runs():
+    from types import SimpleNamespace
+
+    from fabric_rlm.data_agent_review import deepen, summarize_knowledge
+
+    executor = _duckdb_executor()
+    package = _aw_package()
+    knowledge = SimpleNamespace(package=package)
+    base = review_agent(_snapshot(), _schemas(), {LAKEHOUSE_ID: executor}, lambda q: "no idea", years={LAKEHOUSE_ID: [2012, 2013]}, top=3, limit_per_source=2, knowledge=knowledge)
+    assert base.knowledge["sources"][0]["tables"]  # the review already describes the tables
+    runs = [SimpleNamespace(payload={"answer": "x"}, evidence=("e1",))]
+    enriched_calls = []
+
+    def enrich(knowledge_in, results):
+        enriched_calls.append((knowledge_in, list(results)))
+        learned = SimpleNamespace(lesson_id="l2", kind="preferred_strategy", subject="factinternetsales", status="candidate", confidence="medium", structured_rule={"use": "lakehouse.aggregate"}, basis=("verified run",))
+        return SimpleNamespace(package=SimpleNamespace(**{**vars(package), "lessons": package.lessons + (learned,), "evidence": ("e1",)}))
+
+    deeper = deepen(base, questions=1, ask=lambda q: "It was 2,850 dollars.", propose=lambda brief, n: ["What was internet revenue in 2013?"], verify=lambda q: ("agree", "Internet revenue in 2013 was $2,850.00."), explain=lambda case: {"explanation": "x"}, knowledge=knowledge, enrich=enrich, runs=runs)
+    assert enriched_calls == [(knowledge, runs)]
+    assert deeper.knowledge["runs"] == 1 and deeper.knowledge["evidence"] == 1 and [l["id"] for l in deeper.knowledge["learned"]] == ["l2"]
+    assert deeper.learned_knowledge is enriched_calls[0][0] or deeper.learned_knowledge.package.evidence == ("e1",)
+    page = deeper.to_html()
+    assert "Learned from this review" in page and "preferred_strategy" in page and "learned_knowledge" in page and "1 lesson(s) learned from them" in page
+    assert "learned from this review: preferred_strategy on factinternetsales" in deeper.to_markdown()
+
+    def failing(knowledge_in, results):
+        raise RuntimeError("no fingerprints")
+
+    stubborn = deepen(base, questions=1, ask=lambda q: "x", propose=lambda brief, n: ["What was internet revenue in 2013?"], verify=lambda q: ("agree", "$2,850.00"), explain=lambda case: {"explanation": "x"}, knowledge=knowledge, enrich=failing, runs=runs)
+    assert any("could not learn from the RLM's 1 run(s): RuntimeError: no fingerprints" in note for note in stubborn.notes) and stubborn.learned_knowledge is None
+    quiet = deepen(base, questions=1, ask=lambda q: "x", propose=lambda brief, n: ["What was internet revenue in 2013?"], verify=lambda q: ("agree", "$2,850.00"), explain=lambda case: {"explanation": "x"}, knowledge=knowledge, enrich=lambda k, r: SimpleNamespace(package=package), runs=runs)
+    assert quiet.knowledge["learned"] == [] and quiet.knowledge["runs"] == 1 and "Nothing yet: the 1 run(s) left 0 evidence record(s)" in quiet.to_html()
+    assert summarize_knowledge(knowledge)["learned"] == []
+
+
+def test_the_verifier_captures_evidence_and_keeps_its_runs(monkeypatch):
+    from fabric_rlm import verify as verify_module
+    from fabric_rlm.data_agent_review import _rlm_verifier
+
+    seen = []
+
+    class Result:
+        payload = {"answer": "Total was 1,100."}
+
+    def fake_verified_task(task, **kwargs):
+        seen.append(kwargs)
+        return type("Verified", (), {"result": Result(), "verdict": "agree", "attempts": [Result(), Result()]})()
+
+    monkeypatch.setattr(verify_module, "verified_task", fake_verified_task)
+    runs: list = []
+    assert _rlm_verifier({"model": "x"}, {}, knowledge=object(), max_turns=2, timeout=10, results=runs)("q") == ("agree", "Total was 1,100.")
+    assert seen[-1]["capture_evidence"] is True and len(runs) == 2
+    _rlm_verifier({"model": "x"}, {LAKEHOUSE_ID: "handle"}, knowledge=None, max_turns=2, timeout=10, results=runs)("q")
+    assert "capture_evidence" not in seen[-1] and len(runs) == 4

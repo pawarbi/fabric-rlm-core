@@ -125,6 +125,18 @@
   to the selection whether it has schemas enabled (`Tables/dbo/<table>`) or
   not (`Tables/<table>`, which the agent still lists under `dbo`), falling
   back to every table only when neither layout resolves.
+- **What the RLM learned, made useful.** The report section used to list
+  every registered operation (43 identical rows for a 43-table lakehouse)
+  and fingerprints. It now says how the review uses the package, then shows
+  the agent's selected tables as the RLM sees them (fact or dimension, the
+  time axis and measures the questions rely on, personal-data columns, and
+  whether a registered aggregate operation covers the table), groups the
+  operations by kind, lists the lessons, and, after the deeper analysis,
+  what the package learned from the RLM's own verified runs: `deepen`
+  captures evidence on every solve, enriches the package through
+  `RLM.enrich`, reports the lessons that appeared, and returns the enriched
+  package as `report.learned_knowledge` for saving. `summarize_knowledge`
+  takes the schemas and the snapshot for this.
 
 ### Changed
 

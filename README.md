@@ -233,11 +233,16 @@ joins follow key and id columns to the table that carries them, and when the
 column names say nothing the column types the profile recorded decide what is
 a measure, a time column or a grouping column. Topics the agent's instructions put out of scope are
 not asked about, and a decline on one is graded as policy. The report renders
-as Markdown or as a self-contained HTML page, includes what `RLM.learn`
-recorded (profiles, registered operations, lessons), and with a language
-model `deepen` adds RLM-proposed questions whose references come from two
-blind solves that must agree, plus an explanation and a proposed change for
-every question that is not correct.
+as Markdown or as a self-contained HTML page and includes what `RLM.learn`
+recorded, read the way the review uses it: the selected tables as the RLM
+sees them (fact or dimension, time axis, measures, personal-data columns,
+whether an aggregate operation covers them), the operations by kind and the
+lessons. With a language model `deepen` adds RLM-proposed questions whose
+references come from two blind solves that must agree, plus an explanation
+and a proposed change for every question that is not correct; those solves
+run with evidence capture, the package learns from them through
+`RLM.enrich`, the report lists the lessons that appeared, and the enriched
+package is returned as `report.learned_knowledge` for saving.
 
 A package can also carry what earlier runs learned about a source. Every turn
 records its source calls as typed telemetry (the grain a semantic-model query

@@ -349,6 +349,8 @@ if LM:
         print("outcomes after the deeper analysis:", report.score())
         for item in report.analysis:
             print(f"- {item.question_id}: {item.explanation[:200]}")
+        learned = (report.knowledge or {}).get("learned") or []
+        print(f"the package learned {len(learned)} lesson(s) from the RLM's {(report.knowledge or {}).get('runs', 0)} verified run(s)" + ("; report.learned_knowledge holds the enriched package, save it with a knowledge store to start the next review from it" if learned else ""))
 else:
     print("LM is not set; skipping the deeper analysis")
 

@@ -1249,8 +1249,10 @@ def _fact_tables(schema: SourceSchema) -> list[str]:
     joins = _heuristic_joins(schema)
     referenced = _referenced_tables(schema, joins)
     for table, columns in schema.tables.items():
+        if re.match(r"^(?:[a-z0-9_]+\.)?dim[_a-z]", table, re.IGNORECASE):
+            continue  # a dimension by name (dimproduct carries prices and a start date, and is still not a fact)
         measures = _measure_columns(schema, table)
-        if measures and not any(_MEASURE_HINT.search(c) for c in measures) and (table in referenced or table.casefold().startswith("dim")):
+        if measures and not any(_MEASURE_HINT.search(c) for c in measures) and table in referenced:
             continue  # numeric columns on a table others reference are attributes of a dimension, not measures
         dates = [c for c in columns if _is_time_column(schema, table, c)]
         joined_time = any(
@@ -3437,34 +3439,78 @@ def _short_json(value: Any, limit: int = 240) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
-def summarize_knowledge(knowledge: Any) -> dict[str, Any]:
-    """What ``RLM.learn`` recorded, as plain data for the report: profiles, operations, lessons, events."""
-    package = getattr(knowledge, "package", knowledge)
-    sources: list[dict[str, Any]] = []
-    for profile in getattr(package, "sources", ()) or ():
-        schema = getattr(profile, "schema", None) or {}
-        family = str(getattr(profile, "family", "") or "")
-        if family == "lakehouse":
-            counts = [len(entry.get("columns") or {}) for entry in schema.values() if isinstance(entry, Mapping)]
-            shape = f"{len(counts)} tables, {sum(counts)} columns"
-        elif family == "semantic_model":
-            shape = f"{len(schema.get('columns') or {})} columns, {len(schema.get('measures') or {})} measures, {len(schema.get('relationships') or {})} relationships"
-        else:
-            shape = f"{sum(1 for entry in schema.values() if isinstance(entry, Mapping))} columns"
-        diagnostics = getattr(profile, "diagnostics", None) or {}
-        sources.append(
+_PERSONAL_HINT = re.compile(r"(e_?mail|phone|mobile|fax|address|birth|\bdob\b|ssn|social_?security|passport|national_?id|tax_?id|salary|password|secret|token|credit|card_?number|iban|routing|first_?name|last_?name|middle_?name|full_?name|surname|gender|marital)", re.IGNORECASE)
+
+_KNOWLEDGE_USE = (
+    "How the review uses it: the profile (tables, column types, joins) is the schema behind every generated question and its reference; "
+    "the registered operations let the RLM's second opinion aggregate any covered table without writing SQL; "
+    "the lessons carry the definitions the instructions and the reviewer declared into every RLM task; "
+    "the personal-data columns show what the agent could expose from the tables it can read."
+)
+
+
+def _time_axis_text(date: Mapping[str, Any] | None) -> str:
+    if not date:
+        return ""
+    if date.get("year"):
+        return f"{date['date_table']}.{date['year']} via {date['column']}"
+    if date.get("date_table"):
+        return f"{date['date_table']}.{date['timestamp_column']} via {date['column']}"
+    return str(date["column"])
+
+
+def _table_summaries(schema: SourceSchema, selected_paths: Sequence[str], covered: Collection[str]) -> list[dict[str, Any]]:
+    """One row per table of a lakehouse profile, the agent's selected tables and the facts first."""
+    joins = _heuristic_joins(schema)
+    facts = set(_fact_tables(schema))
+    selected = {p.replace("/", ".").casefold() for p in selected_paths} | {p.rsplit("/", 1)[-1].casefold() for p in selected_paths}
+    rows: list[dict[str, Any]] = []
+    for table, columns in schema.tables.items():
+        names = {table.casefold(), table.rsplit(".", 1)[-1].casefold()}
+        date = _date_join(schema, table, joins) if table in facts else None
+        rows.append(
             {
-                "source_id": str(getattr(profile, "source_id", "") or ""),
-                "family": family,
-                "status": str(getattr(profile, "status", "") or ""),
-                "role": str(getattr(profile, "role", "") or ""),
-                "shape": shape,
-                "schema_fingerprint": str(getattr(profile, "schema_fingerprint", "") or "")[:12],
-                "snapshot_fingerprint": str(getattr(profile, "snapshot_fingerprint", "") or "")[:12],
-                "sensitive_columns": [str(c) for c in (getattr(profile, "sensitive_columns", ()) or ())],
-                "diagnostics": {str(k): v for k, v in diagnostics.items() if isinstance(v, (str, int, float, bool))} if isinstance(diagnostics, Mapping) else {},
+                "table": table,
+                "columns": len(columns),
+                "selected": bool(names & selected) if selected else None,
+                "fact": table in facts,
+                "time_axis": _time_axis_text(date),
+                "measures": _measure_columns(schema, table)[:3] if table in facts else [],
+                "personal": [c for c in columns if _PERSONAL_HINT.search(c)][:6],
+                "operation": bool(names & set(covered)),
             }
         )
+    rows.sort(key=lambda r: (r["selected"] is not True, not r["fact"], r["table"].casefold()))
+    return rows
+
+
+def _lesson_dict(lesson: Any) -> dict[str, Any]:
+    return {
+        "id": str(getattr(lesson, "lesson_id", "") or ""),
+        "kind": str(getattr(lesson, "kind", "") or ""),
+        "subject": str(getattr(lesson, "subject", "") or ""),
+        "status": str(getattr(lesson, "status", "") or ""),
+        "confidence": str(getattr(lesson, "confidence", "") or ""),
+        "rule": _short_json(getattr(lesson, "structured_rule", None) or {}),
+        "basis": [str(b) for b in (getattr(lesson, "basis", ()) or ())],
+    }
+
+
+def summarize_knowledge(knowledge: Any, schemas: Sequence[SourceSchema] | None = None, snapshot: AgentSnapshot | None = None) -> dict[str, Any]:
+    """What ``RLM.learn`` recorded, as plain data for the report, and what the review makes of it.
+
+    ``sources`` carry the profiles; a lakehouse profile also lists its
+    ``tables`` as the generator sees them (the agent's selected tables and
+    the facts first): whether the table is a fact, the time axis and the
+    measures the questions rely on, personal-data columns, and whether a
+    registered aggregate operation covers it. ``operation_kinds`` groups the
+    registered operations by name; ``lessons`` are the facts every RLM task
+    receives; ``learned`` and ``runs`` are filled by :func:`deepen` when the
+    package learned from the RLM's own runs.
+    """
+    package = getattr(knowledge, "package", knowledge)
+    schema_by_id = {s.source_id: s for s in (schemas or ())}
+    selected_by_id = {s.id: tuple(s.selected_tables) for s in (snapshot.datasources if snapshot is not None else ())}
     operations = [
         {
             "operation": str(getattr(op, "operation", "") or ""),
@@ -3476,26 +3522,68 @@ def summarize_knowledge(knowledge: Any) -> dict[str, Any]:
         }
         for op in getattr(package, "operations", ()) or ()
     ]
-    lessons = [
-        {
-            "kind": str(getattr(lesson, "kind", "") or ""),
-            "subject": str(getattr(lesson, "subject", "") or ""),
-            "status": str(getattr(lesson, "status", "") or ""),
-            "confidence": str(getattr(lesson, "confidence", "") or ""),
-            "rule": _short_json(getattr(lesson, "structured_rule", None) or {}),
-            "basis": [str(b) for b in (getattr(lesson, "basis", ()) or ())],
-        }
-        for lesson in getattr(package, "lessons", ()) or ()
-    ]
+    covered = {o.casefold() for op in operations for o in op["objects"]}
+    kinds: dict[str, dict[str, Any]] = {}
+    for op in operations:
+        entry = kinds.setdefault(op["operation"], {"operation": op["operation"], "count": 0, "parameters": op["parameters"], "objects": 0, "sources": []})
+        entry["count"] += 1
+        entry["objects"] += len(op["objects"])
+        entry["sources"].extend(s for s in op["sources"] if s not in entry["sources"])
+    sources: list[dict[str, Any]] = []
+    for profile in getattr(package, "sources", ()) or ():
+        schema = getattr(profile, "schema", None) or {}
+        family = str(getattr(profile, "family", "") or "")
+        source_id = str(getattr(profile, "source_id", "") or "")
+        if family == "lakehouse":
+            counts = [len(entry.get("columns") or {}) for entry in schema.values() if isinstance(entry, Mapping)]
+            shape = f"{len(counts)} tables, {sum(counts)} columns"
+        elif family == "semantic_model":
+            shape = f"{len(schema.get('columns') or {})} columns, {len(schema.get('measures') or {})} measures, {len(schema.get('relationships') or {})} relationships"
+        else:
+            shape = f"{sum(1 for entry in schema.values() if isinstance(entry, Mapping))} columns"
+        diagnostics = getattr(profile, "diagnostics", None) or {}
+        source_schema = schema_by_id.get(source_id)
+        if source_schema is None and family == "lakehouse":
+            try:
+                source_schema = schema_from_profile(profile, source_id=source_id)
+            except Exception:  # noqa: BLE001 - an odd profile still gets its summary line
+                source_schema = None
+        tables = _table_summaries(source_schema, selected_by_id.get(source_id, ()), covered) if source_schema is not None and source_schema.kind == "lakehouse" else []
+        sources.append(
+            {
+                "source_id": source_id,
+                "family": family,
+                "status": str(getattr(profile, "status", "") or ""),
+                "role": str(getattr(profile, "role", "") or ""),
+                "shape": shape,
+                "schema_fingerprint": str(getattr(profile, "schema_fingerprint", "") or "")[:12],
+                "snapshot_fingerprint": str(getattr(profile, "snapshot_fingerprint", "") or "")[:12],
+                "sensitive_columns": [str(c) for c in (getattr(profile, "sensitive_columns", ()) or ())],
+                "diagnostics": {str(k): v for k, v in diagnostics.items() if isinstance(v, (str, int, float, bool))} if isinstance(diagnostics, Mapping) else {},
+                "selected": len(selected_by_id.get(source_id, ())),
+                "tables": tables,
+            }
+        )
+    lessons = [_lesson_dict(lesson) for lesson in (getattr(package, "lessons", ()) or ())]
     events = Counter(str(getattr(event, "event_type", "") or "") for event in (getattr(package, "events", ()) or ()))
     return {
         "package_id": str(getattr(package, "package_id", "") or ""),
         "sources": sources,
         "operations": operations,
+        "operation_kinds": sorted(kinds.values(), key=lambda k: (-k["count"], k["operation"])),
         "lessons": lessons,
+        "learned": [],
+        "runs": 0,
         "events": dict(sorted(events.items())),
         "evidence": len(getattr(package, "evidence", ()) or ()),
     }
+
+
+def _shown_tables(source: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The agent's selected tables, or every table when the selection is unknown."""
+    tables = list(source.get("tables") or [])
+    selected = [t for t in tables if t.get("selected") is True]
+    return selected or tables
 
 
 def _cell(value: Any) -> str:
@@ -3547,6 +3635,7 @@ class ReviewReport:
     analysis: tuple[Analysis, ...] = ()  # the RLM's explanations, from deepen()
     discovered: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None  # discover_drivers() per source
     rules: tuple[Rule, ...] = ()  # the instructions' checkable rules, see extract_rules
+    learned_knowledge: Any = None  # the package after RLM.enrich over the deeper analysis runs, see deepen(); save it to reuse the lessons
 
     def compliance(self) -> list[dict[str, Any]]:
         """Per rule: how many answers it applied to, how many broke it, and which questions."""
@@ -3581,19 +3670,37 @@ class ReviewReport:
 
     def _knowledge_lines(self) -> list[str]:
         k = self.knowledge or {}
+        runs = f", {k['runs']} run(s) of the RLM's own references" if k.get("runs") else ""
+        learned = f", {len(k['learned'])} lesson(s) learned from them" if k.get("learned") else ""
         lines = [
             "## What the RLM learned",
-            f"Package {k.get('package_id', '')}: {len(k.get('sources', []))} source(s) profiled, {len(k.get('operations', []))} registered operation(s), {len(k.get('lessons', []))} lesson(s), {k.get('evidence', 0)} evidence record(s).",
+            f"Package {k.get('package_id', '')}: {len(k.get('sources', []))} source(s) profiled, {len(k.get('operations', []))} registered operation(s), {len(k.get('lessons', []))} lesson(s), {k.get('evidence', 0)} evidence record(s){runs}{learned}.",
+            "",
+            _KNOWLEDGE_USE,
+            "",
         ]
         for src in k.get("sources", []):
             sensitive = f"; sensitive columns: {', '.join(src['sensitive_columns'][:8])}" if src.get("sensitive_columns") else ""
-            lines.append(f"- {src['source_id']} ({src['family']}, {src['status']}, role {src['role']}): {src['shape']}; schema fingerprint {src['schema_fingerprint']}; snapshot {src['snapshot_fingerprint']}{sensitive}")
-        for op in k.get("operations", []):
-            grain = f", grain {op['grain']}" if op.get("grain") else ""
-            objects = f" ({', '.join(op['objects'])})" if op.get("objects") else ""
-            lines.append(f"- operation {op['operation']}{objects} on {', '.join(op['sources'])} ({op['status']}{grain}); parameters: {', '.join(op['parameters']) or 'none'}")
+            selected = f"; {src['selected']} tables selected for the agent" if src.get("selected") else ""
+            lines.append(f"- {src['source_id']} ({src['family']}, {src['status']}, role {src['role']}): {src['shape']}{selected}; schema fingerprint {src['schema_fingerprint']}; snapshot {src['snapshot_fingerprint']}{sensitive}")
+            shown = _shown_tables(src)
+            if shown and not src.get("selected"):
+                lines.append(f"  - the agent's selection was not readable; all {len(shown)} tables follow")
+            for table in shown[:60]:
+                role = "fact" if table["fact"] else "dimension"
+                axis = f"; time axis {table['time_axis'] or 'none'}; measures {', '.join(table['measures']) or 'none'}" if table["fact"] else ""
+                personal = f"; personal data: {', '.join(table['personal'])}" if table.get("personal") else ""
+                lines.append(f"  - {table['table']}: {table['columns']} columns, {role}{axis}{personal}; aggregate operation {'registered' if table['operation'] else 'none'}")
+        for kind in k.get("operation_kinds", []):
+            lines.append(f"- operation {kind['operation']} x{kind['count']} covering {kind['objects']} object(s) on {', '.join(kind['sources'])}; parameters: {', '.join(kind['parameters']) or 'none'}")
         for lesson in k.get("lessons", []):
             lines.append(f"- lesson {lesson['kind']} on {lesson['subject']} ({lesson['status']}, {lesson['confidence']}): {lesson['rule']}")
+        if k.get("runs"):
+            if k.get("learned"):
+                for lesson in k["learned"]:
+                    lines.append(f"- learned from this review: {lesson['kind']} on {lesson['subject']} ({lesson['status']}, {lesson['confidence']}): {lesson['rule']}")
+            else:
+                lines.append(f"- learned from this review: nothing yet; the {k['runs']} run(s) left {k.get('evidence', 0)} evidence record(s) and no lesson met the promotion policy")
         if k.get("events"):
             lines.append("- events: " + ", ".join(f"{name} x{n}" for name, n in k["events"].items()))
         lines.append("")
@@ -3695,23 +3802,58 @@ class ReviewReport:
         if self.knowledge:
             k = self.knowledge
             parts.append("<h2>What the RLM learned</h2>")
-            parts.append(f'<div class="muted">Package {esc(str(k.get("package_id", "")))}: {len(k.get("sources", []))} source(s) profiled, {len(k.get("operations", []))} registered operation(s), {len(k.get("lessons", []))} lesson(s), {k.get("evidence", 0)} evidence record(s).</div>')
+            runs = f", {k['runs']} run(s) of the RLM's own references" if k.get("runs") else ""
+            learned = f", {len(k['learned'])} lesson(s) learned from them" if k.get("learned") else ""
+            parts.append(f'<div class="muted">Package {esc(str(k.get("package_id", "")))}: {len(k.get("sources", []))} source(s) profiled, {len(k.get("operations", []))} registered operation(s), {len(k.get("lessons", []))} lesson(s), {k.get("evidence", 0)} evidence record(s){esc(runs)}{esc(learned)}.</div>')
+            parts.append(f"<p>{esc(_KNOWLEDGE_USE)}</p>")
             if k.get("sources"):
-                parts.append("<table><tr><th>Source</th><th>Family</th><th>Status</th><th>Role</th><th>Profile</th><th>Schema fingerprint</th><th>Snapshot</th><th>Sensitive columns</th></tr>")
+                parts.append("<table><tr><th>Source</th><th>Family</th><th>Status</th><th>Role</th><th>Profile</th><th>Selected for the agent</th><th>Schema fingerprint</th><th>Snapshot</th><th>Sensitive columns</th></tr>")
                 for src in k["sources"]:
-                    parts.append(f"<tr><td>{esc(src['source_id'])}</td><td>{esc(src['family'])}</td><td>{esc(src['status'])}</td><td>{esc(src['role'])}</td><td>{esc(src['shape'])}</td><td><code>{esc(src['schema_fingerprint'])}</code></td><td><code>{esc(src['snapshot_fingerprint'])}</code></td><td>{esc(', '.join(src.get('sensitive_columns', [])[:8]))}</td></tr>")
+                    parts.append(f"<tr><td>{esc(src['source_id'])}</td><td>{esc(src['family'])}</td><td>{esc(src['status'])}</td><td>{esc(src['role'])}</td><td>{esc(src['shape'])}</td><td>{src.get('selected') or 'unknown'}</td><td><code>{esc(src['schema_fingerprint'])}</code></td><td><code>{esc(src['snapshot_fingerprint'])}</code></td><td>{esc(', '.join(src.get('sensitive_columns', [])[:8]))}</td></tr>")
                 parts.append("</table>")
-            if k.get("operations"):
-                parts.append("<h3>Registered operations</h3><table><tr><th>Operation</th><th>Sources</th><th>Status</th><th>Grain</th><th>Parameters</th></tr>")
-                for op in k["operations"]:
-                    objects = f" {esc(', '.join(op['objects']))}" if op.get("objects") else ""
-                    parts.append(f"<tr><td><code>{esc(op['operation'])}</code>{objects}</td><td>{esc(', '.join(op['sources']))}</td><td>{esc(op['status'])}</td><td>{esc(op['grain'])}</td><td>{esc(', '.join(op['parameters']))}</td></tr>")
+                for src in k["sources"]:
+                    shown = _shown_tables(src)
+                    if not shown:
+                        continue
+                    title = "Selected tables as the RLM sees them" if src.get("selected") else f"Tables as the RLM sees them (the agent's selection was not readable; all {len(shown)} shown)"
+                    parts.append(f"<h3>{esc(title)}</h3><table><tr><th>Table</th><th>Columns</th><th>Role</th><th>Time axis</th><th>Measures</th><th>Personal data</th><th>Aggregate operation</th></tr>")
+                    for table in shown[:60]:
+                        role = "fact" if table["fact"] else "dimension"
+                        axis = esc(table["time_axis"] or ("none" if table["fact"] else ""))
+                        parts.append(f"<tr><td><code>{esc(table['table'])}</code></td><td>{table['columns']}</td><td>{role}</td><td>{axis}</td><td>{esc(', '.join(table['measures']))}</td><td>{esc(', '.join(table['personal']))}</td><td>{'registered' if table['operation'] else 'none'}</td></tr>")
+                    parts.append("</table>")
+                    facts = [t for t in shown if t["fact"]]
+                    notes_ = []
+                    if facts:
+                        notes_.append(f"{len(facts)} of {len(shown)} tables are facts the generator can ask about")
+                    missing_axis = [t["table"] for t in facts if not t["time_axis"]]
+                    if missing_axis:
+                        notes_.append("no time axis for " + ", ".join(missing_axis))
+                    uncovered = [t["table"] for t in shown if not t["operation"]]
+                    if uncovered:
+                        notes_.append("no registered operation for " + ", ".join(uncovered[:8]) + (" and more" if len(uncovered) > 8 else ""))
+                    if notes_:
+                        parts.append(f'<div class="muted">{esc("; ".join(notes_))}.</div>')
+            if k.get("operation_kinds"):
+                parts.append("<h3>Registered operations</h3><table><tr><th>Operation</th><th>Count</th><th>Objects covered</th><th>Sources</th><th>Parameters</th></tr>")
+                for kind in k["operation_kinds"]:
+                    parts.append(f"<tr><td><code>{esc(kind['operation'])}</code></td><td>{kind['count']}</td><td>{kind['objects']}</td><td>{esc(', '.join(kind['sources']))}</td><td>{esc(', '.join(kind['parameters']))}</td></tr>")
                 parts.append("</table>")
             if k.get("lessons"):
                 parts.append("<h3>Lessons</h3><table><tr><th>Kind</th><th>Subject</th><th>Status</th><th>Confidence</th><th>Rule</th></tr>")
                 for lesson in k["lessons"]:
                     parts.append(f"<tr><td>{esc(lesson['kind'])}</td><td>{esc(lesson['subject'])}</td><td>{esc(lesson['status'])}</td><td>{esc(lesson['confidence'])}</td><td><code>{esc(lesson['rule'])}</code></td></tr>")
                 parts.append("</table>")
+            if k.get("runs"):
+                parts.append("<h3>Learned from this review</h3>")
+                if k.get("learned"):
+                    parts.append("<table><tr><th>Kind</th><th>Subject</th><th>Status</th><th>Confidence</th><th>Rule</th><th>Basis</th></tr>")
+                    for lesson in k["learned"]:
+                        parts.append(f"<tr><td>{esc(lesson['kind'])}</td><td>{esc(lesson['subject'])}</td><td>{esc(lesson['status'])}</td><td>{esc(lesson['confidence'])}</td><td><code>{esc(lesson['rule'])}</code></td><td>{esc(', '.join(lesson.get('basis', [])))}</td></tr>")
+                    parts.append("</table>")
+                    parts.append('<div class="muted">The enriched package is on the report as learned_knowledge; save it with a knowledge store to start the next review from these lessons.</div>')
+                else:
+                    parts.append(f'<div class="muted">Nothing yet: the {k["runs"]} run(s) left {k.get("evidence", 0)} evidence record(s) and no lesson met the promotion policy.</div>')
             if k.get("events"):
                 parts.append('<div class="muted">Events: ' + esc(", ".join(f"{name} x{n}" for name, n in k["events"].items())) + "</div>")
         parts.append("<h2>Suggested changes</h2>")
@@ -3991,7 +4133,7 @@ def review_agent(
         source_rules = rules_by_source.get(question.source_id, ())
         graded.append(replace(final, violations=check_rules(source_rules, question, collected, channel_words.get(question.source_id, ()))))
     suggestions = suggest(snapshot, schemas, findings, questions, references, graded)
-    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context, knowledge=summarize_knowledge(knowledge) if knowledge is not None else None, discovered=discovered, rules=tuple(r for rules in rules_by_source.values() for r in rules))
+    return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context, knowledge=summarize_knowledge(knowledge, schemas, snapshot) if knowledge is not None else None, discovered=discovered, rules=tuple(r for rules in rules_by_source.values() for r in rules))
 
 
 # --------------------------------------------------------------------------- #
@@ -4042,12 +4184,17 @@ def _rlm_proposer(lm: Any, *, max_turns: int, timeout: float) -> Callable[[str, 
     return propose
 
 
-def _rlm_verifier(lm: Any, handles: Mapping[str, Any], knowledge: Any, *, max_turns: int, timeout: float) -> Callable[[str], tuple[str, str]]:
+def _rlm_verifier(lm: Any, handles: Mapping[str, Any], knowledge: Any, *, max_turns: int, timeout: float, results: list[Any] | None = None) -> Callable[[str], tuple[str, str]]:
+    """Verified references through the RLM; every solve lands in ``results`` (with evidence when a package is bound) so the package can learn from them."""
+
     def verify(question: str) -> tuple[str, str]:
         from .verify import verified_task
 
         # a bound knowledge package brings its own source handles; naming them again as inputs is a conflict
-        verified = verified_task(question, outputs=["answer"], inputs=None if knowledge is not None else dict(handles), knowledge=knowledge, lm=lm, max_turns=max_turns, timeout=timeout)
+        extra = {"capture_evidence": True} if knowledge is not None else {}
+        verified = verified_task(question, outputs=["answer"], inputs=None if knowledge is not None else dict(handles), knowledge=knowledge, lm=lm, max_turns=max_turns, timeout=timeout, **extra)
+        if results is not None:
+            results.extend(list(getattr(verified, "attempts", None) or [verified.result]))
         answer = (verified.result.payload or {}).get("answer", "")
         return str(verified.verdict), "" if answer is None else str(answer)
 
@@ -4080,6 +4227,8 @@ def deepen(
     propose: Callable[[str, int], list[str]] | None = None,
     verify: Callable[[str], tuple[str, str]] | None = None,
     explain: Callable[[Mapping[str, Any]], Mapping[str, str]] | None = None,
+    enrich: Callable[[Any, Sequence[Any]], Any] | None = None,
+    runs: list[Any] | None = None,
 ) -> ReviewReport:
     """Deeper analysis with the RLM, on top of a review.
 
@@ -4092,13 +4241,21 @@ def deepen(
     ``verify`` and ``explain`` can be supplied for testing; the defaults use
     the RLM with ``lm``. Supplied ground truth outranks generated ground
     truth, and both outrank the RLM's: proposed questions come last.
+
+    When a ``knowledge`` package is bound, every verified solve runs with
+    evidence capture and the package learns from those runs through
+    ``RLM.enrich`` (``enrich`` replaces it for testing; ``runs`` seeds the
+    list of results): the lessons that appear are reported as learned from
+    this review and the enriched package is returned on the report as
+    ``learned_knowledge`` for the caller to save.
     """
     context = context or report.context
+    runs = runs if runs is not None else []
     if propose is None or verify is None or explain is None:
         if lm is None:
             raise ValueError("deepen needs an lm, or propose, verify and explain callables")
         propose = propose or _rlm_proposer(lm, max_turns=4, timeout=timeout)
-        verify = verify or _rlm_verifier(lm, handles or {}, knowledge, max_turns=max_turns, timeout=timeout)
+        verify = verify or _rlm_verifier(lm, handles or {}, knowledge, max_turns=max_turns, timeout=timeout, results=runs)
         explain = explain or _rlm_explainer(lm, timeout=timeout)
     notes = list(report.notes)
     target = next((s.source_id for s in report.schemas if s.kind != "semantic_model"), report.schemas[0].source_id if report.schemas else "source")
@@ -4199,7 +4356,22 @@ def deepen(
         except Exception as exc:  # noqa: BLE001
             notes.append(f"the RLM could not explain {g.question_id}: {type(exc).__name__}: {str(exc)[:200]}")
     suggestions = suggest(report.snapshot, report.schemas, report.findings, all_questions, all_references, all_graded)
-    return replace(report, questions=all_questions, references=all_references, answers=all_answers, graded=all_graded, suggestions=suggestions, notes=tuple(notes), analysis=tuple(analysis))
+    knowledge_summary, learned_knowledge = report.knowledge, report.learned_knowledge
+    if runs and knowledge is not None:
+        try:
+            if enrich is None:
+                from .runtime import RLM
+
+                enrich = RLM.enrich
+            enriched = enrich(knowledge, list(runs))
+            before = {str(getattr(lesson, "lesson_id", "")) for lesson in (getattr(getattr(knowledge, "package", knowledge), "lessons", ()) or ())}
+            knowledge_summary = summarize_knowledge(enriched, report.schemas, report.snapshot)
+            knowledge_summary["learned"] = [_lesson_dict(lesson) for lesson in (getattr(getattr(enriched, "package", enriched), "lessons", ()) or ()) if str(getattr(lesson, "lesson_id", "")) not in before]
+            knowledge_summary["runs"] = len(runs)
+            learned_knowledge = enriched
+        except Exception as exc:  # noqa: BLE001 - learning is a bonus; the review stands without it
+            notes.append(f"the package could not learn from the RLM's {len(runs)} run(s): {type(exc).__name__}: {str(exc)[:200]}")
+    return replace(report, questions=all_questions, references=all_references, answers=all_answers, graded=all_graded, suggestions=suggestions, notes=tuple(notes), analysis=tuple(analysis), knowledge=knowledge_summary, learned_knowledge=learned_knowledge)
 
 
 # --------------------------------------------------------------------------- #
