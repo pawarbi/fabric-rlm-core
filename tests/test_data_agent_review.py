@@ -1989,3 +1989,12 @@ def test_a_period_written_as_text_is_a_time_axis_without_a_day_grain():
     assert [(r["quarter"], r["value"]) for r in by_kind["quarter_trend"].rows] == [(1, 1600.0), (2, 1200.0), (3, 1700.0), (4, 400.0)]
     assert not any(h.code == "date_as_text" for h in hints) and not any(h.code == "vocabulary" and "quarter" in h.message for h in hints)
     assert any(h.code == "coverage" and "2024 to 2025" in h.message for h in hints)
+
+
+def test_a_territory_group_is_a_place_even_when_the_context_talks_about_territories():
+    from fabric_rlm.data_agent_review import _heuristic_joins, _paths_by_role, attribute_paths
+
+    _executor, schema = _driver_lakehouse()
+    paths = attribute_paths(schema, "factresellersales", _heuristic_joins(schema))
+    roles = {r: p["column"] for r, p in _paths_by_role(paths, terms=("territory", "reseller")).items()}
+    assert roles["category"] == "EnglishProductCategoryName" and roles["place"] == "SalesTerritoryRegion" and roles["entity"] == "ResellerName"

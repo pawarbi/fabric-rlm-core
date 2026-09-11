@@ -2141,8 +2141,8 @@ _EXTENDED_KINDS = frozenset({"month_series", "month_trend", "quarter_trend", "dr
 def _paths_by_role(paths: Sequence[Mapping[str, Any]], terms: Collection[str] = ()) -> dict[str, Mapping[str, Any]]:
     """The path to use for each role a question needs: who (entity), what (product), group (category), where (place)."""
 
-    def pick(pattern: re.Pattern[str], *, prefer_depth: int | None = None) -> Mapping[str, Any] | None:
-        candidates = [p for p in paths if pattern.search(str(p["column"])) and not _LANGUAGE_VARIANT.match(str(p["column"]))]
+    def pick(pattern: re.Pattern[str], *, prefer_depth: int | None = None, exclude: re.Pattern[str] | None = None) -> Mapping[str, Any] | None:
+        candidates = [p for p in paths if pattern.search(str(p["column"])) and not _LANGUAGE_VARIANT.match(str(p["column"])) and not (exclude and exclude.search(str(p["column"])))]
         if not candidates:
             return None
         return sorted(
@@ -2156,7 +2156,7 @@ def _paths_by_role(paths: Sequence[Mapping[str, Any]], terms: Collection[str] = 
 
     roles: dict[str, Mapping[str, Any]] = {}
     for role, pattern, depth in (("entity", _ENTITY_HINT, None), ("product", _PRODUCT_HINT, None), ("category", _CATEGORY_HINT, -1), ("place", _PLACE_HINT, None)):
-        chosen = pick(pattern, prefer_depth=depth)
+        chosen = pick(pattern, prefer_depth=depth, exclude=_PLACE_HINT if role == "category" else None)  # a territory group is a place, not a category
         if chosen is not None:
             roles[role] = chosen
     if not roles and paths:
