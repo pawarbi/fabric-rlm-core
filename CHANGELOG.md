@@ -204,7 +204,17 @@
   `Sweep.to_html()` and `Report.to_html()` render a self-contained
   dashboard with headline cards, trend lines, a waterfall of drivers, a
   driver scatter (share of base against share of change), the tables and
-  the queries behind every figure; `save(path)` writes it as a page.
+  the queries behind every figure; `save(path)` writes it as a page. The
+  page leads with the answer: up to three takeaways, one sentence each with
+  the figure, the comparison, the driver and the caveat, linked to their
+  detail, then a short paragraph with the picture, then the supporting
+  detail. Every compared period passes a completeness check first: a month
+  with fewer than half the rows of a typical month before it, or a year
+  with fewer than half the other's months of data, is flagged as coverage
+  rather than business change, set aside from the takeaways and shown last
+  in the driver analysis, whatever date the data runs to. One verification
+  statement, built from the same counts as the header badge, says how many
+  figures were recomputed, how many were not, and what those carry.
   Notebook: `examples/notebooks/rlm_what_moved.ipynb`. Measures no longer
   include order numbers, codes or text columns.
 - **Monday Morning Brief** (`fabric_rlm.brief`, or `report(source, "monday

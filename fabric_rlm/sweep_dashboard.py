@@ -392,22 +392,53 @@ def _groups_table(d: "Decomposition") -> str:
     return f"<table><tr><th>{esc(_word(d.path))}</th><th>Before</th><th>After</th><th>Change</th><th>Share of change</th><th>Share of base</th></tr>{''.join(rows)}</table>"
 
 
-def _kpi_cards(result: "Sweep") -> str:
-    cards = []
-    flagged = {id(f.movement): f.flags for f in result.findings}
+def _flag_text(flag: str) -> str:
+    """The flag without its machine prefix (``incomplete:``, ``coverage:``, ``volume:``, ``small base:``)."""
+    return flag.split(": ", 1)[1] if ": " in flag and flag.split(": ", 1)[0] in {"incomplete", "coverage", "volume", "small base"} else flag
+
+
+def _measure_cards(result: "Sweep") -> str:
+    """One card per measure: its comparisons as rows, a thin period marked, nothing repeated."""
+    groups: dict[str, list[Any]] = {}
     for m in result.ledger:
         if m.path is not None or f"{m.fact}|{m.measure}" in result.collapsed:
             continue
-        direction = _direction(m.delta)
-        flags = flagged.get(id(m), ())
-        cards.append(
-            f'<div class="kpi"><div class="t" title="{esc(result.phrase(m))}">{esc(result.phrase(m).capitalize())}</div>'
-            f'<div class="v">{esc(_compact(m.after_value))}</div>'
-            f'<div class="d {direction}">{_arrow(m.delta)} {esc(_pct(m.pct))} <span class="flat">{esc(m.comparison.label)}, from {esc(_compact(m.before_value))}</span></div>'
-            + (f'<div class="flat" style="font-size:12px">{esc(flags[0])}</div>' if flags else "")
-            + "</div>"
-        )
+        groups.setdefault(f"{m.fact}|{m.measure}", []).append(m)
+    cards = []
+    for key, movements in groups.items():
+        latest = next((m for m in movements if m.comparison.kind == "year"), movements[0])
+        rows = []
+        for m in movements:
+            marker = ' <span class="badge warn" title="' + esc(next((_flag_text(f) for f in m.flags if f.startswith(("incomplete:", "coverage:"))), "")) + '">incomplete period</span>' if not m.trusted else ""
+            rows.append(f'<div class="d {_direction(m.delta) if m.trusted else "flat"}">{_arrow(m.delta)} {esc(_pct(m.pct))} <span class="flat">{esc(m.comparison.label)}, {esc(_compact(m.before_value))} to {esc(_compact(m.after_value))}</span>{marker}</div>')
+        cards.append(f'<div class="kpi"><div class="t" title="{esc(result.phrase(latest))}">{esc(result.phrase(latest).capitalize())}</div><div class="v">{esc(_compact(latest.after_value))} <span class="flat" style="font-size:12px;font-weight:400">{esc(_period_word(latest))}</span></div>{"".join(rows)}</div>')
     return f'<div class="kpis">{"".join(cards)}</div>' if cards else ""
+
+
+def _period_word(m: Any) -> str:
+    from .sweep import _period_label
+
+    return _period_label(m.comparison.after)
+
+
+def _takeaways(result: "Sweep") -> str:
+    takeaways = result.takeaways()
+    aside = result.set_aside()
+    if not takeaways and not aside:
+        return ""
+    parts = []
+    if takeaways:
+        parts.append(f"<h2>{'Three things to know' if len(takeaways) >= 3 else 'To know'}</h2>")
+        items = []
+        for t in takeaways:
+            link = f' <a href="#{t.anchor}" style="color:#2563eb;text-decoration:none;font-size:12px">detail</a>' if t.anchor else ""
+            items.append(f"<li>{esc(t.text)}{link}</li>")
+        parts.append(f'<ol style="margin:0 0 8px 20px;padding:0;font-size:15px;line-height:1.5">{"".join(items)}</ol>')
+    parts.append(f'<div class="card" style="padding:10px 16px"><div class="caption" style="margin:0 0 4px">The picture</div><div>{esc(result.narrative())}</div></div>')
+    if aside:
+        parts.append('<div class="caption">Set aside, not read as business change:</div>')
+        parts.append("".join(f'<div class="note">{esc(t.text)}</div>' for t in aside[:6]))
+    return "".join(parts)
 
 
 def _trends(result: "Sweep") -> str:
@@ -427,9 +458,11 @@ def _finding(result: "Sweep", finding: "SweepFinding", index: int, *, others_as_
 
     m = finding.movement
     best = finding.best
-    parts = [f'<div class="card"><h3>{index}. {esc(result.headline(m))}</h3>']
+    parts = [f'<div class="card" id="{esc(finding.anchor)}"><h3>{index}. {esc(result.headline(m))}</h3>']
+    if not finding.trusted:
+        parts.append('<div class="note"><b>Not read as business change.</b> One of the periods is incomplete; the figures below are shown for completeness.</div>')
     for flag in finding.flags:
-        parts.append(f'<div class="note">{esc(flag)}</div>')
+        parts.append(f'<div class="note">{esc(_flag_text(flag))}</div>')
     if best is not None:
         parts.append(f'<div class="story"><b>By {esc(_word(best.path))}:</b> {esc(_concentration_sentence(best))}</div>')
         parts.append('<div class="grid2">' + _waterfall_svg(best, f"What moved {m.comparison.label}, by {_word(best.path)}") + _scatter_svg(best, f"Who moved more than their size, by {_word(best.path)}") + "</div>")
@@ -464,17 +497,25 @@ def render(result: "Sweep") -> str:
     parts = [f"<style>{_STYLE}</style>", '<div class="wm">']
     parts.append(f"<h1>What moved in {esc(result.source)}</h1>")
     parts.append(f'<div class="sub">{esc(kind)}, {esc(years)}: {len(result.findings)} material movement(s) from {len(result.ledger)} figures measured by the source in {result.queries} of {result.budget} queries{esc(_seconds(result.elapsed))}. {_badge(result)}</div>')
-    kpis = _kpi_cards(result)
-    if kpis:
-        parts.append("<h2>Headline movements</h2>")
-        parts.append(kpis)
+    parts.extend(_recap_body(result))
+    parts.append("</div>")
+    return "\n".join(parts)
+
+
+def _recap_body(result: "Sweep") -> list[str]:
+    """The answer first, then the supporting detail: takeaways and the picture, the measures, the trends, the driver analysis, the notes, the verification statement."""
+    parts = [_takeaways(result)]
+    cards = _measure_cards(result)
+    if cards:
+        parts.append("<h2>Movements by measure</h2>")
+        parts.append(cards)
     trends = _trends(result)
     if trends:
         parts.append("<h2>Trends</h2>")
         parts.append(trends)
     if result.findings:
         parts.append("<h2>Driver analysis</h2>")
-        parts.append('<div class="caption">Each material movement is split by every grouping the joins reach. The waterfall shows which groups carried the change; the scatter shows whether they moved more than their size (above the diagonal) or merely in proportion to it.</div>')
+        parts.append('<div class="caption">Each material movement is split by every grouping the joins reach. The waterfall shows which groups carried the change; the scatter shows whether they moved more than their size (above the diagonal) or merely in proportion to it. Movements on incomplete periods come last and are not read as business change.</div>')
         for index, finding in enumerate(result.findings, start=1):
             parts.append(_finding(result, finding, index))
     else:
@@ -485,9 +526,8 @@ def render(result: "Sweep") -> str:
     if result.notes:
         parts.append("<h2>Notes</h2>")
         parts.append("".join(f'<div class="caption">{esc(note)}</div>' for note in result.notes))
-    parts.append('<div class="foot">Every figure on this page was computed by the source with the query shown under its finding, and recomputed by an independent per-period query. No language model was involved in producing the numbers.</div>')
-    parts.append("</div>")
-    return "\n".join(parts)
+    parts.append(f'<div class="foot">{esc(result.verification_statement())} No language model was involved in producing the numbers or the sentences.</div>')
+    return parts
 
 
 def document(result: "Sweep") -> str:
@@ -525,7 +565,7 @@ def _reading(spec: Any) -> str:
 def _trend_report(report: Any) -> list[str]:
     result = report.sweep
     parts = []
-    kpis = _kpi_cards(result)
+    kpis = _measure_cards(result)
     if kpis:
         parts.append("<h2>Latest movements</h2>")
         parts.append(kpis)
@@ -556,7 +596,7 @@ def _top_movers_report(report: Any) -> list[str]:
 
     result = report.sweep
     parts = []
-    kpis = _kpi_cards(result)
+    kpis = _measure_cards(result)
     if kpis:
         parts.append("<h2>Headline movements</h2>")
         parts.append(kpis)
@@ -584,6 +624,7 @@ def render_report(report: Any) -> str:
     elif spec.kind == "top_movers":
         parts.extend(_top_movers_report(report))
     elif spec.kind == "root_cause":
+        parts.append(_takeaways(result))
         if result.findings:
             for index, finding in enumerate(result.findings, start=1):
                 parts.append(_finding(result, finding, index, others_as_tables=3))
@@ -594,27 +635,16 @@ def render_report(report: Any) -> str:
             parts.append("<h2>The measure by month</h2>")
             parts.append(trends)
     else:
-        kpis = _kpi_cards(result)
-        if kpis:
-            parts.append("<h2>Headline movements</h2>")
-            parts.append(kpis)
-        trends = _trends(result)
-        if trends:
-            parts.append("<h2>Trends</h2>")
-            parts.append(trends)
-        if result.findings:
-            parts.append("<h2>Driver analysis</h2>")
-            for index, finding in enumerate(result.findings, start=1):
-                parts.append(_finding(result, finding, index))
-        else:
-            parts.append('<div class="card">No material movement to decompose.</div>')
+        parts.extend(_recap_body(result))
+        parts.append("</div>")
+        return "\n".join(parts)
     if result.mismatches:
         parts.append("<h2>Figures that did not recompute</h2>")
         parts.append("".join(f'<div class="note">{esc(text)}</div>' for text in result.mismatches[:10]))
     if result.notes:
         parts.append("<h2>Notes</h2>")
         parts.append("".join(f'<div class="caption">{esc(note)}</div>' for note in result.notes))
-    parts.append('<div class="foot">Every figure on this page was computed by the source with the query shown under its finding, and recomputed by an independent per-period query. No language model was involved in producing the numbers.</div>')
+    parts.append(f'<div class="foot">{esc(result.verification_statement())} No language model was involved in producing the numbers or the sentences.</div>')
     parts.append("</div>")
     return "\n".join(parts)
 
@@ -801,6 +831,9 @@ def render_brief(brief: Any) -> str:
         else '<span class="badge muted">nothing to recompute</span>' if brief.verified else '<span class="badge muted">not recomputed</span>'
     )
     parts.append(f'<div class="sub">Week of {esc(brief.week_label)}. {esc(kind)}, {len(brief.metrics)} metric(s), {brief.queries} of {brief.budget} queries{esc(_seconds(brief.elapsed))}. {badge}</div>')
+    narrative = brief.narrative()
+    if narrative:
+        parts.append(f'<div class="card" style="padding:10px 16px"><div class="caption" style="margin:0 0 4px">The week in short</div><div style="font-size:15px">{esc(narrative)}</div></div>')
     if brief.metrics:
         parts.append("<h2>In one look</h2>")
         cards = []
@@ -824,7 +857,7 @@ def render_brief(brief: Any) -> str:
     if brief.notes:
         parts.append("<h2>Notes</h2>")
         parts.append("".join(f'<div class="caption">{esc(note)}</div>' for note in brief.notes))
-    parts.append('<div class="foot">Every figure was computed by the source and, where it is reported as a movement, recomputed by an independent query. The seasonal expectation, level shifts, patterns and associations are computed from the source\'s own weekly history; no language model wrote a number.</div>')
+    parts.append(f'<div class="foot">{esc(brief.verification_statement())} The seasonal expectation, level shifts, patterns and associations are computed from the source\'s own weekly history. No language model wrote a number or a sentence.</div>')
     parts.append("</div>")
     return "\n".join(parts)
 

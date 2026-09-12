@@ -469,3 +469,67 @@ def test_a_report_over_a_semantic_model_uses_the_model_vocabulary():
     assert cause.spec.period == {"year": 2013} and cause.sweep.findings[0].movement.comparison.label == "2012 to 2013"
     assert cause.sweep.findings[0].best.groups[0].group == "Yellow" and cause.sweep.mismatches == ()
     assert "TREATAS" not in cause.sweep.findings[0].movement.query and "Root cause analysis: Sales model" in cause.to_html()
+
+
+# --------------------------------------------------------------------------- #
+# Leading with the answer: takeaways, completeness, one verification statement
+# --------------------------------------------------------------------------- #
+
+
+def test_the_recap_leads_with_grounded_takeaways_and_sets_incomplete_periods_aside():
+    probe = _saas_payments()
+    result = what_moved(probe, years=[2023, 2024], budget=100)
+    takeaways = result.takeaways()
+    assert [t.text for t in takeaways] == [
+        "Payments amount rose 100% 2023 to 2024, 300 to 600, led by Technology (100% of the change on 33% of the base); on a small base (4 rows before, 4 after).",
+        "Payments satisfaction score fell 25% on average 2023 to 2024, 4 to 3; on a small base (4 rows before, 4 after).",
+    ]
+    assert all(t.trusted for t in takeaways) and takeaways[0].anchor and takeaways[0].finding is not None
+    aside = result.set_aside()
+    assert [t.text for t in aside] == [
+        "Payments amount rose 100% June 2023 to June 2024, but the data ends on 2024-06-15, so June 2024 is incomplete",
+        "Payments satisfaction score fell 25% June 2023 to June 2024, but the data ends on 2024-06-15, so June 2024 is incomplete",
+    ]
+    assert not any(t.trusted for t in aside) and result.findings[-1].trusted is False  # incomplete periods come last in the driver analysis
+    narrative = result.narrative()
+    assert narrative.startswith("2 measures (payments amount, payments satisfaction score) were compared over 2 period pairs; 2 of the 2 comparisons on complete periods moved by 5% or more.")
+    assert "The largest is payments amount, up 100% 2023 to 2024." in narrative and "sits with Technology (sector)" in narrative and "2 movements involve an incomplete period and are set aside" in narrative
+    statement = result.verification_statement()
+    assert statement.startswith(f"Every one of the {len(result.ledger):,} figures was computed by the source") and f"{result.recomputed:,} of them" in statement and "all matched" in statement
+    html = result.to_html()
+    assert "Three things to know" not in html and "<h2>To know</h2>" in html and takeaways[0].text in html and f'href="#{takeaways[0].anchor}"' in html and f'id="{takeaways[0].anchor}"' in html
+    assert "The picture" in html and "Set aside, not read as business change" in html and "Not read as business change." in html
+    assert f"{result.recomputed} figures recomputed, 0 mismatches" in html and f"{result.recomputed:,} of them" in html and "Headline movements" not in html and "Movements by measure" in html
+    markdown = result.to_markdown()
+    assert "To know:\n1. Payments amount rose 100% 2023 to 2024" in markdown and "set aside" in markdown
+
+
+def _thin_december():
+    """A year of daily sales where December holds two days of rows: the data runs to the 27th, so the month looks complete by its end date but not by its coverage."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("CREATE TABLE sales (sale_date DATE, region VARCHAR, amount DOUBLE)")
+    import datetime as dt
+
+    day = dt.date(2024, 1, 1)
+    while day <= dt.date(2024, 12, 27):
+        if day.month < 12 or day.day >= 26:
+            for region in ("North", "South"):
+                con.execute("INSERT INTO sales VALUES (?, ?, ?)", [day.isoformat(), region, 100.0])
+        day += dt.timedelta(days=1)
+    tables = {"sales": ("sale_date", "region", "amount")}
+    types = {"sales": {"sale_date": "DATE", "region": "VARCHAR", "amount": "DOUBLE"}}
+    return LakehouseProbe.from_executor(_executor(con, tables), schema_from_tables(SOURCE, tables, types=types), name="Shop")
+
+
+def test_a_thin_month_fails_the_coverage_check_even_when_the_data_runs_to_its_end():
+    result = what_moved(_thin_december(), budget=50)
+    total = next(m for m in result.ledger if m.path is None)
+    assert total.comparison.label == "November 2024 to December 2024" and (total.before_value, total.after_value) == (6000.0, 400.0)
+    assert total.trusted is False and total.flags[0] == "coverage: December 2024 holds 4 rows against a typical 62 a month, so it looks incomplete and the movement is coverage, not business"
+    assert not any(flag.startswith("incomplete:") for flag in total.flags)  # the end-date rule would have passed: the 27th is late in the month
+    assert result.takeaways() == [] and len(result.set_aside()) == 1 and "but December 2024 holds 4 rows against a typical 62 a month" in result.set_aside()[0].text
+    assert result.findings and result.findings[0].trusted is False
+    html = result.to_html()
+    assert "incomplete period" in html and "Set aside, not read as business change" in html and "Not read as business change." in html
+    assert "1 movement involves an incomplete period and is set aside" in result.narrative()

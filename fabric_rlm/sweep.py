@@ -90,6 +90,7 @@ __all__ = [
     "SemanticModelProbe",
     "Sweep",
     "SweepFinding",
+    "Takeaway",
     "sweep",
     "verify_sweep",
     "what_moved",
@@ -160,6 +161,12 @@ class Movement:
     group: Any = None  # the group's value; None at the total level
     parent: tuple[tuple[str, Any], ...] = ()  # (column, value) of the groups above this one in a drill
     aggregate: str = "sum"  # sum, or avg for a score or a rate
+    flags: tuple[str, ...] = ()  # at the total level: coverage, incomplete period, small base
+
+    @property
+    def trusted(self) -> bool:
+        """Whether both periods are complete enough for the movement to mean something about the business."""
+        return not any(flag.startswith(("incomplete:", "coverage:")) for flag in self.flags)
 
     @property
     def delta(self) -> float:
@@ -217,6 +224,29 @@ class SweepFinding:
     def lead_drill(self) -> Decomposition | None:
         """The drill worth showing: the best one when it says something, else None."""
         return self.drill[0] if self.drill and self.drill[0].concentration in _INFORMATIVE else None
+
+    @property
+    def trusted(self) -> bool:
+        return not any(flag.startswith(("incomplete:", "coverage:")) for flag in self.flags)
+
+    @property
+    def anchor(self) -> str:
+        m = self.movement
+        return re.sub(r"[^a-z0-9]+", "-", f"f-{m.fact}-{m.measure}-{m.comparison.kind}-{m.comparison.after.get('year', '')}-{m.comparison.after.get('month', '')}".casefold()).strip("-")
+
+
+@dataclass(frozen=True)
+class Takeaway:
+    """One sentence a reader can act on, with the movement behind it and whether its periods were complete."""
+
+    text: str
+    movement: Movement
+    finding: SweepFinding | None = None
+    trusted: bool = True
+
+    @property
+    def anchor(self) -> str | None:
+        return self.finding.anchor if self.finding is not None else None
 
 
 @dataclass(frozen=True)
@@ -283,10 +313,109 @@ class Sweep:
             text += f"; {self.recomputed} figure(s) recomputed independently, {len(self.mismatches)} mismatch(es)"
         return text + "."
 
+    def verification_statement(self) -> str:
+        """One sentence that the header badge and the footer both follow, so they cannot disagree."""
+        total = len(self.ledger)
+        if not self.verified:
+            return f"Every one of the {total:,} figures was computed by the source with the query kept next to it; none was recomputed in this run."
+        rest = total - self.recomputed
+        text = f"Every one of the {total:,} figures was computed by the source with the query kept next to it. {self.recomputed:,} of them, the reported movements and the groups of their leading decompositions, were recomputed by independent per-period queries"
+        text += f" with {len(self.mismatches)} mismatch{'es' if len(self.mismatches) != 1 else ''}." if self.mismatches else " and all matched."
+        if rest > 0:
+            text += f" The other {rest:,} carry their recomputation query but were not rerun."
+        return text
+
+    def takeaways(self, limit: int = 3) -> list[Takeaway]:
+        """The movements a reader should know first: complete periods only, the largest relative change per measure, years before months, one per measure."""
+        by_finding = {id(f.movement): f for f in self.findings}
+        candidates: list[tuple[tuple[Any, ...], Movement]] = []
+        seen: set[str] = set()
+        priority = {"year": 0, "same_month_prior_year": 1, "same_week_prior_year": 1, "custom": 1, "month": 2, "week": 2}
+        for m in sorted((m for m in self.ledger if m.path is None and m.pct is not None and m.trusted and abs(m.pct) >= 0.05), key=lambda m: (priority.get(m.comparison.kind, 3), -abs(m.pct or 0))):
+            key = f"{m.fact}|{m.measure}"
+            if key in seen or key in self.collapsed:
+                continue
+            seen.add(key)
+            candidates.append(((priority.get(m.comparison.kind, 3), any(flag.startswith("small base:") for flag in m.flags), -abs(m.pct or 0)), m))
+        out: list[Takeaway] = []
+        for _key, m in sorted(candidates, key=lambda item: item[0])[:limit]:
+            finding = by_finding.get(id(m))
+            out.append(Takeaway(self._takeaway_text(m, finding), m, finding, True))
+        return out
+
+    def set_aside(self) -> list[Takeaway]:
+        """Movements whose periods were not complete: shown, never interpreted."""
+        by_finding = {id(f.movement): f for f in self.findings}
+        out: list[Takeaway] = []
+        seen: set[str] = set()
+        for m in self.ledger:
+            if m.path is not None or m.trusted:
+                continue
+            key = f"{m.fact}|{m.measure}|{m.comparison.label}"
+            if key in seen or f"{m.fact}|{m.measure}" in self.collapsed:
+                continue
+            seen.add(key)
+            reason = next((flag for flag in m.flags if flag.startswith(("incomplete:", "coverage:"))), "")
+            out.append(Takeaway(f"{self.phrase(m).capitalize()} {'fell' if m.delta < 0 else 'rose'} {abs(m.pct or 0):.0%} {m.comparison.label}, but {reason.split(': ', 1)[-1]}", m, by_finding.get(id(m)), False))
+        return out
+
+    def _takeaway_text(self, m: Movement, finding: SweepFinding | None) -> str:
+        direction = "fell" if m.delta < 0 else "rose"
+        averaged = " on average" if m.aggregate == "avg" else ""
+        text = f"{self.phrase(m).capitalize()} {direction} {abs(m.pct or 0):.0%}{averaged} {m.comparison.label}, {_num(m.before_value)} to {_num(m.after_value)}"
+        best = finding.best if finding is not None else None
+        if best is not None and best.groups and m.aggregate == "sum":
+            lead = best.groups[0]
+            share, base = best.share_of_change(lead), best.share_of_base(lead)
+            if best.concentration in {"single", "concentrated"} and share is not None and base is not None:
+                text += f", led by {_label(lead.group)} ({share:.0%} of the change on {base:.0%} of the base)"
+            elif best.concentration == "proportional":
+                text += f", spread across {_word(best.path)} groups in proportion to their size"
+            elif best.concentration == "offsetting":
+                opposite = [g for g in best.groups if g.delta * m.delta < 0]
+                text += f", with {_label(lead.group)} moving one way and {_label(opposite[0].group) if opposite else 'others'} the other"
+            elif best.concentration == "broad":
+                text += f", spread broadly across {_word(best.path)} groups"
+        if any(flag.startswith("volume:") for flag in m.flags):
+            text += "; the row count moved as much as the value, so this is volume, not a change in rate"
+        small = next((flag for flag in m.flags if flag.startswith("small base:")), None)
+        if small:
+            text += f"; on a small base ({small.split(': ', 1)[1]})"
+        return text + "."
+
+    def narrative(self) -> str:
+        """The picture in a short paragraph: what was compared, what moved and where, what was set aside. Every number is from the ledger."""
+        totals = [m for m in self.ledger if m.path is None and f"{m.fact}|{m.measure}" not in self.collapsed]
+        measures = sorted({self.phrase(m) for m in totals})
+        if not totals:
+            return "No measure could be compared across the periods the time axis supports."
+        trusted = [m for m in totals if m.trusted]
+        material = [m for m in trusted if abs(m.pct or 0) >= 0.05]
+        parts = [f"{len(measures)} measure{'s' if len(measures) != 1 else ''} ({', '.join(measures)}) were compared over {len({m.comparison.label for m in totals})} period pairs; {len(material)} of the {len(trusted)} comparisons on complete periods moved by 5% or more."]
+        takeaways = self.takeaways(3)
+        if takeaways:
+            first = takeaways[0].movement
+            parts.append(f"The largest is {self.phrase(first)}, {'down' if first.delta < 0 else 'up'} {abs(first.pct or 0):.0%} {first.comparison.label}.")
+        concentrated = [f for f in self.findings if f.trusted and f.best is not None and f.best.concentration in {"single", "concentrated"} and f.best.groups]
+        if concentrated:
+            leaders = {f"{_label(f.best.groups[0].group)} ({_word(f.best.path)})" for f in concentrated[:3]}
+            parts.append(f"Where a movement is concentrated, it sits with {', '.join(sorted(leaders))}.")
+        aside = self.set_aside()
+        if aside:
+            parts.append(f"{len(aside)} movement{'s' if len(aside) != 1 else ''} involve{'s' if len(aside) == 1 else ''} an incomplete period and {'is' if len(aside) == 1 else 'are'} set aside rather than read as business change.")
+        return " ".join(parts)
+
     def to_markdown(self) -> str:
+        head = [self.summary()]
+        takeaways = self.takeaways()
+        if takeaways:
+            head.append("")
+            head.append("Three things to know:" if len(takeaways) >= 3 else "To know:")
+            head.extend(f"{i}. {t.text}" for i, t in enumerate(takeaways, start=1))
+        head.extend(["", self.narrative(), ""])
         body = "\n".join(("- " + line[2:] if line.startswith("  ") else f"- **{line}**") for line in self.lines())
         notes = "\n".join(f"- {n}" for n in self.notes)
-        return "\n".join(part for part in (self.summary(), body, notes) if part)
+        return "\n".join(part for part in ("\n".join(head), body, notes) if part)
 
     def to_html(self) -> str:
         """The dashboard: headline cards, trends, and for every finding a waterfall, a driver scatter, the tables and the queries."""
@@ -1023,6 +1152,7 @@ def sweep(
                 words[key] = _channel_measure(vocabulary.table(table), vocabulary.measure(measure.strip("[]")))
                 series[key] = _points(months, index, fact["aggregate"], fact_years)
                 run_totals = [_movement(run, dialect, fact, comparison, ()) for comparison in wanted_comparisons]
+                run_totals = [replace(t, flags=_flags(t, t.comparison, max_date, months)) for t in run_totals]
                 ledger.extend(run_totals)
                 twin = next((m for m, other in measured if _same_figures(other, run_totals)), None)
                 if twin is not None:
@@ -1030,13 +1160,13 @@ def sweep(
                     notes.append(f"{words[key]} moves within 1% of {words[f'{table}|{twin}']} in every comparison, so it was not decomposed separately")
                     continue
                 measured.append((measure, run_totals))
-                totals.extend((t, fact, chosen, _flags(t, t.comparison, max_date)) for t in run_totals)
+                totals.extend((t, fact, chosen, t.flags) for t in run_totals)
     except _Budget:
         exhausted = True
         notes.append(f"the budget of {budget} queries was spent before every movement was measured; nothing was decomposed")
 
     material = [item for item in totals if item[0].material(min_pct)]
-    material.sort(key=lambda item: (any("small base" in flag for flag in item[3]), -abs(item[0].pct or 0)))
+    material.sort(key=lambda item: (not item[0].trusted, any("small base" in flag for flag in item[3]), -abs(item[0].pct or 0)))  # complete periods first: a thin month is measured, never explained first
     for index, (total, fact, chosen, flags) in enumerate(material):
         if exhausted:
             break
@@ -1063,7 +1193,7 @@ def sweep(
             decompositions.sort(key=lambda d: (-_rank(d), -d.explained))
             drill.sort(key=lambda d: (-_rank(d), -d.explained))
             findings.append(SweepFinding(total, tuple(decompositions), tuple(drill), flags))
-    findings.sort(key=lambda f: (any("coverage" in flag for flag in f.flags), -(_rank(f.best) if f.best else -1), -abs(f.movement.pct or 0)))
+    findings.sort(key=lambda f: (not f.trusted, any(flag.startswith("volume:") for flag in f.flags), -(_rank(f.best) if f.best else -1), -abs(f.movement.pct or 0)))
     return Sweep(probe.name, probe.kind, tuple(findings), tuple(ledger), spent, budget, tuple(years_used), tuple(notes), words, series, collapsed=tuple(collapsed))
 
 
@@ -1262,21 +1392,68 @@ def _rank(d: Decomposition) -> int:
     return {"single": 4, "concentrated": 3, "offsetting": 2, "broad": 1, "proportional": 0, "none": -1}.get(d.concentration, 0)
 
 
-def _flags(total: Movement, comparison: Comparison, max_date: str | None) -> tuple[str, ...]:
+def _flags(total: Movement, comparison: Comparison, max_date: str | None, months: Sequence[Mapping[str, Any]] = ()) -> tuple[str, ...]:
+    """What a reader must see before the number: an incomplete period (by the data's end or by its row coverage), volume rather than rate, a small base.
+
+    Flags start with ``incomplete:``, ``coverage:``, ``volume:`` or ``small base:`` so
+    the callers can tell a period that must not be interpreted from a caveat.
+    """
     flags: list[str] = []
-    pct, rows_pct = total.pct, total.rows_pct
-    if total.aggregate == "sum" and pct is not None and rows_pct is not None and rows_pct * pct > 0 and abs(rows_pct) >= 0.5 * abs(pct):
-        flags.append(f"row counts moved {rows_pct:+.0%} against {pct:+.0%} in value, so this is volume or coverage rather than a change in rate")
-    if max_date and comparison.after.get("month") is not None:
+    if comparison.after.get("month") is None and comparison.after.get("start") is None:
+        thin = _thin_year(comparison.before, comparison.after, months)
+        if thin:
+            flags.append(thin)
+    else:
+        for period in (comparison.after, comparison.before):
+            coverage = _coverage_flag(period, months)
+            if coverage:
+                flags.append(coverage)
+    if max_date and comparison.after.get("month") is not None and not any(f.startswith("coverage:") for f in flags):
         try:
             end = _dt.date.fromisoformat(max_date)
         except ValueError:
             end = None
         if end is not None and end.year == int(comparison.after["year"]) and end.month == int(comparison.after["month"]) and end.day < 25:
-            flags.append(f"the data ends on {max_date}, so {_month_name(comparison.after)} is incomplete")
+            flags.append(f"incomplete: the data ends on {max_date}, so {_month_name(comparison.after)} is incomplete")
+    pct, rows_pct = total.pct, total.rows_pct
+    if total.aggregate == "sum" and pct is not None and rows_pct is not None and rows_pct * pct > 0 and abs(rows_pct) >= 0.5 * abs(pct):
+        flags.append(f"volume: row counts moved {rows_pct:+.0%} against {pct:+.0%} in value, so this is volume or coverage rather than a change in rate")
     if total.before_rows and total.before_rows < 30:
-        flags.append(f"a small base: {total.before_rows} rows before, {total.after_rows} after")
+        flags.append(f"small base: {total.before_rows} rows before, {total.after_rows} after")
     return tuple(flags)
+
+
+def _coverage_flag(period: Mapping[str, Any], months: Sequence[Mapping[str, Any]]) -> str | None:
+    """A month with fewer than half the rows of a typical month before it is not a complete period, whatever date the data runs to."""
+    if not months or period.get("start") or period.get("month") is None:
+        return None
+    year, month = int(period["year"]), int(period["month"])
+    rows = sum(int(r.get("n") or 0) for r in months if r.get("year") is not None and int(r["year"]) == year and r.get("month") is not None and int(r["month"]) == month)
+    earlier = sorted(((int(r["year"]), int(r["month"]), int(r.get("n") or 0)) for r in months if r.get("year") is not None and r.get("month") is not None and (int(r["year"]), int(r["month"])) < (year, month) and int(r.get("n") or 0) > 0), reverse=True)[:6]
+    if len(earlier) < 2:
+        return None
+    counts = sorted(n for _y, _m, n in earlier)
+    typical = counts[len(counts) // 2]
+    if typical and rows < 0.5 * typical:
+        return f"coverage: {_month_name(period)} holds {rows:,} rows against a typical {typical:,} a month, so it looks incomplete and the movement is coverage, not business"
+    return None
+
+
+def _thin_year(before: Mapping[str, Any], after: Mapping[str, Any], months: Sequence[Mapping[str, Any]]) -> str | None:
+    """Of two years compared, the one with fewer than half the other's months of data is not a complete year (a year that starts in December, a year that ends in January)."""
+    if not months:
+        return None
+
+    def present(period: Mapping[str, Any]) -> int:
+        year = int(period["year"])
+        return len({int(r["month"]) for r in months if r.get("year") is not None and int(r["year"]) == year and r.get("month") is not None and int(r.get("n") or 0) > 0})
+
+    a, b = present(before), present(after)
+    if a and b and b < 0.5 * a:
+        return f"coverage: {int(after['year'])} has data for {b} month{'s' if b != 1 else ''} against {a} in {int(before['year'])}, so it is not a complete year"
+    if a and b and a < 0.5 * b:
+        return f"coverage: {int(before['year'])} has data for {a} month{'s' if a != 1 else ''} against {b} in {int(after['year'])}, so it is not a complete year"
+    return None
 
 
 # --------------------------------------------------------------------------- #

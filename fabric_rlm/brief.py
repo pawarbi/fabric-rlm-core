@@ -175,8 +175,56 @@ class Brief:
             text += f"; {self.recomputed} figure(s) recomputed independently, {len(self.mismatches)} mismatch(es)"
         return text + "."
 
+    def verification_statement(self) -> str:
+        """One sentence the badge and the footer both follow."""
+        total = sum(len(m.sweep.ledger) for m in self.metrics if m.sweep is not None) + sum(len(m.weeks) for m in self.metrics)
+        if not self.verified:
+            return f"Every one of the {total:,} figures was computed by the source; none was recomputed in this run."
+        rest = total - self.recomputed
+        text = f"Every one of the {total:,} figures (the weekly series and the movements) was computed by the source. {self.recomputed:,} of them, the week-over-week and year-ago movements and the groups of their leading decompositions, were recomputed by independent per-period queries"
+        text += f" with {len(self.mismatches)} mismatch{'es' if len(self.mismatches) != 1 else ''}." if self.mismatches else " and all matched."
+        if rest > 0:
+            text += f" The other {rest:,} come from the daily series query and were not rerun."
+        return text
+
+    def narrative(self) -> str:
+        """The week in three sentences, every number from the metrics: the direction of each metric, the verdict that matters most, the driver of the largest move."""
+        if not self.metrics or self.week is None:
+            return ""
+        moves = []
+        for metric in self.metrics:
+            pct = metric.context.get("wow_pct")
+            if pct is not None:
+                moves.append(f"{metric.name} {'fell' if pct < 0 else 'rose'} {abs(pct):.0%}")
+        first = f"In the {self.week.label}, " + (", ".join(moves[:-1]) + (" and " if len(moves) > 1 else "") + moves[-1] if moves else "no metric had a week before to compare with") + " on the week before."
+        sentences = [first[0].upper() + first[1:]]
+        judged = [m for m in self.metrics if m.context.get("z") is not None and abs(m.context["z"]) >= 1.5]
+        if judged:
+            m = judged[0]
+            sentences.append(f"{m.name.capitalize()} is {m.context['verdict']}, against {m.context.get('expected_source', 'the recent level')}.")
+        else:
+            steady = [m.name for m in self.metrics if m.context.get("verdict") == "within the usual range"]
+            if steady:
+                sentences.append(f"{', '.join(steady).capitalize()} {'is' if len(steady) == 1 else 'are'} within the usual range once the season and the recent level are taken into account.")
+        largest = max((m for m in self.metrics if m.context.get("wow_pct") is not None and m.finding is not None and m.finding.best is not None and m.finding.best.groups), key=lambda m: abs(m.context["wow_pct"]), default=None)
+        if largest is not None:
+            best = largest.finding.best
+            lead = best.groups[0]
+            share, base = best.share_of_change(lead), best.share_of_base(lead)
+            if best.concentration in {"single", "concentrated"} and share is not None and base is not None:
+                sentences.append(f"The move in {largest.name} sits with {_label(lead.group)} ({_word(best.path)}), {share:.0%} of the change on {base:.0%} of the base.")
+            elif best.concentration == "proportional":
+                sentences.append(f"The move in {largest.name} is spread across {_word(best.path)} groups in proportion to their size, so no single group explains it.")
+            elif best.concentration == "offsetting":
+                sentences.append(f"The move in {largest.name} nets offsetting moves across {_word(best.path)} groups, {_label(lead.group)} the largest.")
+        recent_shift = next((m for m in self.metrics for p in m.change_points if m.target and (_dt.date.fromisoformat(m.target.start) - _dt.date.fromisoformat(p.start)).days <= 42), None)
+        if recent_shift is not None:
+            point = next(p for p in recent_shift.change_points if (_dt.date.fromisoformat(recent_shift.target.start) - _dt.date.fromisoformat(p.start)).days <= 42)
+            sentences.append(f"{recent_shift.name.capitalize()} has been running at a new level since the {_week_label(point.start)} ({_pct(point.pct)} on the average before).")
+        return " ".join(sentences)
+
     def to_markdown(self) -> str:
-        head = [f"# {self.title}", f"Week: {self.week_label}", "", self.summary(), ""]
+        head = [f"# {self.title}", f"Week: {self.week_label}", "", self.summary(), "", self.narrative(), ""]
         body = []
         for line in self.lines():
             body.append(("- " + line[2:]) if line.startswith("  ") else f"\n**{line}**\n")

@@ -118,3 +118,16 @@ def test_a_brief_request_names_its_metrics():
     assert spec.kind == "brief" and spec.metrics == ("revenue by region", "orders") and spec.title == "Monday Morning Brief"
     result = report(probe, "monday morning brief: revenue by region", instructions=INSTRUCTIONS, budget=40)
     assert result.title == "Monday Morning Brief: Shop" and result.metrics[0].name == "sales revenue"
+
+
+def test_the_brief_opens_with_a_grounded_narrative_and_one_verification_statement():
+    probe = _weekly_lakehouse()
+    result = brief(probe, ["revenue by region", "orders"], instructions=INSTRUCTIONS, budget=60)
+    narrative = result.narrative()
+    assert narrative.startswith("In the week of 23 Dec 2024, sales revenue rose 22% and sales orders rose 23% on the week before.")
+    assert "Sales revenue is very unusual" in narrative and "sits with North (region), 100% of the change on 6" in narrative
+    statement = result.verification_statement()
+    assert statement.startswith("Every one of the") and f"{result.recomputed:,} of them" in statement and "all matched" in statement
+    html = result.to_html()
+    assert "The week in short" in html and narrative in html and f"{result.recomputed} figures recomputed, 0 mismatches" in html and f"{result.recomputed:,} of them" in html
+    assert narrative in result.to_markdown()
