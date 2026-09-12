@@ -533,3 +533,33 @@ def test_a_thin_month_fails_the_coverage_check_even_when_the_data_runs_to_its_en
     html = result.to_html()
     assert "incomplete period" in html and "Set aside, not read as business change" in html and "Not read as business change." in html
     assert "1 movement involves an incomplete period and is set aside" in result.narrative()
+
+
+def _channels():
+    """Two groupings that split the rows the same way: a channel with real names and a reseller type where internet rows carry a placeholder; internet orders drive the rise."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("CREATE TABLE orders (order_date DATE, channel VARCHAR, business_type VARCHAR, quantity INTEGER)")
+    rows = []
+    for year, internet, reseller in ((2023, 20, 200), (2024, 380, 220)):
+        for month in range(1, 13):
+            rows.append((f"{year}-{month:02d}-15", "Internet", "[Not Applicable]", internet))
+            rows.append((f"{year}-{month:02d}-15", "Reseller", "Warehouse", reseller))
+    for row in rows:
+        con.execute("INSERT INTO orders VALUES (?, ?, ?, ?)", list(row))
+    tables = {"orders": ("order_date", "channel", "business_type", "quantity")}
+    types = {"orders": {"order_date": "DATE", "channel": "VARCHAR", "business_type": "VARCHAR", "quantity": "INTEGER"}}
+    return LakehouseProbe.from_executor(_executor(con, tables), schema_from_tables(SOURCE, tables, types=types), name="Orders")
+
+
+def test_a_real_leader_beats_a_placeholder_and_a_placeholder_is_named_for_what_it_means():
+    from fabric_rlm.sweep import _group_phrase, _is_placeholder
+
+    assert _is_placeholder("[Not Applicable]") and _is_placeholder(None) and _is_placeholder("N/A") and _is_placeholder("Unknown") and not _is_placeholder("Internet")
+    assert _group_phrase("[Not Applicable]", {"column": "business_type"}) == "rows with no business type recorded ([Not Applicable])"
+    result = what_moved(_channels(), years=[2023, 2024], budget=50)
+    year = next(f for f in result.findings if f.movement.comparison.kind == "year")
+    assert [d.path["column"] for d in year.decompositions] == ["channel", "business_type"]  # the same split, the real names first
+    assert year.best.groups[0].group == "Internet" and year.decompositions[1].groups[0].group == "[Not Applicable]"
+    assert result.takeaways()[0].text == "Orders quantity rose 127% 2023 to 2024, 2,640 to 7,200, led by Internet (95% of the change on 9% of the base); the row count moved as much as the value, so this is volume, not a change in rate." or "led by Internet (95% of the change on 9% of the base)" in result.takeaways()[0].text
+    assert "sits with Internet (channel)" in result.narrative() and "[Not Applicable]" not in result.narrative()

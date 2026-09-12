@@ -112,6 +112,26 @@ def _aggregate_for(measure: str) -> str:
     return "avg" if _AVERAGED.search(measure) else "sum"
 
 
+_PLACEHOLDER = re.compile(r"^\W*(n/?a|not applicable|not available|not assigned|not specified|unassigned|unspecified|unknown|none|null|blank|missing|other|others|\?+|-+)\W*$", re.IGNORECASE)
+_GROUPING_HINT = re.compile(r"(name|country|region|group|category|segment|type|class|status|city|state|line|plant|channel|brand|tier|family|model|colou?r|method|source|kind|level|stage|priority|medium)", re.IGNORECASE)
+
+
+def _is_placeholder(value: Any) -> bool:
+    """A group value that stands for the absence of one: blank, [Not Applicable], Unknown, N/A."""
+    return value is None or bool(_PLACEHOLDER.match(str(value)))
+
+
+def _placeholder_lead(d: "Decomposition") -> bool:
+    return bool(d.groups) and _is_placeholder(d.groups[0].group)
+
+
+def _group_phrase(value: Any, path: Mapping[str, Any] | None) -> str:
+    """How a reader hears a group: its value, or for a placeholder what the placeholder means (``rows with no business type recorded ([Not Applicable])``)."""
+    if _is_placeholder(value):
+        return f"rows with no {_word(path)} recorded ({_label(value)})"
+    return _label(value)
+
+
 # --------------------------------------------------------------------------- #
 # Results
 # --------------------------------------------------------------------------- #
@@ -368,12 +388,13 @@ class Sweep:
             lead = best.groups[0]
             share, base = best.share_of_change(lead), best.share_of_base(lead)
             if best.concentration in {"single", "concentrated"} and share is not None and base is not None:
-                text += f", led by {_label(lead.group)} ({share:.0%} of the change, from almost no base before)" if base < 0.01 else f", led by {_label(lead.group)} ({share:.0%} of the change on {base:.0%} of the base)"
+                who = _group_phrase(lead.group, best.path)
+                text += f", led by {who} ({share:.0%} of the change, from almost no base before)" if base < 0.01 else f", led by {who} ({share:.0%} of the change on {base:.0%} of the base)"
             elif best.concentration == "proportional":
                 text += f", spread across {_word(best.path)} groups in proportion to their size"
             elif best.concentration == "offsetting":
                 opposite = [g for g in best.groups if g.delta * m.delta < 0]
-                text += f", with {_label(lead.group)} moving one way and {_label(opposite[0].group) if opposite else 'others'} the other"
+                text += f", with {_group_phrase(lead.group, best.path)} moving one way and {_group_phrase(opposite[0].group, best.path) if opposite else 'others'} the other"
             elif best.concentration == "broad":
                 text += f", spread broadly across {_word(best.path)} groups"
         if any(flag.startswith("volume:") for flag in m.flags):
@@ -398,7 +419,7 @@ class Sweep:
             parts.append(f"The largest is {self.phrase(first)}, {'down' if first.delta < 0 else 'up'} {abs(first.pct or 0):.0%} {first.comparison.label}.")
         concentrated = [f for f in self.findings if f.trusted and f.best is not None and f.best.concentration in {"single", "concentrated"} and f.best.groups]
         if concentrated:
-            leaders = {f"{_label(f.best.groups[0].group)} ({_word(f.best.path)})" for f in concentrated[:3]}
+            leaders = {f"{_group_phrase(f.best.groups[0].group, f.best.path)}" + ("" if _is_placeholder(f.best.groups[0].group) else f" ({_word(f.best.path)})") for f in concentrated[:3]}
             parts.append(f"Where a movement is concentrated, it sits with {', '.join(sorted(leaders))}.")
         aside = self.set_aside()
         if aside:
@@ -1175,7 +1196,7 @@ def sweep(
         try:
             for path in chosen:
                 decompositions.append(_decompose(run, dialect, ledger, total, fact, path, (), top))
-            decompositions.sort(key=lambda d: (-_rank(d), -d.explained))
+            decompositions.sort(key=lambda d: (-_rank(d), _placeholder_lead(d), -d.explained))  # a real leader beats a placeholder at the same rank
             best = decompositions[0] if decompositions else None
             if depth >= 2 and best is not None and best.concentration in {"single", "concentrated"} and best.groups:
                 leader = best.groups[0]
@@ -1190,8 +1211,8 @@ def sweep(
             left = len(material) - index - (1 if decompositions else 0)
             notes.append(f"the budget of {budget} queries was spent before the sweep finished; {left} material movement(s) were measured but not decomposed")
         if decompositions:
-            decompositions.sort(key=lambda d: (-_rank(d), -d.explained))
-            drill.sort(key=lambda d: (-_rank(d), -d.explained))
+            decompositions.sort(key=lambda d: (-_rank(d), _placeholder_lead(d), -d.explained))  # a real leader beats a placeholder at the same rank
+            drill.sort(key=lambda d: (-_rank(d), _placeholder_lead(d), -d.explained))
             findings.append(SweepFinding(total, tuple(decompositions), tuple(drill), flags))
     findings.sort(key=lambda f: (not f.trusted, any(flag.startswith("volume:") for flag in f.flags), -(_rank(f.best) if f.best else -1), -abs(f.movement.pct or 0)))
     return Sweep(probe.name, probe.kind, tuple(findings), tuple(ledger), spent, budget, tuple(years_used), tuple(notes), words, series, collapsed=tuple(collapsed))
@@ -1234,7 +1255,7 @@ def _choose_paths(schema: SourceSchema, table: str, joins: Mapping[tuple[str, st
                 chosen_named.append(match)
         return chosen_named
     roles = _paths_by_role(all_paths, terms)
-    rest = sorted((p for p in all_paths if all(p is not r for r in roles.values())), key=lambda p: (not _ATTRIBUTE_HINT.search(str(p["column"])), len(p.get("hops") or ())))  # named like a grouping first, nearest first
+    rest = sorted((p for p in all_paths if all(p is not r for r in roles.values())), key=lambda p: (not _GROUPING_HINT.search(str(p["column"])), len(p.get("hops") or ())))  # named like a grouping (channel, type, region, brand) first, nearest first
     ordered: list[Mapping[str, Any]] = list(roles.values()) + rest
     chosen: list[Mapping[str, Any]] = []
     seen: set[tuple[str, str]] = set()
