@@ -1,39 +1,62 @@
 """What moved: a budgeted, deterministic sweep over a source's facts, measures, groupings and periods.
 
-The sweep is the exhaustive version of the discovery step the review runs
-before it writes questions. For every fact in scope it takes the measures
-the schema exposes, the comparisons the time axis supports (the latest
-month against the month before, the same month a year earlier, the latest
-complete year against the previous one), and every grouping path the joins
-reach. It computes each movement with one query per grouping, scores it by
-absolute and relative change, decomposes the material ones by every path,
-classifies the decomposition as single, concentrated, broad or offsetting,
-drills the leading group one level further, and keeps a ledger of every
-figure with the SQL that produced it and an independent query that
-recomputes it. No model is involved: the numbers are the source's own, and
-the narrative that a model may later write can only refer to them.
+Give :func:`what_moved` a lakehouse (``LakehouseSource``) or a semantic model
+(``SemanticModel``) and it measures, with the source's own query engine, how
+every measure of every fact moved between the periods the time axis
+supports: the latest month against the month before, the same month a year
+earlier, and the latest complete year against the previous one. Material
+movements are decomposed by every grouping the joins or relationships
+reach, each decomposition is classified (one group carries the change, a
+few do, the groups moved in proportion to their size so the grouping
+explains nothing, or groups moved both ways), and the leading group of the
+most concentrated decomposition is drilled one level further.
 
-Everything is bounded by ``budget``, the number of queries the sweep may
-run. What did not fit is recorded in the notes.
+The sweep runs in two phases so the budget goes where it matters: first
+every total movement of every fact is measured, one query each, then the
+material ones are decomposed largest relative change first until the
+budget runs out. Two measures that move identically (an extended amount
+that equals the sales amount) are collapsed. Every figure carries the
+query that produced it and an independent per-period query that recomputes
+it; :func:`verify_sweep` runs those. No model is involved: the numbers are
+the source's own, and ``Sweep.to_html()`` renders them as a dashboard with
+trend, waterfall and driver scatter charts. :mod:`fabric_rlm.reports`
+builds a report of one kind (trend, root cause, recap, top movers) from a
+request written in plain words.
+
+Lakehouses are queried in SQL (DuckDB over OneLake, the joins written from
+key columns and the instructions); semantic models in DAX (the model's
+relationships do the joining, periods filter the related date table).
 """
 
 from __future__ import annotations
 
 import datetime as _dt
 import re
+import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .data_agent_review import (
+    AgentDataSource,
     AgentSnapshot,
+    LakehouseExecutor,
     ReviewContext,
     SourceSchema,
+    _ATTRIBUTE_HINT,
+    _BUSINESS_DATE,
     _Joins,
+    _LOCAL_EXCLUDED,
+    _MONTH_COLUMN,
+    _SECONDARY_DATE,
+    _TIME_COLUMN,
+    _TIME_TYPE,
+    _YEAR_COLUMN,
     _channel_measure,
+    _date_candidates,
     _date_join,
-    _has_month,
     _heuristic_joins,
+    _is_time_column,
     _iso_date,
     _joins_from_instructions,
     _max_date_sql,
@@ -44,24 +67,42 @@ from .data_agent_review import (
     _paths_by_role,
     _period_condition,
     _q,
+    _rows,
     _scoped_facts,
     _sql_literal,
+    _tables_named_in,
     _time_join,
     _year_expr,
     attribute_paths,
     build_vocabulary,
     excluded_terms,
     humanize_column,
+    schema_from_tables,
 )
 
-__all__ = ["Comparison", "Decomposition", "Movement", "Sweep", "SweepFinding", "sweep", "verify_sweep"]
+__all__ = [
+    "Comparison",
+    "Decomposition",
+    "LakehouseProbe",
+    "Movement",
+    "Point",
+    "SemanticModelProbe",
+    "Sweep",
+    "SweepFinding",
+    "sweep",
+    "verify_sweep",
+    "what_moved",
+]
 
 
 class _Budget(Exception):
     """The query budget is spent."""
 
 
-_AVERAGED = re.compile(r"(score|rating|_rate$|rate$|pct|percent|ratio|index|avg|average|mean)", re.IGNORECASE)
+_AVERAGED = re.compile(r"(score|rating|_rate$|rate$|pct|percent|ratio|index|avg|average|mean|unit[_ ]?price|list[_ ]?price|^price$|unit[_ ]?cost|standard[_ ]?cost)", re.IGNORECASE)
+_GROUP_LIMIT = 500  # groups a decomposition query returns, largest absolute change first
+_INFORMATIVE = frozenset({"single", "concentrated", "offsetting", "broad"})
+_COMPARISON_KINDS = ("year", "month", "same_month_prior_year")
 
 
 def _aggregate_for(measure: str) -> str:
@@ -69,9 +110,14 @@ def _aggregate_for(measure: str) -> str:
     return "avg" if _AVERAGED.search(measure) else "sum"
 
 
+# --------------------------------------------------------------------------- #
+# Results
+# --------------------------------------------------------------------------- #
+
+
 @dataclass(frozen=True)
 class Comparison:
-    """Two periods the time axis can express: ``kind`` is ``month``, ``same_month_prior_year`` or ``year``."""
+    """Two periods the time axis can express: ``kind`` is ``month``, ``same_month_prior_year``, ``year`` or ``custom``."""
 
     kind: str
     before: Mapping[str, Any]
@@ -93,8 +139,8 @@ class Movement:
     after_value: float
     before_rows: int
     after_rows: int
-    sql: str
-    verification: Mapping[str, str]  # independent per-period queries: {"before": sql, "after": sql}
+    query: str
+    verification: Mapping[str, str]  # independent per-period queries: {"before": query, "after": query}
     path: Mapping[str, Any] | None = None  # the grouping path; None at the total level
     group: Any = None  # the group's value; None at the total level
     parent: tuple[tuple[str, Any], ...] = ()  # (column, value) of the groups above this one in a drill
@@ -127,8 +173,10 @@ class Decomposition:
     parent: Movement
     path: Mapping[str, Any]
     groups: tuple[Movement, ...]
-    concentration: str  # single | concentrated | broad | offsetting | none
+    concentration: str  # single | concentrated | proportional | broad | offsetting | none
     explained: float  # share of the parent's change carried by the top three groups moving the same way
+    verification: Mapping[str, str] = field(default_factory=dict)  # independent per-period queries recomputing every group in ``groups``
+    size: int = 0  # groups the path has, as far as the query returned them
 
     def share_of_change(self, group: Movement) -> float | None:
         return group.delta / self.parent.delta if self.parent.delta else None
@@ -139,7 +187,7 @@ class Decomposition:
 
 @dataclass(frozen=True)
 class SweepFinding:
-    """A material movement with its decompositions (most concentrated first), the drill into its leading group, and the flags a reader should see first."""
+    """A material movement with its decompositions (most concentrated first), the drills into its leading group (best first), and the flags a reader should see first."""
 
     movement: Movement
     decompositions: tuple[Decomposition, ...] = ()
@@ -150,68 +198,94 @@ class SweepFinding:
     def best(self) -> Decomposition | None:
         return self.decompositions[0] if self.decompositions else None
 
+    @property
+    def lead_drill(self) -> Decomposition | None:
+        """The drill worth showing: the best one when it says something, else None."""
+        return self.drill[0] if self.drill and self.drill[0].concentration in _INFORMATIVE else None
+
+
+@dataclass(frozen=True)
+class Point:
+    """One month of a measure's series: the value (a sum, or an average for a score or a rate) and the rows behind it."""
+
+    year: int
+    month: int
+    value: float
+    rows: int
+
 
 @dataclass(frozen=True)
 class Sweep:
-    source_id: str
+    """What moved in one source, with the ledger of every figure and the queries behind them."""
+
+    source: str
+    kind: str  # lakehouse or semantic_model
     findings: tuple[SweepFinding, ...]
     ledger: tuple[Movement, ...]
     queries: int
     budget: int
+    years: tuple[int, ...] = ()  # the complete years the sweep compared
     notes: tuple[str, ...] = ()
     words: Mapping[str, str] = field(default_factory=dict)  # "fact|measure" -> the business phrase used in the narrative
+    series: Mapping[str, tuple[Point, ...]] = field(default_factory=dict)  # "fact|measure" -> monthly points over the compared years
+    mismatches: tuple[str, ...] = ()  # figures that did not recompute, after verify_sweep
+    recomputed: int = 0  # figures recomputed by verify_sweep
+    verified: bool = False
+    elapsed: float = 0.0
+    collapsed: tuple[str, ...] = ()  # "fact|measure" keys measured but not decomposed because they move like another measure
 
     def phrase(self, movement: Movement) -> str:
         return self.words.get(f"{movement.fact}|{movement.measure}", f"{movement.fact} {movement.measure}")
+
+    def headline(self, movement: Movement) -> str:
+        direction = "fell" if movement.delta < 0 else "rose"
+        averaged = " on average" if movement.aggregate == "avg" else ""
+        return f"{self.phrase(movement).capitalize()} {direction} {abs(movement.pct or 0):.1%}{averaged} {movement.comparison.label} ({_num(movement.before_value)} to {_num(movement.after_value)})."
 
     def lines(self) -> list[str]:
         """The findings as plain sentences, every number from the ledger."""
         lines: list[str] = []
         for finding in self.findings:
-            m = finding.movement
-            direction = "fell" if m.delta < 0 else "rose"
-            averaged = " on average" if m.aggregate == "avg" else ""
-            lines.append(f"{self.phrase(m).capitalize()} {direction} {abs(m.pct or 0):.1%}{averaged} {m.comparison.label} ({_num(m.before_value)} to {_num(m.after_value)}).")
+            lines.append(self.headline(finding.movement))
             for flag in finding.flags:
                 lines.append(f"  Note: {flag}")
             best = finding.best
             if best is not None:
                 lines.append(f"  By {_word(best.path)}: {_concentration_sentence(best)}")
-                for drill in finding.drill:
-                    leader = drill.parent
-                    lines.append(f"  Within {_label(leader.group)}, by {_word(drill.path)}: {_concentration_sentence(drill)}")
+                lead = finding.lead_drill
+                if lead is not None:
+                    lines.append(f"  Within {_label(lead.parent.group)}, by {_word(lead.path)}: {_concentration_sentence(lead)}")
+                elif finding.drill:
+                    lines.append(f"  Within {_label(finding.drill[0].parent.group)}, nothing stands out by {_words([d.path for d in finding.drill])}.")
             others = [d for d in finding.decompositions[1:] if d.concentration in {"single", "concentrated"} and d.groups]
             if others:
                 lines.append("  Also concentrated by " + "; ".join(f"{_word(d.path)} ({_leader_sentence(d)})" for d in others[:2]))
         return lines
 
+    def summary(self) -> str:
+        text = f"{len(self.findings)} material movement(s) from {len(self.ledger)} measured figures in {self.queries} of {self.budget} queries"
+        if self.verified:
+            text += f"; {self.recomputed} figure(s) recomputed independently, {len(self.mismatches)} mismatch(es)"
+        return text + "."
+
     def to_markdown(self) -> str:
-        head = f"{len(self.findings)} material movement(s) from {len(self.ledger)} measured figures in {self.queries} of {self.budget} queries."
         body = "\n".join(("- " + line[2:] if line.startswith("  ") else f"- **{line}**") for line in self.lines())
         notes = "\n".join(f"- {n}" for n in self.notes)
-        return "\n".join(part for part in (head, body, notes) if part)
+        return "\n".join(part for part in (self.summary(), body, notes) if part)
 
     def to_html(self) -> str:
-        from html import escape as esc
+        """The dashboard: headline cards, trends, and for every finding a waterfall, a driver scatter, the tables and the queries."""
+        from .sweep_dashboard import render
 
-        parts = [f'<div class="muted">{esc(f"{len(self.findings)} material movement(s) from {len(self.ledger)} measured figures in {self.queries} of {self.budget} queries.")}</div>']
-        for finding in self.findings:
-            m = finding.movement
-            direction = "fell" if m.delta < 0 else "rose"
-            parts.append(f'<div class="card"><div><b>{esc(self.phrase(m).capitalize())} {direction} {abs(m.pct or 0):.1%} {esc(m.comparison.label)}</b> <span class="muted">({esc(_num(m.before_value))} to {esc(_num(m.after_value))})</span></div>')
-            for flag in finding.flags:
-                parts.append(f'<div class="muted">{esc(flag)}</div>')
-            best = finding.best
-            if best is not None:
-                parts.append(f"<div>By {esc(_word(best.path))}: {esc(_concentration_sentence(best))}</div>")
-                parts.append(_groups_table(best, esc))
-                for drill in finding.drill:
-                    parts.append(f"<div>Within {esc(_label(drill.parent.group))}, by {esc(_word(drill.path))}: {esc(_concentration_sentence(drill))}</div>")
-                    parts.append(_groups_table(drill, esc))
-            parts.append(f"<details><summary>Queries</summary><pre>{esc(m.sql)}</pre><pre>{esc(m.verification.get('after', ''))}</pre></details></div>")
-        for note in self.notes:
-            parts.append(f'<div class="muted">{esc(note)}</div>')
-        return "\n".join(parts)
+        return render(self)
+
+    def save(self, path: str) -> str:
+        """Write the dashboard as a complete HTML page; returns the path."""
+        from .sweep_dashboard import document
+
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(document(self))
+        return path
 
 
 def _num(value: float) -> str:
@@ -221,11 +295,16 @@ def _num(value: float) -> str:
 
 
 def _label(value: Any) -> str:
-    return "(none)" if value is None else str(value)
+    return "(blank)" if value is None else str(value)
 
 
 def _word(path: Mapping[str, Any] | None) -> str:
     return humanize_column(str(path["column"])) if path else "total"
+
+
+def _words(paths: Sequence[Mapping[str, Any]]) -> str:
+    names = [_word(p) for p in paths]
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
 
 
 def _leader_sentence(d: Decomposition) -> str:
@@ -236,34 +315,526 @@ def _leader_sentence(d: Decomposition) -> str:
     return f"{_label(lead.group)} carries {share:.0%}" if share is not None else _label(lead.group)
 
 
+def _shares(d: Decomposition, groups: Sequence[Movement]) -> str:
+    parts: list[str] = []
+    for index, g in enumerate(groups[:3]):
+        change, base = d.share_of_change(g), d.share_of_base(g)
+        if change is None or base is None:
+            parts.append(_label(g.group))
+        elif index == 0:
+            parts.append(f"{_label(g.group)} carries {change:.0%} of the change on {base:.0%} of the base")
+        else:
+            parts.append(f"{_label(g.group)} ({change:.0%} on {base:.0%})")
+    if len(parts) == 3:
+        return f"{parts[0]}, then {parts[1]} and {parts[2]}"
+    return ", then ".join(parts)
+
+
 def _concentration_sentence(d: Decomposition) -> str:
     if not d.groups:
         return "no group moved the same way."
     same = [g for g in d.groups if g.delta * d.parent.delta > 0]
     opposite = [g for g in d.groups if g.delta * d.parent.delta < 0]
-    parts = []
-    for g in same[:3]:
-        change, base = d.share_of_change(g), d.share_of_base(g)
-        parts.append(f"{_label(g.group)} {change:.0%} of the change on {base:.0%} of the base" if change is not None and base is not None else _label(g.group))
     if d.parent.aggregate == "avg":
         moves = "; ".join(f"{_label(g.group)} {_num(g.before_value)} to {_num(g.after_value)}" for g in d.groups[:3])
         return f"largest moves in the average: {moves}."
-    text = {
-        "single": f"one group carries it, {parts[0]}.",
-        "concentrated": f"concentrated: {'; '.join(parts)} (top three explain {d.explained:.0%}).",
-        "proportional": f"in proportion to size, nothing stands out: {'; '.join(parts)}.",
-        "broad": f"broad, spread across groups: {'; '.join(parts)} (top three explain {d.explained:.0%}).",
-        "offsetting": f"offsetting moves: {'; '.join(parts)}, while {', '.join(_label(o.group) for o in opposite[:2])} moved the other way.",
-    }.get(d.concentration, "; ".join(parts) + ".")
-    return text
+    shares = _shares(d, same)
+    return {
+        "single": f"one group: {shares}.",
+        "concentrated": f"concentrated: {shares}; the top three explain {d.explained:.0%}.",
+        "proportional": f"in proportion to size, nothing stands out: {shares}.",
+        "broad": f"broad, spread across groups: {shares}; the top three explain {d.explained:.0%}.",
+        "offsetting": f"offsetting moves: {shares}, while {', '.join(_label(o.group) for o in opposite[:2])} moved the other way.",
+    }.get(d.concentration, shares + ".")
 
 
-def _groups_table(d: Decomposition, esc: Callable[[str], str]) -> str:
-    rows = []
-    for g in d.groups:
-        change, base = d.share_of_change(g), d.share_of_base(g)
-        rows.append(f"<tr><td>{esc(_label(g.group))}</td><td>{esc(_num(g.before_value))}</td><td>{esc(_num(g.after_value))}</td><td>{esc(_num(g.delta))}</td><td>{'' if change is None else f'{change:.0%}'}</td><td>{'' if base is None else f'{base:.0%}'}</td></tr>")
-    return f"<table><tr><th>{esc(_word(d.path))}</th><th>Before</th><th>After</th><th>Change</th><th>Share of change</th><th>Share of base</th></tr>{''.join(rows)}</table>"
+# --------------------------------------------------------------------------- #
+# Query dialects: the same sweep rendered as SQL for a lakehouse and as DAX for a semantic model
+# --------------------------------------------------------------------------- #
+
+_Filters = Sequence[tuple[Mapping[str, Any], Any]]  # (grouping path, value) pairs that narrow a query to one group
+
+
+class _Sql:
+    """DuckDB SQL over a lakehouse catalog; the joins are written out from key columns."""
+
+    kind = "lakehouse"
+
+    def __init__(self, schema: SourceSchema, joins: Mapping[tuple[str, str], tuple[str, str]]) -> None:
+        self.schema = schema
+        self.joins = dict(joins)
+
+    def axis(self, table: str) -> dict[str, Any] | None:
+        return _date_join(self.schema, table, self.joins)
+
+    def _from(self, fact: Mapping[str, Any], joins: _Joins) -> str:
+        time_join = _time_join(fact["date"])
+        return f"FROM {fact['table']} f" + (f" {time_join}" if time_join else "") + "".join(" " + c for c in joins.clauses)
+
+    def _expr(self, fact: Mapping[str, Any]) -> str:
+        m = f"f.{_q(fact['measure'])}"
+        return f"AVG({m})" if fact["aggregate"] == "avg" else f"SUM({m})"
+
+    def _case(self, fact: Mapping[str, Any], condition: str) -> str:
+        m = f"f.{_q(fact['measure'])}"
+        if fact["aggregate"] == "avg":
+            return f"AVG(CASE WHEN {condition} THEN {m} END)"
+        return f"SUM(CASE WHEN {condition} THEN {m} ELSE 0 END)"
+
+    def _period(self, fact: Mapping[str, Any], period: Mapping[str, Any]) -> str:
+        return _period_condition(fact, period, "duckdb")
+
+    def _span(self, fact: Mapping[str, Any], years: Sequence[int]) -> str:
+        return f"{_year_expr(fact['date'], 'duckdb')} IN ({', '.join(str(int(y)) for y in years)})"
+
+    def _filter(self, joins: _Joins, path: Mapping[str, Any], value: Any) -> str:
+        ref = joins.ref(path)
+        return f"{ref} IS NULL" if value is None else f"{ref} = {_sql_literal(value)}"
+
+    def _members(self, label: str, values: Sequence[Any]) -> str:
+        members = [v for v in values if v is not None]
+        parts = [f"{label} IN ({', '.join(_sql_literal(v) for v in members)})"] if members else []
+        if any(v is None for v in values):
+            parts.append(f"{label} IS NULL")
+        return "(" + " OR ".join(parts) + ")"
+
+    def _both(self, fact: Mapping[str, Any], comparison: Comparison) -> tuple[str, str, str]:
+        before, after = self._period(fact, comparison.before), self._period(fact, comparison.after)
+        return before, after, f"(({before}) OR ({after}))"
+
+    def series(self, fact: Mapping[str, Any], measures: Sequence[str]) -> str:
+        """Rows, and the sum of every measure, by year and month over the whole fact."""
+        dt = fact["date"]
+        year, month = _year_expr(dt, "duckdb"), _month_expr(dt, "duckdb")
+        values = ", ".join(f"SUM(f.{_q(m)}) AS v{i}" for i, m in enumerate(measures))
+        join = _time_join(dt)
+        keys = f"{year}" + (f", {month}" if month else "")
+        return f"SELECT {year} AS year, {month or 'NULL'} AS month, COUNT(*) AS n, {values} FROM {fact['table']} f" + (f" {join}" if join else "") + f" GROUP BY {keys} ORDER BY {keys}"
+
+    def months(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        return [dict(r) for r in rows]
+
+    def top_groups(self, fact: Mapping[str, Any], path: Mapping[str, Any], years: Sequence[int], limit: int) -> str:
+        """The largest groups of a path by the measure over the compared years."""
+        joins = _Joins()
+        label = joins.ref(path)
+        return f"SELECT {label} AS label, {self._expr(fact)} AS value {self._from(fact, joins)} WHERE {self._span(fact, years)} GROUP BY {label} ORDER BY ABS(value) DESC NULLS LAST LIMIT {limit}"
+
+    def grouped_series(self, fact: Mapping[str, Any], path: Mapping[str, Any], years: Sequence[int], values: Sequence[Any]) -> str:
+        """The measure by year, month and group, for the listed groups."""
+        dt = fact["date"]
+        joins = _Joins()
+        label = joins.ref(path)
+        year, month = _year_expr(dt, "duckdb"), _month_expr(dt, "duckdb")
+        keys = f"{year}, {month}, {label}" if month else f"{year}, {label}"
+        return f"SELECT {year} AS year, {month or 'NULL'} AS month, {label} AS label, COUNT(*) AS n, SUM(f.{_q(fact['measure'])}) AS v0 {self._from(fact, joins)} WHERE {self._span(fact, years)} AND {self._members(label, values)} GROUP BY {keys} ORDER BY {keys}"
+
+    def max_date(self, fact: Mapping[str, Any]) -> str:
+        return _max_date_sql(fact)
+
+    def movement(self, fact: Mapping[str, Any], comparison: Comparison, filters: _Filters) -> str:
+        joins = _Joins()
+        conditions = [self._filter(joins, p, v) for p, v in filters]
+        before, after, either = self._both(fact, comparison)
+        where = " AND ".join([either, *conditions])
+        return f"SELECT {self._case(fact, after)} AS after_value, {self._case(fact, before)} AS before_value, SUM(CASE WHEN {after} THEN 1 ELSE 0 END) AS after_rows, SUM(CASE WHEN {before} THEN 1 ELSE 0 END) AS before_rows {self._from(fact, joins)} WHERE {where}"
+
+    def total(self, fact: Mapping[str, Any], period: Mapping[str, Any], filters: _Filters) -> str:
+        joins = _Joins()
+        conditions = [self._filter(joins, p, v) for p, v in filters]
+        return f"SELECT {self._expr(fact)} AS value {self._from(fact, joins)} WHERE " + " AND ".join([f"({self._period(fact, period)})", *conditions])
+
+    def grouped(self, fact: Mapping[str, Any], comparison: Comparison, path: Mapping[str, Any], filters: _Filters) -> str:
+        joins = _Joins()
+        conditions = [self._filter(joins, p, v) for p, v in filters]
+        label = joins.ref(path)
+        before, after, either = self._both(fact, comparison)
+        where = " AND ".join([either, *conditions])
+        return (
+            f"SELECT {label} AS label, {self._case(fact, after)} AS after_value, {self._case(fact, before)} AS before_value, "
+            f"SUM(CASE WHEN {after} THEN 1 ELSE 0 END) AS after_rows, SUM(CASE WHEN {before} THEN 1 ELSE 0 END) AS before_rows "
+            f"{self._from(fact, joins)} WHERE {where} GROUP BY {label} ORDER BY ABS(COALESCE(after_value, 0) - COALESCE(before_value, 0)) DESC NULLS LAST LIMIT {_GROUP_LIMIT}"
+        )
+
+    def groups(self, fact: Mapping[str, Any], period: Mapping[str, Any], path: Mapping[str, Any], filters: _Filters, values: Sequence[Any]) -> str:
+        joins = _Joins()
+        conditions = [self._filter(joins, p, v) for p, v in filters]
+        label = joins.ref(path)
+        return f"SELECT {label} AS label, {self._expr(fact)} AS value {self._from(fact, joins)} WHERE " + " AND ".join([f"({self._period(fact, period)})", *conditions, self._members(label, values)]) + f" GROUP BY {label}"
+
+
+def _dax_literal(value: Any) -> str:
+    if isinstance(value, bool):
+        return "TRUE()" if value else "FALSE()"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, (_dt.date, _dt.datetime)):
+        return f"DATE({value.year},{value.month},{value.day})"
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+def _dax_ref(table: str, column: str) -> str:
+    return f"'{table}'[{column}]"
+
+
+_NOT_A_DAY = re.compile(r"(month|quarter|year|week|period|start|end|key)", re.IGNORECASE)
+
+
+def _day_column(schema: SourceSchema, table: str) -> str | None:
+    """A day-grain date column of a date table: ``Date`` first, then ``Full Date``, then any other date-typed column that is not a month or a year."""
+    columns = [c for c in schema.tables.get(table, ()) if _TIME_TYPE.search(schema.column_type(table, c)) and not _NOT_A_DAY.search(c)]
+    if not columns and not schema.types.get(table):
+        columns = [c for c in schema.tables.get(table, ()) if re.fullmatch(r"(full[_ ]?|calendar[_ ]?)?date", c, re.IGNORECASE)]
+    return sorted(columns, key=lambda c: (c.casefold() != "date", "full" not in c.casefold(), c))[0] if columns else None
+
+
+def _dax_axis(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]]) -> dict[str, Any] | None:
+    """The time axis of a fact in a model: a related date table (a day column, else year and month columns), or a date column on the fact."""
+    columns = schema.tables[table]
+    candidates: list[tuple[int, int, dict[str, Any]]] = []
+    order = 0
+    for column in _date_candidates(columns) + [c for c in columns if _is_time_column(schema, table, c) and not _TIME_COLUMN.search(c)]:
+        order += 1
+        score = (2 if _BUSINESS_DATE.search(column) else 0) - (2 if _SECONDARY_DATE.search(column) else 0)
+        target = joins.get((table, column))
+        if target is not None:
+            dim, _key = target
+            day = _day_column(schema, dim)
+            if day:
+                candidates.append((score + 4, order, {"kind": "date", "table": dim, "column": day, "via": column}))
+                continue
+            year = next((c for c in schema.tables[dim] if _YEAR_COLUMN.match(c)), None)
+            if year:
+                candidates.append((score + 3, order, {"kind": "parts", "table": dim, "year": year, "month": next((c for c in schema.tables[dim] if _MONTH_COLUMN.match(c)), None), "via": column}))
+                continue
+        if _TIME_TYPE.search(schema.column_type(table, column)):
+            candidates.append((score, order, {"kind": "date", "table": table, "column": column}))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: (-c[0], c[1]))
+    return candidates[0][2]
+
+
+class _Dax:
+    """DAX over a semantic model; the model's relationships do the joining."""
+
+    kind = "semantic_model"
+
+    def __init__(self, schema: SourceSchema, joins: Mapping[tuple[str, str], tuple[str, str]]) -> None:
+        self.schema = schema
+        self.joins = dict(joins)
+
+    def axis(self, table: str) -> dict[str, Any] | None:
+        return _dax_axis(self.schema, table, self.joins)
+
+    def _expr(self, fact: Mapping[str, Any]) -> str:
+        measure = str(fact["measure"])
+        if measure.startswith("[") and measure.endswith("]"):
+            return measure  # a model measure, evaluated as the model defines it
+        function = "AVERAGE" if fact["aggregate"] == "avg" else "SUM"
+        return f"{function}({_dax_ref(fact['table'], measure)})"
+
+    def _sum(self, fact: Mapping[str, Any], measure: str) -> str:
+        return measure if measure.startswith("[") else f"SUM({_dax_ref(fact['table'], measure)})"
+
+    def _rows(self, fact: Mapping[str, Any]) -> str:
+        return f"COUNTROWS('{fact['table']}')"
+
+    def _period(self, fact: Mapping[str, Any], period: Mapping[str, Any]) -> str:
+        dt = fact["date"]
+        year = int(period["year"])
+        month = period.get("month")
+        if dt["kind"] == "date":
+            ref = _dax_ref(dt["table"], dt["column"])
+            if month:
+                m = int(month)
+                nxt = (year + 1, 1) if m == 12 else (year, m + 1)
+                return f"{ref} >= DATE({year},{m},1) && {ref} < DATE({nxt[0]},{nxt[1]},1)"
+            return f"{ref} >= DATE({year},1,1) && {ref} < DATE({year + 1},1,1)"
+        year_ref = _dax_ref(dt["table"], dt["year"])
+        if month and dt.get("month"):
+            return "TREATAS({(" + f"{year}, {int(month)}" + ")}, " + f"{year_ref}, {_dax_ref(dt['table'], dt['month'])})"
+        return "TREATAS({" + str(year) + "}, " + year_ref + ")"
+
+    def _span(self, fact: Mapping[str, Any], years: Sequence[int]) -> str:
+        dt = fact["date"]
+        first, last = int(min(years)), int(max(years))
+        if dt["kind"] == "date":
+            ref = _dax_ref(dt["table"], dt["column"])
+            return f"{ref} >= DATE({first},1,1) && {ref} < DATE({last + 1},1,1)"
+        return "TREATAS({" + ", ".join(str(int(y)) for y in years) + "}, " + _dax_ref(dt["table"], dt["year"]) + ")"
+
+    def _ref(self, fact: Mapping[str, Any], path: Mapping[str, Any]) -> str:
+        return _dax_ref(_path_table(path, fact["table"]), str(path["column"]))
+
+    def _filter(self, fact: Mapping[str, Any], path: Mapping[str, Any], value: Any) -> str:
+        ref = self._ref(fact, path)
+        if value is None:
+            return f"FILTER(ALL({ref}), ISBLANK({ref}))"
+        return "TREATAS({" + _dax_literal(value) + "}, " + ref + ")"
+
+    def _members(self, ref: str, values: Sequence[Any]) -> str:
+        members = [v for v in values if v is not None]
+        listed = "{" + ", ".join(_dax_literal(v) for v in members) + "}"
+        if any(v is None for v in values):
+            return f"FILTER(ALL({ref}), {ref} IN {listed} || ISBLANK({ref}))" if members else f"FILTER(ALL({ref}), ISBLANK({ref}))"
+        return f"TREATAS({listed}, {ref})"
+
+    @staticmethod
+    def _calc(expression: str, *arguments: str) -> str:
+        return f"CALCULATE({expression}, {', '.join(arguments)})" if arguments else expression
+
+    def _time_keys(self, fact: Mapping[str, Any]) -> tuple[str, str, str]:
+        """The grouping columns, the output columns and the order clause of a series query for this axis."""
+        dt = fact["date"]
+        if dt["kind"] == "date" and dt["table"] != fact["table"]:
+            ref = _dax_ref(dt["table"], dt["column"])
+            return ref, f'"day", {ref}', "ORDER BY [day]"
+        if dt["kind"] == "parts":
+            year_ref = _dax_ref(dt["table"], dt["year"])
+            month_ref = _dax_ref(dt["table"], dt["month"]) if dt.get("month") else None
+            keys = year_ref + (f", {month_ref}" if month_ref else "")
+            return keys, f'"year", {year_ref}, "month", {month_ref or "BLANK()"}', "ORDER BY [year]" + (", [month]" if month_ref else "")
+        raise ValueError("a date column on the fact itself is grouped with GROUPBY")
+
+    def series(self, fact: Mapping[str, Any], measures: Sequence[str]) -> str:
+        dt = fact["date"]
+        picked = ", ".join(f'"v{i}", [v{i}]' for i in range(len(measures)))
+        if dt["kind"] == "date" and dt["table"] == fact["table"]:
+            ref = _dax_ref(fact["table"], dt["column"])
+            sums = ", ".join(f'"v{i}", SUMX(CURRENTGROUP(), {_dax_ref(fact["table"], m)})' for i, m in enumerate(measures))
+            return f'EVALUATE SELECTCOLUMNS(GROUPBY(ADDCOLUMNS(\'{fact["table"]}\', "__y", YEAR({ref}), "__m", MONTH({ref})), [__y], [__m], "n", COUNTX(CURRENTGROUP(), 1), {sums}), "year", [__y], "month", [__m], "n", [n], {picked}) ORDER BY [year], [month]'
+        keys, outputs, order = self._time_keys(fact)
+        values = ", ".join(f'"v{i}", {self._sum(fact, m)}' for i, m in enumerate(measures))
+        return f'EVALUATE SELECTCOLUMNS(SUMMARIZECOLUMNS({keys}, "n", {self._rows(fact)}, {values}), {outputs}, "n", [n], {picked}) {order}'
+
+    def months(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        if not rows or "day" not in rows[0]:
+            return [dict(r) for r in rows]
+        by_month: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for row in rows:
+            iso = _iso_date(row.get("day"))
+            if not iso:
+                continue
+            key: tuple[Any, ...] = (int(iso[:4]), int(iso[5:7])) + ((row.get("label"),) if "label" in row else ())
+            bucket = by_month.setdefault(key, {"year": key[0], "month": key[1], "n": 0, **({"label": row.get("label")} if "label" in row else {})})
+            bucket["n"] += int(row.get("n") or 0)
+            for name, value in row.items():
+                if name.startswith("v"):
+                    bucket[name] = float(bucket.get(name) or 0) + float(value or 0)
+        return [by_month[k] for k in sorted(by_month, key=lambda k: (k[0], k[1], str(k[2:])))]
+
+    def top_groups(self, fact: Mapping[str, Any], path: Mapping[str, Any], years: Sequence[int], limit: int) -> str:
+        ref = self._ref(fact, path)
+        inner = f'SUMMARIZECOLUMNS({ref}, "value", {self._calc(self._expr(fact), self._span(fact, years))})'
+        return f'EVALUATE TOPN({limit}, SELECTCOLUMNS({inner}, "label", {ref}, "value", [value]), ABS([value]), DESC)'
+
+    def grouped_series(self, fact: Mapping[str, Any], path: Mapping[str, Any], years: Sequence[int], values: Sequence[Any]) -> str:
+        dt = fact["date"]
+        ref = self._ref(fact, path)
+        if dt["kind"] == "date" and dt["table"] == fact["table"]:
+            date_ref = _dax_ref(fact["table"], dt["column"])
+            table = f"CALCULATETABLE('{fact['table']}', {self._members(ref, values)}, {self._span(fact, years)})"
+            return f'EVALUATE SELECTCOLUMNS(GROUPBY(ADDCOLUMNS({table}, "__y", YEAR({date_ref}), "__m", MONTH({date_ref}), "__g", {ref}), [__y], [__m], [__g], "n", COUNTX(CURRENTGROUP(), 1), "v0", SUMX(CURRENTGROUP(), {_dax_ref(fact["table"], fact["measure"])})), "year", [__y], "month", [__m], "label", [__g], "n", [n], "v0", [v0]) ORDER BY [year], [month]'
+        keys, outputs, order = self._time_keys(fact)
+        inner = f'SUMMARIZECOLUMNS({keys}, {ref}, {self._members(ref, values)}, "n", {self._calc(self._rows(fact), self._span(fact, years))}, "v0", {self._calc(self._sum(fact, fact["measure"]), self._span(fact, years))})'
+        return f'EVALUATE SELECTCOLUMNS({inner}, {outputs}, "label", {ref}, "n", [n], "v0", [v0]) {order}'
+
+    def max_date(self, fact: Mapping[str, Any]) -> str:
+        dt = fact["date"]
+        if dt["kind"] != "date":
+            return 'EVALUATE ROW("value", BLANK())'
+        ref = _dax_ref(dt["table"], dt["column"])
+        if dt["table"] == fact["table"]:
+            return f'EVALUATE ROW("value", MAX({ref}))'
+        return f"EVALUATE ROW(\"value\", MAXX(SUMMARIZE('{fact['table']}', {ref}), {ref}))"
+
+    def movement(self, fact: Mapping[str, Any], comparison: Comparison, filters: _Filters) -> str:
+        narrow = [self._filter(fact, p, v) for p, v in filters]
+        before, after = self._period(fact, comparison.before), self._period(fact, comparison.after)
+        expr, rows = self._expr(fact), self._rows(fact)
+        return (
+            f'EVALUATE ROW("before_value", {self._calc(expr, before, *narrow)}, "after_value", {self._calc(expr, after, *narrow)}, '
+            f'"before_rows", {self._calc(rows, before, *narrow)}, "after_rows", {self._calc(rows, after, *narrow)})'
+        )
+
+    def total(self, fact: Mapping[str, Any], period: Mapping[str, Any], filters: _Filters) -> str:
+        narrow = [self._filter(fact, p, v) for p, v in filters]
+        return f'EVALUATE ROW("value", {self._calc(self._expr(fact), self._period(fact, period), *narrow)})'
+
+    def grouped(self, fact: Mapping[str, Any], comparison: Comparison, path: Mapping[str, Any], filters: _Filters) -> str:
+        ref = self._ref(fact, path)
+        narrow = "".join(", " + self._filter(fact, p, v) for p, v in filters)
+        before, after = self._period(fact, comparison.before), self._period(fact, comparison.after)
+        expr, rows = self._expr(fact), self._rows(fact)
+        inner = f'SUMMARIZECOLUMNS({ref}{narrow}, "before_value", {self._calc(expr, before)}, "after_value", {self._calc(expr, after)}, "before_rows", {self._calc(rows, before)}, "after_rows", {self._calc(rows, after)})'
+        return f'EVALUATE TOPN({_GROUP_LIMIT}, SELECTCOLUMNS({inner}, "label", {ref}, "before_value", [before_value], "after_value", [after_value], "before_rows", [before_rows], "after_rows", [after_rows]), ABS([after_value] - [before_value]), DESC)'
+
+    def groups(self, fact: Mapping[str, Any], period: Mapping[str, Any], path: Mapping[str, Any], filters: _Filters, values: Sequence[Any]) -> str:
+        ref = self._ref(fact, path)
+        narrow = "".join(", " + self._filter(fact, p, v) for p, v in filters)
+        inner = f'SUMMARIZECOLUMNS({ref}, {self._members(ref, values)}{narrow}, "value", {self._calc(self._expr(fact), self._period(fact, period))})'
+        return f'EVALUATE SELECTCOLUMNS({inner}, "label", {ref}, "value", [value])'
+
+
+# --------------------------------------------------------------------------- #
+# Probes: a schema, a dialect and a way to run a query, for each kind of source
+# --------------------------------------------------------------------------- #
+
+
+def _records(frame: Any) -> list[dict[str, Any]]:
+    if frame is None:
+        return []
+    if hasattr(frame, "to_dict"):
+        return [dict(r) for r in frame.to_dict(orient="records")]
+    return [dict(r) for r in frame if isinstance(r, Mapping)]
+
+
+def _clean(value: Any) -> Any:
+    if isinstance(value, float) and value != value:  # NaN from a pandas frame
+        return None
+    return value
+
+
+def _plain_key(key: Any) -> str:
+    text = str(key).strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    return text.rsplit("]", 1)[-1].lstrip("[") if "]" in text else text
+
+
+def _first(row: Mapping[str, Any], *names: str) -> Any:
+    for name in names:
+        if name in row:
+            return row[name]
+    return None
+
+
+class LakehouseProbe:
+    """Runs the sweep's SQL through ``LakehouseSource.query``; the schema comes from the resolved catalog."""
+
+    kind = "lakehouse"
+
+    def __init__(self, source: Any, *, timeout: float = 600.0, name: str | None = None) -> None:
+        handle = source.resolve() if callable(getattr(source, "resolve", None)) else source
+        tables: dict[str, list[str]] = {}
+        types: dict[str, dict[str, str]] = {}
+        for entry in list(getattr(handle, "catalog", None) or ()):
+            columns = entry.get("columns") or []
+            if not columns:
+                continue
+            names: list[str] = []
+            kinds: dict[str, str] = {}
+            for column in columns:
+                if isinstance(column, Mapping):
+                    column_name, column_type = str(column.get("name", "")), str(column.get("type") or column.get("data_type") or "")
+                else:
+                    column_name, column_type = str(column[0]), (str(column[1]) if len(column) > 1 else "")
+                if column_name:
+                    names.append(column_name)
+                    kinds[column_name] = column_type
+            tables[str(entry["name"])] = names
+            types[str(entry["name"])] = kinds
+        self.name = name or str(getattr(handle, "root", "lakehouse")).rstrip("/").rsplit("/", 1)[-1]
+        self.schema = schema_from_tables(self.name, tables, types=types)
+        self._executor = LakehouseExecutor(handle.query, self.schema.tables, timeout=timeout)
+
+    @classmethod
+    def from_executor(cls, executor: Any, schema: SourceSchema, *, name: str = "lakehouse") -> "LakehouseProbe":
+        """A probe over a ready executor (``run({"sql": ...})``) and schema; what the tests use."""
+        probe = cls.__new__(cls)
+        probe.name = name
+        probe.schema = schema
+        probe._executor = executor
+        return probe
+
+    def run(self, query: str) -> list[dict[str, Any]]:
+        return self._executor.run({"kind": "sql", "sql": query})
+
+    def joins(self, text: str) -> dict[tuple[str, str], tuple[str, str]]:
+        joins = dict(_heuristic_joins(self.schema))
+        joins.update(_joins_from_instructions(text, self.schema))
+        return joins
+
+    def facts(self, text: str) -> list[str]:
+        return _scoped_facts(self.schema, text)
+
+    def dialect(self, joins: Mapping[tuple[str, str], tuple[str, str]]) -> _Sql:
+        return _Sql(self.schema, joins)
+
+
+_AUTO_DATE_TABLE = re.compile(r"^(LocalDateTable_|DateTableTemplate_)", re.IGNORECASE)
+
+
+def _model_facts(schema: SourceSchema, joins: Mapping[tuple[str, str], tuple[str, str]]) -> list[str]:
+    """Tables with measures and a time axis, the ones with the most relationships out first."""
+    facts = []
+    for table in schema.tables:
+        if re.search(r"(date|calendar)", table, re.IGNORECASE):
+            continue
+        if _measure_columns(schema, table) and _dax_axis(schema, table, joins):
+            facts.append(table)
+    return sorted(facts, key=lambda t: (-sum(1 for a, _c in joins if a == t), -len(_measure_columns(schema, t)), t))
+
+
+class SemanticModelProbe:
+    """Runs the sweep's DAX through ``SemanticModel.dax``; the schema comes from ``SemanticModel.metadata()``.
+
+    Any object with ``dax(query)`` returning a DataFrame or row mappings and
+    ``metadata()`` returning frames or row lists named ``tables``,
+    ``columns``, ``measures`` and ``relationships`` (sempy's snake-case
+    column names) works, so a REST client outside a notebook does too.
+    """
+
+    kind = "semantic_model"
+
+    def __init__(self, model: Any, *, name: str | None = None) -> None:
+        meta = model.metadata()
+        frames = {key: _records(getattr(meta, key) if hasattr(meta, key) else meta.get(key)) for key in ("tables", "columns", "measures", "relationships")}
+        hidden = {str(_first(r, "table_name", "name")) for r in frames["tables"] if _first(r, "hidden", "is_hidden") in (True, 1, "True", "true")}
+        tables: dict[str, list[str]] = {}
+        types: dict[str, dict[str, str]] = {}
+        for row in frames["columns"]:
+            table, column = str(_first(row, "table_name", "table") or ""), str(_first(row, "column_name", "name") or "")
+            if not table or not column or table in hidden or _AUTO_DATE_TABLE.match(table) or column.startswith("RowNumber-"):
+                continue
+            tables.setdefault(table, []).append(column)
+            types.setdefault(table, {})[column] = str(_first(row, "data_type", "type") or "")
+        measures = tuple(str(_first(r, "measure_name", "name")) for r in frames["measures"] if _first(r, "measure_name", "name"))
+        relationships: list[tuple[str, str, str, str]] = []
+        for row in frames["relationships"]:
+            if _first(row, "active", "is_active") in (False, 0, "False", "false"):
+                continue
+            parts = tuple(str(_first(row, key) or "") for key in ("from_table", "from_column", "to_table", "to_column"))
+            if parts[0] in tables and parts[2] in tables and all(parts):
+                relationships.append(parts)  # type: ignore[arg-type]
+        self.name = name or str(getattr(model, "dataset", "") or "semantic model")
+        self.schema = SourceSchema(self.name, "semantic_model", {t: tuple(c) for t, c in tables.items()}, measures, tuple(relationships), types)
+        self._model = model
+
+    def run(self, query: str) -> list[dict[str, Any]]:
+        return [{_plain_key(k): _clean(v) for k, v in row.items()} for row in _rows(self._model.dax(query))]
+
+    def joins(self, text: str) -> dict[tuple[str, str], tuple[str, str]]:
+        return {(a, b): (c, d) for a, b, c, d in self.schema.relationships}
+
+    def facts(self, text: str) -> list[str]:
+        facts = _model_facts(self.schema, self.joins(text))
+        named = [t for t in _tables_named_in(text, self.schema) if t in facts]
+        return named or facts
+
+    def dialect(self, joins: Mapping[tuple[str, str], tuple[str, str]]) -> _Dax:
+        return _Dax(self.schema, joins)
+
+
+def _probe_for(source: Any, *, timeout: float, name: str | None) -> Any:
+    if isinstance(source, (LakehouseProbe, SemanticModelProbe)):
+        return source
+    if callable(getattr(source, "dax", None)) and callable(getattr(source, "metadata", None)):
+        return SemanticModelProbe(source, name=name)
+    if callable(getattr(source, "query", None)) and hasattr(source, "catalog"):
+        return LakehouseProbe(source, timeout=timeout, name=name)
+    raise TypeError("what_moved needs a LakehouseSource, a SemanticModel, or a probe built from one")
 
 
 # --------------------------------------------------------------------------- #
@@ -271,204 +842,328 @@ def _groups_table(d: Decomposition, esc: Callable[[str], str]) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def sweep(
-    executor: Any,
-    schema: SourceSchema,
-    snapshot: AgentSnapshot,
-    years: Sequence[int],
+def what_moved(
+    source: Any,
     *,
-    context: ReviewContext | None = None,
-    facts: int = 2,
-    measures: int = 2,
-    paths: int = 8,
-    budget: int = 120,
+    years: Sequence[int] | None = None,
+    instructions: str = "",
+    scope: str = "",
+    facts: int | Sequence[str] = 2,
+    measures: int | Sequence[str] = 2,
+    paths: int | Sequence[str] = 8,
+    comparisons: Sequence[Any] | None = None,
+    budget: int = 60,
+    min_pct: float = 0.05,
+    top: int = 5,
+    depth: int = 2,
+    verify: bool = True,
+    timeout: float = 600.0,
+    name: str | None = None,
+) -> Sweep:
+    """What moved in a lakehouse or a semantic model, measured by the source and recomputed.
+
+    ``years`` are the complete calendar years to compare (discovered from
+    the data when omitted: every year, minus a last one that holds fewer
+    than half the rows of the one before). ``instructions`` is free text
+    about the source, the way a Data Agent's instructions read: tables to
+    use, joins, definitions; ``scope`` says what to look at first. ``facts``,
+    ``measures`` and ``paths`` are counts or explicit names (a model measure
+    as ``"[Total Sales]"``); ``comparisons`` restricts the comparison kinds
+    (``"month"``, ``"same_month_prior_year"``, ``"year"``) or supplies
+    :class:`Comparison` objects; ``budget`` bounds the queries. ``verify``
+    recomputes every reported figure with an independent query afterwards.
+    """
+    probe = _probe_for(source, timeout=timeout, name=name)
+    started = time.monotonic()
+    result = sweep(probe, years, instructions=instructions, scope=scope, facts=facts, measures=measures, paths=paths, comparisons=comparisons, budget=budget, min_pct=min_pct, top=top, depth=depth)
+    if verify:
+        result = verify_sweep(result, probe)
+    return replace(result, elapsed=round(time.monotonic() - started, 1))
+
+
+def sweep(
+    probe: Any,
+    years: Sequence[int] | None = None,
+    *,
+    instructions: str = "",
+    scope: str = "",
+    facts: int | Sequence[str] = 2,
+    measures: int | Sequence[str] = 2,
+    paths: int | Sequence[str] = 8,
+    comparisons: Sequence[Any] | None = None,
+    budget: int = 60,
     min_pct: float = 0.05,
     top: int = 5,
     depth: int = 2,
 ) -> Sweep:
-    """What moved in a source, with every figure computed by the source and recomputable.
-
-    ``facts``, ``measures`` and ``paths`` bound the search space per fact;
-    ``budget`` bounds the queries; ``min_pct`` is the relative change a
-    total movement needs to be decomposed; ``depth`` 2 drills the leading
-    group of the most concentrated decomposition one level further.
-    """
-    source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
-    instructions = (source.instructions if source else "") + "\n" + snapshot.instructions + ("\n" + context.text if context is not None else "")
-    joins = dict(_heuristic_joins(schema))
-    joins.update(_joins_from_instructions(instructions, schema))
-    excluded = excluded_terms(instructions)
-    terms = context.terms if context is not None else ()
+    """The sweep over a probe: phase one measures every movement, phase two decomposes the material ones until the budget is spent."""
+    schema: SourceSchema = probe.schema
+    context = ReviewContext(scope=scope) if scope else None
+    text = "\n".join(part for part in (instructions, context.text if context is not None else "") if part)
+    snapshot = AgentSnapshot(agent_id="sweep", name=probe.name, instructions=instructions, datasources=(AgentDataSource(id=schema.source_id, kind=schema.kind, name=probe.name),))
     vocabulary = build_vocabulary(snapshot, schema, context)
+    excluded = excluded_terms(text)
+    terms = context.terms if context is not None else ()
+    joins = probe.joins(text)
+    dialect = probe.dialect(joins)
     ledger: list[Movement] = []
     findings: list[SweepFinding] = []
     notes: list[str] = []
     words: dict[str, str] = {}
+    series: dict[str, tuple[Point, ...]] = {}
+    collapsed: list[str] = []
     spent = 0
 
-    def run(sql: str) -> list[dict[str, Any]]:
+    def run(query: str) -> list[dict[str, Any]]:
         nonlocal spent
         if spent >= budget:
             raise _Budget
         spent += 1
-        return executor.run({"kind": "sql", "sql": sql})
+        return probe.run(query)
 
-    fact_names = _scoped_facts(schema, instructions)[:facts]
+    if isinstance(facts, int):
+        fact_names = list(probe.facts(text))[:facts]
+    else:
+        lowered = {t.casefold(): t for t in schema.tables}
+        fact_names = [lowered[str(f).casefold()] for f in facts if str(f).casefold() in lowered]
     if not fact_names:
         notes.append("no fact table recognised, nothing to sweep")
+
+    totals: list[tuple[Movement, dict[str, Any], list[Mapping[str, Any]], tuple[str, ...]]] = []
+    years_used: list[int] = [int(y) for y in years] if years else []
+    exhausted = False
     try:
         for table in fact_names:
-            date = _date_join(schema, table, joins)
-            measure_list = _measure_columns(schema, table)[:measures]
-            if not date or not measure_list:
+            axis = dialect.axis(table)
+            candidates = _measure_candidates(schema, table, measures)
+            if not axis or not candidates:
                 notes.append(f"{table}: no time axis or no measure, not swept")
                 continue
-            base_fact = {"table": table, "date": date, "measure": measure_list[0]}
-            comparisons = _comparisons(run, base_fact, years)
-            if not comparisons:
-                notes.append(f"{table}: no comparison the time axis supports for {list(years)}")
+            base = {"table": table, "date": axis, "measure": candidates[0], "aggregate": _aggregate_for(candidates[0])}
+            months = dialect.months(run(dialect.series(base, candidates)))
+            fact_years = [int(y) for y in years] if years else _complete_years(months)
+            if not years_used:
+                years_used = list(fact_years)
+            wanted_comparisons = _wanted_comparisons(months, fact_years, comparisons)
+            if not wanted_comparisons:
+                notes.append(f"{table}: no comparison the time axis supports for {fact_years}")
                 continue
             try:
-                rows = run(_max_date_sql(base_fact))
-                max_date = _iso_date(rows[0]["value"]) if rows and rows[0].get("value") is not None else None
+                rows = run(dialect.max_date(base))
+                max_date = _iso_date(rows[0].get("value")) if rows and rows[0].get("value") is not None else None
             except _Budget:
                 raise
-            except Exception:  # noqa: BLE001 - the flag that needs it is skipped
+            except Exception:  # noqa: BLE001 - only the incomplete-month flag needs it
                 max_date = None
-            all_paths = attribute_paths(schema, table, joins, excluded)
-            roles = _paths_by_role(all_paths, terms)
-            ordered: list[Mapping[str, Any]] = list(roles.values()) + [p for p in all_paths if all(p is not r for r in roles.values())]
-            chosen: list[Mapping[str, Any]] = []
-            seen: set[tuple[str, str]] = set()
-            for path in ordered:
-                key = (_path_table(path, table), str(path["column"]))
-                if key not in seen:
-                    seen.add(key)
-                    chosen.append(path)
-                if len(chosen) >= paths:
+            chosen = _choose_paths(schema, table, joins, excluded, terms, paths)
+            wanted = measures if isinstance(measures, int) else len(candidates)
+            measured: list[tuple[str, list[Movement]]] = []
+            for index, measure in enumerate(candidates):
+                if len(measured) >= wanted:
                     break
-            for measure in measure_list:
-                fact = {"table": table, "date": date, "measure": measure}
-                words[f"{table}|{measure}"] = _channel_measure(vocabulary.table(table), vocabulary.measure(measure))
-                for comparison in comparisons:
-                    total = _movement(run, fact, comparison, None, None, ())
-                    ledger.append(total)
-                    if not total.material(min_pct):
-                        continue
-                    decompositions: list[Decomposition] = []
-                    for path in chosen:
-                        groups = _grouped(run, fact, comparison, path, ())
-                        ledger.extend(groups)
-                        decompositions.append(_decompose(total, path, groups, top))
-                    decompositions.sort(key=lambda d: (-_rank(d), -d.explained))
-                    drill: list[Decomposition] = []
-                    best = decompositions[0] if decompositions else None
-                    if depth >= 2 and best is not None and best.concentration in {"single", "concentrated"} and best.groups:
-                        leader = best.groups[0]
-                        for path in chosen:
-                            if (_path_table(path, table), str(path["column"])) == (_path_table(best.path, table), str(best.path["column"])):
-                                continue
-                            groups = _grouped(run, fact, comparison, path, ((best.path, leader.group),))
-                            ledger.extend(groups)
-                            drill.append(_decompose(leader, path, groups, top))
-                            if len(drill) >= 3:
-                                break
-                        drill.sort(key=lambda d: (-_rank(d), -d.explained))
-                    findings.append(SweepFinding(total, tuple(decompositions), tuple(drill[:1]), _flags(total, comparison, max_date)))
+                fact = {"table": table, "date": axis, "measure": measure, "aggregate": _aggregate_for(measure)}
+                key = f"{table}|{measure}"
+                words[key] = _channel_measure(vocabulary.table(table), vocabulary.measure(measure.strip("[]")))
+                series[key] = _points(months, index, fact["aggregate"], fact_years)
+                run_totals = [_movement(run, dialect, fact, comparison, ()) for comparison in wanted_comparisons]
+                ledger.extend(run_totals)
+                twin = next((m for m, other in measured if _same_figures(other, run_totals)), None)
+                if twin is not None:
+                    collapsed.append(key)
+                    notes.append(f"{words[key]} moves within 1% of {words[f'{table}|{twin}']} in every comparison, so it was not decomposed separately")
+                    continue
+                measured.append((measure, run_totals))
+                totals.extend((t, fact, chosen, _flags(t, t.comparison, max_date)) for t in run_totals)
     except _Budget:
-        notes.append(f"the budget of {budget} queries was spent before the sweep finished; later facts, measures or comparisons were not swept")
+        exhausted = True
+        notes.append(f"the budget of {budget} queries was spent before every movement was measured; nothing was decomposed")
+
+    material = [item for item in totals if item[0].material(min_pct)]
+    material.sort(key=lambda item: (any("small base" in flag for flag in item[3]), -abs(item[0].pct or 0)))
+    for index, (total, fact, chosen, flags) in enumerate(material):
+        if exhausted:
+            break
+        decompositions: list[Decomposition] = []
+        drill: list[Decomposition] = []
+        try:
+            for path in chosen:
+                decompositions.append(_decompose(run, dialect, ledger, total, fact, path, (), top))
+            decompositions.sort(key=lambda d: (-_rank(d), -d.explained))
+            best = decompositions[0] if decompositions else None
+            if depth >= 2 and best is not None and best.concentration in {"single", "concentrated"} and best.groups:
+                leader = best.groups[0]
+                for path in chosen:
+                    if _same_path(path, best.path, fact["table"]):
+                        continue
+                    drill.append(_decompose(run, dialect, ledger, leader, fact, path, ((best.path, leader.group),), top))
+                    if len(drill) >= 3:
+                        break
+        except _Budget:
+            exhausted = True
+            left = len(material) - index - (1 if decompositions else 0)
+            notes.append(f"the budget of {budget} queries was spent before the sweep finished; {left} material movement(s) were measured but not decomposed")
+        if decompositions:
+            decompositions.sort(key=lambda d: (-_rank(d), -d.explained))
+            drill.sort(key=lambda d: (-_rank(d), -d.explained))
+            findings.append(SweepFinding(total, tuple(decompositions), tuple(drill), flags))
     findings.sort(key=lambda f: (any("coverage" in flag for flag in f.flags), -(_rank(f.best) if f.best else -1), -abs(f.movement.pct or 0)))
-    return Sweep(schema.source_id, tuple(findings), tuple(ledger), spent, budget, tuple(notes), words)
+    return Sweep(probe.name, probe.kind, tuple(findings), tuple(ledger), spent, budget, tuple(years_used), tuple(notes), words, series, collapsed=tuple(collapsed))
 
 
-def _rank(d: Decomposition) -> int:
-    return {"single": 4, "concentrated": 3, "offsetting": 2, "broad": 1, "proportional": 0, "none": -1}.get(d.concentration, 0)
+def _wanted_comparisons(months: Sequence[Mapping[str, Any]], years: Sequence[int], comparisons: Sequence[Any] | None) -> list[Comparison]:
+    """The comparisons the axis supports, narrowed to the kinds asked for, plus any explicit ones."""
+    supported = _comparisons(months, years)
+    if comparisons is None:
+        return supported
+    kinds = {str(c) for c in comparisons if isinstance(c, str)}
+    explicit = [c for c in comparisons if isinstance(c, Comparison)]
+    return [c for c in supported if c.kind in kinds] + explicit
 
 
-def _comparisons(run: Callable[[str], list[dict[str, Any]]], fact: Mapping[str, Any], years: Sequence[int]) -> list[Comparison]:
-    """The comparisons the time axis supports: the latest complete year against the one before, the latest month with data against the month before and against the same month a year earlier."""
-    years = [int(y) for y in years]
+def _measure_candidates(schema: SourceSchema, table: str, measures: int | Sequence[str]) -> list[str]:
+    if isinstance(measures, int):
+        additive_first = sorted(_measure_columns(schema, table), key=lambda c: _aggregate_for(c) == "avg")  # amounts and quantities before prices and scores, which only average
+        return additive_first[: measures + 2]  # a couple of spares, in case two move identically
+    lowered = {c.casefold(): c for c in schema.tables[table]}
+    chosen: list[str] = []
+    for measure in measures:
+        text = str(measure)
+        if text.startswith("[") and text.endswith("]"):
+            chosen.append(text)
+        elif text.casefold() in lowered:
+            chosen.append(lowered[text.casefold()])
+    return chosen
+
+
+def _choose_paths(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]], excluded: Any, terms: Sequence[str], paths: int | Sequence[str]) -> list[Mapping[str, Any]]:
+    """The grouping paths to sweep: the role paths first, then the rest, up to a count; or the named columns in the order named."""
+    all_paths = [p for p in attribute_paths(schema, table, joins, excluded) if not _LOCAL_EXCLUDED.search(str(p["column"]))]  # a code, a SKU or a number is a label, not a grouping
+    if not isinstance(paths, int):
+        chosen_named: list[Mapping[str, Any]] = []
+        for name in paths:
+            wanted = str(name).casefold()
+            match = next((p for p in all_paths if str(p["column"]).casefold() == wanted or humanize_column(str(p["column"])).casefold() == wanted), None)
+            if match is not None and all(match is not c for c in chosen_named):
+                chosen_named.append(match)
+        return chosen_named
+    roles = _paths_by_role(all_paths, terms)
+    rest = sorted((p for p in all_paths if all(p is not r for r in roles.values())), key=lambda p: (not _ATTRIBUTE_HINT.search(str(p["column"])), len(p.get("hops") or ())))  # named like a grouping first, nearest first
+    ordered: list[Mapping[str, Any]] = list(roles.values()) + rest
+    chosen: list[Mapping[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for path in ordered:
+        key = (_path_table(path, table), str(path["column"]))
+        if key not in seen:
+            seen.add(key)
+            chosen.append(path)
+        if len(chosen) >= paths:
+            break
+    return chosen
+
+
+def _same_path(a: Mapping[str, Any], b: Mapping[str, Any], table: str) -> bool:
+    return (_path_table(a, table), str(a["column"])) == (_path_table(b, table), str(b["column"]))
+
+
+def _same_figures(a: Sequence[Movement], b: Sequence[Movement], tolerance: float = 0.01) -> bool:
+    """Two measures move alike when every before and after figure agrees within the tolerance (an extended amount next to a sales amount)."""
+
+    def near(x: float, y: float) -> bool:
+        return abs(x - y) <= tolerance * max(1.0, abs(y))
+
+    return len(a) == len(b) and all(near(x.before_value, y.before_value) and near(x.after_value, y.after_value) for x, y in zip(a, b))
+
+
+def _complete_years(months: Sequence[Mapping[str, Any]]) -> list[int]:
+    """Every year with rows, minus a first year that starts after January and a last year that ends before December.
+
+    Without months to look at, a last year holding fewer than half the rows
+    of the one before is taken as partial.
+    """
+    counts: dict[int, int] = {}
+    present: dict[int, set[int]] = {}
+    for row in months:
+        if row.get("year") is None:
+            continue
+        year = int(row["year"])
+        counts[year] = counts.get(year, 0) + int(row.get("n") or 0)
+        if row.get("month") is not None and int(row.get("n") or 0) > 0:
+            present.setdefault(year, set()).add(int(row["month"]))
+    years = sorted(counts)
+    if present:
+        if years and 12 not in present.get(years[-1], set()):
+            years = years[:-1]
+        if years and 1 not in present.get(years[0], set()):
+            years = years[1:]
+        return years
+    if len(years) >= 2 and counts[years[-1]] < 0.5 * counts[years[-2]]:
+        years = years[:-1]
+    return years
+
+
+def _comparisons(months: Sequence[Mapping[str, Any]], years: Sequence[int]) -> list[Comparison]:
+    """The latest complete year against the one before; the latest month with data against the month before and against the same month a year earlier."""
     comparisons: list[Comparison] = []
     if len(years) >= 2:
-        comparisons.append(Comparison("year", {"year": years[-2]}, {"year": years[-1]}))
-    dt = fact["date"]
-    if years and _has_month(dt):
-        year_expr, month_expr = _year_expr(dt, "duckdb"), _month_expr(dt, "duckdb")
-        join = _time_join(dt)
-        span = ", ".join(str(y) for y in years[-2:])
-        sql = f"SELECT {year_expr} AS year, {month_expr} AS month, COUNT(*) AS n FROM {fact['table']} f" + (f" {join}" if join else "") + f" WHERE {year_expr} IN ({span}) GROUP BY {year_expr}, {month_expr} ORDER BY {year_expr}, {month_expr}"
-        months = [(int(r["year"]), int(r["month"])) for r in run(sql) if r.get("year") is not None and r.get("month") is not None]
-        if months:
-            latest = months[-1]
-            if len(months) >= 2:
-                previous = months[-2]
-                consecutive = (previous[0] == latest[0] and previous[1] == latest[1] - 1) or (previous[0] == latest[0] - 1 and previous[1] == 12 and latest[1] == 1)
-                if consecutive:
-                    comparisons.append(Comparison("month", {"year": previous[0], "month": previous[1]}, {"year": latest[0], "month": latest[1]}))
-            if (latest[0] - 1, latest[1]) in months:
-                comparisons.append(Comparison("same_month_prior_year", {"year": latest[0] - 1, "month": latest[1]}, {"year": latest[0], "month": latest[1]}))
+        comparisons.append(Comparison("year", {"year": int(years[-2])}, {"year": int(years[-1])}))
+    present = sorted({(int(r["year"]), int(r["month"])) for r in months if r.get("year") is not None and r.get("month") is not None and int(r.get("n") or 0) > 0})
+    if present:
+        latest = present[-1]
+        if len(present) >= 2:
+            previous = present[-2]
+            consecutive = (previous[0] == latest[0] and previous[1] == latest[1] - 1) or (previous[0] == latest[0] - 1 and previous[1] == 12 and latest[1] == 1)
+            if consecutive:
+                comparisons.append(Comparison("month", {"year": previous[0], "month": previous[1]}, {"year": latest[0], "month": latest[1]}))
+        if (latest[0] - 1, latest[1]) in present:
+            comparisons.append(Comparison("same_month_prior_year", {"year": latest[0] - 1, "month": latest[1]}, {"year": latest[0], "month": latest[1]}))
     return comparisons
 
 
-def _aggregates(fact: Mapping[str, Any], before: str, after: str) -> str:
-    m = f"f.{_q(fact['measure'])}"
-    if _aggregate_for(fact["measure"]) == "avg":
-        return f"AVG(CASE WHEN {after} THEN {m} END) AS after_value, AVG(CASE WHEN {before} THEN {m} END) AS before_value, SUM(CASE WHEN {after} THEN 1 ELSE 0 END) AS after_rows, SUM(CASE WHEN {before} THEN 1 ELSE 0 END) AS before_rows"
-    return f"SUM(CASE WHEN {after} THEN {m} ELSE 0 END) AS after_value, SUM(CASE WHEN {before} THEN {m} ELSE 0 END) AS before_value, SUM(CASE WHEN {after} THEN 1 ELSE 0 END) AS after_rows, SUM(CASE WHEN {before} THEN 1 ELSE 0 END) AS before_rows"
+def _points(months: Sequence[Mapping[str, Any]], index: int, aggregate: str, years: Sequence[int], value_key: str | None = None) -> tuple[Point, ...]:
+    """The monthly series of one measure over the compared years and whatever follows them."""
+    start = int(years[-2]) if len(years) >= 2 else (int(years[0]) if years else 0)
+    key = value_key or f"v{index}"
+    points: list[Point] = []
+    for row in months:
+        if row.get("year") is None or row.get("month") is None or int(row["year"]) < start:
+            continue
+        rows = int(row.get("n") or 0)
+        value = float(row.get(key) or 0)
+        if aggregate == "avg":
+            value = value / rows if rows else 0.0
+        points.append(Point(int(row["year"]), int(row["month"]), value, rows))
+    return tuple(points)
 
 
-def _verification(fact: Mapping[str, Any], from_clause: str, before: str, after: str, filters: Sequence[str]) -> dict[str, str]:
-    function = "AVG" if _aggregate_for(fact["measure"]) == "avg" else "SUM"
-    m = f"f.{_q(fact['measure'])}"
-    return {
-        "before": f"SELECT {function}({m}) AS value {from_clause} WHERE " + " AND ".join([f"({before})", *filters]),
-        "after": f"SELECT {function}({m}) AS value {from_clause} WHERE " + " AND ".join([f"({after})", *filters]),
-    }
-
-
-def _movement(run: Callable[[str], list[dict[str, Any]]], fact: Mapping[str, Any], comparison: Comparison, path: Mapping[str, Any] | None, group: Any, parent: tuple[tuple[Mapping[str, Any], Any], ...]) -> Movement:
-    """The total-level movement (path None), or one filtered group when a drill needs a parent figure."""
-    before, after = _period_condition(fact, comparison.before, "duckdb"), _period_condition(fact, comparison.after, "duckdb")
-    joins = _Joins()
-    filters = [_filter(joins, p, v) for p, v in parent]
-    if path is not None:
-        filters.append(_filter(joins, path, group))
-    where = " AND ".join([f"(({before}) OR ({after}))", *filters])
-    time_join = _time_join(fact["date"])
-    from_clause = f"FROM {fact['table']} f" + (f" {time_join}" if time_join else "") + "".join(" " + c for c in joins.clauses)
-    sql = f"SELECT {_aggregates(fact, before, after)} {from_clause} WHERE {where}"
-    rows = run(sql)
+def _movement(run: Callable[[str], list[dict[str, Any]]], dialect: Any, fact: Mapping[str, Any], comparison: Comparison, filters: _Filters, *, path: Mapping[str, Any] | None = None, group: Any = None) -> Movement:
+    """One figure at the total level, or for one group when a drill needs a parent figure."""
+    narrow = list(filters) + ([(path, group)] if path is not None else [])
+    query = dialect.movement(fact, comparison, narrow)
+    rows = run(query)
     row = rows[0] if rows else {}
-    verification = _verification(fact, from_clause, before, after, filters)
-    return Movement(fact["table"], fact["measure"], comparison, float(row.get("before_value") or 0), float(row.get("after_value") or 0), int(row.get("before_rows") or 0), int(row.get("after_rows") or 0), sql, verification, path, group, tuple((str(p["column"]), v) for p, v in parent), _aggregate_for(fact["measure"]))
+    verification = {"before": dialect.total(fact, comparison.before, narrow), "after": dialect.total(fact, comparison.after, narrow)}
+    return Movement(fact["table"], fact["measure"], comparison, float(row.get("before_value") or 0), float(row.get("after_value") or 0), int(row.get("before_rows") or 0), int(row.get("after_rows") or 0), query, verification, path, group, tuple((str(p["column"]), v) for p, v in filters), fact["aggregate"])
 
 
-def _filter(joins: _Joins, path: Mapping[str, Any], value: Any) -> str:
-    ref = joins.ref(path)
-    return f"{ref} IS NULL" if value is None else f"{ref} = {_sql_literal(value)}"
-
-
-def _grouped(run: Callable[[str], list[dict[str, Any]]], fact: Mapping[str, Any], comparison: Comparison, path: Mapping[str, Any], parent: tuple[tuple[Mapping[str, Any], Any], ...]) -> list[Movement]:
-    """Every group of one path in one query, within the parent groups of a drill."""
-    before, after = _period_condition(fact, comparison.before, "duckdb"), _period_condition(fact, comparison.after, "duckdb")
-    joins = _Joins()
-    filters = [_filter(joins, p, v) for p, v in parent]
-    label = joins.ref(path)
-    where = " AND ".join([f"(({before}) OR ({after}))", *filters])
-    time_join = _time_join(fact["date"])
-    from_clause = f"FROM {fact['table']} f" + (f" {time_join}" if time_join else "") + "".join(" " + c for c in joins.clauses)
-    sql = f"SELECT {label} AS label, {_aggregates(fact, before, after)} {from_clause} WHERE {where} GROUP BY {label}"
-    movements = []
-    parent_columns = tuple((str(p["column"]), v) for p, v in parent)
-    for row in run(sql):
+def _decompose(run: Callable[[str], list[dict[str, Any]]], dialect: Any, ledger: list[Movement], parent: Movement, fact: Mapping[str, Any], path: Mapping[str, Any], parents: _Filters, top: int) -> Decomposition:
+    """Every group of one path in one query, classified; the groups join the ledger with their own recomputation queries."""
+    comparison = parent.comparison
+    query = dialect.grouped(fact, comparison, path, parents)
+    parent_columns = tuple((str(p["column"]), v) for p, v in parents)
+    groups: list[Movement] = []
+    for row in run(query):
         group = row.get("label")
-        group_filters = [*filters, _filter(joins, path, group)]
-        verification = _verification(fact, from_clause, before, after, group_filters)
-        movements.append(Movement(fact["table"], fact["measure"], comparison, float(row.get("before_value") or 0), float(row.get("after_value") or 0), int(row.get("before_rows") or 0), int(row.get("after_rows") or 0), sql, verification, path, group, parent_columns, _aggregate_for(fact["measure"])))
-    return movements
+        narrow = [*parents, (path, group)]
+        verification = {"before": dialect.total(fact, comparison.before, narrow), "after": dialect.total(fact, comparison.after, narrow)}
+        groups.append(Movement(fact["table"], fact["measure"], comparison, float(row.get("before_value") or 0), float(row.get("after_value") or 0), int(row.get("before_rows") or 0), int(row.get("after_rows") or 0), query, verification, path, group, parent_columns, fact["aggregate"]))
+    ledger.extend(groups)
+    decomposition = _classify(parent, path, groups, top)
+    values = [g.group for g in decomposition.groups]
+    verification = {"before": dialect.groups(fact, comparison.before, path, parents, values), "after": dialect.groups(fact, comparison.after, path, parents, values)} if values else {}
+    return replace(decomposition, verification=verification, size=len(groups))
 
 
-def _decompose(parent: Movement, path: Mapping[str, Any], groups: Sequence[Movement], top: int) -> Decomposition:
+def _classify(parent: Movement, path: Mapping[str, Any], groups: Sequence[Movement], top: int) -> Decomposition:
     """Classify how a change spreads over the groups of one path.
 
     ``single``: one group carries at least half of the change and more than
@@ -506,6 +1201,10 @@ def _decompose(parent: Movement, path: Mapping[str, Any], groups: Sequence[Movem
     return Decomposition(parent, path, tuple(same[:top] + opposite[:2]), concentration, explained)
 
 
+def _rank(d: Decomposition) -> int:
+    return {"single": 4, "concentrated": 3, "offsetting": 2, "broad": 1, "proportional": 0, "none": -1}.get(d.concentration, 0)
+
+
 def _flags(total: Movement, comparison: Comparison, max_date: str | None) -> tuple[str, ...]:
     flags: list[str] = []
     pct, rows_pct = total.pct, total.rows_pct
@@ -523,25 +1222,52 @@ def _flags(total: Movement, comparison: Comparison, max_date: str | None) -> tup
     return tuple(flags)
 
 
-def verify_sweep(sweep_result: Sweep, executor: Any, *, tolerance: float = 1e-6) -> list[str]:
-    """Recompute every finding's headline and group figures with their independent per-period queries; the mismatches, as text."""
+# --------------------------------------------------------------------------- #
+# Verification
+# --------------------------------------------------------------------------- #
+
+
+def verify_sweep(result: Sweep, probe: Any, *, tolerance: float = 1e-6) -> Sweep:
+    """Recompute every reported figure with its independent per-period query; the result carries the mismatches and the count."""
     mismatches: list[str] = []
     checked: set[str] = set()
+    recomputed = 0
 
-    def check(m: Movement, label: str) -> None:
+    def close(expected: float, actual: float) -> bool:
+        return abs(actual - expected) <= tolerance * max(1.0, abs(expected))
+
+    def figure(m: Movement, label: str) -> None:
+        nonlocal recomputed
         key = m.verification["after"] + m.verification["before"]
         if key in checked:
             return
         checked.add(key)
         for side, expected in (("before", m.before_value), ("after", m.after_value)):
-            rows = executor.run({"kind": "sql", "sql": m.verification[side]})
+            rows = probe.run(m.verification[side])
             actual = float((rows[0] or {}).get("value") or 0) if rows else 0.0
-            if abs(actual - expected) > tolerance * max(1.0, abs(expected)):
+            recomputed += 1
+            if not close(expected, actual):
                 mismatches.append(f"{label} {side}: expected {expected}, recomputed {actual}")
 
-    for finding in sweep_result.findings:
-        check(finding.movement, f"{finding.movement.fact}.{finding.movement.measure} {finding.movement.comparison.label}")
-        for d in (*finding.decompositions[:1], *finding.drill):
-            for g in d.groups[:3]:
-                check(g, f"{g.fact}.{g.measure} {g.comparison.label} {_word(g.path)}={_label(g.group)}")
-    return mismatches
+    def groups(d: Decomposition) -> None:
+        nonlocal recomputed
+        if not d.verification or not d.groups:
+            return
+        key = d.verification["after"] + d.verification["before"]
+        if key in checked:
+            return
+        checked.add(key)
+        for side in ("before", "after"):
+            actual = {row.get("label"): float(row.get("value") or 0) for row in probe.run(d.verification[side])}
+            for g in d.groups:
+                expected = g.before_value if side == "before" else g.after_value
+                got = actual.get(g.group, 0.0)
+                recomputed += 1
+                if not close(expected, got):
+                    mismatches.append(f"{g.fact}.{g.measure} {g.comparison.label} {_word(g.path)}={_label(g.group)} {side}: expected {expected}, recomputed {got}")
+
+    for finding in result.findings:
+        figure(finding.movement, f"{finding.movement.fact}.{finding.movement.measure} {finding.movement.comparison.label}")
+        for d in (*finding.decompositions[:1], *finding.drill[:1]):
+            groups(d)
+    return replace(result, mismatches=tuple(mismatches), recomputed=recomputed, verified=True)

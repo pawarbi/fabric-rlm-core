@@ -176,25 +176,37 @@
   transactions, invoices); every question the schema supports is generated
   before the limit is applied, so a source with many facts keeps its trend,
   driver and period questions. Tests cover each of those shapes end to end.
-- **What moved: a budgeted sweep** (`fabric_rlm.sweep`). For every fact in
-  scope, `sweep` takes the measures the schema exposes, the comparisons the
-  time axis supports (the latest month against the month before, the same
-  month a year earlier, the latest complete year against the previous one)
-  and every grouping path the joins reach, measures each movement with one
-  query per grouping, decomposes the material ones by every path, and
-  classifies each decomposition: one group carries it, a few do, groups
-  moved in proportion to their size so the path explains nothing, or groups
-  moved both ways. The leading group of the most concentrated decomposition
-  is drilled one level further. Scores, ratings and rates are averaged, not
-  summed. Every figure in the ledger carries the query that produced it and
-  an independent per-period query that recomputes it (`verify_sweep`); a
-  movement whose row count moved as much as its value is flagged as volume
-  or coverage rather than rate, a small base and an incomplete last month
-  are flagged too. No model is involved. `review_agent(sweep_budget=N)` runs
-  it per lakehouse source, the report gains a "What moved" section in both
-  renderings, the RLM proposer hears the findings, and the notebook runs it
-  with `SWEEP_BUDGET`. Measures no longer include order numbers, codes or
-  text columns.
+- **What moved: a sweep and reports over a source** (`fabric_rlm.sweep`,
+  `fabric_rlm.reports`). `what_moved(source)` takes a `LakehouseSource` or
+  a `SemanticModel` directly and measures, with the source's own engine
+  (DuckDB SQL over OneLake; DAX through the model's relationships), how
+  every measure of every fact moved between the periods the time axis
+  supports: the latest month against the month before, the same month a
+  year earlier, the latest complete year against the previous one. Material
+  movements are decomposed by every grouping the joins or relationships
+  reach and classified (one group carries it, a few do, groups moved in
+  proportion to their size so the grouping explains nothing, groups moved
+  both ways), and the leading group is drilled one level further. The
+  sweep runs in two phases so the budget goes where it matters (every total
+  first, then the material ones largest relative change first), collapses
+  measures that move identically, averages scores and rates instead of
+  summing them, and flags volume-driven changes, small bases and an
+  incomplete last month. Every figure carries the query that produced it
+  and an independent per-period query that recomputes it; `verify_sweep`
+  runs those, grouped so a decomposition costs two queries to check.
+  `report(source, request)` reads a request in plain words against the
+  source's vocabulary (its tables, measures, grouping columns and the
+  instructions' words for them) into a `ReportSpec` and builds one of four
+  reports: trend (by month, and by the largest groups of each grouping
+  asked for), root cause (one movement decomposed by the groupings asked
+  for and drilled), recap (the full sweep) and top movers (the groups that
+  rose and fell most); the page states how the request was read.
+  `Sweep.to_html()` and `Report.to_html()` render a self-contained
+  dashboard with headline cards, trend lines, a waterfall of drivers, a
+  driver scatter (share of base against share of change), the tables and
+  the queries behind every figure; `save(path)` writes it as a page.
+  Notebook: `examples/notebooks/rlm_what_moved.ipynb`. Measures no longer
+  include order numbers, codes or text columns.
 
 ### Changed
 
