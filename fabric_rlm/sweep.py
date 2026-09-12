@@ -368,7 +368,7 @@ class Sweep:
             lead = best.groups[0]
             share, base = best.share_of_change(lead), best.share_of_base(lead)
             if best.concentration in {"single", "concentrated"} and share is not None and base is not None:
-                text += f", led by {_label(lead.group)} ({share:.0%} of the change on {base:.0%} of the base)"
+                text += f", led by {_label(lead.group)} ({share:.0%} of the change, from almost no base before)" if base < 0.01 else f", led by {_label(lead.group)} ({share:.0%} of the change on {base:.0%} of the base)"
             elif best.concentration == "proportional":
                 text += f", spread across {_word(best.path)} groups in proportion to their size"
             elif best.concentration == "offsetting":
