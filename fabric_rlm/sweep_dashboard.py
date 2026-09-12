@@ -621,3 +621,213 @@ def render_report(report: Any) -> str:
 
 def document_report(report: Any) -> str:
     return _page(f"{report.spec.title.capitalize()}: {report.sweep.source}", render_report(report))
+
+
+# --------------------------------------------------------------------------- #
+# The Monday Morning Brief
+# --------------------------------------------------------------------------- #
+
+
+def _spark_svg(values: Sequence[float], width: int = 160, height: int = 36) -> str:
+    if len(values) < 2:
+        return ""
+    low, high = min(values), max(values)
+    span = (high - low) or 1.0
+    step = (width - 4) / (len(values) - 1)
+    points = [(2 + i * step, 2 + (high - v) * (height - 4) / span) for i, v in enumerate(values)]
+    path = " ".join(f"{'M' if i == 0 else 'L'}{x:.1f},{y:.1f}" for i, (x, y) in enumerate(points))
+    last_x, last_y = points[-1]
+    return f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" aria-hidden="true"><path d="{path}" fill="none" stroke="#94a3b8" stroke-width="1.5"/><circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="3" fill="#2563eb"/></svg>'
+
+
+def _weekly_svg(metric: Any, title: str) -> str:
+    """The last 52 weeks with the briefed week marked, level shifts as dashed lines, and the expectation for the week as a hollow marker."""
+    weeks = list(metric.weeks)
+    target = metric.target
+    if target is None or len(weeks) < 2:
+        return ""
+    index = next((i for i, w in enumerate(weeks) if w.start == target.start), len(weeks) - 1)
+    window = weeks[max(0, index - 51) : index + 1]
+    width, height, left, right, top, bottom = 640, 240, 64, 16, 28, 40
+    values = [w.value for w in window]
+    expected = metric.context.get("expected")
+    low, high = min(0.0, min(values)), max(values + ([expected] if expected else []))
+    ticks = _nice_ticks(low, high)
+    low, high = min(ticks[0], low), max(ticks[-1], high)
+    span = high - low or 1.0
+
+    def x(i: int) -> float:
+        return left + i * (width - left - right) / max(1, len(window) - 1)
+
+    def y(v: float) -> float:
+        return top + (high - v) * (height - top - bottom) / span
+
+    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="{esc(title)}">']
+    parts.append(f'<text x="{left}" y="16" font-size="12" fill="#374151" font-weight="600">{esc(title)}</text>')
+    for tick in ticks:
+        parts.append(f'<line x1="{left}" x2="{width - right}" y1="{y(tick):.1f}" y2="{y(tick):.1f}" stroke="#eef2f7"/>')
+        parts.append(f'<text x="{left - 6}" y="{y(tick) + 4:.1f}" font-size="10" fill="#6b7280" text-anchor="end">{esc(_compact(tick))}</text>')
+    step = max(1, round(len(window) / 6))
+    for i, w in enumerate(window):
+        if i % step == 0:
+            parts.append(f'<text x="{x(i):.1f}" y="{height - bottom + 14}" font-size="10" fill="#6b7280" text-anchor="middle">{esc(_short_date(w.start))}</text>')
+    starts = {w.start: i for i, w in enumerate(window)}
+    for point in metric.change_points:
+        if point.start in starts:
+            px = x(starts[point.start])
+            parts.append(f'<line x1="{px:.1f}" x2="{px:.1f}" y1="{top}" y2="{height - bottom}" stroke="#f59e0b" stroke-dasharray="4 3"><title>{esc(f"level shift: {_full(point.before)} to {_full(point.after)}")}</title></line>')
+    path = " ".join(f"{'M' if i == 0 else 'L'}{x(i):.1f},{y(v):.1f}" for i, v in enumerate(values))
+    parts.append(f'<path d="{path}" fill="none" stroke="#2563eb" stroke-width="2" stroke-linejoin="round"/>')
+    for i, w in enumerate(window):
+        parts.append(f'<circle cx="{x(i):.1f}" cy="{y(w.value):.1f}" r="2.2" fill="#2563eb"><title>{esc(f"{w.label}: {_full(w.value)}")}</title></circle>')
+    last = len(window) - 1
+    if expected:
+        parts.append(f'<circle cx="{x(last):.1f}" cy="{y(expected):.1f}" r="5" fill="none" stroke="#6b7280" stroke-width="1.5"><title>{esc(f"expected: {_full(expected)}")}</title></circle>')
+    parts.append(f'<circle cx="{x(last):.1f}" cy="{y(values[-1]):.1f}" r="5" fill="#dc2626"><title>{esc(f"this week: {_full(values[-1])}")}</title></circle>')
+    parts.append(f'<text x="{width - right}" y="{height - 4}" font-size="10" fill="#9ca3af" text-anchor="end">red: this week; hollow: the expectation; dashed: a level shift</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _short_date(iso: str) -> str:
+    import datetime as _dt
+
+    day = _dt.date.fromisoformat(iso)
+    return f"{day.day} {calendar.month_abbr[day.month]} {str(day.year)[2:]}"
+
+
+def _weekday_svg(shares: Any, title: str) -> str:
+    if not shares or not any(v for v, _u in shares.values()):
+        return ""
+    width, height, left, top, bottom = 640, 170, 40, 26, 30
+    slot = (width - left - 10) / 7
+    high = max(max(this, usual) for this, usual in shares.values()) or 1.0
+
+    def y(v: float) -> float:
+        return top + (high - v) * (height - top - bottom) / high
+
+    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="{esc(title)}">']
+    parts.append(f'<text x="{left}" y="16" font-size="12" fill="#374151" font-weight="600">{esc(title)}</text>')
+    for weekday in range(7):
+        this, usual = shares.get(weekday, (0.0, 0.0))
+        cx = left + slot * weekday + slot / 2
+        parts.append(f'<rect x="{cx - 22:.1f}" y="{y(usual):.1f}" width="20" height="{max(0.0, y(0) - y(usual)):.1f}" fill="#cbd5e1"><title>{esc(f"usual: {usual:.0%}")}</title></rect>')
+        parts.append(f'<rect x="{cx + 2:.1f}" y="{y(this):.1f}" width="20" height="{max(0.0, y(0) - y(this)):.1f}" fill="#2563eb"><title>{esc(f"this week: {this:.0%}")}</title></rect>')
+        parts.append(f'<text x="{cx:.1f}" y="{height - bottom + 14}" font-size="10" fill="#6b7280" text-anchor="middle">{calendar.day_abbr[weekday]}</text>')
+    parts.append(f'<text x="{width - 10}" y="{height - 4}" font-size="10" fill="#9ca3af" text-anchor="end">blue: this week; grey: the usual share over the twelve weeks before</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _context_table(metric: Any) -> str:
+    c = metric.context
+    rows = [("This week", c.get("value"), None)]
+    if c.get("previous") is not None:
+        rows.append(("Week before", c["previous"], c.get("wow_pct")))
+    if c.get("avg4") is not None:
+        rows.append(("Average of the last 4 weeks", c["avg4"], c.get("vs_avg4_pct")))
+    if c.get("avg13") is not None:
+        rows.append(("Average of the last 13 weeks", c["avg13"], c.get("vs_avg13_pct")))
+    if c.get("prior_year") is not None:
+        rows.append(("Same week last year", c["prior_year"], c.get("yoy_pct")))
+    if c.get("expected"):
+        rows.append(("Expected for this week", c["expected"], c.get("vs_expected_pct")))
+    body = "".join(f"<tr><td>{esc(label)}</td><td>{esc(_full(value)) if value is not None else ''}</td><td class=\"{_direction(pct or 0) if pct is not None else 'flat'}\">{esc(_pct(pct)) if pct is not None else ''}</td></tr>" for label, value, pct in rows)
+    return f"<table><tr><th>Context</th><th>Value</th><th>This week against it</th></tr>{body}</table>"
+
+
+def _metric_section(metric: Any, index: int) -> str:
+    from .sweep import _concentration_sentence
+
+    c = metric.context
+    chips = []
+    if c.get("verdict"):
+        chips.append(f'<span class="chip">{esc(c["verdict"])}</span>')
+    if c.get("trend_note"):
+        chips.append(f'<span class="chip">{esc(c["trend_note"])}</span>')
+    if c.get("rank_note"):
+        chips.append(f'<span class="chip">{esc(c["rank_note"])}</span>')
+    if c.get("streak_note"):
+        chips.append(f'<span class="chip">{esc(c["streak_note"])}</span>')
+    parts = [f'<div class="card"><h3>{index}. {esc(metric.name.capitalize())}</h3>', f'<div class="story">{esc(metric.headline)}</div>', "".join(chips)]
+    from .brief import _week_label
+
+    parts.append(_weekly_svg(metric, f"{metric.name.capitalize()} by week"))
+    for point in metric.change_points:
+        parts.append(f'<div class="note">Level shift the {esc(_week_label(point.start))}: the weekly average went from {esc(_full(point.before))} to {esc(_full(point.after))} ({esc(_pct(point.pct))}).</div>')
+    parts.append(_context_table(metric))
+    finding = metric.finding
+    if finding is not None:
+        parts.append("<h3 style=\"margin-top:12px\">Why it moved</h3>")
+        for flag in finding.flags:
+            parts.append(f'<div class="note">{esc(flag)}</div>')
+        for text in metric.explanations:
+            parts.append(f'<div class="story">{esc(text)}</div>')
+        best = finding.best
+        if best is not None and best.groups:
+            parts.append('<div class="grid2">' + _waterfall_svg(best, f"Week over week, by {_word(best.path)}") + _scatter_svg(best, f"Who moved more than their size, by {_word(best.path)}") + "</div>")
+            parts.append(_groups_table(best))
+            lead = finding.lead_drill
+            if lead is not None:
+                parts.append(_groups_table(lead))
+        others = finding.decompositions[1:]
+        if others:
+            parts.append('<div class="caption">Other groupings tried: ' + "".join(f'<span class="chip">by <b>{esc(_word(d.path))}</b>: {esc(_concentration_words(d.concentration))}</span>' for d in others) + "</div>")
+    prior = metric.prior_year_finding
+    if prior is not None and prior.best is not None and prior.best.groups:
+        parts.append(f'<div class="story"><b>Against the same week last year, by {esc(_word(prior.best.path))}:</b> {esc(_concentration_sentence(prior.best))}</div>')
+    if metric.pattern or any(v for v, _u in metric.weekday_shares.values()):
+        parts.append("<h3 style=\"margin-top:12px\">Pattern within the week</h3>")
+        if metric.pattern:
+            parts.append(f'<div class="story">{esc(metric.pattern)}</div>')
+        parts.append(_weekday_svg(metric.weekday_shares, "Share of the week by day"))
+    for note in metric.notes:
+        parts.append(f'<div class="caption">{esc(note)}</div>')
+    if finding is not None:
+        m = finding.movement
+        parts.append("<details><summary>Queries behind these figures</summary>" + "".join(f'<div class="caption">{esc(label)}</div><pre>{esc(text)}</pre>' for label, text in (("Measured by", m.query), ("Recomputed by (this week)", m.verification.get("after", "")), ("Recomputed by (week before)", m.verification.get("before", ""))) if text) + "</details>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def render_brief(brief: Any) -> str:
+    """The brief as an HTML fragment with its own styles: one look, the watch list, every metric, what moves together."""
+    kind = "semantic model" if brief.kind == "semantic_model" else brief.kind
+    parts = [f"<style>{_STYLE}</style>", '<div class="wm">']
+    parts.append(f"<h1>{esc(brief.title)}</h1>")
+    badge = (
+        f'<span class="badge {"ok" if not brief.mismatches else "warn"}">{brief.recomputed} figures recomputed, {len(brief.mismatches)} mismatch{"es" if len(brief.mismatches) != 1 else ""}</span>'
+        if brief.verified and brief.recomputed
+        else '<span class="badge muted">nothing to recompute</span>' if brief.verified else '<span class="badge muted">not recomputed</span>'
+    )
+    parts.append(f'<div class="sub">Week of {esc(brief.week_label)}. {esc(kind)}, {len(brief.metrics)} metric(s), {brief.queries} of {brief.budget} queries{esc(_seconds(brief.elapsed))}. {badge}</div>')
+    if brief.metrics:
+        parts.append("<h2>In one look</h2>")
+        cards = []
+        for metric in brief.metrics:
+            c = metric.context
+            values = [w.value for w in metric.weeks[-13:]]
+            chips = "".join(f'<span class="{_direction(v)}">{esc(label)} {esc(_pct(v))}</span> ' for label, v in (("wow", c.get("wow_pct")), ("yoy", c.get("yoy_pct")), ("vs 13w", c.get("vs_avg13_pct"))) if v is not None)
+            cards.append(f'<div class="kpi"><div class="t" title="{esc(metric.name)}">{esc(metric.name.capitalize())}</div><div class="v">{esc(_compact(c.get("value", 0.0)))}</div><div class="d">{chips}</div>{_spark_svg(values)}</div>')
+        parts.append(f'<div class="kpis">{"".join(cards)}</div>')
+    if brief.watch:
+        parts.append("<h2>Watch</h2>")
+        parts.append("".join(f'<div class="note">{esc(text)}</div>' for text in brief.watch))
+    for index, metric in enumerate(brief.metrics, start=1):
+        parts.append(_metric_section(metric, index))
+    if brief.comovement:
+        parts.append("<h2>Across metrics</h2>")
+        parts.append("".join(f'<div class="story">{esc(text)}</div>' for text in brief.comovement))
+    if brief.mismatches:
+        parts.append("<h2>Figures that did not recompute</h2>")
+        parts.append("".join(f'<div class="note">{esc(text)}</div>' for text in brief.mismatches[:10]))
+    if brief.notes:
+        parts.append("<h2>Notes</h2>")
+        parts.append("".join(f'<div class="caption">{esc(note)}</div>' for note in brief.notes))
+    parts.append('<div class="foot">Every figure was computed by the source and, where it is reported as a movement, recomputed by an independent query. The seasonal expectation, level shifts, patterns and associations are computed from the source\'s own weekly history; no language model wrote a number.</div>')
+    parts.append("</div>")
+    return "\n".join(parts)
+
+
+def document_brief(brief: Any) -> str:
+    return _page(brief.title, render_brief(brief))

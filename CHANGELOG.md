@@ -207,6 +207,26 @@
   the queries behind every figure; `save(path)` writes it as a page.
   Notebook: `examples/notebooks/rlm_what_moved.ipynb`. Measures no longer
   include order numbers, codes or text columns.
+- **Monday Morning Brief** (`fabric_rlm.brief`, or `report(source, "monday
+  morning brief: revenue by region, orders")`). Name the metrics to track
+  and the brief takes the latest complete Monday-to-Sunday week the source
+  holds (or the week you name), measures each metric for it with the
+  source's engine at day grain, and puts it in context: the week before, the
+  same week a year earlier, the averages of the last four and thirteen
+  weeks, the seasonal expectation (the recent level scaled by how that week
+  of the year ran against its own level in prior years) and the rank against
+  the record. It finds level shifts in the weekly history (binary
+  segmentation on the means), calls a week unusual when it sits far from
+  the expectation in units of the recent residuals, decomposes the
+  week-over-week move by the groupings named and drills the leading group,
+  splits the move into volume and value per row, states the counterfactual
+  for the leading group, reads the day-of-week pattern against the twelve
+  weeks before, notes which metrics moved together and which led by a week,
+  and keeps a watch list. The page is a newsletter: one look, the watch
+  list, one section per metric with the weekly chart (the week, the
+  expectation and the level shifts marked), the context table, the drivers,
+  the pattern, and the queries. What it says about causes is what the
+  history supports and it says so.
 
 ### Changed
 

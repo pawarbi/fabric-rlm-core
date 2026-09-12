@@ -26,6 +26,11 @@
 # - **root cause**: `"why did reseller sales fall in December 2013 by product and territory"`
 # - **recap**: `"weekly recap"` or `"what moved"`
 # - **top movers**: `"top 10 movers by customer year over year"`
+# - **Monday Morning Brief**: `"monday morning brief: revenue by region, orders"`,
+#   last week for the metrics you name, in context (the week before, the same
+#   week last year, the recent averages, the seasonal expectation), with level
+#   shifts, drivers, the volume and rate split, the day-of-week pattern and what
+#   moved together
 #
 # The page says how the request was read; a wrong reading is fixed by
 # rewording, or by passing a `ReportSpec` with the exact columns.
@@ -104,13 +109,14 @@ else:
 
 # CELL ********************
 
-result = report(source, REQUEST, years=YEARS, instructions=INSTRUCTIONS, budget=BUDGET)
-for line in result.spec.reading:
+result = report(source, REQUEST, years=YEARS, instructions=INSTRUCTIONS, budget=BUDGET)   # a Report, or a Brief for a brief request
+print(result.title)
+for line in getattr(getattr(result, "spec", None), "reading", ()):
     print("  " + line)
-print(result.sweep.summary())
+print(result.summary())
 for line in result.lines()[:12]:
     print("  " + line)
-for note in result.sweep.notes:
+for note in result.notes:
     print("note:", note)
 
 # METADATA ********************
@@ -167,6 +173,12 @@ if REPORT_PATH:
 #
 # exact = report(source, ReportSpec(kind="root_cause", facts=("factresellersales",), measures=("SalesAmount",), groupings=("EnglishProductCategoryName", "SalesTerritoryRegion"), period={"year": 2013, "month": 12}, against={"year": 2012, "month": 12}), years=YEARS, instructions=INSTRUCTIONS, budget=BUDGET)
 # displayHTML(exact.to_html())
+#
+# the brief, straight from the metrics you track; schedule this notebook for Monday mornings
+# from fabric_rlm.brief import brief
+# monday = brief(source, ["internet sales revenue by product category and country", "reseller sales revenue by reseller"], instructions=INSTRUCTIONS, budget=90)
+# displayHTML(monday.to_html())
+# monday.save("/lakehouse/default/Files/monday_morning_brief.html")
 
 # METADATA ********************
 

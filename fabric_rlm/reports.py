@@ -29,18 +29,19 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .data_agent_review import AgentDataSource, AgentSnapshot, _measure_columns, _month_name, _tables_named_in, attribute_paths, build_vocabulary, excluded_terms, humanize_column
+from .data_agent_review import AgentDataSource, AgentSnapshot, _is_key, _is_time_column, _measure_columns, _month_name, _tables_named_in, attribute_paths, build_vocabulary, excluded_terms, humanize_column
 from .sweep import Comparison, Movement, Point, Sweep, _aggregate_for, _choose_paths, _points, _probe_for, sweep, verify_sweep
 
 __all__ = ["Report", "ReportSpec", "parse_request", "report"]
 
 _KINDS = {
+    "brief": re.compile(r"\b(brief|monday morning|newsletter)\b", re.IGNORECASE),
     "root_cause": re.compile(r"\b(root cause|why|what drove|driver|drivers|drove|explain|cause|caused|reason)\b", re.IGNORECASE),
     "top_movers": re.compile(r"\b(top movers|movers|biggest|largest|winners|losers|risers|fallers|gainers|decliners|most improved)\b", re.IGNORECASE),
     "trend": re.compile(r"\b(trend|trends|over time|by month|monthly|seasonal|seasonality|month by month|time series|evolution)\b", re.IGNORECASE),
     "recap": re.compile(r"\b(recap|review|summary|summari[sz]e|what moved|overview|weekly|monthly business|wbr|mbr|highlights)\b", re.IGNORECASE),
 }
-_KIND_NAMES = {"root_cause": "root cause analysis", "top_movers": "top movers", "trend": "trend analysis", "recap": "recap of what moved"}
+_KIND_NAMES = {"brief": "Monday Morning Brief", "root_cause": "root cause analysis", "top_movers": "top movers", "trend": "trend analysis", "recap": "recap of what moved"}
 _MONTHS = {name.casefold(): index for index, name in enumerate(calendar.month_name) if name}
 _MONTHS.update({name.casefold(): index for index, name in enumerate(calendar.month_abbr) if name})
 _PERIOD = re.compile(r"\b(?:(" + "|".join(sorted(_MONTHS, key=len, reverse=True)) + r")\.?\s+)?((?:19|20)\d{2})\b", re.IGNORECASE)
@@ -108,6 +109,7 @@ class ReportSpec:
     request: str = ""
     reading: tuple[str, ...] = ()  # how the request was read, printed on the page
     unmatched: tuple[str, ...] = ()  # parts of the request nothing in the source matched
+    metrics: tuple[str, ...] = ()  # the metrics a brief tracks, in plain words
 
     @property
     def title(self) -> str:
@@ -127,6 +129,17 @@ class Report:
     @property
     def source(self) -> str:
         return self.sweep.source
+
+    @property
+    def notes(self) -> tuple[str, ...]:
+        return self.sweep.notes
+
+    @property
+    def title(self) -> str:
+        return f"{self.spec.title.capitalize()}: {self.sweep.source}"
+
+    def summary(self) -> str:
+        return self.sweep.summary()
 
     def lines(self) -> list[str]:
         return self.sweep.lines()
@@ -160,7 +173,7 @@ def _tokens(text: str) -> list[str]:
 
 
 def _kind(text: str, has_period: bool) -> str:
-    for kind in ("root_cause", "top_movers", "trend", "recap"):
+    for kind in ("brief", "root_cause", "top_movers", "trend", "recap"):
         if _KINDS[kind].search(text):
             return kind
     return "root_cause" if has_period else "recap"
@@ -235,9 +248,16 @@ def _match_facts(text: str, probe: Any, vocabulary: Any, instructions: str) -> l
 def _match_measures(text: str, schema: Any, table: str, vocabulary: Any) -> tuple[list[str], list[str]]:
     """Measure columns the request names, best first, and the request words that named them."""
     tokens = _tokens(text)
+    lowered_text = " " + " ".join(tokens) + " "
     candidates = _measure_columns(schema, table)
     scored: list[tuple[int, int, str]] = []
     matched_words: list[str] = []
+    for column in schema.tables[table]:
+        # a column named outright is the measure, whether or not its name says it is one (orders, sessions, headcount)
+        spelled = " ".join(_tokens(humanize_column(column)))
+        if column not in candidates and spelled and f" {spelled} " in lowered_text and not _is_key(column) and not _is_time_column(schema, table, column):
+            scored.append((-100, -1, column))
+            matched_words.append(spelled)
     for index, column in enumerate(candidates):
         column_words = set(_tokens(humanize_column(column))) | {column.casefold().replace("_", "")}
         term = vocabulary.measure(column).casefold() if hasattr(vocabulary, "measure") else ""
@@ -320,6 +340,12 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
     period, against = _periods(text)
     kind = _kind(text, period is not None)
     reading = [f"report: {_KIND_NAMES[kind]}"]
+    if kind == "brief":
+        from .brief import brief_request
+
+        metrics = brief_request(text)
+        reading.append("metrics: " + ", ".join(metrics) if metrics else "metrics: the first fact's main measures (the request named none)")
+        return ReportSpec(kind, request=text, reading=tuple(reading), metrics=tuple(metrics))
     facts = _match_facts(text, probe, vocabulary, joined_text)
     default_facts = list(probe.facts(joined_text))
     if facts:
@@ -389,6 +415,14 @@ def report(
     probe = _probe_for(source, timeout=timeout, name=name)
     started = time.monotonic()
     spec = request if isinstance(request, ReportSpec) else parse_request(request, probe, instructions=instructions, scope=scope)
+    if spec.kind == "brief":
+        from .brief import brief as build_brief
+
+        metrics: list[Any] = list(spec.metrics)
+        if not metrics:
+            facts = list(probe.facts(instructions))
+            metrics = [{"measure": m, "fact": facts[0]} for m in _measure_columns(probe.schema, facts[0])[:2]] if facts else []
+        return build_brief(probe, metrics, instructions=instructions, scope=scope, budget=budget, verify=verify, timeout=timeout, name=name)  # type: ignore[return-value]
     explicit = _explicit_comparisons(spec.period, spec.against)
     comparisons: Sequence[Any] | None = explicit or (list(spec.comparisons) if spec.comparisons else None)
     facts: int | Sequence[str] = list(spec.facts) if spec.facts else 2

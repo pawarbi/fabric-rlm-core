@@ -218,7 +218,11 @@ vocabulary, measures every figure with the source's engine (SQL over
 OneLake, DAX for a model), recomputes each reported figure with an
 independent query, and renders a dashboard with trend, waterfall and driver
 scatter charts (`examples/notebooks/rlm_what_moved.ipynb`). No model
-touches the numbers.
+touches the numbers. `fabric_rlm.brief.brief(source, ["revenue by region",
+"orders"])` is the Monday Morning Brief: last week for the metrics you name,
+against the week before, the same week last year, the recent averages and
+the seasonal expectation, with level shifts, the drivers of the move, the
+volume and rate split, the day-of-week pattern and what moved together.
 It also asks the data what nobody would think to put in the instructions
 (keys with no match in their dimension, dimension keys that repeat, values
 spelled in several cases in a case-sensitive lakehouse, the vocabulary of

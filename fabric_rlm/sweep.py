@@ -70,6 +70,7 @@ from .data_agent_review import (
     _rows,
     _scoped_facts,
     _sql_literal,
+    _stamp,
     _tables_named_in,
     _time_join,
     _year_expr,
@@ -115,9 +116,23 @@ def _aggregate_for(measure: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def _period_label(period: Mapping[str, Any]) -> str:
+    """``December 2013``, ``2013``, or the label a date range carries (``week of 2 Dec 2013``)."""
+    if period.get("label"):
+        return str(period["label"])
+    if period.get("start"):
+        return f"{period['start']} to {period.get('end', '')}"
+    return _month_name(period)
+
+
 @dataclass(frozen=True)
 class Comparison:
-    """Two periods the time axis can express: ``kind`` is ``month``, ``same_month_prior_year``, ``year`` or ``custom``."""
+    """Two periods the time axis can express: ``kind`` is ``month``, ``same_month_prior_year``, ``year``, ``week``, ``same_week_prior_year`` or ``custom``.
+
+    A period is ``{"year": 2013}``, ``{"year": 2013, "month": 12}``, or a
+    date range ``{"start": "2013-12-02", "end": "2013-12-09", "label": ...}``
+    with the end exclusive (a week, a quarter, any span with a day grain).
+    """
 
     kind: str
     before: Mapping[str, Any]
@@ -125,7 +140,7 @@ class Comparison:
 
     @property
     def label(self) -> str:
-        return f"{_month_name(self.before)} to {_month_name(self.after)}"
+        return f"{_period_label(self.before)} to {_period_label(self.after)}"
 
 
 @dataclass(frozen=True)
@@ -381,11 +396,33 @@ class _Sql:
             return f"AVG(CASE WHEN {condition} THEN {m} END)"
         return f"SUM(CASE WHEN {condition} THEN {m} ELSE 0 END)"
 
+    def day(self, fact: Mapping[str, Any]) -> str:
+        """The time axis at day grain: the date table's day column, its yyyymmdd key, or the fact's own date or timestamp."""
+        dt = fact["date"]
+        if dt.get("period"):
+            raise ValueError("a period written as text has no day grain")
+        if dt.get("date_table") and not dt.get("timestamp"):
+            column = _day_column(self.schema, str(dt["date_table"]))
+            if column:
+                return f"CAST(d.{_q(column)} AS DATE)"
+            return f"CAST(strptime(CAST(d.{_q(dt['date_key'])} AS VARCHAR), '%Y%m%d') AS DATE)"
+        return f"CAST({_stamp(dt, 'duckdb')} AS DATE)"
+
     def _period(self, fact: Mapping[str, Any], period: Mapping[str, Any]) -> str:
+        if period.get("start"):
+            day = self.day(fact)
+            return f"{day} >= DATE '{period['start']}' AND {day} < DATE '{period['end']}'"
         return _period_condition(fact, period, "duckdb")
 
     def _span(self, fact: Mapping[str, Any], years: Sequence[int]) -> str:
         return f"{_year_expr(fact['date'], 'duckdb')} IN ({', '.join(str(int(y)) for y in years)})"
+
+    def daily(self, fact: Mapping[str, Any], measures: Sequence[str]) -> str:
+        """Rows and the sum of every measure by day over the whole fact."""
+        day = self.day(fact)
+        values = ", ".join(f"SUM(f.{_q(m)}) AS v{i}" for i, m in enumerate(measures))
+        join = _time_join(fact["date"])
+        return f"SELECT {day} AS day, COUNT(*) AS n, {values} FROM {fact['table']} f" + (f" {join}" if join else "") + " GROUP BY 1 ORDER BY 1"
 
     def _filter(self, joins: _Joins, path: Mapping[str, Any], value: Any) -> str:
         ref = joins.ref(path)
@@ -542,6 +579,12 @@ class _Dax:
 
     def _period(self, fact: Mapping[str, Any], period: Mapping[str, Any]) -> str:
         dt = fact["date"]
+        if period.get("start"):
+            if dt["kind"] != "date":
+                raise ValueError("the model's date table has no day column, so a date range cannot be expressed")
+            ref = _dax_ref(dt["table"], dt["column"])
+            start, end = _dt.date.fromisoformat(str(period["start"])), _dt.date.fromisoformat(str(period["end"]))
+            return f"{ref} >= DATE({start.year},{start.month},{start.day}) && {ref} < DATE({end.year},{end.month},{end.day})"
         year = int(period["year"])
         month = period.get("month")
         if dt["kind"] == "date":
@@ -607,6 +650,20 @@ class _Dax:
         keys, outputs, order = self._time_keys(fact)
         values = ", ".join(f'"v{i}", {self._sum(fact, m)}' for i, m in enumerate(measures))
         return f'EVALUATE SELECTCOLUMNS(SUMMARIZECOLUMNS({keys}, "n", {self._rows(fact)}, {values}), {outputs}, "n", [n], {picked}) {order}'
+
+    def daily(self, fact: Mapping[str, Any], measures: Sequence[str]) -> str:
+        """Rows and the sum of every measure by day: the date table's day column, or the fact's own date."""
+        dt = fact["date"]
+        if dt["kind"] != "date":
+            raise ValueError("the model's date table has no day column, so there is no daily series")
+        picked = ", ".join(f'"v{i}", [v{i}]' for i in range(len(measures)))
+        if dt["table"] != fact["table"]:
+            ref = _dax_ref(dt["table"], dt["column"])
+            values = ", ".join(f'"v{i}", {self._sum(fact, m)}' for i, m in enumerate(measures))
+            return f'EVALUATE SELECTCOLUMNS(SUMMARIZECOLUMNS({ref}, "n", {self._rows(fact)}, {values}), "day", {ref}, "n", [n], {picked}) ORDER BY [day]'
+        ref = _dax_ref(fact["table"], dt["column"])
+        sums = ", ".join(f'"v{i}", SUMX(CURRENTGROUP(), {_dax_ref(fact["table"], m)})' for i, m in enumerate(measures))
+        return f'EVALUATE SELECTCOLUMNS(GROUPBY(ADDCOLUMNS(\'{fact["table"]}\', "__d", DATE(YEAR({ref}), MONTH({ref}), DAY({ref}))), [__d], "n", COUNTX(CURRENTGROUP(), 1), {sums}), "day", [__d], "n", [n], {picked}) ORDER BY [day]'
 
     def months(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if not rows or "day" not in rows[0]:
