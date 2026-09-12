@@ -1387,25 +1387,31 @@ def _classify(parent: Movement, path: Mapping[str, Any], groups: Sequence[Moveme
         return Decomposition(parent, path, ranked, "none", 0.0)
     same = sorted((g for g in groups if g.delta * total > 0), key=lambda g: -abs(g.delta))
     opposite = sorted((g for g in groups if g.delta * total < 0), key=lambda g: -abs(g.delta))
-    shares = [g.delta / total for g in same]
-    explained = sum(shares[:3])
     base = parent.before_value
 
-    def excess(g: Movement, share: float) -> float:
-        base_share = g.before_value / base if base else 0.0
-        return share - base_share
+    def share(g: Movement) -> float:
+        return g.delta / total
 
+    def excess(g: Movement) -> float:
+        # how much more of the change a group carried than its size would predict: the driver signal
+        return share(g) - (g.before_value / base if base else 0.0)
+
+    explained = sum(sorted((share(g) for g in same), reverse=True)[:3])
+    # the driver is the group that moved most against its size among those carrying a real part of the change,
+    # not the largest contributor: a big group growing in step with the total is the base, not the story
+    driver = max((g for g in same if share(g) >= 0.2), key=excess, default=None)
     if opposite and abs(sum(o.delta for o in opposite)) >= 0.5 * abs(total):
         concentration = "offsetting"
-    elif same and shares[0] >= 0.5 and excess(same[0], shares[0]) >= 0.1:
+    elif driver is not None and share(driver) >= 0.5 and excess(driver) >= 0.1:
         concentration = "single"
-    elif same and explained >= 0.7 and excess(same[0], shares[0]) >= 0.1:
+    elif driver is not None and excess(driver) >= 0.1 and explained >= 0.7:
         concentration = "concentrated"
-    elif same and all(abs(excess(g, s)) < 0.1 for g, s in zip(same[:3], shares[:3])):
+    elif same and all(abs(excess(g)) < 0.1 for g in same[:3]):
         concentration = "proportional"
     else:
         concentration = "broad"
-    return Decomposition(parent, path, tuple(same[:top] + opposite[:2]), concentration, explained)
+    ordered = ([driver] + [g for g in same if g is not driver]) if driver is not None and concentration in {"single", "concentrated"} else same
+    return Decomposition(parent, path, tuple(ordered[:top] + opposite[:2]), concentration, explained)
 
 
 def _rank(d: Decomposition) -> int:
