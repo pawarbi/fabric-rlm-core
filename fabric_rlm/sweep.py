@@ -43,7 +43,6 @@ from .data_agent_review import (
     LakehouseExecutor,
     ReviewContext,
     SourceSchema,
-    _ATTRIBUTE_HINT,
     _BUSINESS_DATE,
     _Joins,
     _LOCAL_EXCLUDED,
