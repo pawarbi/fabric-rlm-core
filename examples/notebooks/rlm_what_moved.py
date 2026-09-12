@@ -37,7 +37,7 @@
 
 # CELL ********************
 
-%pip install -q fabric-rlm  # pin a version in a scheduled notebook
+%pip install -q "fabric-rlm==0.6.1"
 
 # METADATA ********************
 
