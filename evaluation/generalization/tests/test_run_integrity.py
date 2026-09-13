@@ -40,7 +40,7 @@ def test_saved_package_has_actual_content_and_detects_mutation(tmp_path):
         runner.check_package(knowledge, snapshot)
 
 
-def test_missing_metadata_reads_result_outputs_not_nonexistent_payload():
+def test_missing_metadata_reads_the_public_outputs_contract():
     result = SimpleNamespace(
         outputs={"answer": {"status": "needs_definition", "value": "definition missing"}},
         submitted=True, failure_reason=None,

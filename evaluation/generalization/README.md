@@ -26,6 +26,31 @@ Source-call telemetry counts instrumented adapter calls, not direct pandas
 reads. Claims marked `supported` by the answer are self-reports, not independently
 verified evidence coverage.
 
+The current audit and limitations are in `POSTFIX_AUDIT.md`. To reproduce the
+final fixed-core matrix from this branch (use fresh output paths):
+
+```powershell
+$fixtures = (Resolve-Path evaluation\generalization\generated).Path
+python -m evaluation.generalization.runner live `
+  --fixtures $fixtures --output evaluation\generalization\raw-results\final-naming.json `
+  --variants descriptive,abbreviated,camel --repetitions 3 `
+  --max-live-calls 423 --max-cost-usd 5
+python -m evaluation.generalization.insufficient_metadata `
+  --fixtures $fixtures --output evaluation\generalization\raw-results\final-ambiguity.json `
+  --repetitions 3 --max-live-calls 9
+python -m evaluation.generalization.evidence_summary `
+  --input evaluation\generalization\raw-results\final-naming.json `
+  --output evaluation\generalization\evidence\final-naming-summary.json
+```
+
+For the unfixed comparison, use a separate worktree at `4878627`, copy this
+branch's `evaluation\generalization\*.py` harness into that worktree (not core),
+and run the same `runner live` command with `--variants descriptive`,
+`--max-live-calls 141`, and a distinct `final-baseline.json` output. Pass the
+same absolute `$fixtures` path. Verify that only `fabric_rlm\serializers.py`
+and `fabric_rlm\lakehouse.py` differ between core directories. Keep provider
+settings unchanged; do not merge evaluation evidence into any tested package.
+
 This evaluation is pinned to baseline commit
 `b5226712a9aa41c3173d5f427e81244c333c0179`. The freeze manifest covers every
 file below `fabric_rlm/`, including bundled skills. Evaluation code, generated

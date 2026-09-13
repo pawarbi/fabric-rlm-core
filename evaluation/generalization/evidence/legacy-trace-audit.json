@@ -1,0 +1,422 @@
+{
+  "B_registered_incomplete": [
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": false,
+            "text": "Insufficient data: ordered_units and shipped_units not available in inputs."
+          }
+        ],
+        "entity_id": null,
+        "grain": null,
+        "period": null,
+        "status": "abstain",
+        "units": null,
+        "value": "ordered_units and shipped_units data missing"
+      },
+      "operation": "order_lines.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "inventory_fill_rate",
+      "repetition": 0,
+      "source_fingerprints": {
+        "order_lines": "7babb71f6ddb06d969e7031d4dc78f40dc1984c2ace68bab19d0fc2ee4ecd423"
+      },
+      "trace_sha256": "ec7d19a09172a47b52d40c851ebc0eca448526a597a2a281fc35adbb191f1fe7"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "No data rows are marked as complete reporting periods with matching defect and production data, preventing weighted defect rate calculation."
+          }
+        ],
+        "entity_id": null,
+        "grain": null,
+        "period": null,
+        "status": "abstain",
+        "units": null,
+        "value": "missing complete reporting period data"
+      },
+      "operation": "production.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "manufacturing_weighted_defect_rate",
+      "repetition": 0,
+      "source_fingerprints": {
+        "production": "4e10288249cd2a2b3588df8a0248662fc6c92d8aba87edb3099c7c7913055305"
+      },
+      "trace_sha256": "4114af47970bea46526152b5110e9e6ad5fc502ba77a23068dd324f013a5e076"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Input data is missing expected fields for reporting completeness and units; cannot determine incomplete reporting periods."
+          }
+        ],
+        "entity_id": null,
+        "grain": null,
+        "period": null,
+        "status": "needs_definition",
+        "units": null,
+        "value": "missing_reporting_data"
+      },
+      "operation": "production.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "manufacturing_incomplete_excluded",
+      "repetition": 0,
+      "source_fingerprints": {
+        "production": "4e10288249cd2a2b3588df8a0248662fc6c92d8aba87edb3099c7c7913055305"
+      },
+      "trace_sha256": "afa76096ebecab29abffa42aafd942c71c0565bb139ee17a120b68ac1c569cc0"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": false,
+            "text": "The data source has no inventory snapshot data to calculate available units."
+          }
+        ],
+        "entity_id": null,
+        "grain": null,
+        "period": null,
+        "status": "abstain",
+        "units": null,
+        "value": "No inventory snapshot data available"
+      },
+      "operation": "inventory_snapshots.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "inventory_available_units",
+      "repetition": 0,
+      "source_fingerprints": {
+        "inventory_snapshots": "ea1a71223703bdf6b51ed936568fdb40b6a7758ca7d55864b76751ff04662a94"
+      },
+      "trace_sha256": "9626d0f999a316d0c121fff8a8072a907ef2aeae3a4c3646240c3e0500b6f00f"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Input data lacks necessary fields like 'reporting_complete', 'defect_units', 'produced_units' to calculate defect rates."
+          }
+        ],
+        "entity_ids": null,
+        "grain": null,
+        "period": null,
+        "status": "needs_definition",
+        "units": null,
+        "value": "missing required fields: reporting_complete, defect_units, produced_units"
+      },
+      "operation": "production.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "manufacturing_worst_line",
+      "repetition": 0,
+      "source_fingerprints": {
+        "production": "4e10288249cd2a2b3588df8a0248662fc6c92d8aba87edb3099c7c7913055305"
+      },
+      "trace_sha256": "72bedb9adb3b1b08671e1332cf435ac633c6d7807c4f6a67b55685b52366ee93"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": false,
+            "text": "The current data does not include shipped units broken down by customer identity, which is required to answer the question."
+          }
+        ],
+        "entity_id": null,
+        "grain": "customer_id",
+        "period": null,
+        "status": "abstain",
+        "units": "units",
+        "value": "shipped_units by customer_id data not found"
+      },
+      "operation": "shipment_events.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "inventory_top_customer",
+      "repetition": 0,
+      "source_fingerprints": {
+        "shipment_events": "35d042a90b354d357db761a11b9083154d63f773788bc2249f93cff4dd13244e"
+      },
+      "trace_sha256": "e8475dff00b032e2ac05c49b868d3bedcfb0c04177ae2e3d2f227c05917194f0"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": false,
+            "text": "Insufficient data to determine units produced in complete reporting periods; missing required production rows with 'reporting_complete' field."
+          }
+        ],
+        "entity_id": null,
+        "grain": null,
+        "period": null,
+        "status": "abstain",
+        "units": null,
+        "value": "missing_required_data"
+      },
+      "operation": "production.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "manufacturing_complete_units",
+      "repetition": 0,
+      "source_fingerprints": {
+        "production": "4e10288249cd2a2b3588df8a0248662fc6c92d8aba87edb3099c7c7913055305"
+      },
+      "trace_sha256": "6298003d2b9270e1dc123db62046a424506c2644d1b2ff4802a6c78030bf824c"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Insufficient data: rows do not contain 'reporting_complete' or 'produced_units' fields to identify incomplete reporting periods."
+          }
+        ],
+        "entity_id": null,
+        "grain": null,
+        "period": null,
+        "status": "needs_definition",
+        "units": null,
+        "value": "missing_fields_reporting_complete_and_produced_units"
+      },
+      "operation": "production.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "manufacturing_incomplete_excluded",
+      "repetition": 1,
+      "source_fingerprints": {
+        "production": "4e10288249cd2a2b3588df8a0248662fc6c92d8aba87edb3099c7c7913055305"
+      },
+      "trace_sha256": "4850f0fab4afcfc225c093aa4c9df039d90852a75fab8ca60bf8dd18cb59968a"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": false,
+            "text": "No shipment data available in the input to identify customer with most shipped units."
+          }
+        ],
+        "entity_id": null,
+        "entity_ids": null,
+        "grain": null,
+        "period": null,
+        "status": "abstain",
+        "units": null,
+        "value": "missing_shipment_data"
+      },
+      "operation": "shipment_events.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "inventory_top_customer",
+      "repetition": 1,
+      "source_fingerprints": {
+        "shipment_events": "35d042a90b354d357db761a11b9083154d63f773788bc2249f93cff4dd13244e"
+      },
+      "trace_sha256": "34927e77a5922b29554c64266f7fa614b77ec383a70568740684911212ff9a4c"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "No complete reporting period rows available to calculate weighted defect rate."
+          }
+        ],
+        "entity_id": null,
+        "grain": null,
+        "period": null,
+        "status": "abstain",
+        "units": null,
+        "value": "No complete reporting period data"
+      },
+      "operation": "production.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "manufacturing_weighted_defect_rate",
+      "repetition": 1,
+      "source_fingerprints": {
+        "production": "4e10288249cd2a2b3588df8a0248662fc6c92d8aba87edb3099c7c7913055305"
+      },
+      "trace_sha256": "fda9cc766db869553c0ae46eb8c0915bfbbbe9f064c98fa40cf2f0f1df5f5e52"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": false,
+            "text": "The dataset does not contain inventory data needed to calculate available units."
+          }
+        ],
+        "entity_id": null,
+        "grain": null,
+        "period": null,
+        "status": "abstain",
+        "units": null,
+        "value": "missing inventory data"
+      },
+      "operation": "inventory_snapshots.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "inventory_available_units",
+      "repetition": 1,
+      "source_fingerprints": {
+        "inventory_snapshots": "ea1a71223703bdf6b51ed936568fdb40b6a7758ca7d55864b76751ff04662a94"
+      },
+      "trace_sha256": "96c3d1c06c8236724df3cfbd5af894c96c646ca7c8daf10c0970ad4cf224e7e5"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": false,
+            "text": "Cannot determine reopened tickets because event_type data is missing or undefined."
+          }
+        ],
+        "entity_id": null,
+        "grain": null,
+        "period": null,
+        "status": "needs_definition",
+        "units": null,
+        "value": "event_type"
+      },
+      "operation": "ticket_events.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "service_reopened_tickets",
+      "repetition": 1,
+      "source_fingerprints": {
+        "ticket_events": "bc38913127ed84aab59e8f2adf25447f0ab2526b83d98258e7ad954b42d5a6f4"
+      },
+      "trace_sha256": "1e27f6101f5ae6c0415ce7f9b13905cc0128c9a84f65a34d3b002f22426bdc16"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "No rows with complete reporting period are available to compute weighted defect rate."
+          }
+        ],
+        "entity_id": null,
+        "entity_ids": null,
+        "grain": null,
+        "period": null,
+        "status": "abstain",
+        "units": null,
+        "value": "no complete reporting periods with reporting_complete=True"
+      },
+      "operation": "production.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "manufacturing_weighted_defect_rate",
+      "repetition": 2,
+      "source_fingerprints": {
+        "production": "4e10288249cd2a2b3588df8a0248662fc6c92d8aba87edb3099c7c7913055305"
+      },
+      "trace_sha256": "b37be1c5546a0e677c6b5dd6796c8b975c2936f0cef300e4e9de35bc2e8bdc47"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": false,
+            "text": "Input data lacks necessary details (produced_units, reporting_complete, etc.) to determine incomplete reporting periods."
+          }
+        ],
+        "entity_ids": null,
+        "grain": null,
+        "period": null,
+        "status": "needs_definition",
+        "units": null,
+        "value": "missing fields produced_units and reporting_complete"
+      },
+      "operation": "production.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "manufacturing_incomplete_excluded",
+      "repetition": 2,
+      "source_fingerprints": {
+        "production": "4e10288249cd2a2b3588df8a0248662fc6c92d8aba87edb3099c7c7913055305"
+      },
+      "trace_sha256": "e46363390fa43cb767a75be148f616a3ad4e9dc1cde7adf026a5ac763e5c8c3a"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": false,
+            "text": "No data rows available to compute available units as sum(on_hand_units - allocated_units) at latest snapshot."
+          }
+        ],
+        "entity_id": null,
+        "grain": "latest inventory snapshot",
+        "period": "latest",
+        "status": "abstain",
+        "units": "units",
+        "value": "missing data to compute available units (sum(on_hand_units - allocated_units)) at latest snapshot"
+      },
+      "operation": "inventory_snapshots.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "inventory_available_units",
+      "repetition": 2,
+      "source_fingerprints": {
+        "inventory_snapshots": "ea1a71223703bdf6b51ed936568fdb40b6a7758ca7d55864b76751ff04662a94"
+      },
+      "trace_sha256": "eefa2e9c19966004a10750cadabd966b3ec92ccbd8e36ed48a3a9515f3333a42"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "No production rows have reporting_complete marked true; cannot compute defect rates for complete periods without that definition or data."
+          }
+        ],
+        "entity_id": null,
+        "grain": null,
+        "period": null,
+        "status": "needs_definition",
+        "units": null,
+        "value": "reporting_complete"
+      },
+      "operation": "production.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "manufacturing_worst_line",
+      "repetition": 2,
+      "source_fingerprints": {
+        "production": "4e10288249cd2a2b3588df8a0248662fc6c92d8aba87edb3099c7c7913055305"
+      },
+      "trace_sha256": "650b7c93811f74e40ba8462583a5960551ffb91a5ebb9e7efefed0bdc01ce6e5"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "No customer-level shipped units data available to determine which customer received the most shipped units."
+          }
+        ],
+        "entity_id": null,
+        "grain": "customer_id",
+        "period": null,
+        "status": "abstain",
+        "units": "units",
+        "value": "shipped_units by customer_id"
+      },
+      "operation": "shipment_events.tabular.aggregate.v1",
+      "payload_matches": true,
+      "question_id": "inventory_top_customer",
+      "repetition": 2,
+      "source_fingerprints": {
+        "shipment_events": "35d042a90b354d357db761a11b9083154d63f773788bc2249f93cff4dd13244e"
+      },
+      "trace_sha256": "3a4f6fb16b2cba6ea512df5de8270b0ebcd742cffc328d137654938968cf7681"
+    }
+  ],
+  "counts": {
+    "A|not_matching_or_unsubmitted": 45,
+    "B|not_matching_or_unsubmitted": 3,
+    "B|payload_matches": 42,
+    "C|not_matching_or_unsubmitted": 3,
+    "C|payload_matches": 42
+  },
+  "warning": "Legacy traces were shared between runs; a matching payload is not a cryptographic original-run guarantee."
+}
