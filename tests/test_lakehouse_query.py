@@ -902,3 +902,164 @@ def test_query_timeout_is_validated_and_passed_to_the_deadline(tmp_path) -> None
     for bad in (0, -1, True, 10_000):
         with pytest.raises(ValueError, match="timeout"):
             source.query("SELECT 1 FROM companies", sources={"companies": "files.companies"}, timeout=bad)
+# --- F11: comment markers inside data must not be mistaken for SQL comments ---
+
+
+def _literal_source(tmp_path):
+    """A catalog whose data legitimately contains comment-marker characters."""
+    csv_path = tmp_path / "parts.csv"
+    csv_path.write_text(
+        "owner,sku,note\n"
+        "Smith--Jones,XY--01,first\n"
+        "Patel,A/*B,second\n"
+        "Okafor,ZZ-09,third\n",
+        encoding="utf-8",
+    )
+    return LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.parts", "path": str(csv_path)}],
+    )
+
+
+@pytest.mark.parametrize(
+    ("predicate", "expected"),
+    [
+        ("owner = 'Smith--Jones'", [["first"]]),
+        ("sku = 'XY--01'", [["first"]]),
+        ("sku = 'A/*B'", [["second"]]),
+        ("note LIKE '%*/%' OR note = 'third'", [["third"]]),
+    ],
+)
+def test_lakehouse_query_filters_on_values_containing_comment_markers(
+    predicate: str,
+    expected: list[list[str]],
+    tmp_path,
+) -> None:
+    """A value is data, not syntax: no rephrasing can rescue these filters."""
+    source = _literal_source(tmp_path)
+
+    result = source.query(
+        f"SELECT note FROM parts WHERE {predicate}",
+        sources={"parts": "files.parts"},
+    )
+
+    assert result["rows"] == expected
+
+
+def test_lakehouse_query_allows_comment_markers_in_quoted_identifiers(
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "odd.csv"
+    csv_path.write_text("a--b\n7\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.odd", "path": str(csv_path)}],
+    )
+
+    result = source.query(
+        'SELECT "a--b" AS value FROM odd',
+        sources={"odd": "files.odd"},
+    )
+
+    assert result["rows"] == [[7]]
+
+
+def test_lakehouse_query_allows_doubled_quotes_inside_a_literal(tmp_path) -> None:
+    csv_path = tmp_path / "parts.csv"
+    csv_path.write_text("owner\nO'Brien--Ltd\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.parts", "path": str(csv_path)}],
+    )
+
+    result = source.query(
+        "SELECT owner FROM parts WHERE owner = 'O''Brien--Ltd'",
+        sources={"parts": "files.parts"},
+    )
+
+    assert result["rows"] == [["O'Brien--Ltd"]]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM parts -- drop everything",
+        "SELECT /* sneaky */ * FROM parts",
+        "SELECT * FROM read_csv_auto/**/('C:/secrets.txt')",
+        "SELECT * FROM parts WHERE owner = 'ok' -- trailing",
+        "SELECT * FROM parts WHERE owner = 'ok' AND 1=1 /* block */",
+    ],
+)
+def test_lakehouse_query_still_rejects_comments_outside_literals(
+    sql: str,
+    tmp_path,
+) -> None:
+    source = _literal_source(tmp_path)
+
+    with pytest.raises(ValueError, match="read-only catalog query"):
+        source.query(sql, sources={"parts": "files.parts"})
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM parts WHERE owner = 'unterminated",
+        'SELECT "unterminated FROM parts',
+        # An escape-string literal is not parsed here; it fails closed.
+        r"SELECT * FROM parts WHERE owner = E'\''",
+        # Dollar-quoting is not parsed here either; it fails closed.
+        "SELECT * FROM parts WHERE owner = $$a--b$$",
+    ],
+)
+def test_lakehouse_query_fails_closed_on_quoting_it_cannot_parse(
+    sql: str,
+    tmp_path,
+) -> None:
+    source = _literal_source(tmp_path)
+
+    with pytest.raises(ValueError, match="read-only catalog query"):
+        source.query(sql, sources={"parts": "files.parts"})
+
+
+def test_catalog_query_rejections_name_their_cause() -> None:
+    """One message for every cause leaves the caller nothing to act on."""
+    normalize = lakehouse_module._normalize_catalog_query
+    causes = {}
+    for label, sql in (
+        ("empty", "   "),
+        ("too_long", "SELECT " + "x" * 200_000),
+        ("not_a_query", "DELETE FROM parts"),
+        ("comment", "SELECT * FROM parts -- drop everything"),
+        ("unterminated", "SELECT * FROM parts WHERE a = 'oops"),
+    ):
+        with pytest.raises(ValueError) as exc_info:
+            normalize(sql)
+        causes[label] = str(exc_info.value)
+
+    assert len(set(causes.values())) == len(causes), causes
+    for message in causes.values():
+        assert "read-only catalog query" in message
+    assert "empty" in causes["empty"]
+    assert "limit" in causes["too_long"]
+    assert "SELECT" in causes["not_a_query"]
+    assert "comment" in causes["comment"].casefold()
+    assert "unterminated" in causes["unterminated"]
+
+
+def test_catalog_query_rejection_names_the_unauthorized_table(tmp_path) -> None:
+    source = _literal_source(tmp_path)
+
+    with pytest.raises(ValueError) as exc_info:
+        source.query(
+            "SELECT * FROM secrets",
+            sources={"parts": "files.parts"},
+        )
+
+    assert "secrets" in str(exc_info.value)
+
+
+def test_normalize_catalog_query_returns_the_original_sql(tmp_path) -> None:
+    """Masking is for scanning only; the executed SQL must be unchanged."""
+    sql = "SELECT note FROM parts WHERE owner = 'Smith--Jones'"
+
+    assert lakehouse_module._normalize_catalog_query(f"  {sql}  ") == sql
