@@ -795,6 +795,8 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
                 definition = kpi_definition(spec, grain=grain)
                 if now:
                     explanations.append(f"The top {spec.top} ({', '.join(now.leaders)}) hold {now.share:.0%} of {measure_spec['name']} this week" + (f" against {before.share:.0%} a year ago." if before else ".") + (f" New in the top {spec.top} since a year ago: {', '.join(entrants)}." if entrants else ""))
+                    if now.groups <= spec.top:
+                        explanations.append(f"The grouping has only {now.groups} group{'s' if now.groups != 1 else ''} this week, so the top {spec.top} is all of it; a finer grouping would say more.")
                 extra = {"shares": points[-52:], "leaders_now": now.leaders if now else (), "leaders_before": before.leaders if before else (), "entrants": tuple(entrants)}
             else:
                 continue

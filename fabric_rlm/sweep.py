@@ -102,6 +102,7 @@ class _Budget(Exception):
 
 _AVERAGED = re.compile(r"(score|rating|_rate$|rate$|pct|percent|ratio|index|avg|average|mean|unit[_ ]?price|list[_ ]?price|^price$|unit[_ ]?cost|standard[_ ]?cost)", re.IGNORECASE)
 _GROUP_LIMIT = 500  # groups a decomposition query returns, largest absolute change first
+_ROW_LIMIT = 10_000  # rows a lakehouse query may return (the source's own ceiling); a daily series over 27 years fits
 _INFORMATIVE = frozenset({"single", "concentrated", "offsetting", "broad"})
 _COMPARISON_KINDS = ("year", "month", "same_month_prior_year")
 
@@ -949,7 +950,16 @@ class LakehouseProbe:
             types[str(entry["name"])] = kinds
         self.name = name or str(getattr(handle, "root", "lakehouse")).rstrip("/").rsplit("/", 1)[-1]
         self.schema = schema_from_tables(self.name, tables, types=types)
-        self._executor = LakehouseExecutor(handle.query, self.schema.tables, timeout=timeout)
+
+        def query(sql: str, **kwargs: Any) -> Any:
+            # a daily series has one row per day and a lifecycle one per period: ask for the source's full row limit,
+            # and refuse a cut result rather than analyse a history that quietly stops short
+            result = handle.query(sql, max_rows=_ROW_LIMIT, **kwargs)
+            if isinstance(result, Mapping) and result.get("truncated"):
+                raise ValueError(f"the query returned more than {_ROW_LIMIT:,} rows and was cut; narrow it before analysing it")
+            return result
+
+        self._executor = LakehouseExecutor(query, self.schema.tables, timeout=timeout)
 
     @classmethod
     def from_executor(cls, executor: Any, schema: SourceSchema, *, name: str = "lakehouse") -> "LakehouseProbe":
