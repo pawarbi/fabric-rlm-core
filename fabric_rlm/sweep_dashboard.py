@@ -433,7 +433,7 @@ def _pareto_svg(pareto: dict[str, Any], word: str, title: str) -> str:
     curve_base, curve_change = pareto["curve_base"], pareto["curve_change"]
     if n < 2 or not curve_base:
         return ""
-    width, height, left, right, top, bottom = 640, 240, 56, 84, 42, 36
+    width, height, left, right, top, bottom = 640, 240, 56, 124, 42, 36
 
     def x(rank: int, total: int) -> float:
         return left + rank * (width - left - right) / max(1, total)
