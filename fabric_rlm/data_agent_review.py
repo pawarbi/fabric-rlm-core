@@ -1348,6 +1348,7 @@ _PERIOD_COLUMN = re.compile(r"(?:^|[_ ])(?:quarter|year_?quarter|fiscal_quarter|
 _TIME_TYPE = re.compile(r"(timestamp|datetime|date)", re.IGNORECASE)  # Delta names, SQL names or arrow ``DataType<Timestamp(...)>`` and ``Date32``
 _NUMERIC_TYPE = re.compile(r"(int|long|double|float|decimal|numeric|real|number|short|byte)", re.IGNORECASE)
 _TEXT_TYPE = re.compile(r"(string|varchar|char|text|utf8)", re.IGNORECASE)
+_ZONED_TYPE = re.compile(r"(time ?zone|timestamptz|datetimeoffset)", re.IGNORECASE)  # a timestamp that carries an offset: read in UTC
 _FREE_TEXT_HINT = re.compile(r"(comment|message|description|note|text|address|email|phone|url|zip|postal|guid|hash|token)", re.IGNORECASE)
 
 
@@ -1425,6 +1426,8 @@ def _date_join(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str],
         if column.casefold().endswith("key") and not _DATE_KEY.search(column):
             continue
         entry: dict[str, Any] = {"column": column, "timestamp": True}
+        if _ZONED_TYPE.search(column_type):
+            entry["tz"] = True  # read in UTC, so a day does not move with the session's time zone
         if column.casefold().endswith("key") or _NUMERIC_TYPE.search(column_type):
             entry["stored"] = "yyyymmdd"  # an integer date: 20240131, the way a date key is written
             score -= 1
@@ -1444,6 +1447,8 @@ def _date_join(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str],
                 score = -3 + (2 if _BUSINESS_DATE.search(stamp) else 0) - (2 if _SECONDARY_DATE.search(stamp) else 0)  # a date on a joined table only when the fact has none worth using
                 entry = {"column": column, "date_table": other, "date_key": key, "timestamp": True, "timestamp_column": stamp}
                 stamp_type = schema.column_type(other, stamp)
+                if _ZONED_TYPE.search(stamp_type):
+                    entry["tz"] = True
                 if _NUMERIC_TYPE.search(stamp_type):
                     entry["stored"] = "yyyymmdd"
                 elif _TEXT_TYPE.search(stamp_type):
@@ -1480,7 +1485,9 @@ def _stamp(dt: Mapping[str, Any], dialect: str) -> str:
         return f"CONVERT(datetime, CAST({column} AS VARCHAR(8)), 112)" if dialect == "tsql" else f"CAST(strptime(CAST({column} AS VARCHAR), '%Y%m%d') AS TIMESTAMP)"
     if stored == "text":
         return f"TRY_CONVERT(datetime, {column})" if dialect == "tsql" else f"COALESCE(TRY_CAST({column} AS TIMESTAMP), TRY_STRPTIME({column}, '%Y%m%d'))"
-    return column if dialect == "tsql" else f"CAST({column} AS TIMESTAMP)"
+    if dialect == "tsql":
+        return column
+    return f"CAST(timezone('UTC', {column}) AS TIMESTAMP)" if dt.get("tz") else f"CAST({column} AS TIMESTAMP)"
 
 
 def _period_part(dt: Mapping[str, Any], part: str, dialect: str) -> str:

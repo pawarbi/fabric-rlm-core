@@ -258,6 +258,21 @@
   and the instructions given, the queries spent and the verification
   statement. Text and marks keep at least WCAG AA contrast; nothing on the
   page relies on colour alone.
+- **Guards on what a figure can mean.** A decomposition whose groups hold
+  more rows than the fact (a join to a table whose key is not unique) is
+  flagged "join multiplies rows", classified as no evidence and never the
+  driver; rows the join drops (a key with no match in the grouping's
+  table) are kept as a group of their own, "(no match in products)", so
+  every split adds up to its total and the remainder is not recomputed as
+  if the source had produced it. The Pareto view reads against the
+  parent's totals, so a grouping the query cut at its 500 largest movers
+  says so and the curve ends in the unlisted rest instead of pretending
+  the 500 are everything. A timestamp column that carries a time zone is
+  read in UTC, so a day does not move with the session's time zone. A
+  model query returning more than 200,000 rows is refused with a clear
+  message, and the concentration KPI over a model groups by week inside
+  DAX (falling back to one row per day and group when a model will not),
+  so a fine grouping no longer returns days times groups.
 - **Monday Morning Brief** (`fabric_rlm.brief`, or `report(source, "monday
   morning brief: revenue by region, orders")`). Name the metrics to track
   and the brief takes the latest complete Monday-to-Sunday week the source

@@ -105,3 +105,74 @@ def test_the_pareto_view_takes_the_finest_grouping_and_the_page_carries_its_nota
     assert "<summary>About this page</summary>" in html and "Tables used" in html and "Generated" in html
     assert "Set aside, not read as business change (" in html and html.index("Set aside, not read as business change (") > html.index("Driver analysis")  # collapsed, after the analysis
     assert "Notation:" in html and "#00875a" in html and "#c9500a" in html  # the rise and fall pair
+
+
+def _shop_with_products(*, duplicate_key: bool = False, missing_key: bool = False):
+    """Daily sales of three products over two years, a products table joined on product_id; one product can be listed twice or not at all."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("CREATE TABLE sales (sale_date DATE, region VARCHAR, product_id INTEGER, amount DOUBLE)")
+    con.execute("CREATE TABLE products (product_id INTEGER, category VARCHAR)")
+    con.execute("INSERT INTO sales SELECT DATE '2023-01-01' + INTERVAL (d) DAY, CASE WHEN d % 2 = 0 THEN 'North' ELSE 'South' END, 1 + d % 3, 100.0 + CASE WHEN d >= 365 THEN 50.0 ELSE 0.0 END FROM range(730) t(d)")
+    rows = [(1, "Bikes"), (2, "Parts")] + ([] if missing_key else [(3, "Gear")]) + ([(1, "Bikes again")] if duplicate_key else [])
+    for row in rows:
+        con.execute("INSERT INTO products VALUES (?, ?)", list(row))
+    tables = {"sales": ("sale_date", "region", "product_id", "amount"), "products": ("product_id", "category")}
+    types = {"sales": {"sale_date": "DATE", "region": "VARCHAR", "product_id": "INTEGER", "amount": "DOUBLE"}, "products": {"product_id": "INTEGER", "category": "VARCHAR"}}
+    return LakehouseProbe.from_executor(_executor(con, tables), schema_from_tables(SOURCE, tables, types=types), name="Shop")
+
+
+def test_a_join_that_multiplies_rows_is_flagged_and_never_read_as_the_driver():
+    result = what_moved(_shop_with_products(duplicate_key=True), instructions="sales.product_id = products.product_id", budget=40)
+    finding = next(f for f in result.findings if f.movement.comparison.kind == "year")
+    by_category = next(d for d in finding.decompositions if d.path["column"] == "category")
+    assert by_category.concentration == "none" and by_category.flags and by_category.flags[0].startswith("join multiplies rows")
+    assert finding.best is not None and finding.best.path["column"] == "region"
+    assert "join multiplies rows" in result.to_markdown() and result.pareto(by_category) is None
+
+
+def test_rows_the_join_drops_are_kept_as_a_group_so_the_split_adds_up():
+    result = what_moved(_shop_with_products(missing_key=True), instructions="sales.product_id = products.product_id", budget=40)
+    finding = next(f for f in result.findings if f.movement.comparison.kind == "year")
+    by_category = next(d for d in finding.decompositions if d.path["column"] == "category")
+    remainder = next(g for g in by_category.groups if g.group == "(no match in products)")
+    parent = by_category.parent
+    assert remainder.query == "" and abs(sum(g.after_value for g in by_category.groups) - parent.after_value) < 1e-6 and abs(sum(g.before_value for g in by_category.groups) - parent.before_value) < 1e-6
+    assert remainder.after_rows == parent.after_rows - sum(g.after_rows for g in by_category.groups if g.query)
+    assert result.verified and result.mismatches == ()  # the remainder is arithmetic, not a figure the source recomputes
+
+
+def test_a_grouping_cut_at_500_reads_its_pareto_against_the_true_total():
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("CREATE TABLE sales (sale_date DATE, customer VARCHAR, amount DOUBLE)")
+    con.execute("INSERT INTO sales SELECT DATE '2023-01-15' + to_months(m::INTEGER), 'customer ' || c, (10.0 + c % 7) * CASE WHEN m >= 12 THEN 1.5 ELSE 1.0 END FROM range(24) t(m), range(600) u(c)")
+    tables = {"sales": ("sale_date", "customer", "amount")}
+    types = {"sales": {"sale_date": "DATE", "customer": "VARCHAR", "amount": "DOUBLE"}}
+    probe = LakehouseProbe.from_executor(_executor(con, tables), schema_from_tables(SOURCE, tables, types=types), name="Shop")
+    result = what_moved(probe, budget=40)
+    finding = next(f for f in result.findings if f.movement.comparison.kind == "year")
+    by_customer = next(d for d in finding.decompositions if d.path["column"] == "customer")
+    assert by_customer.size == 500
+    view = result.pareto(by_customer)
+    assert view is not None and view["capped"] and view["n"] == 500 and abs(view["curve_base"][-1] - 1.0) < 1e-9 and view["listed_base"] < 1.0
+    sentence = result.pareto_sentence(by_customer)
+    assert "largest customer movers the query listed (there are more)" in sentence
+
+
+def test_a_timestamp_with_a_time_zone_is_read_in_utc_whatever_the_session_zone():
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("SET TimeZone = 'America/Los_Angeles'")
+    con.execute("CREATE TABLE events (happened_at TIMESTAMPTZ, kind VARCHAR, amount DOUBLE)")
+    con.execute("INSERT INTO events VALUES (TIMESTAMPTZ '2024-07-01 03:00:00+00', 'a', 1.0), (TIMESTAMPTZ '2024-06-15 12:00:00+00', 'a', 1.0)")
+    tables = {"events": ("happened_at", "kind", "amount")}
+    types = {"events": {"happened_at": "TIMESTAMP WITH TIME ZONE", "kind": "VARCHAR", "amount": "DOUBLE"}}
+    probe = LakehouseProbe.from_executor(_executor(con, tables), schema_from_tables(SOURCE, tables, types=types), name="Events")
+    dialect = probe.dialect(probe.joins(""))
+    axis = dialect.axis("events")
+    assert axis is not None and axis.get("tz") is True
+    sql = dialect.daily({"table": "events", "date": axis, "measure": "amount", "aggregate": "sum"}, ["amount"])
+    assert "timezone('UTC'" in sql
+    days = sorted(str(row["day"])[:10] for row in probe.run(sql))
+    assert days == ["2024-06-15", "2024-07-01"]  # 03:00 UTC on 1 July stays 1 July, not 30 June Los Angeles time

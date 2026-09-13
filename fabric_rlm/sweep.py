@@ -129,6 +129,7 @@ _MEASUREMENT = re.compile(r"(length|lenght|width|height|weight|depth|volume|_cm$
 _NUMERIC_TYPE = re.compile(r"(int|double|float|decimal|numeric|real|number)", re.IGNORECASE)
 _GROUP_LIMIT = 500  # groups a decomposition query returns, largest absolute change first
 _ROW_LIMIT = 10_000  # rows a lakehouse query may return (the source's own ceiling); a daily series over 27 years fits
+_DAX_ROW_LIMIT = 200_000  # rows one model query may return before the tool refuses the result rather than wade through it
 _INFORMATIVE = frozenset({"single", "concentrated", "offsetting", "broad"})
 _COMPARISON_KINDS = ("year", "month", "same_month_prior_year")
 
@@ -245,6 +246,7 @@ class Decomposition:
     explained: float  # share of the parent's change carried by the top three groups moving the same way
     verification: Mapping[str, str] = field(default_factory=dict)  # independent per-period queries recomputing every group in ``groups``
     size: int = 0  # groups the path has, as far as the query returned them
+    flags: tuple[str, ...] = ()  # why this split cannot be read as evidence (a join that multiplies rows)
 
     def share_of_change(self, group: Movement) -> float | None:
         return group.delta / self.parent.delta if self.parent.delta else None
@@ -413,26 +415,42 @@ class Sweep:
         the same way as the total carry ``threshold`` of their change. The curves are the cumulative shares, largest first.
         """
         groups = self.groups_of(d)
-        if len(groups) < least or d.parent.aggregate not in {"sum", "count"} or not d.parent.delta:
+        if len(groups) < least or d.parent.aggregate not in {"sum", "count"} or not d.parent.delta or d.flags:
             return None
+        capped = len(groups) >= _GROUP_LIMIT  # the query lists the 500 largest movers; the rest of the base and of the change is in groups it did not list
         base_values = sorted((max(0.0, g.after_value) for g in groups), reverse=True)
+        base_total = d.parent.after_value if d.parent.after_value > 0 else sum(base_values)
+        rest_base = max(0.0, base_total - sum(base_values))
         same = sorted((abs(g.delta) for g in groups if g.delta * d.parent.delta > 0), reverse=True)
-        total_base, total_same = sum(base_values), sum(same)
-        if not total_base or not total_same:
+        change_total = abs(d.parent.delta)  # the net change: what the groups listed carry of it, the rest sits in groups not listed or that moved the other way
+        if not base_total or not same:
             return None
 
         def curve(values: Sequence[float], total: float) -> list[float]:
             out, running = [], 0.0
             for v in values:
                 running += v
-                out.append(running / total)
+                out.append(min(1.0, running / total))
             return out
 
-        def k_for(shares: Sequence[float]) -> int:
-            return next((i + 1 for i, c in enumerate(shares) if c >= threshold - 1e-9), len(shares))
+        def k_for(shares: Sequence[float]) -> int | None:
+            return next((i + 1 for i, c in enumerate(shares) if c >= threshold - 1e-9), None)
 
-        curve_base, curve_change = curve(base_values, total_base), curve(same, total_same)
-        return {"n": len(groups), "n_change": len(same), "k_base": k_for(curve_base), "k_change": k_for(curve_change), "curve_base": curve_base, "curve_change": curve_change, "threshold": threshold}
+        curve_base = curve(base_values + ([rest_base] if rest_base > 1e-9 * base_total else []), base_total)
+        curve_change = curve(same, change_total)
+        k_base = k_for(curve_base)
+        return {
+            "n": len(groups),
+            "capped": capped,
+            "n_change": len(same),
+            "k_base": k_base if k_base is not None and k_base <= len(base_values) else None,  # None: the listed groups do not reach the threshold on their own
+            "k_change": k_for(curve_change),
+            "curve_base": curve_base,
+            "curve_change": curve_change,
+            "threshold": threshold,
+            "listed_base": min(1.0, sum(base_values) / base_total),
+            "listed_change": min(1.0, sum(same) / change_total),
+        }
 
     def pareto_view(self, finding: SweepFinding, least: int = 12) -> tuple[Decomposition | None, dict[str, Any] | None]:
         """The decomposition a Pareto view applies to: the grouping with the most members (customers, products, cities), when it has at least ``least``."""
@@ -447,12 +465,17 @@ class Sweep:
         p = self.pareto(d)
         if not p:
             return ""
-        n, word = p["n"], _word(d.path)
-        shape = "the change is more concentrated than the base" if p["k_change"] < p["k_base"] else "the change is spread wider than the base" if p["k_change"] > p["k_base"] else "the change follows the base"
-        return (
-            f"Pareto: {p['k_base']} of the {n:,} {word} groups ({p['k_base'] / n:.0%}) carry {p['threshold']:.0%} of {self.phrase(d.parent)} in {_period_label(d.parent.comparison.after)}; "
-            f"{shape}: {p['k_change']} of the {p['n_change']:,} that moved the same way carry {p['threshold']:.0%} of it."
-        )
+        n, word, share = p["n"], _word(d.path), f"{p['threshold']:.0%}"
+        what = f"{self.phrase(d.parent)} in {_period_label(d.parent.comparison.after)}"
+        listed = f"the {n:,} {word} groups" if not p["capped"] else f"the {n:,} largest {word} movers the query listed (there are more)"
+        kb, kc = p["k_base"], p["k_change"]
+        first = f"{kb} of {listed} ({kb / n:.0%}) carry {share} of {what}" if kb is not None else f"{listed} carry {p['listed_base']:.0%} of {what}, the rest sits in groups the query did not list"
+        if kc is not None:
+            shape = "more concentrated than the base" if kb is not None and kc < kb else "spread wider than the base" if kb is not None and kc > kb else "as concentrated as the base"
+            second = f"the change is {shape}: {kc} of the {p['n_change']:,} that moved the same way carry {share} of the net change"
+        else:
+            second = f"the {p['n_change']:,} listed groups that moved the same way carry {p['listed_change']:.0%} of the net change, the rest sits in groups not listed or in groups that moved the other way"
+        return f"Pareto: {first}; {second}."
 
     def steady(self, limit: int = 3) -> list[Movement]:
         """When nothing moved by the material share, the largest trusted movements anyway, so the reader sees how steady steady is."""
@@ -609,6 +632,8 @@ def _shares(d: Decomposition, groups: Sequence[Movement]) -> str:
 
 
 def _concentration_sentence(d: Decomposition) -> str:
+    if d.flags:
+        return d.flags[0] + "."
     if not d.groups:
         return "no group moved the same way."
     same = [g for g in d.groups if g.delta * d.parent.delta > 0]
@@ -1167,7 +1192,10 @@ class SemanticModelProbe:
         self._model = model
 
     def run(self, query: str) -> list[dict[str, Any]]:
-        return [{_plain_key(k): _clean(v) for k, v in row.items()} for row in _rows(self._model.dax(query))]
+        rows = [{_plain_key(k): _clean(v) for k, v in row.items()} for row in _rows(self._model.dax(query))]
+        if len(rows) > _DAX_ROW_LIMIT:
+            raise ValueError(f"the model returned {len(rows):,} rows for one query, more than the {_DAX_ROW_LIMIT:,} this tool handles; narrow the grouping or the window")
+        return rows
 
     def joins(self, text: str) -> dict[tuple[str, str], tuple[str, str]]:
         return {(a, b): (c, d) for a, b, c, d in self.schema.relationships}
@@ -1572,10 +1600,23 @@ def _decompose(run: Callable[[str], list[dict[str, Any]]], dialect: Any, ledger:
         verification = {"before": dialect.total(fact, comparison.before, narrow), "after": dialect.total(fact, comparison.after, narrow)}
         groups.append(Movement(fact["table"], fact["measure"], comparison, float(row.get("before_value") or 0), float(row.get("after_value") or 0), int(row.get("before_rows") or 0), int(row.get("after_rows") or 0), query, verification, path, group, parent_columns, fact["aggregate"]))
     ledger.extend(groups)
+    size = len(groups)
+    if groups and size < _GROUP_LIMIT and parent.aggregate in {"sum", "count"}:
+        rows_before, rows_after = sum(g.before_rows for g in groups), sum(g.after_rows for g in groups)
+        if rows_after > parent.after_rows * 1.005 + 1 or rows_before > parent.before_rows * 1.005 + 1:
+            # the join to the grouping's table returns more rows than the fact has: every group is overstated, and the split is no evidence
+            flag = f"join multiplies rows: the path to {_word(path)} returns {max(rows_before, rows_after):,} rows for {max(parent.before_rows, parent.after_rows):,} on the fact, so this split overstates every group and is not read as evidence"
+            ranked = tuple(sorted(groups, key=lambda g: -abs(g.delta))[:top])
+            return Decomposition(parent, path, ranked, "none", 0.0, size=size, flags=(flag,))
+        lost = max(parent.before_rows - rows_before, parent.after_rows - rows_after)
+        missing_before, missing_after = parent.before_value - sum(g.before_value for g in groups), parent.after_value - sum(g.after_value for g in groups)
+        if lost > 0.005 * max(parent.before_rows, parent.after_rows, 1) and (abs(missing_before) > 1e-9 or abs(missing_after) > 1e-9):
+            # rows with no match in the grouping's table drop out of an inner join: kept as a group of their own, so the split still adds up to the total
+            groups = [*groups, Movement(fact["table"], fact["measure"], comparison, missing_before, missing_after, max(0, parent.before_rows - rows_before), max(0, parent.after_rows - rows_after), "", {}, path, f"(no match in {_path_table(path, fact['table'])})", parent_columns, fact["aggregate"])]
     decomposition = _classify(parent, path, groups, top)
-    values = [g.group for g in decomposition.groups]
+    values = [g.group for g in decomposition.groups if g.query]  # a remainder group is arithmetic on the parent, not a figure the source can recompute
     verification = {"before": dialect.groups(fact, comparison.before, path, parents, values), "after": dialect.groups(fact, comparison.after, path, parents, values)} if values else {}
-    return replace(decomposition, verification=verification, size=len(groups))
+    return replace(decomposition, verification=verification, size=size)
 
 
 def _classify(parent: Movement, path: Mapping[str, Any], groups: Sequence[Movement], top: int) -> Decomposition:
@@ -1731,6 +1772,8 @@ def verify_sweep(result: Sweep, probe: Any, *, tolerance: float = 1e-6) -> Sweep
         for side in ("before", "after"):
             actual = {row.get("label"): float(row.get("value") or 0) for row in probe.run(d.verification[side])}
             for g in d.groups:
+                if not g.query:
+                    continue  # a remainder group is arithmetic on the parent, not a figure the source can recompute
                 expected = g.before_value if side == "before" else g.after_value
                 got = actual.get(g.group, 0.0)
                 recomputed += 1

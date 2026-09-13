@@ -431,6 +431,7 @@ def _scatter_svg(d: "Decomposition", title: str) -> str:
 def _pareto_svg(pareto: dict[str, Any], word: str, title: str) -> str:
     """Cumulative share of the base and of the change against the share of groups, with the 80% line and where each curve crosses it."""
     n = int(pareto["n"])
+    capped = bool(pareto.get("capped"))
     curve_base, curve_change = pareto["curve_base"], pareto["curve_change"]
     if n < 2 or not curve_base:
         return ""
@@ -442,7 +443,7 @@ def _pareto_svg(pareto: dict[str, Any], word: str, title: str) -> str:
     def y(share: float) -> float:
         return top + (1.0 - share) * (height - top - bottom)
 
-    parts = _open(title, width, height, left=left, subtitle=f"{word} groups ranked largest first; across: share of the {n:,} groups, up: cumulative share")
+    parts = _open(title, width, height, left=left, subtitle=f"{word} groups ranked largest first; across: share of the {n:,}{'+' if capped else ''} groups listed, up: cumulative share")
     _gridlines(parts, [0.0, 0.2, 0.4, 0.6, 0.8, 1.0], y, left, width - right, lambda t: f"{t:.0%}")
     for share in (0.0, 0.2, 0.4, 0.6, 0.8, 1.0):
         parts.append(f'<text x="{x(int(round(share * n)), n):.1f}" y="{height - bottom + 15}" font-size="11" fill="{_MUTED}" text-anchor="middle">{share:.0%}</text>')
@@ -452,9 +453,10 @@ def _pareto_svg(pareto: dict[str, Any], word: str, title: str) -> str:
         total = len(curve)
         path = " ".join(f"{'M' if i == 0 else 'L'}{x(i, total):.1f},{y(c):.1f}" for i, c in enumerate([0.0] + list(curve)))
         parts.append(f'<path d="{path}" fill="none" stroke="{color}" stroke-width="2.2" stroke-linejoin="round"><title>{esc(name)}</title></path>')
-        if 1 <= k <= total:
-            parts.append(f'<circle cx="{x(k, total):.1f}" cy="{y(curve[k - 1]):.1f}" r="5" fill="{color}" stroke="#fff" stroke-width="1.5"><title>{esc(f"{k} of {total} carry {curve[k - 1]:.0%} of the {name}")}</title></circle>')
-        parts.append(f'<text x="{width - right + 4}" y="{y(curve[-1]) + 4 + (12 if name == "change" and abs(curve[-1] - curve_base[-1]) < 0.06 else 0):.1f}" font-size="11" font-weight="{600 if name == "change" else 400}" fill="{_INK if name == "change" else _MUTED}">{name}: {k} of {total}</text>')
+        if k is not None and 1 <= k <= total:
+            parts.append(f'<circle cx="{x(k, total):.1f}" cy="{y(curve[k - 1]):.1f}" r="5" fill="{color}" stroke="#fff" stroke-width="1.5"><title>{esc(f"{k} of {n} carry {curve[k - 1]:.0%} of the {name}")}</title></circle>')
+        caption = f"{name}: {k} of {n:,}{'+' if capped else ''}" if k is not None else f"{name}: {curve[-1]:.0%} listed"
+        parts.append(f'<text x="{width - right + 4}" y="{y(curve[-1]) + 4 + (12 if name == "change" and abs(curve[-1] - curve_base[-1]) < 0.06 else 0):.1f}" font-size="11" font-weight="{600 if name == "change" else 400}" fill="{_INK if name == "change" else _MUTED}">{esc(caption)}</text>')
     parts.append("</svg>")
     return "".join(parts)
 

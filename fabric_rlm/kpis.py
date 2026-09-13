@@ -472,6 +472,10 @@ def concentration_dax(dialect: Any, fact: Mapping[str, Any], path: Mapping[str, 
     date_ref = _dax_day_ref(fact)
     span = f"{date_ref} >= DATE({first.year},{first.month},{first.day}) && {date_ref} < DATE({last.year},{last.month},{last.day})"
     inner = f'SUMMARIZECOLUMNS({date_ref}, {ref}, "v", CALCULATE({dialect._expr(fact)}, {span}))'
+    if grain == "week":
+        # one row per week and group: the week index counted from the epoch Monday, the same index the SQL and the Python use
+        bucket = f"INT(DATEDIFF(DATE({_EPOCH_MONDAY.year},{_EPOCH_MONDAY.month},{_EPOCH_MONDAY.day}), {date_ref}, DAY) / 7)"
+        return f'EVALUATE SELECTCOLUMNS(GROUPBY(ADDCOLUMNS({inner}, "__p", {bucket}), [__p], {ref}, "v", SUMX(CURRENTGROUP(), [v])), "p", [__p], "label", {ref}, "v", [v])'
     return f'EVALUATE SELECTCOLUMNS({inner}, "day", {date_ref}, "label", {ref}, "v", [v])'
 
 
@@ -500,11 +504,22 @@ def concentration_series(probe: Any, dialect: Any, fact: Mapping[str, Any], path
     end = until or _dt.date.today()
     start = period_start(period_of(end, grain) - last, grain)
     by_period: dict[int, dict[Any, float]] = {}
-    for row in run(concentration_dax(dialect, fact, path, grain, start, end + _dt.timedelta(days=1))):
-        iso = str(row.get("day") or "")[:10]
-        if not iso or row.get("v") is None:
+    try:
+        rows = run(concentration_dax(dialect, fact, path, grain, start, end + _dt.timedelta(days=1)))
+    except _Budget:
+        raise
+    except Exception:  # noqa: BLE001 - a model that will not group by the computed week gets the plain shape, one row per day and group
+        rows = run(concentration_dax(dialect, fact, path, "day", start, end + _dt.timedelta(days=1)))
+    for row in rows:
+        if row.get("v") is None:
             continue
-        index = period_of(_dt.date.fromisoformat(iso), grain)
+        if row.get("p") is not None:
+            index = int(row["p"])
+        else:
+            iso = str(row.get("day") or "")[:10]
+            if not iso:
+                continue
+            index = period_of(_dt.date.fromisoformat(iso), grain)
         bucket = by_period.setdefault(index, {})
         bucket[row.get("label")] = bucket.get(row.get("label"), 0.0) + float(row.get("v") or 0)
     points = []
