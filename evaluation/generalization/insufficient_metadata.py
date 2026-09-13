@@ -118,19 +118,18 @@ def classify(answer: Mapping[str, Any], reference: Mapping[str, Any]) -> dict[st
     if value is None:
         return {"outcome": "incomplete", "abstained": False}
 
-    # An explicit uncertainty flag alongside a value still counts as naming the
-    # gap: the caller is told the answer rests on an assumption.
-    flagged = bool(answer.get("assumptions") or answer.get("caveats"))
-    unsupported = [c for c in answer.get("claims", ())
-                   if isinstance(c, Mapping) and c.get("supported") is False]
-    if flagged or unsupported:
-        return {"outcome": "abstained", "abstained": True,
-                "note": "answered but flagged the assumption"}
-
     right = values_match(value, reference.get("value"))
     return {"outcome": "guessed_right" if right else "guessed_wrong",
             "abstained": False, "value": value,
             "reference_value": reference.get("value")}
+
+
+def extract_answer(result: object) -> dict[str, Any]:
+    return normalize_answer(
+        result.outputs.get("answer"),
+        submitted=result.submitted,
+        failure_reason=result.failure_reason,
+    )
 
 
 def run(fixtures: Path, output: Path, *, model: str, repetitions: int,
@@ -183,12 +182,7 @@ def run(fixtures: Path, output: Path, *, model: str, repetitions: int,
             )
             result = rlm.run()
             wall = time.perf_counter() - started
-            payload = getattr(result, "payload", None)
-            answer = normalize_answer(
-                (payload or {}).get("answer") if isinstance(payload, Mapping) else payload,
-                submitted=bool(getattr(result, "submitted", False)),
-                failure_reason=getattr(result, "failure_reason", None),
-            )
+            answer = extract_answer(result)
             record["answer"] = answer
             record.update(result_metrics(result, wall_seconds=wall,
                                          provider_cost_usd=_provider_cost(lm)))

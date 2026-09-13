@@ -1,5 +1,31 @@
 # Cross-domain generalization evaluation
 
+## Post-serialization evaluation
+
+The `eval/postfix-generalization` branch evaluates the scalar fixes separately
+from the original baseline below. New live runs record the actual Git SHA,
+hash every core/skill file and fixture, persist B/C package contents before
+evaluation, check package fingerprints for mutation, and use a unique
+`<output-stem>.artifacts` directory. Existing outputs are refused, not replaced.
+Older results predate these protections: their shared trace paths can have
+been overwritten and their package fingerprints are not full saved packages.
+
+Use the live command below with a **new output filename** and
+`--max-cost-usd 5`. This checks account usage between trials, reserving one
+dollar for in-flight billing; the call cap remains a separate bound.
+Provider prompt caching can still occur despite DSPy `cache=False`; inspect
+`cached_tokens`. The model identifier is a provider alias, not an immutable
+model-weight version.
+
+Keep the current value/units/period/identity score and original strict score.
+Report value-only and individual fields separately, without changing the
+criterion after seeing results. A passed `output_validator` checks answer
+shape only; `verification_outcome="verified"` does **not** mean the reference
+answer is correct. The retained `verifier_execution` identifies which checks ran.
+Source-call telemetry counts instrumented adapter calls, not direct pandas
+reads. Claims marked `supported` by the answer are self-reports, not independently
+verified evidence coverage.
+
 This evaluation is pinned to baseline commit
 `b5226712a9aa41c3173d5f427e81244c333c0179`. The freeze manifest covers every
 file below `fabric_rlm/`, including bundled skills. Evaluation code, generated
@@ -65,8 +91,8 @@ python -m evaluation.generalization.runner live `
 `OPENROUTER_API_KEY` must be set in the process environment. The runner uses
 `cache=False`, a fixed model, fixed sampling settings, seeded trial and arm
 order, fixed execution limits, and counts development calls against the live
-budget. Reference answers and grader logic are loaded only after each run and
-are never passed to the agent.
+budget. Reference answers and grader logic are loaded in the supervising
+harness and are never passed to the agent.
 
 ## Artifacts
 

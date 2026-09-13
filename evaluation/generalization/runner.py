@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -8,6 +9,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.request
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -39,6 +41,39 @@ def _write_json(path: Path, value: object) -> None:
         json.dumps(value, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
     )
+
+
+def reserve_artifacts(output: Path) -> Path:
+    if output.exists():
+        raise FileExistsError(f"result already exists: {output}")
+    artifacts = output.parent / (output.stem + ".artifacts")
+    artifacts.mkdir(parents=True, exist_ok=False)
+    return artifacts
+
+
+def snapshot_package(path: Path, knowledge: object) -> dict[str, str]:
+    _write_json(path, knowledge.package.to_dict())
+    return {"path": str(path), "fingerprint": knowledge.package.fingerprint,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def check_package(knowledge: object, snapshot: Mapping[str, str]) -> None:
+    if knowledge.package.fingerprint != snapshot["fingerprint"]:
+        raise RuntimeError("frozen evaluation package changed during evaluation")
+    if hashlib.sha256(Path(snapshot["path"]).read_bytes()).hexdigest() != snapshot["sha256"]:
+        raise RuntimeError("saved evaluation package changed during evaluation")
+
+
+def account_usage() -> float:
+    request = urllib.request.Request(
+        "https://openrouter.ai/api/v1/key",
+        headers={"Authorization": "Bearer " + os.environ["OPENROUTER_API_KEY"]},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        usage = json.load(response)["data"]["usage"]
+    if not isinstance(usage, (int, float)) or usage < 0:
+        raise ValueError("provider did not report usable account usage")
+    return float(usage)
 
 
 def _redact_trace_text(value: str) -> str:
@@ -187,12 +222,17 @@ def result_metrics(
         "failed_source_calls": int(source_summary.get("failed_source_calls", 0)),
         "source_seconds": float(source_summary.get("source_seconds", 0.0)),
         "verification_outcome": _verification_outcome(metadata),
+        "verifier_execution": metadata.get("verifier_execution"),
+        "verification_scope": "configured checks only; not reference-answer correctness",
         "integrity_ok": bool(getattr(result, "integrity_ok", True)),
         "knowledge_mode": metadata.get("knowledge_mode"),
         "knowledge_fingerprint": metadata.get("knowledge_fingerprint"),
         "lessons_injected": len(injected) if isinstance(injected, (list, tuple)) else 0,
         "operation_id": metadata.get("operation_id"),
         "operation_audit_status": metadata.get("operation_audit_status"),
+        "operation_host_seconds": metadata.get("operation_host_seconds"),
+        "operation_selection_lm_calls": metadata.get("operation_selection_lm_calls", 0),
+        "source_call_scope": "instrumented adapter calls only; excludes direct pandas/SQL",
     }
 
 
@@ -418,7 +458,7 @@ def _development_results(
     for index, prompt in enumerate(prompts):
         if budget[0] <= 0:
             break
-        result, lm, _wall = _run_rlm(
+        result, lm, wall = _run_rlm(
             model=model,
             question=prompt,
             definitions=definitions,
@@ -433,6 +473,10 @@ def _development_results(
             trace_id=f"development__{domain}__{variant}__{index}",
             result=result,
             lm=lm,
+        )
+        _write_json(
+            trace_dir / f"development__{domain}__{variant}__{index}.metrics.json",
+            result_metrics(result, wall_seconds=wall, provider_cost_usd=_provider_cost(lm)),
         )
         budget[0] -= 1
         results.append(result)
@@ -451,7 +495,9 @@ def run_live(
     max_turns: int,
     timeout: float,
     smoke: bool,
+    max_cost_usd: float | None = None,
 ) -> dict[str, object]:
+    artifacts = reserve_artifacts(output)
     if not os.environ.get("OPENROUTER_API_KEY"):
         result = {
             "status": "unmeasured",
@@ -462,6 +508,25 @@ def run_live(
         return result
     from fabric_rlm import RLM
 
+    repo = Path(__file__).resolve().parents[2]
+    actual_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    frozen = create_freeze_manifest(repo, baseline_sha=actual_sha)
+    _write_json(artifacts / "core-freeze.json", frozen)
+    fixture_hashes = {
+        str(path.relative_to(fixtures)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in fixtures.rglob("*") if path.is_file() and "private" not in path.parts
+    }
+    usage_start = account_usage() if max_cost_usd is not None else None
+    provenance = {
+        "actual_sha": actual_sha, "core_freeze": str(artifacts / "core-freeze.json"),
+        "fixture_sha256": fixture_hashes, "max_cost_usd": max_cost_usd,
+        "account_usage_start": usage_start, "temperature": 1.0,
+        "provider_cache": "not controllable; cached tokens recorded",
+        "skills": [], "skill_autoloading": False,
+    }
+    _write_json(artifacts / "provenance.json", provenance)
     definitions = json.loads((fixtures / "definitions.json").read_text(encoding="utf-8"))
     questions = json.loads((fixtures / "questions.json").read_text(encoding="utf-8"))
     references = calculate_references(fixtures)
@@ -476,9 +541,10 @@ def run_live(
             domain_counts[domain] += 1
     schedule = build_schedule(selected, repetitions=repetitions, seed=seed)
     budget = [max_live_calls]
-    trace_dir = output.parent / "traces"
+    trace_dir = artifacts / "traces"
     packages: dict[tuple[str, str, str], object | None] = {}
     package_summaries: dict[str, object] = {}
+    package_snapshots: dict[tuple[str, str, str], dict[str, str]] = {}
     try:
         for variant in variants:
             for domain in ("inventory", "manufacturing", "service"):
@@ -499,6 +565,11 @@ def run_live(
                 )
                 enriched = RLM.enrich(learned, development) if development else learned
                 packages[(domain, variant, "C")] = enriched
+                for arm, package in (("B", learned), ("C", enriched)):
+                    package_snapshots[(domain, variant, arm)] = snapshot_package(
+                        artifacts / "packages" / f"{domain}__{variant}__{arm}.json",
+                        package,
+                    )
                 package_summaries[f"{domain}:{variant}"] = {
                     "learn_only_lessons": len(learned.package.lessons),
                     "enriched_lessons": len(enriched.package.lessons),
@@ -509,6 +580,7 @@ def run_live(
     except Exception as exc:
         blocked = {
             **classify_live_error(exc),
+            "provenance": provenance,
             "baseline_sha": BASELINE_SHA,
             "model": model,
             "seed": seed,
@@ -526,11 +598,17 @@ def run_live(
     for trial in schedule:
         if budget[0] <= 0:
             break
+        if max_cost_usd is not None:
+            # Reserve one dollar for an in-flight task and delayed provider accounting.
+            if account_usage() - usage_start >= max_cost_usd - 1.0:
+                break
         question = questions_by_id[str(trial["question_id"])]
         domain = str(trial["domain"])
         variant = str(trial["variant"])
         arm = str(trial["arm"])
         knowledge = packages[(domain, variant, arm)]
+        if knowledge is not None:
+            check_package(knowledge, package_snapshots[(domain, variant, arm)])
         inputs = _domain_sources(fixtures, domain, variant) if arm == "A" else None
         result = None
         lm = None
@@ -580,6 +658,8 @@ def run_live(
         budget[0] -= 1
         expected = references[domain][variant][str(trial["question_id"])]
         grade = grade_answer(answer, expected)
+        if knowledge is not None:
+            check_package(knowledge, package_snapshots[(domain, variant, arm)])
         trials.append(
             {
                 **trial,
@@ -605,6 +685,7 @@ def run_live(
             output,
             {
                 "status": "partial",
+                "provenance": provenance,
                 "baseline_sha": BASELINE_SHA,
                 "model": model,
                 "seed": seed,
@@ -619,6 +700,10 @@ def run_live(
         )
     final = {
         "status": "complete" if len(trials) == len(schedule) else "budget_limited",
+        "provenance": provenance,
+        "core_freeze_mismatches": verify_freeze(repo, frozen),
+        "package_snapshots": {"|".join(key): value for key, value in package_snapshots.items()},
+        "account_usage_end": account_usage() if max_cost_usd is not None else None,
         "baseline_sha": BASELINE_SHA,
         "model": model,
         "seed": seed,
@@ -697,6 +782,7 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--max-turns", type=int, default=6)
     live.add_argument("--timeout", type=float, default=120.0)
     live.add_argument("--smoke", action="store_true")
+    live.add_argument("--max-cost-usd", type=float)
     return parser
 
 
@@ -730,6 +816,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_turns=args.max_turns,
             timeout=args.timeout,
             smoke=args.smoke,
+            max_cost_usd=args.max_cost_usd,
         )
     return 0
 
