@@ -181,3 +181,81 @@ def test_freeze_dataframe_stays_opaque() -> None:
     pd = pytest.importorskip("pandas")
     frozen = freeze(pd.DataFrame({"a": [1, 2]}))
     assert frozen["__serializable__"] is False
+
+
+# --- scalars from SQL sources and date arithmetic ----------------------
+#
+# These reach a SUBMIT payload whenever the model computes in the worker rather
+# than through LakehouseSource.query, which normalizes them separately. Both
+# paths now share one conversion policy.
+
+
+def test_freeze_decimal_becomes_a_float() -> None:
+    from decimal import Decimal
+    frozen = freeze(Decimal("350.75"))
+    assert frozen == 350.75
+    assert isinstance(frozen, float)
+
+
+def test_freeze_date_becomes_an_iso_string() -> None:
+    import datetime as dt
+    assert freeze(dt.date(2024, 1, 15)) == "2024-01-15"
+
+
+def test_freeze_datetime_becomes_an_iso_string() -> None:
+    import datetime as dt
+    assert freeze(dt.datetime(2024, 1, 15, 12, 30)) == "2024-01-15T12:30:00"
+
+
+def test_freeze_time_becomes_an_iso_string() -> None:
+    import datetime as dt
+    assert freeze(dt.time(12, 30)) == "12:30:00"
+
+
+def test_freeze_timedelta_becomes_fractional_days() -> None:
+    import datetime as dt
+    assert freeze(dt.timedelta(days=36)) == 36.0
+    assert freeze(dt.timedelta(days=1, hours=12)) == 1.5
+
+
+def test_freeze_bytes_become_hex() -> None:
+    assert freeze(b"\x00\xff") == "00ff"
+
+
+def test_freeze_pandas_timestamp_and_timedelta() -> None:
+    pd = pytest.importorskip("pandas")
+    assert freeze(pd.Timestamp("2024-01-15")).startswith("2024-01-15")
+    assert freeze(pd.Timedelta(days=36)) == 36.0
+
+
+def test_freeze_pandas_missing_values_become_null() -> None:
+    pd = pytest.importorskip("pandas")
+    assert freeze(pd.NaT) is None
+    assert freeze(pd.NA) is None
+
+
+def test_freeze_numpy_datetime_scalars() -> None:
+    np = pytest.importorskip("numpy")
+    assert freeze(np.datetime64("2024-01-15")).startswith("2024-01-15")
+    assert freeze(np.timedelta64(36, "D")) == 36.0
+
+
+def test_freeze_pyarrow_scalar_unwraps() -> None:
+    pa = pytest.importorskip("pyarrow")
+    assert freeze(pa.scalar(5)) == 5
+
+
+def test_freeze_submit_payload_with_sql_scalars() -> None:
+    import datetime as dt
+    from decimal import Decimal
+    payload = freeze_submit_payload({
+        "total_revenue": Decimal("350.75"),
+        "first_date": dt.date(2024, 1, 15),
+        "days_between": dt.timedelta(days=36),
+    })
+    assert payload == {
+        "total_revenue": 350.75,
+        "first_date": "2024-01-15",
+        "days_between": 36.0,
+    }
+    json.dumps(payload)
