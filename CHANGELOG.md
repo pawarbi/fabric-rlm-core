@@ -237,6 +237,23 @@
   expectation and the level shifts marked), the context table, the drivers,
   the pattern, and the queries. What it says about causes is what the
   history supports and it says so.
+- **KPIs from structure** (`fabric_rlm.kpis`, through `brief(source,
+  metrics, kpis=[...])`). Nothing assumes customers or sales: an entity is
+  any key on the fact that refers to something with repeat activity over
+  time, ranked by cardinality, repeat rate across months and a name that
+  reads like an entity, and the choice is printed with its reasons and its
+  rivals (`entity=` overrides it). From the entity the lifecycle counts
+  follow for any domain, in one SQL query for a lakehouse or one DAX query
+  per week for a model: active, new (first activity in the week), retained,
+  resurrected (back after a gap) and churned (active in the window before,
+  not now), drawn as growth accounting. Ratios divide two measures or a
+  measure by rows per week (``"average order value = sales amount / order
+  quantity"``); crossings report the week one series overtook another or a
+  level, with filters in plain words (``"order quantity where channel =
+  Internet vs order quantity where channel = Reseller"``); concentration
+  tracks the share the top groups hold and who entered the top. Every KPI
+  gets the same context, level shifts, verdict and watch list as a metric,
+  and its definition is printed next to its number.
 
 ### Changed
 

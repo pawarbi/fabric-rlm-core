@@ -179,6 +179,17 @@ if REPORT_PATH:
 # monday = brief(source, ["internet sales revenue by product category and country", "reseller sales revenue by reseller"], instructions=INSTRUCTIONS, budget=90)
 # displayHTML(monday.to_html())
 # monday.save("/lakehouse/default/Files/monday_morning_brief.html")
+#
+# KPIs built from the structure: the entity (customers, devices, accounts...) is discovered and its choice explained on the page;
+# say entity="ResellerKey" to change it. Ratios, crossings with filters, and the share of the top groups work the same way.
+# monday = brief(
+#     source,
+#     ["sales amount by country"],
+#     kpis=["new customers", "churned customers over 4 weeks", "active customers", "average order value = sales amount / order quantity",
+#           "order quantity where channel = Internet vs order quantity where channel = Reseller", "top 3 share of sales amount by product"],
+#     instructions=INSTRUCTIONS, budget=120,
+# )
+# displayHTML(monday.to_html())
 
 # METADATA ********************
 

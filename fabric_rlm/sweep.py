@@ -502,6 +502,8 @@ def _concentration_sentence(d: Decomposition) -> str:
     if d.parent.aggregate == "avg":
         moves = "; ".join(f"{_label(g.group)} {_num(g.before_value)} to {_num(g.after_value)}" for g in d.groups[:3])
         return f"largest moves in the average: {moves}."
+    if not same:
+        return "no group moved in the direction of the total." if opposite else "no group changed."
     shares = _shares(d, same)
     return {
         "single": f"one group: {shares}.",
@@ -566,12 +568,14 @@ class _Sql:
     def _span(self, fact: Mapping[str, Any], years: Sequence[int]) -> str:
         return f"{_year_expr(fact['date'], 'duckdb')} IN ({', '.join(str(int(y)) for y in years)})"
 
-    def daily(self, fact: Mapping[str, Any], measures: Sequence[str]) -> str:
-        """Rows and the sum of every measure by day over the whole fact."""
+    def daily(self, fact: Mapping[str, Any], measures: Sequence[str], filters: _Filters = ()) -> str:
+        """Rows and the sum of every measure by day over the whole fact, narrowed to the groups in ``filters``."""
         day = self.day(fact)
+        joins = _Joins()
+        conditions = [self._filter(joins, p, v) for p, v in filters]
         values = ", ".join(f"SUM(f.{_q(m)}) AS v{i}" for i, m in enumerate(measures))
-        join = _time_join(fact["date"])
-        return f"SELECT {day} AS day, COUNT(*) AS n, {values} FROM {fact['table']} f" + (f" {join}" if join else "") + " GROUP BY 1 ORDER BY 1"
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        return f"SELECT {day} AS day, COUNT(*) AS n, {values} {self._from(fact, joins)}{where} GROUP BY 1 ORDER BY 1"
 
     def _filter(self, joins: _Joins, path: Mapping[str, Any], value: Any) -> str:
         ref = joins.ref(path)
@@ -800,19 +804,21 @@ class _Dax:
         values = ", ".join(f'"v{i}", {self._sum(fact, m)}' for i, m in enumerate(measures))
         return f'EVALUATE SELECTCOLUMNS(SUMMARIZECOLUMNS({keys}, "n", {self._rows(fact)}, {values}), {outputs}, "n", [n], {picked}) {order}'
 
-    def daily(self, fact: Mapping[str, Any], measures: Sequence[str]) -> str:
-        """Rows and the sum of every measure by day: the date table's day column, or the fact's own date."""
+    def daily(self, fact: Mapping[str, Any], measures: Sequence[str], filters: _Filters = ()) -> str:
+        """Rows and the sum of every measure by day: the date table's day column, or the fact's own date; narrowed to the groups in ``filters``."""
         dt = fact["date"]
         if dt["kind"] != "date":
             raise ValueError("the model's date table has no day column, so there is no daily series")
         picked = ", ".join(f'"v{i}", [v{i}]' for i in range(len(measures)))
+        narrow = [self._filter(fact, p, v) for p, v in filters]
         if dt["table"] != fact["table"]:
             ref = _dax_ref(dt["table"], dt["column"])
             values = ", ".join(f'"v{i}", {self._sum(fact, m)}' for i, m in enumerate(measures))
-            return f'EVALUATE SELECTCOLUMNS(SUMMARIZECOLUMNS({ref}, "n", {self._rows(fact)}, {values}), "day", {ref}, "n", [n], {picked}) ORDER BY [day]'
+            return f'EVALUATE SELECTCOLUMNS(SUMMARIZECOLUMNS({ref}{"".join(", " + f for f in narrow)}, "n", {self._rows(fact)}, {values}), "day", {ref}, "n", [n], {picked}) ORDER BY [day]'
         ref = _dax_ref(fact["table"], dt["column"])
+        table = f"CALCULATETABLE('{fact['table']}', {', '.join(narrow)})" if narrow else f"'{fact['table']}'"
         sums = ", ".join(f'"v{i}", SUMX(CURRENTGROUP(), {_dax_ref(fact["table"], m)})' for i, m in enumerate(measures))
-        return f'EVALUATE SELECTCOLUMNS(GROUPBY(ADDCOLUMNS(\'{fact["table"]}\', "__d", DATE(YEAR({ref}), MONTH({ref}), DAY({ref}))), [__d], "n", COUNTX(CURRENTGROUP(), 1), {sums}), "day", [__d], "n", [n], {picked}) ORDER BY [day]'
+        return f'EVALUATE SELECTCOLUMNS(GROUPBY(ADDCOLUMNS({table}, "__d", DATE(YEAR({ref}), MONTH({ref}), DAY({ref}))), [__d], "n", COUNTX(CURRENTGROUP(), 1), {sums}), "day", [__d], "n", [n], {picked}) ORDER BY [day]'
 
     def months(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if not rows or "day" not in rows[0]:

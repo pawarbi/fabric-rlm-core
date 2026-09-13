@@ -223,6 +223,11 @@ touches the numbers. `fabric_rlm.brief.brief(source, ["revenue by region",
 against the week before, the same week last year, the recent averages and
 the seasonal expectation, with level shifts, the drivers of the move, the
 volume and rate split, the day-of-week pattern and what moved together.
+`kpis=["new customers", "churned customers over 4 weeks", "average order
+value = sales amount / order quantity", "top 3 share of revenue by
+reseller"]` adds KPIs built from the source's structure: the entity is
+discovered and its choice explained, and every definition is printed next
+to its number.
 It also asks the data what nobody would think to put in the instructions
 (keys with no match in their dimension, dimension keys that repeat, values
 spelled in several cases in a case-sensitive lakehouse, the vocabulary of

@@ -195,12 +195,39 @@ class FakeModel:
             return f"SUM({self._ref(self._inner(text, 'SUM'))})"
         if text.startswith("AVERAGE("):
             return f"AVG({self._ref(self._inner(text, 'AVERAGE'))})"
+        if text.startswith("DISTINCTCOUNT("):
+            return f"COUNT(DISTINCT {self._ref(self._inner(text, 'DISTINCTCOUNT'))})"
         if text.startswith("COUNTROWS("):
             return "COUNT(*)"
         raise AssertionError(f"unknown aggregate: {text}")
 
+    def _members(self, text: str) -> str:
+        """CALCULATETABLE(VALUES(ref), predicates...) -> SELECT DISTINCT ref ... WHERE predicates."""
+        arguments = self._split(self._inner(text.strip(), "CALCULATETABLE"))
+        ref = self._ref(self._inner(arguments[0], "VALUES"))
+        where = " AND ".join(self._predicate(a) for a in arguments[1:])
+        return f"SELECT DISTINCT {ref} AS k {self.FROM}" + (f" WHERE {where}" if where else "")
+
     def _expression(self, text: str) -> str:
         text = text.strip()
+        if text.startswith("COUNTROWS(INTERSECT("):
+            left, right = self._split(self._inner(self._inner(text, "COUNTROWS"), "INTERSECT"))
+            return f"(SELECT COUNT(*) FROM ({self._members(left)} INTERSECT {self._members(right)}) t)"
+        if text.startswith("COUNTROWS(FILTER(ADDCOLUMNS(CALCULATETABLE(VALUES("):
+            table_expression, condition = self._split(self._inner(self._inner(text, "COUNTROWS"), "FILTER"))
+            members, _name, first = self._split(self._inner(table_expression, "ADDCOLUMNS"))
+            ref = self._ref(self._inner(self._split(self._inner(members, "CALCULATETABLE"))[0], "VALUES"))
+            date_ref = self._ref(re.search(r"MINX?\((?:'[^']+', RELATED\()?('[^']+'\[[^\]]+\])\)?\)", first).group(1))
+            bounds = re.fullmatch(r"\[__first\] >= DATE\((\d+),(\d+),(\d+)\) && \[__first\] < DATE\((\d+),(\d+),(\d+)\)", condition.strip())
+            y0, m0, d0, y1, m1, d1 = (int(bounds.group(i)) for i in range(1, 7))
+            return f"(SELECT COUNT(*) FROM (SELECT {ref} AS k, MIN({date_ref}) AS first {self.FROM} GROUP BY {ref}) t WHERE k IN ({self._members(members)}) AND first >= DATE '{y0:04d}-{m0:02d}-{d0:02d}' AND first < DATE '{y1:04d}-{m1:02d}-{d1:02d}')"
+        if text.startswith("COUNTROWS(FILTER(ADDCOLUMNS(VALUES("):
+            table_expression, condition = self._split(self._inner(self._inner(text, "COUNTROWS"), "FILTER"))
+            values, _name, months = self._split(self._inner(table_expression, "ADDCOLUMNS"))
+            ref = self._ref(self._inner(values, "VALUES"))
+            date_ref = self._ref(re.search(r"YEAR\((?:RELATED\()?('[^']+'\[[^\]]+\])\)?\)", months).group(1))
+            least = int(re.fullmatch(r"\[__months\] >= (\d+)", condition.strip()).group(1))
+            return f"(SELECT COUNT(*) FROM (SELECT {ref} AS k, COUNT(DISTINCT EXTRACT(year FROM {date_ref}) * 12 + EXTRACT(month FROM {date_ref})) AS months {self.FROM} GROUP BY {ref}) t WHERE months >= {least})"
         if text.startswith("CALCULATE("):
             arguments = self._split(self._inner(text, "CALCULATE"))
             where = " AND ".join(self._predicate(a) for a in arguments[1:])

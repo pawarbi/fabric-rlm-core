@@ -726,6 +726,101 @@ def _short_date(iso: str) -> str:
     return f"{day.day} {calendar.month_abbr[day.month]} {str(day.year)[2:]}"
 
 
+def _lines_svg(series_by_label: "dict[str, Sequence[Any]]", title: str, *, markers: Sequence[str] = (), percent: bool = False) -> str:
+    """Lines by date for two or three weekly series (each a sequence with ``start`` and ``value``), with dashed markers at the dates given."""
+    starts = sorted({w.start for points in series_by_label.values() for w in points})
+    if len(starts) < 2:
+        return ""
+    width, height, left, right, top, bottom = 640, 240, 64, 16, 28, 44
+    values = [w.value for points in series_by_label.values() for w in points]
+    low, high = min(0.0, min(values)), max(values)
+    ticks = _nice_ticks(low, high)
+    low, high = min(ticks[0], low), max(ticks[-1], high)
+    span = high - low or 1.0
+    index = {s: i for i, s in enumerate(starts)}
+
+    def x(start: str) -> float:
+        return left + index[start] * (width - left - right) / max(1, len(starts) - 1)
+
+    def y(v: float) -> float:
+        return top + (high - v) * (height - top - bottom) / span
+
+    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="{esc(title)}">']
+    parts.append(f'<text x="{left}" y="16" font-size="12" fill="#374151" font-weight="600">{esc(title)}</text>')
+    for tick in ticks:
+        parts.append(f'<line x1="{left}" x2="{width - right}" y1="{y(tick):.1f}" y2="{y(tick):.1f}" stroke="#eef2f7"/>')
+        parts.append(f'<text x="{left - 6}" y="{y(tick) + 4:.1f}" font-size="10" fill="#6b7280" text-anchor="end">{esc(f"{tick:.0%}" if percent else _compact(tick))}</text>')
+    step = max(1, round(len(starts) / 6))
+    for i, s in enumerate(starts):
+        if i % step == 0:
+            parts.append(f'<text x="{x(s):.1f}" y="{height - bottom + 14}" font-size="10" fill="#6b7280" text-anchor="middle">{esc(_short_date(s))}</text>')
+    for marker in markers:
+        if marker in index:
+            parts.append(f'<line x1="{x(marker):.1f}" x2="{x(marker):.1f}" y1="{top}" y2="{height - bottom}" stroke="#f59e0b" stroke-dasharray="4 3"/>')
+    for i, (label, points) in enumerate(series_by_label.items()):
+        color = _SERIES_PALETTE[i % len(_SERIES_PALETTE)]
+        ordered = sorted(points, key=lambda w: w.start)
+        path = " ".join(f"{'M' if j == 0 else 'L'}{x(w.start):.1f},{y(w.value):.1f}" for j, w in enumerate(ordered))
+        parts.append(f'<path d="{path}" fill="none" stroke="{color}" stroke-width="1.8" stroke-linejoin="round"><title>{esc(label)}</title></path>')
+        legend_x = left + i * 150
+        parts.append(f'<rect x="{legend_x}" y="{height - 9}" width="9" height="9" fill="{color}" rx="2"/><text x="{legend_x + 12}" y="{height}" font-size="10" fill="#374151">{esc(_short(label, 22))}</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _growth_svg(points: Sequence[Any], title: str) -> str:
+    """Growth accounting by week: new, retained and resurrected stacked upward, churned downward."""
+    if not points:
+        return ""
+    width, height, left, right, top, bottom = 640, 240, 64, 16, 28, 44
+    high = max((p.new + p.retained + p.resurrected) for p in points) or 1.0
+    low = -max(p.churned for p in points)
+    ticks = _nice_ticks(low, high)
+    low, high = min(ticks[0], low), max(ticks[-1], high)
+    span = high - low or 1.0
+    slot = (width - left - right) / max(1, len(points))
+    bar = max(2.0, slot * 0.7)
+
+    def y(v: float) -> float:
+        return top + (high - v) * (height - top - bottom) / span
+
+    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="{esc(title)}">']
+    parts.append(f'<text x="{left}" y="16" font-size="12" fill="#374151" font-weight="600">{esc(title)}</text>')
+    for tick in ticks:
+        parts.append(f'<line x1="{left}" x2="{width - right}" y1="{y(tick):.1f}" y2="{y(tick):.1f}" stroke="#eef2f7"/>')
+        parts.append(f'<text x="{left - 6}" y="{y(tick) + 4:.1f}" font-size="10" fill="#6b7280" text-anchor="end">{esc(_compact(tick))}</text>')
+    parts.append(f'<line x1="{left}" x2="{width - right}" y1="{y(0):.1f}" y2="{y(0):.1f}" stroke="#9ca3af"/>')
+    step = max(1, round(len(points) / 6))
+    for i, p in enumerate(points):
+        cx = left + slot * i + slot / 2
+        base = 0.0
+        for value, color, label in ((p.retained, "#94a3b8", "retained"), (p.new, "#2563eb", "new"), (p.resurrected, "#10b981", "resurrected")):
+            if value:
+                parts.append(f'<rect x="{cx - bar / 2:.1f}" y="{y(base + value):.1f}" width="{bar:.1f}" height="{max(0.5, y(base) - y(base + value)):.1f}" fill="{color}"><title>{esc(f"{label} {p.start}: {value:,}")}</title></rect>')
+                base += value
+        if p.churned:
+            parts.append(f'<rect x="{cx - bar / 2:.1f}" y="{y(0):.1f}" width="{bar:.1f}" height="{max(0.5, y(-p.churned) - y(0)):.1f}" fill="#dc2626"><title>{esc(f"churned {p.start}: {p.churned:,}")}</title></rect>')
+        if i % step == 0:
+            parts.append(f'<text x="{cx:.1f}" y="{height - bottom + 14}" font-size="10" fill="#6b7280" text-anchor="middle">{esc(_short_date(p.start))}</text>')
+    for i, (color, label) in enumerate((("#94a3b8", "retained"), ("#2563eb", "new"), ("#10b981", "resurrected"), ("#dc2626", "churned"))):
+        parts.append(f'<rect x="{left + i * 90}" y="{height - 9}" width="9" height="9" fill="{color}" rx="2"/><text x="{left + i * 90 + 12}" y="{height}" font-size="10" fill="#374151">{label}</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _kpi_charts(metric: Any) -> str:
+    extra = metric.extra or {}
+    if metric.kind in {"new", "active", "retained", "resurrected", "churned"} and extra.get("growth"):
+        return _growth_svg(extra["growth"], f"{extra['entity'].name.capitalize()} by week: who stayed, who joined, who came back, who left")
+    if metric.kind == "ratio" and extra.get("numerator"):
+        return _lines_svg({extra.get("numerator_name", "numerator"): extra["numerator"][-52:]}, f"{extra.get('numerator_name', 'numerator').capitalize()} by week") + _lines_svg({extra.get("denominator_name", "denominator"): extra["denominator"][-52:]}, f"{extra.get('denominator_name', 'denominator').capitalize()} by week")
+    if metric.kind == "crossing" and extra.get("left"):
+        return _lines_svg({extra.get("left_name", "left"): extra["left"][-52:], extra.get("right_name", "right"): extra["right"][-52:]}, "The two series by week; dashed: a crossing", markers=[when for when, _side in extra.get("crossings", ())])
+    if metric.kind == "concentration" and extra.get("shares"):
+        return _lines_svg({"share of the top groups": extra["shares"]}, "Share held by the top groups, by week", percent=True) if hasattr(extra["shares"][0], "value") else ""
+    return ""
+
+
 def _weekday_svg(shares: Any, title: str) -> str:
     if not shares or not any(v for v, _u in shares.values()):
         return ""
@@ -779,10 +874,20 @@ def _metric_section(metric: Any, index: int) -> str:
         chips.append(f'<span class="chip">{esc(c["rank_note"])}</span>')
     if c.get("streak_note"):
         chips.append(f'<span class="chip">{esc(c["streak_note"])}</span>')
-    parts = [f'<div class="card"><h3>{index}. {esc(metric.name.capitalize())}</h3>', f'<div class="story">{esc(metric.headline)}</div>', "".join(chips)]
+    parts = [f'<div class="card"><h3>{index}. {esc(metric.name.capitalize())}</h3>', f'<div class="story">{esc(metric.headline)}</div>']
+    if metric.definition:
+        parts.append(f'<div class="caption">Definition: {esc(metric.definition)}.</div>')
+    parts.append("".join(chips))
     from .brief import _week_label
 
-    parts.append(_weekly_svg(metric, f"{metric.name.capitalize()} by week"))
+    if metric.kind == "concentration":
+        parts.append(_lines_svg({metric.name: list(metric.weeks)[-52:]}, f"{metric.name.capitalize()} by week", percent=True))
+    else:
+        parts.append(_weekly_svg(metric, f"{metric.name.capitalize()} by week"))
+    parts.append(_kpi_charts(metric))
+    if metric.kind != "measure":
+        for text in metric.explanations:
+            parts.append(f'<div class="story">{esc(text)}</div>')
     for point in metric.change_points:
         parts.append(f'<div class="note">Level shift the {esc(_week_label(point.start))}: the weekly average went from {esc(_full(point.before))} to {esc(_full(point.after))} ({esc(_pct(point.pct))}).</div>')
     parts.append(_context_table(metric))
@@ -846,6 +951,11 @@ def render_brief(brief: Any) -> str:
     if brief.watch:
         parts.append("<h2>Watch</h2>")
         parts.append("".join(f'<div class="note">{esc(text)}</div>' for text in brief.watch))
+    if brief.definitions or brief.entity_choice:
+        parts.append("<h2>Definitions</h2>")
+        if brief.entity_choice:
+            parts.append(f'<div class="caption">Entities: {esc(brief.entity_choice)}.</div>')
+        parts.append("<ul style=\"margin:4px 0 8px 18px;padding:0;font-size:13px\">" + "".join(f"<li><b>{esc(name)}</b>: {esc(definition)}.</li>" for name, definition in brief.definitions) + "</ul>")
     for index, metric in enumerate(brief.metrics, start=1):
         parts.append(_metric_section(metric, index))
     if brief.comovement:

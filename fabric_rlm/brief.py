@@ -95,6 +95,9 @@ class MetricBrief:
     explanations: tuple[str, ...] = ()
     headline: str = ""
     notes: tuple[str, ...] = ()
+    kind: str = "measure"  # measure, or a KPI kind: new, active, retained, resurrected, churned, ratio, crossing, concentration
+    definition: str = ""  # what the number means, printed next to it
+    extra: Mapping[str, Any] = field(default_factory=dict)  # the series behind a KPI: growth accounting, the two sides of a ratio or a crossing, the shares
 
     @property
     def finding(self) -> SweepFinding | None:
@@ -111,6 +114,8 @@ class MetricBrief:
 
     def lines(self) -> list[str]:
         lines = [self.headline]
+        if self.definition:
+            lines.append(f"  Definition: {self.definition}.")
         c = self.context
         if c.get("rank_note"):
             lines.append(f"  {c['rank_note']}")
@@ -144,10 +149,16 @@ class Brief:
     mismatches: tuple[str, ...] = ()
     verified: bool = False
     elapsed: float = 0.0
+    entities: tuple[Any, ...] = ()  # the entity candidates found on the fact, best first
+    entity_choice: str = ""  # which entity the lifecycle KPIs count, and why
 
     @property
     def title(self) -> str:
         return f"Monday Morning Brief: {self.source}"
+
+    @property
+    def definitions(self) -> list[tuple[str, str]]:
+        return [(m.name, m.definition) for m in self.metrics if m.definition]
 
     @property
     def week_label(self) -> str:
@@ -194,7 +205,9 @@ class Brief:
         moves = []
         for metric in self.metrics:
             pct = metric.context.get("wow_pct")
-            if pct is not None:
+            if metric.kind == "concentration" and metric.target is not None:
+                moves.append(f"{metric.name} held at {metric.target.value:.0%}" if pct is not None and abs(pct) < 0.02 else f"{metric.name} {'fell' if (pct or 0) < 0 else 'rose'} to {metric.target.value:.0%}")
+            elif pct is not None:
                 moves.append(f"{metric.name} {'fell' if pct < 0 else 'rose'} {abs(pct):.0%}")
         first = f"In the {self.week.label}, " + (", ".join(moves[:-1]) + (" and " if len(moves) > 1 else "") + moves[-1] if moves else "no metric had a week before to compare with") + " on the week before."
         sentences = [first[0].upper() + first[1:]]
@@ -225,6 +238,8 @@ class Brief:
 
     def to_markdown(self) -> str:
         head = [f"# {self.title}", f"Week: {self.week_label}", "", self.summary(), "", self.narrative(), ""]
+        if self.entity_choice:
+            head.extend([f"Entities: {self.entity_choice}", ""])
         body = []
         for line in self.lines():
             body.append(("- " + line[2:]) if line.startswith("  ") else f"\n**{line}**\n")
@@ -398,6 +413,8 @@ def _context(weeks: Sequence[Week], index: int, aggregate: str) -> dict[str, Any
         c["verdict"] = f"unusual: {abs(c['z']):.1f} standard deviations {'above' if c['z'] > 0 else 'below'} the expectation"
     else:
         c["verdict"] = f"very unusual: {abs(c['z']):.1f} standard deviations {'above' if c['z'] > 0 else 'below'} the expectation"
+    if c.get("z") is not None and abs(c["z"]) >= 1.5 and len(index_values) == 1 and c.get("yoy_pct") is not None and abs(c["yoy_pct"]) >= 1.0:
+        c["verdict"] += ", though the seasonal pattern comes from a single prior year that ran at a very different level"
     # the record
     earlier = values[:index]
     if earlier:
@@ -618,8 +635,11 @@ def _pearson(xs: Sequence[float], ys: Sequence[float]) -> float | None:
 
 def brief(
     source: Any,
-    metrics: Sequence[Any],
+    metrics: Sequence[Any] = (),
     *,
+    kpis: Sequence[str] = (),
+    entity: str | None = None,
+    window: int = 1,
     week: str | None = None,
     history_weeks: int = 104,
     instructions: str = "",
@@ -634,12 +654,22 @@ def brief(
 
     ``metrics`` are plain words (``"revenue by product category"``,
     ``"order quantity"``) or mappings ``{"measure": ..., "fact": ...,
-    "by": [...], "name": ...}``. ``week`` is any date of the week to brief
-    (default: the latest complete Monday-to-Sunday week the source holds);
-    ``history_weeks`` bounds the weekly history used for context; ``paths``
-    the groupings tried per metric when none are named; ``budget`` the
-    queries for the whole brief, shared out across the metrics.
+    "by": [...], "name": ...}``. ``kpis`` are built from the structure:
+    lifecycle counts (``"new customers"``, ``"churned resellers over 4
+    weeks"``, ``"active users"``), ratios (``"average order value = sales
+    amount / order quantity"``, ``"revenue per rows"``), crossings
+    (``"order quantity where channel = Internet vs order quantity where
+    channel = Reseller"``) and concentration (``"top 3 share of revenue by
+    reseller"``). ``entity`` overrides the entity the lifecycle counts use;
+    ``window`` is how many weeks count as "before" for retained and churned.
+    ``week`` is any date of the week to brief (default: the latest complete
+    Monday-to-Sunday week the source holds); ``history_weeks`` bounds the
+    weekly history used for context; ``paths`` the groupings tried per
+    metric when none are named; ``budget`` the queries for the whole brief,
+    shared out across the metrics and KPIs.
     """
+    from .kpis import parse_kpi
+
     probe = _probe_for(source, timeout=timeout, name=name)
     started = time.monotonic()
     schema = probe.schema
@@ -647,11 +677,19 @@ def brief(
     text = "\n".join(p for p in (instructions, context.text if context is not None else "") if p)
     joins = probe.joins(text)
     dialect = probe.dialect(joins)
-    specs = _metric_specs(metrics, probe, instructions, scope)
+    kpi_specs = []
+    plain_metrics = list(metrics)
+    for phrase in kpis:
+        parsed = parse_kpi(str(phrase))
+        if parsed is None:
+            plain_metrics.append(phrase)  # an ordinary metric named among the KPIs
+        else:
+            kpi_specs.append(parsed)
+    specs = _metric_specs(plain_metrics, probe, instructions, scope)
     notes: list[str] = []
     briefs: list[MetricBrief] = []
     spent = 0
-    per_metric = max(8, budget // max(1, len(specs)))
+    per_metric = max(8, budget // max(1, len(specs) + len(kpi_specs)))
     target_week: Week | None = None
     for spec in specs:
         fact_name, measure = spec["fact"], spec["measure"]
@@ -718,9 +756,18 @@ def brief(
         explanations = _explanations(spec["name"], finding, mix)
         headline = _headline(spec["name"], target, ctx, aggregate)
         briefs.append(MetricBrief(spec["name"], fact_name, measure, tuple(spec["groupings"]), aggregate, tuple(weeks), target, ctx, tuple(points), shares, pattern, swept, mix, tuple(explanations), headline, tuple(n for n in metric_notes if n)))
+    entities: list[Any] = []
+    entity_choice = ""
+    if kpi_specs:
+        from .kpis import build_kpis
+
+        kpi_briefs, entities, entity_choice, kpi_spent, kpi_notes, target_week = build_kpis(probe, dialect, joins, kpi_specs, specs, entity=entity, window=window, week=week, target_week=target_week, history_weeks=history_weeks, instructions=instructions, scope=scope, budget=max(8, budget - spent), per_kpi=per_metric)
+        briefs.extend(kpi_briefs)
+        spent += kpi_spent
+        notes.extend(kpi_notes)
     comovement = _comovement(briefs)
     watch = _watch(briefs)
-    result = Brief(probe.name, probe.kind, target_week, tuple(briefs), tuple(comovement), tuple(watch), spent, budget, tuple(notes))
+    result = Brief(probe.name, probe.kind, target_week, tuple(briefs), tuple(comovement), tuple(watch), spent, budget, tuple(notes), entities=tuple(entities), entity_choice=entity_choice)
     if verify:
         recomputed, mismatches = 0, []
         verified_metrics = []
