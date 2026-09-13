@@ -18,6 +18,18 @@
   unexpected repetition indices no longer pass. Completion is checked per
   task separately from correctness, so a faster abstention or timeout
   cannot be hidden by equal accuracy or a gain on a different task.
+- **An integer or boolean aggregate is no longer reported as an unserializable
+  value.** `np.float64` subclasses Python `float`, but `np.int64` and `np.bool_`
+  subclass nothing, so they missed `freeze`'s native-scalar branch and were
+  emitted as opaque `{"__serializable__": false}` markers. The everyday
+  `df["qty"].sum()` and `(df["qty"] > 1).any()` therefore returned a correct
+  number or flag that read back as unusable — and `np.True_` labelled itself
+  `"__type__": "bool"` while doing so. Zero-dimensional array scalars are now
+  unwrapped to their Python natives. Detection is duck-typed on `ndim`/`shape`
+  rather than importing numpy, which is an optional dependency, so other array
+  libraries behave the same; arrays, Series and DataFrames — including a
+  single-element 1-D array — still serialize as opaque markers, since a lone
+  scalar cannot represent their data.
 - **A value containing `--`, `/*` or `*/` no longer looks like a SQL comment to
   `LakehouseSource.query`.** The read-only gate scanned the raw query text for
   comment markers, so an ordinary filter on data that happens to contain them —

@@ -203,6 +203,28 @@ def test_a_typed_number_the_output_showed_is_accepted(tmp_path: Path) -> None:
     assert "verifier_repair_history" not in result.trajectory.metadata
 
 
+def test_file_integer_and_boolean_aggregates_survive_submission(tmp_path: Path) -> None:
+    path = tmp_path / "quantities.csv"
+    path.write_text("quantity\n3\n4\n", encoding="utf-8")
+    lm = ScriptedLM(_code(
+        "import pandas as pd\n"
+        "rows = pd.read_csv(quantities)\n"
+        "total = rows['quantity'].sum()\n"
+        "positive = (rows['quantity'] > 0).any()\n"
+        "print(total, positive)\n"
+        "SUBMIT(answer={'value': total, 'positive': positive})"
+    ))
+
+    result = RLM.task(
+        "Return the total and whether any quantity is positive.",
+        inputs={"quantities": path}, outputs={"answer": dict},
+        lm=lm, max_turns=1, timeout=10, enable_skill_autoloading=False, skills=[],
+    ).run()
+
+    assert result.submitted
+    assert result.payload["answer"] == {"value": 7, "positive": True}
+
+
 # ------------------------------------------------ registered operations --
 
 
