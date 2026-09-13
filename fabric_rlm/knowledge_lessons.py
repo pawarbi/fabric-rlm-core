@@ -42,6 +42,7 @@ from fabric_rlm.knowledge import (
     SourceProfile,
     _domain_fingerprint,
 )
+from fabric_rlm.knowledge_evidence import _is_aggregate_observation
 
 
 # "IsCurrentQuarter", "CurrentYearQuarter", "current_period", "AsOfDate",
@@ -468,7 +469,7 @@ def _valid_grain_lessons(
     for record in records:
         if record.observation_type != "query_execution" or not record.execution_trusted:
             continue
-        if record.observation.get("query_type") not in {"aggregate", "measure", "registered_operation"}:
+        if not _is_aggregate_observation(record.observation):
             continue
         grain = record.observation.get("grain")
         rows = _number(record.observation.get("returned_rows"))

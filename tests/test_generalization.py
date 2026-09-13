@@ -486,6 +486,45 @@ def test_lakehouse_queries_record_their_grain_as_evidence(tmp_path: Path) -> Non
     assert {e.evidence_id for e in again} == {e.evidence_id for e in result.evidence}
 
 
+@pytest.mark.parametrize("max_rows", [10, 1])
+def test_grouped_lakehouse_sql_learns_only_from_complete_results(tmp_path: Path, max_rows) -> None:
+    knowledge = RLM.learn(sources={"service": _service_lakehouse(tmp_path)})
+    results = []
+    for _ in range(2):
+        lm = ScriptedLM(
+            '{"fallback":true,"reason":"Use a grouped SQL read."}',
+            _code(
+                "rows = service.query("
+                "'SELECT region, SUM(hours) AS hours FROM tickets GROUP BY region',"
+                f"sources={{'tickets':'tickets'}}, max_rows={max_rows})\n"
+                "print(rows['rows'])\n"
+                "SUBMIT(answer={'rows': rows['rows']})"
+            ),
+        )
+        result = RLM.task(
+            "Group hours by region.", outputs={"answer": dict}, knowledge=knowledge,
+            lm=lm, max_turns=1, timeout=30, capture_evidence=True,
+            enable_skill_autoloading=False, skills=[],
+        ).run()
+        assert result.submitted
+        (query,) = [e for e in result.evidence if e.observation_type == "query_execution"]
+        assert query.observation["query_type"] == "lakehouse_sql"
+        assert query.observation["truncated"] is (max_rows == 1)
+        assert not query.analytically_trusted
+        results.append(result)
+
+    enriched = RLM.enrich(knowledge, results)
+    lessons = [lesson for lesson in enriched.package.lessons if lesson.kind == "valid_grain"]
+    if max_rows == 1:
+        assert lessons == []
+    else:
+        assert len(lessons) == 1
+        assert lessons[0].status == "active"
+        assert tuple(lessons[0].structured_rule["grain"]) == ("region",)
+        assert lessons[0].structured_rule["runs"] == 2
+        assert lessons[0].structured_rule["verified_successes"] == 0
+
+
 def test_a_shared_glossary_renders_once_and_never_crowds_out_the_grain(tmp_path: Path) -> None:
     # The same definitions declared on every table of a domain, as a source
     # owner would: the agent sees the structural facts first, one line per

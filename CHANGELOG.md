@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **Grouped Lakehouse SQL can produce valid-grain lessons.** Successful
+  grouped reads were captured but excluded by their `lakehouse_sql` type.
+  Aggregation evidence is now recognized consistently during harvesting
+  and promotion; truncated results remain ineligible. Independent-run
+  thresholds and analytical verification requirements are unchanged.
 - **Registered-operation selection is explicitly optional and task-complete.**
   The planner is instructed to fall back for partial coverage or unknown
   data-dependent parameters instead of guessing literal placeholders. This
