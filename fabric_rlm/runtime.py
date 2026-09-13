@@ -1431,7 +1431,13 @@ class RLM:
             {
                 "role": "system",
                 "content": (
-                    "Select one registered host operation for the task. "
+                    "Select one registered host operation only if its result "
+                    "can support the complete task, not just part of it. "
+                    "This is an optional optimization. Use literal parameter values "
+                    "grounded in the task or declared guidance, or selectors "
+                    "explicitly defined by the contract. Do not guess unknown "
+                    "data-dependent values or substitute unevaluated placeholders. "
+                    "If coverage or required values are missing, use the fallback. "
                     "Return JSON only, with exactly "
                     '{"operation_id":"...","parameters":{...}}. '
                     "Use only operation IDs and parameter values allowed by the "

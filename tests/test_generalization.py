@@ -232,6 +232,27 @@ def _plan(operation_id: str, **parameters: str) -> str:
     return json.dumps({"operation_id": operation_id, "parameters": parameters})
 
 
+def test_planner_contract_requires_complete_grounded_operations(tmp_path: Path) -> None:
+    knowledge = RLM.learn(sources={"production": _production_csv(tmp_path)})
+    lm = ScriptedLM(
+        '{"fallback":true,"reason":"The operation does not cover the complete task."}',
+        _code("SUBMIT(answer=production.name)"),
+    )
+    result = RLM.task(
+        "Return the source filename.", outputs={"answer": str},
+        knowledge=knowledge, lm=lm, max_turns=1, timeout=10,
+        enable_skill_autoloading=False, skills=[],
+    ).run()
+
+    planner = lm.messages[0][0]["content"]
+    assert "complete task" in planner
+    assert "literal parameter values" in planner
+    assert "data-dependent" in planner
+    assert result.payload == {"answer": "production.csv"}
+    assert result.trajectory.metadata["knowledge_mode"] == "fallback_no_compatible_operation"
+    assert "operation_execution" not in result.trajectory.metadata
+
+
 def test_the_packet_introduces_itself_and_the_raw_source_stays_bound(tmp_path: Path) -> None:
     knowledge = RLM.learn(sources={"production": _production_csv(tmp_path)})
     operation = knowledge.package.operations[0]

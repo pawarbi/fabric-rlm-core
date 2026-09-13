@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **Registered-operation selection is explicitly optional and task-complete.**
+  The planner is instructed to fall back for partial coverage or unknown
+  data-dependent parameters instead of guessing literal placeholders. This
+  is model guidance, not a replacement for independent answer validation;
+  the host's existing contract and audit boundaries remain unchanged.
 - **Host work is included in source-call metrics and run outcomes.**
   Runtime results, evidence and benchmarks share the same accounting;
   adapter telemetry and its operation wrapper are not double-counted.
