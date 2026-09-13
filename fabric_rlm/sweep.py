@@ -324,6 +324,8 @@ class Sweep:
     verified: bool = False
     elapsed: float = 0.0
     collapsed: tuple[str, ...] = ()  # "fact|measure" keys measured but not decomposed because they move like another measure
+    location: str = ""  # where the source lives: a OneLake or file root, a workspace and dataset
+    instructions: str = ""  # the instructions the sweep was given
 
     def phrase(self, movement: Movement) -> str:
         return self.words.get(f"{movement.fact}|{movement.measure}", f"{movement.fact} {movement.measure}")
@@ -351,6 +353,9 @@ class Sweep:
                     lines.append(f"  Within {_label(lead.parent.group)}, by {_word(lead.path)}: {_concentration_sentence(lead)}")
                 elif finding.drill:
                     lines.append(f"  Within {_label(finding.drill[0].parent.group)}, nothing stands out by {_words([d.path for d in finding.drill])}.")
+            fine, view = self.pareto_view(finding)
+            if fine is not None and view is not None:
+                lines.append(f"  {self.pareto_sentence(fine)}")
             said = {_concentration_sentence(best)} if best is not None else set()
             for other in [d for d in finding.decompositions[1:] if d.groups][:4]:
                 sentence = _concentration_sentence(other)
@@ -395,6 +400,59 @@ class Sweep:
             finding = by_finding.get(id(m))
             out.append(Takeaway(self._takeaway_text(m, finding), m, finding, True))
         return out
+
+    def groups_of(self, d: Decomposition) -> list[Movement]:
+        """Every group the source returned for a decomposition, from the ledger (the decomposition itself keeps only the largest)."""
+        above = d.parent.parent + (((str(d.parent.path["column"]), d.parent.group),) if d.parent.path is not None else ())
+        return [m for m in self.ledger if m.path is not None and m.path is d.path and m.parent == above and m.fact == d.parent.fact and m.measure == d.parent.measure and m.comparison.label == d.parent.comparison.label]
+
+    def pareto(self, d: Decomposition, threshold: float = 0.8, least: int = 12) -> dict[str, Any] | None:
+        """How few groups carry most of the base and most of the change, for a grouping with at least ``least`` members.
+
+        ``k_base`` groups carry ``threshold`` of the level in the later period; ``k_change`` of the groups that moved
+        the same way as the total carry ``threshold`` of their change. The curves are the cumulative shares, largest first.
+        """
+        groups = self.groups_of(d)
+        if len(groups) < least or d.parent.aggregate not in {"sum", "count"} or not d.parent.delta:
+            return None
+        base_values = sorted((max(0.0, g.after_value) for g in groups), reverse=True)
+        same = sorted((abs(g.delta) for g in groups if g.delta * d.parent.delta > 0), reverse=True)
+        total_base, total_same = sum(base_values), sum(same)
+        if not total_base or not total_same:
+            return None
+
+        def curve(values: Sequence[float], total: float) -> list[float]:
+            out, running = [], 0.0
+            for v in values:
+                running += v
+                out.append(running / total)
+            return out
+
+        def k_for(shares: Sequence[float]) -> int:
+            return next((i + 1 for i, c in enumerate(shares) if c >= threshold - 1e-9), len(shares))
+
+        curve_base, curve_change = curve(base_values, total_base), curve(same, total_same)
+        return {"n": len(groups), "n_change": len(same), "k_base": k_for(curve_base), "k_change": k_for(curve_change), "curve_base": curve_base, "curve_change": curve_change, "threshold": threshold}
+
+    def pareto_view(self, finding: SweepFinding, least: int = 12) -> tuple[Decomposition | None, dict[str, Any] | None]:
+        """The decomposition a Pareto view applies to: the grouping with the most members (customers, products, cities), when it has at least ``least``."""
+        candidates = sorted((d for d in finding.decompositions if d.size >= least and d.groups), key=lambda d: -d.size)
+        for d in candidates:
+            p = self.pareto(d, least=least)
+            if p:
+                return d, p
+        return None, None
+
+    def pareto_sentence(self, d: Decomposition) -> str:
+        p = self.pareto(d)
+        if not p:
+            return ""
+        n, word = p["n"], _word(d.path)
+        shape = "the change is more concentrated than the base" if p["k_change"] < p["k_base"] else "the change is spread wider than the base" if p["k_change"] > p["k_base"] else "the change follows the base"
+        return (
+            f"Pareto: {p['k_base']} of the {n:,} {word} groups ({p['k_base'] / n:.0%}) carry {p['threshold']:.0%} of {self.phrase(d.parent)} in {_period_label(d.parent.comparison.after)}; "
+            f"{shape}: {p['k_change']} of the {p['n_change']:,} that moved the same way carry {p['threshold']:.0%} of it."
+        )
 
     def steady(self, limit: int = 3) -> list[Movement]:
         """When nothing moved by the material share, the largest trusted movements anyway, so the reader sees how steady steady is."""
@@ -1020,6 +1078,7 @@ class LakehouseProbe:
             tables[str(entry["name"])] = names
             types[str(entry["name"])] = kinds
         self.name = name or str(getattr(handle, "root", "lakehouse")).rstrip("/").rsplit("/", 1)[-1]
+        self.location = str(getattr(handle, "root", "") or "")
         self.schema = schema_from_tables(self.name, tables, types=types)
 
         def query(sql: str, **kwargs: Any) -> Any:
@@ -1037,6 +1096,7 @@ class LakehouseProbe:
         """A probe over a ready executor (``run({"sql": ...})``) and schema; what the tests use."""
         probe = cls.__new__(cls)
         probe.name = name
+        probe.location = ""
         probe.schema = schema
         probe._executor = executor
         return probe
@@ -1102,6 +1162,7 @@ class SemanticModelProbe:
             if parts[0] in tables and parts[2] in tables and all(parts):
                 relationships.append(parts)  # type: ignore[arg-type]
         self.name = name or str(getattr(model, "dataset", "") or "semantic model")
+        self.location = ", ".join(p for p in (f"workspace {getattr(model, 'workspace', '')}" if getattr(model, "workspace", "") else "", f"dataset {getattr(model, 'dataset', '')}" if getattr(model, "dataset", "") else "") if p)
         self.schema = SourceSchema(self.name, "semantic_model", {t: tuple(c) for t, c in tables.items()}, measures, tuple(relationships), types)
         self._model = model
 
@@ -1309,7 +1370,7 @@ def sweep(
             drill.sort(key=lambda d: (-_rank(d), _placeholder_lead(d), -d.explained))
             findings.append(SweepFinding(total, tuple(decompositions), tuple(drill), flags))
     findings.sort(key=lambda f: (not f.trusted, any(flag.startswith("volume:") for flag in f.flags), -(_rank(f.best) if f.best else -1), -abs(f.movement.pct or 0)))
-    return Sweep(probe.name, probe.kind, tuple(findings), tuple(ledger), spent, budget, tuple(years_used), tuple(notes), words, series, collapsed=tuple(collapsed))
+    return Sweep(probe.name, probe.kind, tuple(findings), tuple(ledger), spent, budget, tuple(years_used), tuple(notes), words, series, collapsed=tuple(collapsed), location=str(getattr(probe, "location", "") or ""), instructions=text)
 
 
 def _wanted_comparisons(months: Sequence[Mapping[str, Any]], years: Sequence[int], comparisons: Sequence[Any] | None) -> list[Comparison]:

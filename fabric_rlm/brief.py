@@ -149,6 +149,9 @@ class Brief:
     elapsed: float = 0.0
     entities: tuple[Any, ...] = ()  # the entity candidates found on the fact, best first
     entity_choice: str = ""  # which entity the lifecycle KPIs count, and why
+    request: str = ""  # the metrics and KPIs asked for, as given
+    instructions: str = ""  # the instructions the brief was given
+    location: str = ""  # where the source lives
 
     @property
     def title(self) -> str:
@@ -900,7 +903,8 @@ def brief(
         notes.extend(kpi_notes)
     comovement = _comovement(briefs)
     watch = _watch(briefs)
-    result = Brief(probe.name, probe.kind, target_week, tuple(briefs), tuple(comovement), tuple(watch), spent, budget, tuple(notes), entities=tuple(entities), entity_choice=entity_choice)
+    asked = ", ".join(str(m.get("name") or m.get("measure") or m) if isinstance(m, Mapping) else str(m) for m in metrics) + (f"; KPIs: {', '.join(str(k) for k in kpis)}" if kpis else "")
+    result = Brief(probe.name, probe.kind, target_week, tuple(briefs), tuple(comovement), tuple(watch), spent, budget, tuple(notes), entities=tuple(entities), entity_choice=entity_choice, request=asked, instructions=instructions, location=str(getattr(probe, "location", "") or ""))
     if verify:
         recomputed, mismatches = 0, []
         verified_metrics = []

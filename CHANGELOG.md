@@ -237,6 +237,27 @@
   every comparison, on any fact, are one figure; and when nothing moved by
   5% or more the largest movements are listed as steady, so a page is never
   empty.
+- **Pages in IBCS notation, with a Pareto view.** The dashboard follows
+  the International Business Communication Standards (version 2): the
+  title states the message, the current period is dark and the period
+  compared with is grey, a rise is green and a fall is red in a pair
+  colour-blind readers can tell apart (with the sign and a hatch as a
+  second cue), time runs left to right, categories are horizontal bars,
+  every chart of one measure on a page shares its scale, and the unit sits
+  in the chart title. Each driver analysis shows the bridge (the change
+  each group contributed between the two periods), an IBCS variance chart
+  (every group before and after, its absolute change and its relative
+  change as a pin), the driver scatter, and, for a grouping with twelve or
+  more members, a Pareto view: how few groups carry 80% of the base and
+  80% of the change, as a sentence and as cumulative curves
+  (`Sweep.pareto`, `Sweep.pareto_sentence`, also in the text output).
+  Movements on incomplete periods are collapsed at the bottom of the page
+  under "Set aside, not read as business change", where a reader can open
+  them; an "About this page" block, also collapsed, records when the page
+  was generated, the source and its location, the tables used, the request
+  and the instructions given, the queries spent and the verification
+  statement. Text and marks keep at least WCAG AA contrast; nothing on the
+  page relies on colour alone.
 - **Monday Morning Brief** (`fabric_rlm.brief`, or `report(source, "monday
   morning brief: revenue by region, orders")`). Name the metrics to track
   and the brief takes the latest complete Monday-to-Sunday week the source
