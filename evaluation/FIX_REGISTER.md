@@ -63,10 +63,33 @@ not in the harness, the notebook, or the model's own output.
 
 **The `.task` critical list is one item: F11 — now fixed (PR #77).**
 
+> **Revised 2026-09-17.** It is now **two**: F11 and **F17**, the scalar
+> serialization defect (PR #79), which was invisible to this partition because
+> it corrupts the *answer payload* rather than the execution path — the run
+> succeeds, the number is right, and the submitted value is a marker object.
+> It was found by repeated-trial work, not by code audit, which is itself a
+> finding about how these defects surface.
+
 That is the substantive finding of this partition, and it is a good one: it is
 consistent with cold `.task` scoring 91.7% on 24 unseen complex questions with
 zero fan-out traps. Core execution is in better shape than the undifferentiated
 register implied — most of what was found belongs to the learning path.
+
+> **Precision caveat added 2026-09-17.** The 91.7% figure is a **single run of
+> 24 questions (n=1)**. Later repeated-trial work on the dbo lakehouse measured
+> a run-to-run spread of **12–16 pp** on an unchanged configuration, and found
+> that **24% of question grades flipped between identical runs**
+> ([`calibration/NOISE_ATTRIBUTION.md`](calibration/NOISE_ATTRIBUTION.md)).
+> Read 91.7% as "high, somewhere in the 80s-to-90s", not as a point estimate,
+> and do not compare it to any other number narrower than the floor. The
+> spread itself is estimated on 3 reps and is likewise imprecise — neither 12
+> nor 16 pp should be quoted as exact.
+>
+> Two mechanical causes of that floor have since been removed — scalar
+> serialization (PR #79) and the unenforced `answer.value` contract
+> (`c4f72b5`) — which together accounted for **71% of observed flips**. Any
+> accuracy claim below should be re-measured with both in place, over at least
+> three reps, before it is quoted again.
 
 ### F11, demonstrated
 
@@ -142,6 +165,13 @@ These are the ones where the system reports success while something is broken.
 | **F16** | `assert_not_clarification_request` detects a deferral by matching English opener phrases. A non-English "please confirm / I need more information" matches nothing, so **no assert fires and the answer passes** — it fails *open*. The guard against a model dodging the question only works in English. | `_CLARIFICATION_OPENERS` (`validators.py:373-378`): 4/4 English detected, 0/4 German-Spanish-French-Italian detected. Docstring says "Universal … because clarification openers are domain-agnostic **English**." | **universal mechanism** |
 | **F9** ~~artifact loss~~ | **WITHDRAWN 2026-09-10 — this was not a library defect.** The observation was real: on the cold re-run, q13 appended its correct row, printed `saved staged file`, and submitted without publishing, so the next question reloaded q12's workbook and the row was never carried; q25's `Question ID` was the integer `25`. The **attribution was wrong.** `published=True` is not a library status flag — it is the harness's own OneLake file-existence probe (`make_notebook.py:453` → `workbook_state()`), which reads `True` for every question because the workbook has existed since q01. And no library code writes workbook rows: `excel_artifacts.py` only ever calls `load_workbook` to read (`:71, :96-97, :146-147`), while `make_notebook.py` states "the parent harness deliberately does no Excel work at all." Both failures are **model-authored**; the harness's probe was simply too coarse to notice. | **withdrawn** — reclassified as (a) harness measurement weakness and (b) model prompt-adherence. See F9-P for the one salvageable idea. |
 | **F9-P** *(proposal, not a finding)* | Nothing surfaces staged-but-never-published files at end of run. `FileDestination` already tracks `_staged_paths` (`artifacts.py:158`), so the run could report which staged files were never promoted. | Evidence **n=1** (q13). Deliberately **not implemented**: staging without publishing is legitimate (scratch files, superseded drafts), so it cannot be an error; and reporting it would not have prevented the loss. Needs a real frequency estimate first. | **proposed universal mechanism — unbuilt** |
+| **F17** *(fixed — PR #79)* | `freeze()` (`serializers.py`) recognised only Python native scalars, so any other scalar was replaced with `{"__serializable__": false}` **in the submitted answer**. `np.int64` and `np.bool_` subclass nothing, so `df["a"].sum()` — the most common operation in the product — leaked; `np.float64` subclasses `float` and did not, which is why it hid. A later type probe found **19 further leaking types**, including **`Decimal`** (what `SUM(amount)` returns) and **every date/datetime/timedelta type** (every reporting-period answer). Compounding it, `lakehouse._json_value:759` already normalised exactly these types, so the library held **two conversion policies with different coverage** and a value's meaning depended on which path carried it. | Recorded trials A q09 and A q13: `np.int64(93257855)` graded **wrong**, bare `93257855` graded **right** — identical numbers, opposite grades. Reproduced end-to-end through a real worker `SUBMIT` with the numpy fix applied: a Decimal revenue total and three dates all returned `{"__serializable__": false}`. | **universal mechanism** |
+| **F18** *(harness, not core — fixed `c4f72b5`)* | **11 of 150 trials (7%) submitted `answer.value = null`** and were recorded as successes: `submitted: true`, `failure_reason: None`. They graded wrong, silently, and each spent a trial. Attribution put this at **53% of all grade flips** — the largest single mechanical cause. `assert_keys` already rejects nulls; **the harness passed no `output_validator` at all**, so the output contract stated in the prompt was never enforced. | `require_value` replayed against the 150 recorded trials fires on exactly those 11 and on no other; **none of the 11 had ever graded correct**. | **harness gap** — with one core observability follow-up: a declared output field submitted as null should not be recorded with `failure_reason: None`. |
+
+**F17 and F18 together accounted for 71% of run-to-run grade flips.** Both are
+now fixed, and both were found only by asking why a *grade* changed when the
+*value* did not — a question that costs nothing and was worth more than any
+additional run.
 
 **F14 and F16 are the two I would fix first.** F14 turns a recoverable
 size-limit into a dead task; F16 lets an evasion be scored as an answer.
@@ -225,6 +255,20 @@ The `.learn` gate fails for a reason no item above repairs. Arm D supplied
 
 - accuracy 87.5% vs cold 91.7% — still behind;
 - turns −4.4% at **p = 1.0**, tokens +3.8% at **p = 1.0** — null on both.
+
+> **Precision caveat added 2026-09-17.** The 4.2 pp accuracy gap is **well
+> inside the 12–16 pp run-to-run floor** measured later, and both arms are
+> n=1. This comparison does not establish that arm D is behind cold; it
+> establishes only that it is **not detectably ahead**. The turns and token
+> results are honest nulls and stand as such — p = 1.0 is a null either way.
+>
+> The separate dbo-lakehouse A-vs-B result is now better explained without
+> invoking accuracy at all: arm B had **fewer** reasoning-caused flips than
+> arm A (2 vs 3), but **82% of its flips were mechanical** versus 50% for A,
+> and its unanswered trials averaged **22,987 prompt tokens against 15,341**
+> for answered ones. Learning did not make the model reason worse — it
+> inflated context by roughly 60% and pushed more runs into describing rather
+> than computing. That is a **cost-and-context finding**, not an accuracy one.
 
 Abstentions did fall 2 → 0 while confidently-wrong rose 2 → 3. So profiling
 buys **completeness, not efficiency**. Fixing F12 and D-3 is necessary for
