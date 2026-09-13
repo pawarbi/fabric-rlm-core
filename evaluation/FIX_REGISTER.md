@@ -173,6 +173,21 @@ now fixed, and both were found only by asking why a *grade* changed when the
 *value* did not — a question that costs nothing and was worth more than any
 additional run.
 
+### Harness defects found during the cross-domain run
+
+Neither is a library defect. Both are recorded here because each one silently
+invalidated numbers that had already been reported, and because the same
+mistake is easy to repeat.
+
+| id | defect | evidence | class |
+|---|---|---|---|
+| **F19** *(harness — fixed `7360c25`)* | `grader.py` compared the free-text `grain` and `period` fields with `==`, so a correct answer failed whenever it described the same grain in different words. The failure mode was not merely a lost point: a right answer landed in the **`confident_wrong`** bucket, the most alarming category in the report. | The 9-trial post-fix smoke: **6 of 6 answered trials carried the correct value and the grader scored 0 of 6**, every one as `confident_wrong`. `'latest inventory snapshot product grain'` vs reference `'latest warehouse-product snapshot rows'`. Regrading under the revised criterion moved the smoke to 1/9, **not** 6/9 — the grader was wrong, and the run was still mostly wrong, which is why both numbers are reported. | **harness gap** |
+| **F20** *(harness — fixed `7ee067f`)* | `run_live` set `inputs = _domain_sources(...) if arm == "A" else None`, so arms B and C were given a knowledge package **and no data sources at all**. Every A-vs-B gap therefore mixes two independent changes, and the obvious reading — "learning hurts" — is not a claim this design can support. The two harnesses in the repository also disagreed: the dbo runner starves only B and returns sources to C, so the same arm letter meant different things in different result files. | First descriptive matrix, 135 trials: A 60.0% value correctness vs B and C both 26.7%, with **arm B incomplete on 51.1% of trials** — the signature of a run with nothing to read, not of bad advice. New arms `BS`/`CS` hold source access fixed and vary only the package. | **harness gap** |
+
+Both are worth stating plainly: **every arm-comparison number produced before
+`7ee067f` measures data access, not learning**, and every `confident_wrong`
+count produced before `7360c25` is inflated by vocabulary disagreement.
+
 **F14 and F16 are the two I would fix first.** F14 turns a recoverable
 size-limit into a dead task; F16 lets an evasion be scored as an answer.
 
