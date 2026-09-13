@@ -244,6 +244,38 @@ def parse_kpi(text: str) -> KpiSpec | None:
     return None
 
 
+_SYNONYM_RINGS = (
+    {"customer", "client", "account", "buyer", "shopper", "consumer", "purchaser"},
+    {"user", "member", "subscriber", "visitor", "player", "login"},
+    {"device", "machine", "asset", "equipment", "sensor", "unit", "instrument"},
+    {"product", "sku", "item", "article"},
+    {"vendor", "supplier", "seller", "merchant"},
+    {"employee", "staff", "agent", "rep", "owner", "worker", "technician"},
+    {"company", "organization", "organisation", "firm", "business", "tenant"},
+    {"store", "shop", "branch", "outlet", "site", "location", "plant", "facility"},
+    {"property", "listing", "home", "unit"},
+    {"patient", "case"},
+    {"driver", "rider", "courier"},
+)
+_SYNONYMS: dict[str, frozenset[str]] = {word: frozenset(ring) for ring in _SYNONYM_RINGS for word in ring}
+
+
+def _singular(word: str) -> str:
+    word = word.casefold()
+    if word.endswith("ies") and len(word) > 4:
+        return word[:-3] + "y"
+    if word.endswith(("ses", "xes", "ches", "shes")) and len(word) > 4:
+        return word[:-2]
+    return word[:-1] if word.endswith("s") and not word.endswith("ss") and len(word) > 3 else word
+
+
+def _entity_names(e: Entity) -> set[str]:
+    """Every word an entity answers to: its name, its column, and the column stem without its id or key suffix (DeviceID is a device)."""
+    stem = re.sub(r"[_ ]?(?:id|key|code|name|nm)$", "", e.column, flags=re.IGNORECASE)
+    stem_words = re.findall(r"[a-z]+", re.sub(r"(?<=[a-z])(?=[A-Z])", " ", stem).casefold())
+    return {_singular(t) for t in re.findall(r"[a-z]+", e.name.casefold())} | {e.column.casefold()} | {_singular(t) for t in stem_words if len(t) >= 3}
+
+
 def resolve_entity(spec: KpiSpec, entities: Sequence[Entity], override: str | None) -> tuple[Entity | None, str]:
     """The entity a lifecycle KPI counts: the override, the one the words name, else the best ranked; and why."""
     if not entities:
@@ -255,11 +287,15 @@ def resolve_entity(spec: KpiSpec, entities: Sequence[Entity], override: str | No
             return chosen, f"entity {chosen.describe()}, as specified"
     words = spec.entity_words.casefold()
     if words:
-        tokens = set(re.findall(r"[a-z]+", words))
+        tokens = {_singular(t) for t in re.findall(r"[a-z]+", words)}
+        # the name the words use first (accounts is accounts when the source has them), then the column stem, then a synonym (machines for DeviceID)
         for e in entities:
-            names = set(re.findall(r"[a-z]+", e.name.casefold())) | {e.column.casefold()}
-            if tokens & names or any(t.rstrip("s") == n.rstrip("s") for t in tokens for n in names):
+            if tokens & _entity_names(e):
                 return e, f"entity {e.describe()}, matching '{spec.entity_words}'"
+        for e in entities:
+            rings = {member for t in tokens for member in _SYNONYMS.get(t, ())}
+            if rings & _entity_names(e):
+                return e, f"entity {e.describe()}, read as '{spec.entity_words}'"
     if words:
         # a name that matches nothing is declined, never substituted: a "new products" section is not an answer to "new customers"
         return None, f"nothing with a time axis has a key called '{spec.entity_words}'; the entities found are {', '.join(e.describe() for e in entities[:4])}; say entity=... to use one"
@@ -553,6 +589,8 @@ def kpi_definition(spec: KpiSpec, *, entity: Entity | None = None, grain: str = 
     unit = "week" if grain == "week" else "month"
     if entity is not None and how and entity.repeat_rate < 0.02:
         how += "; no id recurs across months, so each may be an event such as an order rather than a lasting entity"
+    elif entity is not None and how and entity.repeat_rate >= 0.95:
+        how += f"; {entity.repeat_rate:.0%} recur across months, a fixed roster rather than a population, so new and churned stay near zero"
     if spec.kind == "new" and entity:
         return f"{entity.name} whose first activity falls in the {unit} ({how})"
     if spec.kind == "active" and entity:

@@ -126,3 +126,21 @@ def test_lifecycle_kpis_over_a_semantic_model_write_dax_per_period():
     assert any(q.startswith('EVALUATE ROW("active", CALCULATE(DISTINCTCOUNT(') and "INTERSECT(CALCULATETABLE(VALUES(" in q for q in model.queries)
     assert new.target.start == "2013-12-09" and new.target.value == 0.0
     assert result.mismatches == ()
+
+
+def test_entity_words_match_the_column_stem_a_synonym_or_the_name_and_a_roster_is_said():
+    from fabric_rlm.kpis import Entity, kpi_definition, resolve_entity
+
+    assets = Entity("DeviceID", "assets", 8, 34440, 8, 2.0, ("named like an entity",), "production_log")
+    customers = Entity("custName", "customers", 46, 466942, 46, 2.0, ("named like an entity",), "sales")
+    accounts = Entity("account_id", "accounts", 72, 163, 42, 3.0, ("named like an entity",), "orders")
+    entities = [customers, assets, accounts]
+    assert resolve_entity(parse_kpi("new devices"), entities, None)[0] is assets  # the column stem
+    assert resolve_entity(parse_kpi("new machines"), entities, None)[0] is assets  # a synonym
+    assert resolve_entity(parse_kpi("churned clients over 4 weeks"), entities, None)[0] is customers
+    assert resolve_entity(parse_kpi("new accounts"), entities, None)[0] is accounts  # the name the source uses beats a synonym of customers
+    assert resolve_entity(parse_kpi("new companies"), entities, None)[0] is None  # nothing answers to it: declined, not substituted
+    chosen, why = resolve_entity(parse_kpi("new"), entities, None)
+    assert chosen is customers and "ranked first" in why
+    roster = kpi_definition(parse_kpi("new customers"), entity=customers, how="custName on sales")
+    assert roster == "customers whose first activity falls in the week (custName on sales; 100% recur across months, a fixed roster rather than a population, so new and churned stay near zero)"
