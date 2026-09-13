@@ -1,9 +1,162 @@
 # Post-serialization generalization evaluation
 
-**Status: live matrices running; no final accuracy or learning-gain conclusion yet.**
+**Status: all 549 planned evaluation trials completed. General reliability and
+positive learned-behavior transfer are not established.**
 This report supersedes the narrative conclusions from the invalid BS/CS run,
 not its preserved raw evidence. Core and bundled skills have not been edited
 during this continuation.
+
+## Final measured results
+
+All 405 fixed-core naming trials, 135 unfixed descriptive trials and 9
+counterfactual-ambiguity trials completed. Both matrices have zero core/skill
+hash drift, zero fixture hash changes, and intact saved package hashes.
+Provider account deltas including development runs were $1.116066600 and
+$0.357881436 respectively; the ambiguity probe reported $0.031666536.
+Total for these three runs: **approximately $1.506**, well below $25.
+No trial-level exception was recorded in either matrix. That does not imply
+completion: turn exhaustion, invalid output statuses and abstentions are
+retained in the counts below.
+
+Each fixed-core arm has 135 trials: 126 answerable cases and 9 unanswerable
+root-cause cases. Correct abstention is reported separately, never as a
+completed analytical answer.
+
+| Fixed-core metric | A: no package | B: learn only | C: enriched |
+|---|---:|---:|---:|
+| Correct answer: value, units, period, required identity | 14/126 | 4/126 | 1/126 |
+| Original strict answer score (includes grain wording) | 0/126 | 0/126 | 0/126 |
+| Correct value and required identity | 76/126 | 28/126 | 33/126 |
+| Incomplete analytical tasks (all abstentions included) | 31/135 | 77/135 | 73/135 |
+| Successful-status wrong value or identity, answerable cases | 23 | 26 | 27 |
+| Correctly recognized unanswerable root-cause cases | 2/9 | 2/9 | 4/9 |
+| Serialization marker trials | 0 | 0 | 0 |
+| Median evaluation wall seconds | 14.91 | 11.53 | 10.54 |
+| Evaluation prompt tokens | 1,304,510 | 1,069,327 | 1,055,573 |
+| Evaluation completion tokens | 96,156 | 76,913 | 69,361 |
+| Provider-reported cached tokens | 908,672 | 633,088 | 673,152 |
+| Evaluation provider cost | $0.3990 | $0.3573 | $0.3279 |
+
+The shorter B/C times are not a success: many tasks stop with insufficient
+information. Primary correctness remains sensitive to unit/period wording.
+The value-and-identity results show that this is not merely a grading-vocabulary
+problem. All nine B packages and all nine C packages contained **zero lessons**,
+and zero lessons were injected. These measure the effects of operation catalogs
+and the package execution path, not learned-lesson transfer.
+
+### Domain and naming robustness
+
+Correct value and identity, pooled across three repetitions. Inventory and
+manufacturing have 15 answerable trials per cell; service has 12, plus 3
+unanswerable cases excluded from this value metric.
+
+| Domain / naming | A | B | C |
+|---|---:|---:|---:|
+| Inventory / descriptive | 10/15 | 2/15 | 2/15 |
+| Inventory / abbreviated | 11/15 | 1/15 | 2/15 |
+| Inventory / camel | 9/15 | 2/15 | 3/15 |
+| Manufacturing / descriptive | 8/15 | 2/15 | 0/15 |
+| Manufacturing / abbreviated | 8/15 | 2/15 | 2/15 |
+| Manufacturing / camel | 9/15 | 2/15 | 3/15 |
+| Service / descriptive | 9/12 | 5/12 | 6/12 |
+| Service / abbreviated | 5/12 | 5/12 | 8/12 |
+| Service / camel | 7/12 | 7/12 | 7/12 |
+
+Mappings preserve meaning across column naming variants. Table names and
+English task/definition language remain unchanged: this is **column-naming
+robustness**, not fully opaque source naming or multilingual task robustness.
+There is no consistent naming winner. Three repetitions are insufficient to
+establish stable small differences; per-repetition counts are in the summary.
+
+### Per-question results, including improvements and regressions
+
+Correct value and required identity out of nine trials (three naming variants
+times three repetitions); root-cause row instead counts appropriate abstention.
+Full primary/strict scores and field-level checks are in
+`evidence\final-naming-summary.json` and the raw results.
+
+| Question | A | B | C |
+|---|---:|---:|---:|
+| Latest available inventory | 7 | 1 | 1 |
+| Fill rate | 8 | 0 | 0 |
+| Join-safe inventory value | 7 | 4 | 6 |
+| Open ordered units | 6 | 0 | 0 |
+| Top customer identity and shipped units | 2 | 0 | 0 |
+| Complete-period produced units | 7 | 4 | 2 |
+| Incomplete-period units excluded | 7 | 1 | 1 |
+| Overall defect rate, not average of rates | 3 | 1 | 1 |
+| Weighted defect rate | 2 | 0 | 0 |
+| Worst production line and rate | 6 | 0 | 1 |
+| Breached ticket identities | 7 | 2 | 4 |
+| Deduplicated first response | 3 | 4 | 4 |
+| First-response SLA rate | 5 | 4 | 7 |
+| Distinct reopened tickets | 6 | 7 | 6 |
+| Appropriate root-cause abstention | 2 | 2 | 4 |
+
+Service contains observed improvements, so an overall average must not be read
+as "packages always hurt." Conversely, repeated zero results on fill rate and
+open-order quantities cannot be concealed by those improvements.
+
+### Before/after serialization
+
+The comparable descriptive subset has 45 trials per arm.
+
+| Metric | Unfixed A/B/C | Fixed A/B/C |
+|---|---|---|
+| Serialization-marker trials | 12 / 0 / 0 | 0 / 0 / 0 |
+| Correct value and identity | 17 / 14 / 11 | 27 / 9 / 8 |
+| Primary correct answers | 3 / 3 / 0 | 4 / 1 / 0 |
+
+The unfixed markers occurred in inventory (7) and manufacturing (5).
+The fixed run has zero markers across all 405 naming trials. Together with
+the deterministic scalar exposure probe, this supports the serialization fix,
+**not a general accuracy fix**. B/C numerical scores regressed in this live
+comparison; runs were sequential and packages were independently built, so
+those differences cannot be causally attributed to serialization.
+
+### Missing definitions and unsupported causal claims
+
+The probe produced **zero explicit abstentions, eight substantive answers,
+and one failed task**. Inventory assumed available means on-hand stock (230)
+in all three repetitions; another consistent definition gives net stock (186).
+Manufacturing assumed an unspecified quality KPI, often a yield rather than
+the witness defect rate. Service supplied two causal-sounding answers despite
+no cause field, with one other run failing.
+
+The raw classifier labels these eight as `guessed_wrong` relative to witness A.
+That label is **not proof of numerical wrongness**: inventory's 230 exactly
+matches witness B. The defensible finding is failure to request the missing
+convention or acknowledge that cause is unobserved. Private witness alternatives
+and full answers are retained in the raw archive; no witness was agent input.
+
+### Final conclusions and remaining gaps
+
+**General execution capability:** Broad, but not reliably accurate. The fixed
+system computes across unrelated domains and removes the observed scalar-loss
+failure, yet wrong joins, missing answer metadata and incomplete tasks remain.
+
+**Generalization of learned behavior:** Not demonstrated. File packages created
+no lessons. A real, deterministically reproduced one-operation restriction
+explains a subset of the B/C failures; semantic learning still has separately
+demonstrated English/business/date-name dependencies. Do not recommend package
+learning as a universal accuracy improvement based on this evaluation.
+
+**Portability:** Established only for the historical three real Fabric
+aggregate tasks and the tested local file paths. The new trials do not establish
+all-question parity with SQL/Lakehouse or semantic models, nor learned transfer.
+
+**Unsupported claims:** "Bulletproof," general positive learning gain, complete
+live change/recovery coverage on Fabric, workbook correctness for these tasks,
+independent claim-to-evidence coverage, and complete I/O counts. The large
+dataset was profiled and exercised deterministically, not used in this live
+question matrix. No findings were patched into core during evaluation.
+
+## Earlier checkpoint details and reproduction
+
+The sections below preserve the pre-run design, legacy observations, detailed
+mechanism findings and source limitations. Any statement that final results
+were pending refers to that earlier checkpoint; the completed results above
+take precedence.
 
 ## Experimental identity
 

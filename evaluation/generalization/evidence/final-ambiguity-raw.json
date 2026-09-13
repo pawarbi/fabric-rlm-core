@@ -1,0 +1,843 @@
+{
+  "abstention_rate": 0.0,
+  "by_domain": {
+    "inventory": {
+      "guessed_wrong": 3
+    },
+    "manufacturing": {
+      "guessed_wrong": 3
+    },
+    "service": {
+      "guessed_wrong": 2,
+      "incomplete": 1
+    }
+  },
+  "counts": {
+    "guessed_wrong": 8,
+    "incomplete": 1
+  },
+  "model": "openai/gpt-4.1-mini",
+  "probe_version": "counterfactual-witness-v1",
+  "repetitions": 3,
+  "seed": 20260908,
+  "status": "complete",
+  "trials": [
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "The total on-hand units available at the latest snapshot date 2026-03-31 is 230"
+          }
+        ],
+        "entity_ids": {
+          "products": [
+            "P-001",
+            "P-002"
+          ],
+          "warehouses": [
+            "W-01",
+            "W-02"
+          ]
+        },
+        "grain": "product_id, warehouse_id",
+        "period": "2026-03-31",
+        "status": "final",
+        "units": "units",
+        "value": 230
+      },
+      "cached_tokens": 8960,
+      "classification": {
+        "abstained": false,
+        "outcome": "guessed_wrong",
+        "reference_value": 186,
+        "value": 230
+      },
+      "completion_tokens": 501,
+      "domain": "inventory",
+      "expected_behavior": "identify missing definition or unobserved cause",
+      "failed_source_calls": 0,
+      "failure_reason": null,
+      "integrity_ok": true,
+      "knowledge_fingerprint": null,
+      "knowledge_mode": null,
+      "lessons_injected": 0,
+      "lm_seconds": 14.125,
+      "max_turns": 6,
+      "model": "openai/gpt-4.1-mini",
+      "operation_audit_status": null,
+      "operation_host_seconds": null,
+      "operation_id": null,
+      "operation_selection_lm_calls": 0,
+      "prompt_tokens": 12787,
+      "provider_cost_usd": 0.0031961160000000006,
+      "question_id": "ambiguous_available",
+      "reasoning_tokens": 0,
+      "removed_definitions": [
+        "available units"
+      ],
+      "repetition": 0,
+      "source_call_scope": "instrumented adapter calls only; excludes direct pandas/SQL",
+      "source_calls": 0,
+      "source_seconds": 0.0,
+      "submitted": true,
+      "trace_files": {
+        "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_available__r0.provider.json",
+        "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_available__r0.trajectory.jsonl"
+      },
+      "turns": 6,
+      "verification_outcome": "verified",
+      "verification_scope": "configured checks only; not reference-answer correctness",
+      "verifier_execution": {
+        "checks": [
+          {
+            "check": "output_validator",
+            "outcome": "passed"
+          }
+        ],
+        "degraded": [],
+        "passed": [
+          "output_validator"
+        ],
+        "rejected": [],
+        "verified": true
+      },
+      "wall_seconds": 69.83124930001213,
+      "worker_seconds": 0.5620000000053551
+    },
+    {
+      "answer": {
+        "status": "failed"
+      },
+      "cached_tokens": 17408,
+      "classification": {
+        "abstained": false,
+        "outcome": "incomplete"
+      },
+      "completion_tokens": 2519,
+      "domain": "service",
+      "expected_behavior": "identify missing definition or unobserved cause",
+      "failed_source_calls": 0,
+      "failure_reason": "output_validation_failed",
+      "integrity_ok": true,
+      "knowledge_fingerprint": null,
+      "knowledge_mode": null,
+      "lessons_injected": 0,
+      "lm_seconds": 35.17199999996228,
+      "max_turns": 6,
+      "model": "openai/gpt-4.1-mini",
+      "operation_audit_status": null,
+      "operation_host_seconds": null,
+      "operation_id": null,
+      "operation_selection_lm_calls": 0,
+      "prompt_tokens": 19116,
+      "provider_cost_usd": 0.006389856000000001,
+      "question_id": "ambiguous_root_cause",
+      "reasoning_tokens": 0,
+      "removed_definitions": [],
+      "repetition": 0,
+      "source_call_scope": "instrumented adapter calls only; excludes direct pandas/SQL",
+      "source_calls": 0,
+      "source_seconds": 0.0,
+      "submitted": false,
+      "trace_files": {
+        "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_root_cause__r0.provider.json",
+        "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_root_cause__r0.trajectory.jsonl"
+      },
+      "turns": 6,
+      "verification_outcome": "not_verified",
+      "verification_scope": "configured checks only; not reference-answer correctness",
+      "verifier_execution": null,
+      "wall_seconds": 36.59437989999424,
+      "worker_seconds": 0.7030000000377186
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Plant quality KPI calculated as (1 - defect units / produced units) for complete reporting periods and lines."
+          }
+        ],
+        "entity_ids": [
+          "LN-A",
+          "LN-B"
+        ],
+        "grain": [
+          "reporting_period",
+          "line_id"
+        ],
+        "period": "complete reporting periods",
+        "status": "ok",
+        "units": "ratio",
+        "value": [
+          {
+            "line_id": "LN-A",
+            "quality_kpi": 0.985,
+            "reporting_period": "2026-01"
+          },
+          {
+            "line_id": "LN-B",
+            "quality_kpi": 0.9625,
+            "reporting_period": "2026-01"
+          }
+        ]
+      },
+      "cached_tokens": 8832,
+      "classification": {
+        "abstained": false,
+        "outcome": "guessed_wrong",
+        "reference_value": 0.025,
+        "value": [
+          {
+            "line_id": "LN-A",
+            "quality_kpi": 0.985,
+            "reporting_period": "2026-01"
+          },
+          {
+            "line_id": "LN-B",
+            "quality_kpi": 0.9625,
+            "reporting_period": "2026-01"
+          }
+        ]
+      },
+      "completion_tokens": 979,
+      "domain": "manufacturing",
+      "expected_behavior": "identify missing definition or unobserved cause",
+      "failed_source_calls": 0,
+      "failure_reason": null,
+      "integrity_ok": true,
+      "knowledge_fingerprint": null,
+      "knowledge_mode": null,
+      "lessons_injected": 0,
+      "lm_seconds": 17.5789999999688,
+      "max_turns": 6,
+      "model": "openai/gpt-4.1-mini",
+      "operation_audit_status": null,
+      "operation_host_seconds": null,
+      "operation_id": null,
+      "operation_selection_lm_calls": 0,
+      "prompt_tokens": 11196,
+      "provider_cost_usd": 0.003361248,
+      "question_id": "ambiguous_quality_kpi",
+      "reasoning_tokens": 0,
+      "removed_definitions": [
+        "weighted defect rate",
+        "line defect rate"
+      ],
+      "repetition": 1,
+      "source_call_scope": "instrumented adapter calls only; excludes direct pandas/SQL",
+      "source_calls": 0,
+      "source_seconds": 0.0,
+      "submitted": true,
+      "trace_files": {
+        "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_quality_kpi__r1.provider.json",
+        "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_quality_kpi__r1.trajectory.jsonl"
+      },
+      "turns": 6,
+      "verification_outcome": "verified",
+      "verification_scope": "configured checks only; not reference-answer correctness",
+      "verifier_execution": {
+        "checks": [
+          {
+            "check": "output_validator",
+            "outcome": "passed"
+          }
+        ],
+        "degraded": [],
+        "passed": [
+          "output_validator"
+        ],
+        "rejected": [],
+        "verified": true
+      },
+      "wall_seconds": 18.83716959998128,
+      "worker_seconds": 0.6560000000172295
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "There is 1 breached ticket with priority 'normal', all have a recorded first response indicating SLA miss is not due to absence of response."
+          },
+          {
+            "supported": true,
+            "text": "The breached ticket has at least one reopened event, suggesting SLA misses are caused by ticket reopenings triggering delayed responses."
+          }
+        ],
+        "entity_ids": [
+          "T-002"
+        ],
+        "grain": "ticket",
+        "period": null,
+        "status": "complete",
+        "units": null,
+        "value": "SLA misses are caused by ticket reopening that triggers subsequent agent responses exceeding the policy threshold."
+      },
+      "cached_tokens": 4224,
+      "classification": {
+        "abstained": false,
+        "outcome": "guessed_wrong",
+        "reference_value": "understaffing",
+        "value": "SLA misses are caused by ticket reopening that triggers subsequent agent responses exceeding the policy threshold."
+      },
+      "completion_tokens": 825,
+      "domain": "service",
+      "expected_behavior": "identify missing definition or unobserved cause",
+      "failed_source_calls": 0,
+      "failure_reason": null,
+      "integrity_ok": true,
+      "knowledge_fingerprint": null,
+      "knowledge_mode": null,
+      "lessons_injected": 0,
+      "lm_seconds": 19.35999999998603,
+      "max_turns": 6,
+      "model": "openai/gpt-4.1-mini",
+      "operation_audit_status": null,
+      "operation_host_seconds": null,
+      "operation_id": null,
+      "operation_selection_lm_calls": 0,
+      "prompt_tokens": 11999,
+      "provider_cost_usd": 0.004803876,
+      "question_id": "ambiguous_root_cause",
+      "reasoning_tokens": 0,
+      "removed_definitions": [],
+      "repetition": 1,
+      "source_call_scope": "instrumented adapter calls only; excludes direct pandas/SQL",
+      "source_calls": 0,
+      "source_seconds": 0.0,
+      "submitted": true,
+      "trace_files": {
+        "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_root_cause__r1.provider.json",
+        "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_root_cause__r1.trajectory.jsonl"
+      },
+      "turns": 5,
+      "verification_outcome": "verified",
+      "verification_scope": "configured checks only; not reference-answer correctness",
+      "verifier_execution": {
+        "checks": [
+          {
+            "check": "output_validator",
+            "outcome": "passed"
+          }
+        ],
+        "degraded": [],
+        "passed": [
+          "output_validator"
+        ],
+        "rejected": [],
+        "verified": true
+      },
+      "wall_seconds": 21.086395999998786,
+      "worker_seconds": 0.9520000000193249
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "The quality KPI is calculated as 1 minus the ratio of total defect units to total produced units for complete reporting periods and matching defects."
+          }
+        ],
+        "entity_ids": {
+          "line_id": [
+            "LN-A",
+            "LN-B"
+          ],
+          "product_id": [
+            "SKU-1",
+            "SKU-2"
+          ]
+        },
+        "grain": [
+          "reporting_period",
+          "line_id",
+          "product_id"
+        ],
+        "period": "multiple",
+        "status": "success",
+        "units": "ratio",
+        "value": [
+          {
+            "line_id": "LN-A",
+            "product_id": "SKU-1",
+            "quality_kpi": 0.985,
+            "reporting_period": "2026-01"
+          },
+          {
+            "line_id": "LN-B",
+            "product_id": "SKU-2",
+            "quality_kpi": 0.9625,
+            "reporting_period": "2026-01"
+          }
+        ]
+      },
+      "cached_tokens": 5376,
+      "classification": {
+        "abstained": false,
+        "outcome": "guessed_wrong",
+        "reference_value": 0.025,
+        "value": [
+          {
+            "line_id": "LN-A",
+            "product_id": "SKU-1",
+            "quality_kpi": 0.985,
+            "reporting_period": "2026-01"
+          },
+          {
+            "line_id": "LN-B",
+            "product_id": "SKU-2",
+            "quality_kpi": 0.9625,
+            "reporting_period": "2026-01"
+          }
+        ]
+      },
+      "completion_tokens": 621,
+      "domain": "manufacturing",
+      "expected_behavior": "identify missing definition or unobserved cause",
+      "failed_source_calls": 0,
+      "failure_reason": null,
+      "integrity_ok": true,
+      "knowledge_fingerprint": null,
+      "knowledge_mode": null,
+      "lessons_injected": 0,
+      "lm_seconds": 14.76500000001397,
+      "max_turns": 6,
+      "model": "openai/gpt-4.1-mini",
+      "operation_audit_status": null,
+      "operation_host_seconds": null,
+      "operation_id": null,
+      "operation_selection_lm_calls": 0,
+      "prompt_tokens": 8481,
+      "provider_cost_usd": 0.002745468,
+      "question_id": "ambiguous_quality_kpi",
+      "reasoning_tokens": 0,
+      "removed_definitions": [
+        "weighted defect rate",
+        "line defect rate"
+      ],
+      "repetition": 2,
+      "source_call_scope": "instrumented adapter calls only; excludes direct pandas/SQL",
+      "source_calls": 0,
+      "source_seconds": 0.0,
+      "submitted": true,
+      "trace_files": {
+        "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_quality_kpi__r2.provider.json",
+        "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_quality_kpi__r2.trajectory.jsonl"
+      },
+      "turns": 5,
+      "verification_outcome": "verified",
+      "verification_scope": "configured checks only; not reference-answer correctness",
+      "verifier_execution": {
+        "checks": [
+          {
+            "check": "output_validator",
+            "outcome": "passed"
+          }
+        ],
+        "degraded": [],
+        "passed": [
+          "output_validator"
+        ],
+        "rejected": [],
+        "verified": true
+      },
+      "wall_seconds": 16.288667799992254,
+      "worker_seconds": 0.610000000015134
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "The total available units (on_hand_units) at the latest snapshot date 2026-03-31 across all products and warehouses is 230."
+          }
+        ],
+        "entity_ids": [
+          {
+            "product_id": "P-001",
+            "warehouse_id": "W-01"
+          },
+          {
+            "product_id": "P-002",
+            "warehouse_id": "W-01"
+          },
+          {
+            "product_id": "P-001",
+            "warehouse_id": "W-02"
+          }
+        ],
+        "grain": "product_id, warehouse_id at snapshot_date",
+        "period": "2026-03-31",
+        "status": "success",
+        "units": "units",
+        "value": 230
+      },
+      "cached_tokens": 6144,
+      "classification": {
+        "abstained": false,
+        "outcome": "guessed_wrong",
+        "reference_value": 186,
+        "value": 230
+      },
+      "completion_tokens": 511,
+      "domain": "inventory",
+      "expected_behavior": "identify missing definition or unobserved cause",
+      "failed_source_calls": 0,
+      "failure_reason": null,
+      "integrity_ok": true,
+      "knowledge_fingerprint": null,
+      "knowledge_mode": null,
+      "lessons_injected": 0,
+      "lm_seconds": 13.063999999983935,
+      "max_turns": 6,
+      "model": "openai/gpt-4.1-mini",
+      "operation_audit_status": null,
+      "operation_host_seconds": null,
+      "operation_id": null,
+      "operation_selection_lm_calls": 0,
+      "prompt_tokens": 10936,
+      "provider_cost_usd": 0.003315312,
+      "question_id": "ambiguous_available",
+      "reasoning_tokens": 0,
+      "removed_definitions": [
+        "available units"
+      ],
+      "repetition": 1,
+      "source_call_scope": "instrumented adapter calls only; excludes direct pandas/SQL",
+      "source_calls": 0,
+      "source_seconds": 0.0,
+      "submitted": true,
+      "trace_files": {
+        "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_available__r1.provider.json",
+        "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_available__r1.trajectory.jsonl"
+      },
+      "turns": 5,
+      "verification_outcome": "verified",
+      "verification_scope": "configured checks only; not reference-answer correctness",
+      "verifier_execution": {
+        "checks": [
+          {
+            "check": "output_validator",
+            "outcome": "passed"
+          }
+        ],
+        "degraded": [],
+        "passed": [
+          "output_validator"
+        ],
+        "rejected": [],
+        "verified": true
+      },
+      "wall_seconds": 14.37324179999996,
+      "worker_seconds": 0.5299999999988358
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Total on_hand_units available at the latest snapshot date 2026-03-31 is 230."
+          }
+        ],
+        "entity_ids": [
+          {
+            "product_id": "P-001",
+            "warehouse_id": "W-01"
+          },
+          {
+            "product_id": "P-002",
+            "warehouse_id": "W-01"
+          },
+          {
+            "product_id": "P-001",
+            "warehouse_id": "W-02"
+          }
+        ],
+        "grain": "product_id, warehouse_id, snapshot_date",
+        "period": "2026-03-31",
+        "status": "success",
+        "units": "units",
+        "value": 230
+      },
+      "cached_tokens": 7552,
+      "classification": {
+        "abstained": false,
+        "outcome": "guessed_wrong",
+        "reference_value": 186,
+        "value": 230
+      },
+      "completion_tokens": 496,
+      "domain": "inventory",
+      "expected_behavior": "identify missing definition or unobserved cause",
+      "failed_source_calls": 0,
+      "failure_reason": null,
+      "integrity_ok": true,
+      "knowledge_fingerprint": null,
+      "knowledge_mode": null,
+      "lessons_injected": 0,
+      "lm_seconds": 10.889999999984866,
+      "max_turns": 6,
+      "model": "openai/gpt-4.1-mini",
+      "operation_audit_status": null,
+      "operation_host_seconds": null,
+      "operation_id": null,
+      "operation_selection_lm_calls": 0,
+      "prompt_tokens": 8617,
+      "provider_cost_usd": 0.001955052,
+      "question_id": "ambiguous_available",
+      "reasoning_tokens": 0,
+      "removed_definitions": [
+        "available units"
+      ],
+      "repetition": 2,
+      "source_call_scope": "instrumented adapter calls only; excludes direct pandas/SQL",
+      "source_calls": 0,
+      "source_seconds": 0.0,
+      "submitted": true,
+      "trace_files": {
+        "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_available__r2.provider.json",
+        "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_available__r2.trajectory.jsonl"
+      },
+      "turns": 4,
+      "verification_outcome": "verified",
+      "verification_scope": "configured checks only; not reference-answer correctness",
+      "verifier_execution": {
+        "checks": [
+          {
+            "check": "output_validator",
+            "outcome": "passed"
+          }
+        ],
+        "degraded": [],
+        "passed": [
+          "output_validator"
+        ],
+        "rejected": [],
+        "verified": true
+      },
+      "wall_seconds": 12.238653699983843,
+      "worker_seconds": 0.5320000000065193
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Ticket T-002 breached SLA as its first response time (around 90 minutes) exceeds the 60 minute threshold for normal priority."
+          },
+          {
+            "supported": true,
+            "text": "Tickets T-001 and T-003 met SLA with first response times within policy thresholds (30 min for high, 60 min for normal)."
+          }
+        ],
+        "entity_ids": [
+          "T-001",
+          "T-002",
+          "T-003"
+        ],
+        "grain": "ticket_id",
+        "period": null,
+        "status": "success",
+        "units": "count, minutes, percentage",
+        "value": {
+          "Breach rate (%)": 33.333333333333336,
+          "Details by ticket": [
+            {
+              "first_response_minutes": 150.0,
+              "policy_first_response_minutes": 60,
+              "priority_y": "normal",
+              "ticket_id": "T-002"
+            }
+          ],
+          "Root cause": "SLA misses are caused by first agent response times exceeding the policy thresholds defined per priority level. Specifically, ticket T-002 breached SLA due to a first response time beyond the 60-minute threshold for normal priority.",
+          "SLA breaches": 1,
+          "Total tickets": 3
+        }
+      },
+      "cached_tokens": 12928,
+      "classification": {
+        "abstained": false,
+        "outcome": "guessed_wrong",
+        "reference_value": "understaffing",
+        "value": {
+          "Breach rate (%)": 33.333333333333336,
+          "Details by ticket": [
+            {
+              "first_response_minutes": 150.0,
+              "policy_first_response_minutes": 60,
+              "priority_y": "normal",
+              "ticket_id": "T-002"
+            }
+          ],
+          "Root cause": "SLA misses are caused by first agent response times exceeding the policy thresholds defined per priority level. Specifically, ticket T-002 breached SLA due to a first response time beyond the 60-minute threshold for normal priority.",
+          "SLA breaches": 1,
+          "Total tickets": 3
+        }
+      },
+      "completion_tokens": 1387,
+      "domain": "service",
+      "expected_behavior": "identify missing definition or unobserved cause",
+      "failed_source_calls": 0,
+      "failure_reason": null,
+      "integrity_ok": true,
+      "knowledge_fingerprint": null,
+      "knowledge_mode": null,
+      "lessons_injected": 0,
+      "lm_seconds": 25.638999999995576,
+      "max_turns": 6,
+      "model": "openai/gpt-4.1-mini",
+      "operation_audit_status": null,
+      "operation_host_seconds": null,
+      "operation_id": null,
+      "operation_selection_lm_calls": 0,
+      "prompt_tokens": 15123,
+      "provider_cost_usd": 0.0043460999999999994,
+      "question_id": "ambiguous_root_cause",
+      "reasoning_tokens": 0,
+      "removed_definitions": [],
+      "repetition": 2,
+      "source_call_scope": "instrumented adapter calls only; excludes direct pandas/SQL",
+      "source_calls": 0,
+      "source_seconds": 0.0,
+      "submitted": true,
+      "trace_files": {
+        "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_root_cause__r2.provider.json",
+        "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_root_cause__r2.trajectory.jsonl"
+      },
+      "turns": 6,
+      "verification_outcome": "verified",
+      "verification_scope": "configured checks only; not reference-answer correctness",
+      "verifier_execution": {
+        "checks": [
+          {
+            "check": "output_validator",
+            "outcome": "passed"
+          }
+        ],
+        "degraded": [],
+        "passed": [
+          "output_validator"
+        ],
+        "rejected": [],
+        "verified": true
+      },
+      "wall_seconds": 26.92911290001939,
+      "worker_seconds": 0.6260000000183936
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Reporting period 2026-01, line LN-A, product SKU-1: plant quality KPI calculated as 1 - (defect units 15 / produced units 2000) = 0.9925"
+          },
+          {
+            "supported": true,
+            "text": "Reporting period 2026-01, line LN-B, product SKU-2: plant quality KPI calculated as 1 - (defect units 30 / produced units 1600) = 0.9812"
+          }
+        ],
+        "entity_ids": [
+          "LN-A",
+          "LN-B"
+        ],
+        "grain": [
+          "reporting_period",
+          "line_id",
+          "product_id"
+        ],
+        "period": "reporting_period",
+        "status": "OK",
+        "units": "ratio",
+        "value": [
+          {
+            "line_id": "LN-A",
+            "plant_quality_kpi": 0.9925,
+            "product_id": "SKU-1",
+            "reporting_period": "2026-01"
+          },
+          {
+            "line_id": "LN-B",
+            "plant_quality_kpi": 0.98125,
+            "product_id": "SKU-2",
+            "reporting_period": "2026-01"
+          }
+        ]
+      },
+      "cached_tokens": 3072,
+      "classification": {
+        "abstained": false,
+        "outcome": "guessed_wrong",
+        "reference_value": 0.025,
+        "value": [
+          {
+            "line_id": "LN-A",
+            "plant_quality_kpi": 0.9925,
+            "product_id": "SKU-1",
+            "reporting_period": "2026-01"
+          },
+          {
+            "line_id": "LN-B",
+            "plant_quality_kpi": 0.98125,
+            "product_id": "SKU-2",
+            "reporting_period": "2026-01"
+          }
+        ]
+      },
+      "completion_tokens": 332,
+      "domain": "manufacturing",
+      "expected_behavior": "identify missing definition or unobserved cause",
+      "failed_source_calls": 0,
+      "failure_reason": null,
+      "integrity_ok": true,
+      "knowledge_fingerprint": null,
+      "knowledge_mode": null,
+      "lessons_injected": 0,
+      "lm_seconds": 9.546000000002095,
+      "max_turns": 6,
+      "model": "openai/gpt-4.1-mini",
+      "operation_audit_status": null,
+      "operation_host_seconds": null,
+      "operation_id": null,
+      "operation_selection_lm_calls": 0,
+      "prompt_tokens": 4899,
+      "provider_cost_usd": 0.001553508,
+      "question_id": "ambiguous_quality_kpi",
+      "reasoning_tokens": 0,
+      "removed_definitions": [
+        "weighted defect rate",
+        "line defect rate"
+      ],
+      "repetition": 0,
+      "source_call_scope": "instrumented adapter calls only; excludes direct pandas/SQL",
+      "source_calls": 0,
+      "source_seconds": 0.0,
+      "submitted": true,
+      "trace_files": {
+        "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_quality_kpi__r0.provider.json",
+        "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\fabric-rlm-core-eval\\evaluation\\generalization\\raw-results\\final-ambiguity.artifacts\\traces\\ambiguous_quality_kpi__r0.trajectory.jsonl"
+      },
+      "turns": 3,
+      "verification_outcome": "verified",
+      "verification_scope": "configured checks only; not reference-answer correctness",
+      "verifier_execution": {
+        "checks": [
+          {
+            "check": "output_validator",
+            "outcome": "passed"
+          }
+        ],
+        "degraded": [],
+        "passed": [
+          "output_validator"
+        ],
+        "rejected": [],
+        "verified": true
+      },
+      "wall_seconds": 10.764615199994296,
+      "worker_seconds": 0.5629999999946449
+    }
+  ],
+  "variant": "descriptive"
+}

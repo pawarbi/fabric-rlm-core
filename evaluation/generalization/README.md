@@ -26,7 +26,18 @@ Source-call telemetry counts instrumented adapter calls, not direct pandas
 reads. Claims marked `supported` by the answer are self-reports, not independently
 verified evidence coverage.
 
-The current audit and limitations are in `POSTFIX_AUDIT.md`. To reproduce the
+The completed 549-trial audit and limitations are in `POSTFIX_AUDIT.md`.
+`evidence\final-evaluation-raw.zip` contains the seeded fixtures (including
+private references), raw trial records, all 1,098 evaluation trace files,
+development traces/metrics, saved packages, and hash manifests. Paths recorded
+inside JSON describe the original execution environment; ZIP members use
+paths relative to this evaluation directory. The archive is approximately
+10 MB. Its checksum and per-file checksums are in
+`evidence\final-artifact-validation.json`. Per-domain, naming, question,
+repetition, field-level, strict and primary scores are in
+`evidence\final-naming-summary.json` and `final-baseline-summary.json`.
+
+To reproduce the
 final fixed-core matrix from this branch (use fresh output paths):
 
 ```powershell
