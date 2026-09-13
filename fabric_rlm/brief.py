@@ -747,9 +747,9 @@ def brief(
         if index < 0:
             notes.append(f"{spec['name']}: no complete week in the data (it ends on {max_day.isoformat()})")
             continue
-        weeks = weeks[max(0, index + 1 - history_weeks) : index + 1] + weeks[index + 1 :]
-        index = min(index, len(weeks) - 1)
-        index = next(i for i, w in enumerate(weeks) if w.start == weeks[index].start)
+        dropped = max(0, index + 1 - history_weeks)  # the history window ends at the briefed week; the weeks after it stay for the charts
+        weeks = weeks[dropped:]
+        index -= dropped
         target = weeks[index]
         if target_week is None:
             target_week = target

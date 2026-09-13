@@ -771,6 +771,9 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
                     threshold = None
                 fact_l = {"table": left["fact"], "date": dialect.axis(left["fact"]), "measure": left["measure"], "aggregate": "sum"}
                 weeks_l, max_day = _weeks_of(run(dialect.daily(fact_l, [left["measure"]], left_filters)), "v0")
+                if not weeks_l:
+                    notes.append(f"{spec.name}: no rows match {spec.left}; check the value against the source (case and spelling count)")
+                    continue
                 if threshold is not None:
                     weeks_r = [Week(w.start, threshold, w.rows, w.days) for w in weeks_l]
                     right_name = f"{threshold:,.0f}"
@@ -781,6 +784,9 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
                         continue
                     fact_r = {"table": right["fact"], "date": dialect.axis(right["fact"]), "measure": right["measure"], "aggregate": "sum"}
                     weeks_r, _ = _weeks_of(run(dialect.daily(fact_r, [right["measure"]], right_filters)), "v0", max_day)
+                    if not weeks_r:
+                        notes.append(f"{spec.name}: no rows match {spec.right}; check the value against the source (case and spelling count)")
+                        continue
                     right_name = spec.right
                     if missing_r:
                         kpi_notes.append(f"no grouping matched {missing_r}")
