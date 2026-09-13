@@ -258,10 +258,12 @@ def resolve_entity(spec: KpiSpec, entities: Sequence[Entity], override: str | No
             names = set(re.findall(r"[a-z]+", e.name.casefold())) | {e.column.casefold()}
             if tokens & names or any(t.rstrip("s") == n.rstrip("s") for t in tokens for n in names):
                 return e, f"entity {e.describe()}, matching '{spec.entity_words}'"
+    if words:
+        # a name that matches nothing is declined, never substituted: a "new products" section is not an answer to "new customers"
+        return None, f"nothing with a time axis has a key called '{spec.entity_words}'; the entities found are {', '.join(e.describe() for e in entities[:4])}; say entity=... to use one"
     best = entities[0]
     others = ", ".join(e.describe() for e in entities[1:4])
-    missing = f"nothing on any fact is called '{spec.entity_words}'; " if words else ""
-    return best, f"{missing}entity {best.describe()}, ranked first because it is {', '.join(best.reasons)}" + (f"; other candidates: {others}" if others else "") + "; say entity=... to change"
+    return best, f"entity {best.describe()}, ranked first because it is {', '.join(best.reasons)}" + (f"; other candidates: {others}" if others else "") + "; say entity=... to change"
 
 
 # --------------------------------------------------------------------------- #
@@ -546,6 +548,8 @@ def default_measure(schema: Any, table: str) -> str | None:
 def kpi_definition(spec: KpiSpec, *, entity: Entity | None = None, grain: str = "week", how: str = "") -> str:
     """The definition printed next to the number, in words a reader can check."""
     unit = "week" if grain == "week" else "month"
+    if entity is not None and how and entity.repeat_rate < 0.02:
+        how += "; no id recurs across months, so each may be an event such as an order rather than a lasting entity"
     if spec.kind == "new" and entity:
         return f"{entity.name} whose first activity falls in the {unit} ({how})"
     if spec.kind == "active" and entity:
@@ -606,7 +610,7 @@ def _weeks_of(rows: Sequence[Mapping[str, Any]], value_key: str, max_day: _dt.da
     if not daily:
         return [], None
     daily.sort()
-    last = max_day or daily[-1][0]
+    last = max(daily[-1][0], max_day) if max_day else daily[-1][0]  # a filtered series that stops early still reaches the briefed week, at zero
     return _weeks(daily, "sum", last), last
 
 
@@ -629,6 +633,8 @@ def _kpi_headline(spec: KpiSpec, name: str, target: Any, c: Mapping[str, Any]) -
     else:
         if c.get("wow_pct") is not None:
             against.append(f"{_pct(c['wow_pct'])} on the week before")
+        elif c.get("previous_empty"):
+            against.append("after a week before with no rows")
         if c.get("yoy_pct") is not None:
             against.append(f"{_pct(c['yoy_pct'])} on the same week last year")
         if c.get("vs_avg13_pct") is not None:
@@ -636,6 +642,8 @@ def _kpi_headline(spec: KpiSpec, name: str, target: Any, c: Mapping[str, Any]) -
     text += (": " + ", ".join(against) if against else "") + "."
     if c.get("verdict") and c.get("expected_source"):
         text += f" Against {c['expected_source']}, this week is {c['verdict']}."
+    elif c.get("sparse"):
+        text += f" {c['verdict'][0].upper()}{c['verdict'][1:]}."
     return text
 
 
@@ -682,15 +690,21 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
                 monday = (wanted - _dt.timedelta(days=wanted.weekday())).isoformat()
                 target_week = next((w for w in weeks0 if w.start == monday), weeks0[-1] if weeks0 else None)
             else:
-                target_week = weeks0[-1] if weeks0 else None
+                from .brief import _last_covered_week
+
+                target_week = weeks0[_last_covered_week(weeks0)] if weeks0 else None
         if target_week is None:
             return [], [], "", spent, ["no complete week for the KPIs"], None
         target_index = period_of(_dt.date.fromisoformat(target_week.start), grain)
+        target_sunday = _dt.date.fromisoformat(target_week.start) + _dt.timedelta(days=6)
         first_index = target_index - history_weeks + 1
         if any(s.kind in _LIFECYCLE_KINDS for s in kpi_specs):
-            for table in [fact_name] + [t for t in probe.facts(text) if t != fact_name][:4]:
+            # any table with a time axis and a key can carry an entity's activity, measures or not: an orders table is where customers appear
+            fact_tables = probe.facts(text)
+            ordered = [fact_name] + [t for t in fact_tables if t != fact_name] + [t for t in schema.tables if t != fact_name and t not in fact_tables and not re.search(r"(date|calendar|time)", t, re.IGNORECASE)]
+            for table in ordered[:8]:
                 table_axis = dialect.axis(table)
-                if table_axis is not None:
+                if table_axis is not None and _candidate_keys(schema, table, dialect):
                     facts_with_axis.append({"table": table, "date": table_axis, "measure": default_measure(schema, table) or "", "aggregate": "sum"})
             entities = discover_entities(probe, dialect, facts_with_axis, joins, run)
     except _Budget:
@@ -743,11 +757,11 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
                 fact_n = {"table": num["fact"], "date": dialect.axis(num["fact"]), "measure": num["measure"], "aggregate": "sum"}
                 if den is not None and den["fact"] == num["fact"] and den_filters == num_filters:
                     rows = run(dialect.daily(fact_n, [num["measure"], den["measure"]], num_filters))
-                    weeks_n, max_day = _weeks_of(rows, "v0")
+                    weeks_n, max_day = _weeks_of(rows, "v0", target_sunday)
                     weeks_d, _ = _weeks_of(rows, "v1", max_day)
                 else:
                     rows = run(dialect.daily(fact_n, [num["measure"]], num_filters))
-                    weeks_n, max_day = _weeks_of(rows, "v0")
+                    weeks_n, max_day = _weeks_of(rows, "v0", target_sunday)
                     if rows_denominator or den is None:
                         weeks_d = [Week(w.start, float(w.rows), w.rows, w.days) for w in weeks_n]
                     else:
@@ -770,7 +784,7 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
                 except ValueError:
                     threshold = None
                 fact_l = {"table": left["fact"], "date": dialect.axis(left["fact"]), "measure": left["measure"], "aggregate": "sum"}
-                weeks_l, max_day = _weeks_of(run(dialect.daily(fact_l, [left["measure"]], left_filters)), "v0")
+                weeks_l, max_day = _weeks_of(run(dialect.daily(fact_l, [left["measure"]], left_filters)), "v0", target_sunday)
                 if not weeks_l:
                     notes.append(f"{spec.name}: no rows match {spec.left}; check the value against the source (case and spelling count)")
                     continue
@@ -833,7 +847,7 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
                 continue
             index = next((i for i, w in enumerate(weeks) if w.start == target_week.start), len(weeks) - 1)
             ctx = _context(weeks, index, "sum")
-            shifts = _change_points(weeks[: index + 1])
+            shifts = _change_points(weeks[: index + 1]) if not ctx.get("sparse") else []
             headline = _kpi_headline(spec, name, weeks[index], ctx)
             briefs.append(MetricBrief(name, fact_name, spec.kind, (), "sum", tuple(weeks), weeks[index], ctx, tuple(shifts), {}, "", None, {}, tuple(explanations), headline, tuple(kpi_notes), kind=spec.kind, definition=definition, extra=extra))
         except _Budget:

@@ -45,6 +45,14 @@ def _shop():
     return LakehouseProbe.from_executor(LakehouseExecutor(query, tables), schema_from_tables("lh", tables, types=types), name="Shop")
 
 
+def test_a_thin_tail_moves_the_briefed_week_back_and_says_so():
+    # the shop's last weeks hold 1 to 3 customers against a usual 5, so their rows fall below half the typical week: read as data still arriving, unless a week is named
+    result = brief(_shop(), ["revenue"], instructions="Revenue = SUM(amount).", budget=30)
+    assert result.week is not None and result.week.start == "2024-12-09"
+    assert any("7 against a typical 35" in note and "say week=2024-12-23" in note for note in result.notes), result.notes
+    assert "The last 2 weeks hold far fewer rows" in result.to_markdown() or "the last 2 weeks hold far fewer rows" in result.to_markdown()
+
+
 def test_kpi_phrases_are_read_by_kind():
     assert parse_kpi("new customers").kind == "new" and parse_kpi("new customers").entity_words == "customers"
     churn = parse_kpi("churned resellers over 4 weeks")
@@ -65,7 +73,7 @@ def test_kpi_phrases_are_read_by_kind():
 
 def test_entities_are_ranked_by_structure_and_the_lifecycle_counts_are_exact():
     probe = _shop()
-    result = brief(probe, ["revenue"], kpis=["new customers", "churned customers", "active customers"], instructions="Revenue = SUM(amount).", budget=90)
+    result = brief(probe, ["revenue"], kpis=["new customers", "churned customers", "active customers"], week="2024-12-23", instructions="Revenue = SUM(amount).", budget=90)
     assert [e.column for e in result.entities] == ["customer_id", "product_id"]
     customers, products = result.entities
     assert customers.entities == 101 and customers.name == "customers" and "named like an entity" in customers.reasons and customers.score > products.score
@@ -93,7 +101,7 @@ def test_entities_are_ranked_by_structure_and_the_lifecycle_counts_are_exact():
 
 def test_an_entity_override_a_ratio_a_crossing_and_a_concentration():
     probe = _shop()
-    result = brief(probe, [], kpis=["new products", "amount / rows", "amount crossing 8000", "top 1 share of amount by region", "amount where region = North vs amount where region = South"], entity="product_id", instructions="Revenue = SUM(amount).", budget=90)
+    result = brief(probe, [], kpis=["new products", "amount / rows", "amount crossing 8000", "top 1 share of amount by region", "amount where region = North vs amount where region = South"], entity="product_id", week="2024-12-23", instructions="Revenue = SUM(amount).", budget=90)
     new_products = next(m for m in result.metrics if m.kind == "new")
     assert new_products.name == "new products" and result.entity_choice.endswith("as specified") and new_products.target.value == 0.0
     ratio = next(m for m in result.metrics if m.kind == "ratio")

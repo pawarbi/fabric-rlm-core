@@ -900,7 +900,8 @@ def _metric_section(metric: Any, index: int) -> str:
             parts.append(f'<div class="story">{esc(text)}</div>')
         best = finding.best
         if best is not None and best.groups:
-            parts.append('<div class="grid2">' + _waterfall_svg(best, f"Week over week, by {_word(best.path)}") + _scatter_svg(best, f"Who moved more than their size, by {_word(best.path)}") + "</div>")
+            against = "Week over week" if finding.movement.comparison.kind == "week" else "Against the same week last year"
+            parts.append('<div class="grid2">' + _waterfall_svg(best, f"{against}, by {_word(best.path)}") + _scatter_svg(best, f"Who moved more than their size, by {_word(best.path)}") + "</div>")
             parts.append(_groups_table(best))
             lead = finding.lead_drill
             if lead is not None:
@@ -909,7 +910,7 @@ def _metric_section(metric: Any, index: int) -> str:
         if others:
             parts.append('<div class="caption">Other groupings tried: ' + "".join(f'<span class="chip">by <b>{esc(_word(d.path))}</b>: {esc(_concentration_words(d.concentration))}</span>' for d in others) + "</div>")
     prior = metric.prior_year_finding
-    if prior is not None and prior.best is not None and prior.best.groups:
+    if prior is not None and prior is not metric.finding and prior.best is not None and prior.best.groups:
         parts.append(f'<div class="story"><b>Against the same week last year, by {esc(_word(prior.best.path))}:</b> {esc(_concentration_sentence(prior.best))}</div>')
     if metric.pattern or any(v for v, _u in metric.weekday_shares.values()):
         parts.append("<h3 style=\"margin-top:12px\">Pattern within the week</h3>")

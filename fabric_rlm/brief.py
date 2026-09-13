@@ -27,7 +27,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .data_agent_review import AgentDataSource, AgentSnapshot, ReviewContext, _measure_columns, build_vocabulary, excluded_terms
-from .sweep import Comparison, Sweep, SweepFinding, _aggregate_for, _concentration_sentence, _iso_date, _label, _num, _probe_for, _word, sweep, verify_sweep
+from .sweep import Comparison, Sweep, SweepFinding, _aggregate_of, _concentration_sentence, _iso_date, _label, _num, _probe_for, _summed_columns, _word, sweep, verify_sweep
 
 __all__ = ["Brief", "ChangePoint", "MetricBrief", "Week", "brief"]
 
@@ -101,10 +101,8 @@ class MetricBrief:
 
     @property
     def finding(self) -> SweepFinding | None:
-        """The week-over-week movement with its drivers."""
-        if self.sweep is None:
-            return None
-        return next((f for f in self.sweep.findings if f.movement.comparison.kind == "week"), None)
+        """The week-over-week movement with its drivers; against an empty week before, the same week last year instead."""
+        return _metric_finding(self.sweep, self.context)
 
     @property
     def prior_year_finding(self) -> SweepFinding | None:
@@ -209,7 +207,7 @@ class Brief:
                 moves.append(f"{metric.name} held at {metric.target.value:.0%}" if pct is not None and abs(pct) < 0.02 else f"{metric.name} {'fell' if (pct or 0) < 0 else 'rose'} to {metric.target.value:.0%}")
             elif pct is not None:
                 moves.append(f"{metric.name} {'fell' if pct < 0 else 'rose'} {abs(pct):.0%}")
-        first = f"In the {self.week.label}, " + (", ".join(moves[:-1]) + (" and " if len(moves) > 1 else "") + moves[-1] if moves else "no metric had a week before to compare with") + " on the week before."
+        first = f"In the {self.week.label}, " + (", ".join(moves[:-1]) + (" and " if len(moves) > 1 else "") + moves[-1] + " on the week before." if moves else "no metric has a week before with rows to compare with.")
         sentences = [first[0].upper() + first[1:]]
         judged = [m for m in self.metrics if m.context.get("z") is not None and abs(m.context["z"]) >= 1.5]
         if judged:
@@ -331,13 +329,28 @@ def _weeks(daily: Sequence[tuple[_dt.date, int, float]], aggregate: str, max_day
         bucket[0] += value
         bucket[1] += rows
         bucket[2] += 1
+    if not by_week:
+        return []
     weeks = []
-    for monday in sorted(by_week):
-        if monday + _dt.timedelta(days=6) > max_day:
-            continue
-        value, rows, days = by_week[monday]
+    monday = min(by_week)
+    while monday + _dt.timedelta(days=6) <= max_day:  # only weeks whose Sunday is in the data
+        value, rows, days = by_week.get(monday, [0.0, 0, 0])  # a week with no rows is a week of zero, not a missing week
         weeks.append(Week(monday.isoformat(), (value / rows if rows else 0.0) if aggregate == "avg" else value, int(rows), int(days)))
+        monday += _dt.timedelta(days=7)
     return weeks
+
+
+def _last_covered_week(weeks: Sequence[Week], *, back: int = 8) -> int:
+    """The index of the latest week with real coverage: a trailing week holding under half the rows of a typical recent week is a stub."""
+    index = len(weeks) - 1
+    steps = 0
+    while index > 0 and steps < back:
+        recent = sorted(w.rows for w in weeks[max(0, index - 13) : index] if w.rows)
+        if len(recent) < 4 or weeks[index].rows >= 0.5 * recent[len(recent) // 2]:
+            break
+        index -= 1
+        steps += 1
+    return index
 
 
 def _mean(values: Sequence[float]) -> float:
@@ -352,7 +365,7 @@ def _std(values: Sequence[float]) -> float:
 
 
 def _slope_pct(values: Sequence[float]) -> float | None:
-    """The fitted change over the window as a share of the window's mean."""
+    """The fitted change over the window: where the fitted line ends against where it starts, a decline capped at -100%."""
     n = len(values)
     if n < 4:
         return None
@@ -362,7 +375,11 @@ def _slope_pct(values: Sequence[float]) -> float | None:
     if not denominator or not y_mean:
         return None
     slope = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, values)) / denominator
-    return slope * (n - 1) / abs(y_mean)
+    start = y_mean - slope * x_mean
+    end = y_mean + slope * (n - 1 - x_mean)
+    if start <= 0 or start < 0.05 * abs(y_mean):
+        return None  # a fitted line starting at or near zero has no base to state a change against
+    return max(-1.0, (end - start) / start)
 
 
 def _context(weeks: Sequence[Week], index: int, aggregate: str) -> dict[str, Any]:
@@ -370,8 +387,14 @@ def _context(weeks: Sequence[Week], index: int, aggregate: str) -> dict[str, Any
     target = weeks[index]
     values = [w.value for w in weeks]
     c: dict[str, Any] = {"value": target.value, "rows": target.rows}
+    # a series with rows in few of its weeks (monthly postings, a rare category) is at the wrong grain for a weekly comparison: say so instead of judging it
+    history = weeks[max(0, index - 51) : index + 1]
+    present = sum(1 for w in history if w.rows)
+    sparse = len(history) >= 8 and present < 0.6 * len(history)
+    c["sparse"] = f"rows in only {present} of the last {len(history)} weeks" if sparse else None
     previous = weeks[index - 1] if index >= 1 else None
     c["previous"] = previous.value if previous else None
+    c["previous_empty"] = bool(previous is not None and not previous.rows)
     c["wow_pct"] = (target.value - previous.value) / abs(previous.value) if previous and previous.value else None
     starts = {w.start: i for i, w in enumerate(weeks)}
     year_ago = (_dt.date.fromisoformat(target.start) - _dt.timedelta(days=364)).isoformat()
@@ -379,17 +402,17 @@ def _context(weeks: Sequence[Week], index: int, aggregate: str) -> dict[str, Any
     c["prior_year"] = prior.value if prior else None
     c["prior_year_start"] = prior.start if prior else None
     c["yoy_pct"] = (target.value - prior.value) / abs(prior.value) if prior and prior.value else None
-    c["avg4"] = _mean(values[max(0, index - 4) : index]) if index >= 4 else None
+    c["avg4"] = _mean(values[max(0, index - 4) : index]) if index >= 4 and not sparse else None
     c["vs_avg4_pct"] = (target.value - c["avg4"]) / abs(c["avg4"]) if c["avg4"] else None
-    c["avg13"] = _mean(values[max(0, index - 13) : index]) if index >= 8 else None
+    c["avg13"] = _mean(values[max(0, index - 13) : index]) if index >= 8 and not sparse else None
     c["vs_avg13_pct"] = (target.value - c["avg13"]) / abs(c["avg13"]) if c["avg13"] else None
     # the seasonal expectation: the recent level scaled by how this week of the year sat against its own recent level in prior years
-    expected, index_values, source = _expectation(weeks, index)
+    expected, index_values, source = _expectation(weeks, index) if not sparse else (None, [], None)
     c["expected"] = expected
     c["expected_source"] = source
     c["vs_expected_pct"] = (target.value - expected) / abs(expected) if expected else None
     residuals = []
-    for i in range(max(8, index - 26), index):
+    for i in range(max(8, index - 26), index if not sparse else 0):
         e, _iv, _s = _expectation(weeks, i)
         if e:
             residuals.append(weeks[i].value - e)
@@ -403,7 +426,9 @@ def _context(weeks: Sequence[Week], index: int, aggregate: str) -> dict[str, Any
         c["z"] = 0.0 if abs(deviation) <= 1e-9 * max(1.0, abs(expected)) else math.copysign(math.inf, deviation)
     else:
         c["z"] = None
-    if len(residuals) < 8 or c["z"] is None:
+    if sparse:
+        c["verdict"] = f"the data has {c['sparse']}, so a weekly comparison says little about it; a monthly grain would fit it better"
+    elif len(residuals) < 8 or c["z"] is None:
         c["verdict"] = "not enough history to say whether this is unusual"
     elif math.isinf(c["z"]):
         c["verdict"] = f"very unusual: {'above' if c['z'] > 0 else 'below'} an expectation the last {len(residuals)} weeks never deviated from"
@@ -431,9 +456,9 @@ def _context(weeks: Sequence[Week], index: int, aggregate: str) -> dict[str, Any
         else:
             higher = [i for i in range(index) if values[i] > target.value]
             lower = [i for i in range(index) if values[i] < target.value]
-            if higher and index - higher[-1] >= 8:
+            if higher and index - higher[-1] >= 8 and all(values[i] < target.value for i in range(higher[-1] + 1, index)):
                 c["rank_note"] = f"The highest week since the {_week_label(weeks[higher[-1]].start)}."
-            elif lower and index - lower[-1] >= 8:
+            elif lower and index - lower[-1] >= 8 and all(values[i] > target.value for i in range(lower[-1] + 1, index)):
                 c["rank_note"] = f"The lowest week since the {_week_label(weeks[lower[-1]].start)}."
         window = values[max(0, index - 52) : index + 1]
         c["percentile"] = sum(1 for v in window if v <= target.value) / len(window)
@@ -573,6 +598,20 @@ def _mix(finding: SweepFinding | None) -> dict[str, float]:
     return {"volume": volume / m.delta, "rate": rate / m.delta, "interaction": interaction / m.delta, "rate_before": rate0, "rate_after": rate1}
 
 
+def _metric_finding(swept: Sweep | None, context: Mapping[str, Any]) -> SweepFinding | None:
+    """The week-over-week finding; against an empty week before there is nothing to decompose, so the same week last year is the comparison left."""
+    if swept is None:
+        return None
+    finding = next((f for f in swept.findings if f.movement.comparison.kind == "week"), None)
+    if finding is None and context.get("previous_empty"):
+        finding = next((f for f in swept.findings if f.movement.comparison.kind == "same_week_prior_year"), None)
+    return finding
+
+
+def _period_words(period: Mapping[str, Any]) -> str:
+    return str(period.get("label") or (f"the week of {_week_label(period['start'])[8:]}" if period.get("start") else period))
+
+
 def _explanations(name: str, finding: SweepFinding | None, mix: Mapping[str, float]) -> list[str]:
     lines: list[str] = []
     if finding is None:
@@ -587,7 +626,8 @@ def _explanations(name: str, finding: SweepFinding | None, mix: Mapping[str, flo
         if best.concentration in {"single", "concentrated", "offsetting"} and m.before_value and m.pct is not None:
             leader = best.groups[0]
             held = (m.delta - leader.delta) / abs(m.before_value)
-            lines.append(f"Had {_label(leader.group)} held at the week before, {name} would have moved {held:+.1%} instead of {m.pct:+.1%}.")
+            against = "the week before" if m.comparison.kind == "week" else "the same week last year" if m.comparison.kind == "same_week_prior_year" else _period_words(m.comparison.before)
+            lines.append(f"Had {_label(leader.group)} held at {against}, {name} would have moved {held:+.1%} instead of {m.pct:+.1%}.")
     if mix:
         rows_word = "rows"
         lines.append(
@@ -599,12 +639,15 @@ def _explanations(name: str, finding: SweepFinding | None, mix: Mapping[str, flo
 
 def _comovement(metrics: Sequence[MetricBrief]) -> list[str]:
     """Which metrics move together week over week, and which lead by a week: associations over the shared history, not causes."""
-    lines: list[str] = []
+    found: list[tuple[float, str]] = []
     changes: dict[str, dict[str, float]] = {}
     for metric in metrics:
         series: dict[str, float] = {}
+        thin = _thin_weeks(metric.weeks)  # a stub week at the tail would drag every series down together and fake a correlation
+        level = sorted(abs(w.value) for w in metric.weeks if w.value)
+        floor = 0.1 * level[len(level) // 2] if level else 0.0  # a change off a near-empty week is a spike, not a movement
         for previous, current in zip(metric.weeks, metric.weeks[1:]):
-            if previous.value:
+            if previous.value and abs(previous.value) >= floor and current.start not in thin and previous.start not in thin:
                 series[current.start] = (current.value - previous.value) / abs(previous.value)
         changes[metric.name] = series
     names = [m.name for m in metrics]
@@ -613,18 +656,52 @@ def _comovement(metrics: Sequence[MetricBrief]) -> list[str]:
             shared = sorted(set(changes[a]) & set(changes[b]))
             if len(shared) < 12:
                 continue
-            same = _pearson([changes[a][s] for s in shared], [changes[b][s] for s in shared])
-            a_leads = _pearson([changes[a][s] for s in shared[:-1]], [changes[b][s] for s in shared[1:]])
-            b_leads = _pearson([changes[b][s] for s in shared[:-1]], [changes[a][s] for s in shared[1:]])
+            same = _spearman([changes[a][s] for s in shared], [changes[b][s] for s in shared])
+            a_leads = _spearman([changes[a][s] for s in shared[:-1]], [changes[b][s] for s in shared[1:]])
+            b_leads = _spearman([changes[b][s] for s in shared[:-1]], [changes[a][s] for s in shared[1:]])
             if same is not None and abs(same) >= 0.5:
-                lines.append(f"{a.capitalize()} and {b} moved {'together' if same > 0 else 'in opposite directions'} over the last {len(shared)} weeks (r = {same:.2f}).")
+                found.append((abs(same), f"{a.capitalize()} and {b} moved {'together' if same > 0 else 'in opposite directions'} over the last {len(shared)} weeks (r = {same:.2f})."))
             if a_leads is not None and abs(a_leads) >= 0.5 and abs(a_leads) > abs(same or 0) + 0.1:
-                lines.append(f"{a.capitalize()} led {b} by a week (r = {a_leads:.2f} at a one-week lag).")
+                found.append((abs(a_leads), f"{a.capitalize()} led {b} by a week (r = {a_leads:.2f} at a one-week lag)."))
             if b_leads is not None and abs(b_leads) >= 0.5 and abs(b_leads) > abs(same or 0) + 0.1:
-                lines.append(f"{b.capitalize()} led {a} by a week (r = {b_leads:.2f} at a one-week lag).")
+                found.append((abs(b_leads), f"{b.capitalize()} led {a} by a week (r = {b_leads:.2f} at a one-week lag)."))
+    lines = [text for _strength, text in sorted(found, key=lambda item: -item[0])[:6]]
     if lines:
         lines.append("These are associations in the source's own history; they say what moved with what, not what caused what.")
     return lines
+
+
+def _thin_weeks(weeks: Sequence[Week]) -> set[str]:
+    """Weeks holding under half the rows of a typical recent week: the tail of a data set that has not fully arrived."""
+    thin: set[str] = set()
+    for index in range(len(weeks) - 1, max(-1, len(weeks) - 10), -1):
+        recent = sorted(w.rows for w in weeks[max(0, index - 13) : index] if w.rows)
+        if len(recent) >= 4 and weeks[index].rows < 0.5 * recent[len(recent) // 2]:
+            thin.add(weeks[index].start)
+        else:
+            break
+    return thin
+
+
+def _spearman(xs: Sequence[float], ys: Sequence[float]) -> float | None:
+    """Rank correlation: one enormous week cannot make every pair read r = 1.00."""
+    if len(xs) < 3 or len(xs) != len(ys):
+        return None
+    return _pearson(_ranks(xs), _ranks(ys))
+
+
+def _ranks(values: Sequence[float]) -> list[float]:
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        for k in range(i, j + 1):
+            ranks[order[k]] = (i + j) / 2 + 1  # ties share the average rank
+        i = j + 1
+    return ranks
 
 
 def _pearson(xs: Sequence[float], ys: Sequence[float]) -> float | None:
@@ -710,7 +787,7 @@ def brief(
         if axis is None:
             notes.append(f"{spec['name']}: {fact_name} has no time axis")
             continue
-        aggregate = _aggregate_for(measure)
+        aggregate = _aggregate_of(measure, _summed_columns(instructions))
         fact = {"table": fact_name, "date": axis, "measure": measure, "aggregate": aggregate}
         try:
             rows = probe.run(dialect.daily(fact, [measure]))
@@ -743,7 +820,14 @@ def brief(
                 notes.append(f"{spec['name']}: no complete week starting {target_week.start} in its data (it ends on {max_day.isoformat()}); left out")
                 continue
         else:
-            index = len(weeks) - 1
+            index = _last_covered_week(weeks)
+            if index < len(weeks) - 1:
+                typical = sorted(w.rows for w in weeks[max(0, index - 12) : index + 1] if w.rows)
+                behind = len(weeks) - 1 - index
+                notes.append(
+                    f"the last {f'{behind} weeks hold' if behind > 1 else 'week holds'} far fewer rows than the weeks before {'them' if behind > 1 else 'it'} ({weeks[-1].rows:,} against a typical {typical[len(typical) // 2]:,}), "
+                    f"which usually means the data has not fully arrived, so the brief covers the {weeks[index].label}; say week={weeks[-1].start} to brief the latest week anyway"
+                )
         if index < 0:
             notes.append(f"{spec['name']}: no complete week in the data (it ends on {max_day.isoformat()})")
             continue
@@ -755,7 +839,7 @@ def brief(
             target_week = target
         metric_notes = [spec["note"]] if spec.get("note") else []
         ctx = _context(weeks, index, aggregate)
-        points = _change_points(weeks[: index + 1])
+        points = _change_points(weeks[: index + 1]) if not ctx.get("sparse") else []  # a level shift needs a series that has rows in most weeks
         shares, pattern = _weekday_pattern(daily, target, weeks, index)
         comparisons: list[Comparison] = []
         if index >= 1:
@@ -767,7 +851,7 @@ def brief(
             swept = sweep(probe, None, instructions=instructions, scope=scope, facts=[fact_name], measures=[measure], paths=list(spec["groupings"]) if spec["groupings"] else paths, comparisons=comparisons, budget=per_metric, min_pct=0.0, depth=2)
             spent += swept.queries
             metric_notes.extend(n for n in swept.notes if "budget" in n)
-        finding = next((f for f in swept.findings if f.movement.comparison.kind == "week"), None) if swept else None
+        finding = _metric_finding(swept, ctx)
         mix = _mix(finding)
         explanations = _explanations(spec["name"], finding, mix)
         headline = _headline(spec["name"], target, ctx, aggregate)
@@ -804,6 +888,8 @@ def _headline(name: str, target: Week, c: Mapping[str, Any], aggregate: str) -> 
     against = []
     if c.get("wow_pct") is not None:
         against.append(f"{_pct(c['wow_pct'])} on the week before")
+    elif c.get("previous_empty"):
+        against.append("after a week before with no rows")
     if c.get("yoy_pct") is not None:
         against.append(f"{_pct(c['yoy_pct'])} on the same week last year")
     if c.get("vs_avg13_pct") is not None:
@@ -821,6 +907,9 @@ def _watch(metrics: Sequence[MetricBrief]) -> list[str]:
     for metric in metrics:
         c = metric.context
         z = c.get("z")
+        if c.get("sparse"):
+            watch.append(f"{metric.name.capitalize()}: {c['sparse']}, so its week-to-week movements are not read as signal.")
+            continue
         if c.get("coverage_note"):
             # a week that may not have fully arrived: one line, and the movements it would otherwise raise are read as coverage
             superseded = [f"{_pct(c['wow_pct'])} week over week"] if c.get("wow_pct") is not None and abs(c["wow_pct"]) >= 0.15 else []
@@ -834,7 +923,7 @@ def _watch(metrics: Sequence[MetricBrief]) -> list[str]:
         for point in recent:
             watch.append(f"{metric.name.capitalize()}: a level shift six weeks ago or less (the {_week_label(point.start)}, {_pct(point.pct)}).")
         if c.get("streak", 0) >= 3:
-            watch.append(f"{metric.name.capitalize()}: {c['streak_note']}")
+            watch.append(f"{metric.name.capitalize()}: {c['streak_note'][0].lower()}{c['streak_note'][1:]}")
         if c.get("wow_pct") is not None and abs(c["wow_pct"]) >= 0.15 and not (z is not None and abs(z) >= 2):
             watch.append(f"{metric.name.capitalize()}: {_pct(c['wow_pct'])} week over week.")
     return watch

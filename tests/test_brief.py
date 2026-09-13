@@ -102,8 +102,12 @@ def test_a_brief_over_a_semantic_model_writes_daily_dax_and_copes_with_little_hi
     result = brief(model, ["sales amount by color"], budget=40)
     assert result.kind == "semantic_model" and result.week is not None and result.week.start == "2013-12-09"
     metric = result.metrics[0]
-    assert metric.context["value"] == 210.0 and metric.context["previous"] == 1020.0 and round(metric.context["wow_pct"], 3) == -0.794
-    assert metric.context["verdict"] == "not enough history to say whether this is unusual"
+    # sales on the 1st and the 15th leave most weeks empty: the week before is a real zero, and the series is too sparse for a weekly verdict
+    assert metric.context["value"] == 210.0 and metric.context["previous"] == 0.0 and metric.context["wow_pct"] is None and metric.context["previous_empty"]
+    assert metric.context["verdict"].startswith("the data has rows in only 5 of the last 52 weeks") and metric.context["z"] is None and metric.change_points == ()
+    assert "after a week before with no rows" in metric.headline and "13-week average" not in metric.headline
+    assert result.watch == ("Sales amount: rows in only 5 of the last 52 weeks, so its week-to-week movements are not read as signal.",)
+    assert result.narrative().startswith("In the week of 9 Dec 2013, no metric has a week before with rows to compare with.")
     assert any(q.startswith("EVALUATE SELECTCOLUMNS(SUMMARIZECOLUMNS('Date'[Date], \"n\", COUNTROWS('Sales')") for q in model.queries)
     assert metric.finding is not None and "DATE(2013,12,9)" in metric.finding.movement.query and metric.finding.best.path["column"] == "Color"
     assert result.mismatches == () and result.recomputed > 0

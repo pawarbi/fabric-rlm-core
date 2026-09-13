@@ -10,7 +10,7 @@ import pytest
 
 from fabric_rlm.data_agent_review import LakehouseExecutor, schema_from_tables
 from fabric_rlm.reports import ReportSpec, parse_request, report
-from fabric_rlm.sweep import LakehouseProbe, SemanticModelProbe, Sweep, sweep, verify_sweep, what_moved
+from fabric_rlm.sweep import Comparison, LakehouseProbe, SemanticModelProbe, Sweep, sweep, verify_sweep, what_moved
 
 SOURCE = "lh-1"
 
@@ -549,8 +549,13 @@ def _thin_december():
     return LakehouseProbe.from_executor(_executor(con, tables), schema_from_tables(SOURCE, tables, types=types), name="Shop")
 
 
-def test_a_thin_month_fails_the_coverage_check_even_when_the_data_runs_to_its_end():
+def test_a_thin_trailing_month_is_skipped_by_default_and_fails_the_coverage_check_when_compared_anyway():
     result = what_moved(_thin_december(), budget=50)
+    total = next(m for m in result.ledger if m.path is None)
+    assert total.comparison.label == "October 2024 to November 2024" and (total.before_value, total.after_value) == (6200.0, 6000.0) and total.trusted
+    assert any("December 2024 (4 rows)" in note and "stops at November 2024" in note for note in result.notes), result.notes
+    # asked for outright, the thin month is compared, and the coverage check sets the movement aside: the data runs to the 27th, so the end-date rule alone would pass it
+    result = what_moved(_thin_december(), budget=50, comparisons=[Comparison("month", {"year": 2024, "month": 11}, {"year": 2024, "month": 12})])
     total = next(m for m in result.ledger if m.path is None)
     assert total.comparison.label == "November 2024 to December 2024" and (total.before_value, total.after_value) == (6000.0, 400.0)
     assert total.trusted is False and total.flags[0] == "coverage: December 2024 holds 4 rows against a typical 62 a month, so it looks incomplete and the movement is coverage, not business"

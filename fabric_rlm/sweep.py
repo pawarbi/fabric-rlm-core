@@ -100,7 +100,19 @@ class _Budget(Exception):
     """The query budget is spent."""
 
 
-_AVERAGED = re.compile(r"(score|rating|_rate$|rate$|pct|percent|ratio|index|avg|average|mean|unit[_ ]?price|list[_ ]?price|^price$|unit[_ ]?cost|standard[_ ]?cost)", re.IGNORECASE)
+_AVERAGED = re.compile(r"(score|rating|_rate$|rate$|pct|percent|ratio|index|avg|average|mean|unit[_ ]?price|list[_ ]?price|unit[_ ]?cost|standard[_ ]?cost)", re.IGNORECASE)
+_SUMMED = re.compile(r"SUM\s*\(\s*\[?([A-Za-z_][A-Za-z0-9_ ]*)\]?\s*\)", re.IGNORECASE)
+
+
+def _summed_columns(text: str) -> frozenset[str]:
+    """Columns the instructions define as sums (``Revenue = SUM(price)``): summed whatever their name suggests."""
+    return frozenset(match.group(1).strip().casefold() for match in _SUMMED.finditer(text or ""))
+
+
+def _aggregate_of(measure: str, summed: frozenset[str] = frozenset()) -> str:
+    return "sum" if measure.casefold() in summed else _aggregate_for(measure)
+_MEASUREMENT = re.compile(r"(length|lenght|width|height|weight|depth|volume|_cm$|_mm$|_kg$|_g$|_lbs?$)", re.IGNORECASE)
+_NUMERIC_TYPE = re.compile(r"(int|double|float|decimal|numeric|real|number)", re.IGNORECASE)
 _GROUP_LIMIT = 500  # groups a decomposition query returns, largest absolute change first
 _ROW_LIMIT = 10_000  # rows a lakehouse query may return (the source's own ceiling); a daily series over 27 years fits
 _INFORMATIVE = frozenset({"single", "concentrated", "offsetting", "broad"})
@@ -322,9 +334,8 @@ class Sweep:
                     lines.append(f"  Within {_label(lead.parent.group)}, by {_word(lead.path)}: {_concentration_sentence(lead)}")
                 elif finding.drill:
                     lines.append(f"  Within {_label(finding.drill[0].parent.group)}, nothing stands out by {_words([d.path for d in finding.drill])}.")
-            others = [d for d in finding.decompositions[1:] if d.concentration in {"single", "concentrated"} and d.groups]
-            if others:
-                lines.append("  Also concentrated by " + "; ".join(f"{_word(d.path)} ({_leader_sentence(d)})" for d in others[:2]))
+            for other in [d for d in finding.decompositions[1:] if d.groups][:3]:
+                lines.append(f"  Also by {_word(other.path)}: {_concentration_sentence(other)}")
         return lines
 
     def summary(self) -> str:
@@ -1126,6 +1137,7 @@ def sweep(
     vocabulary = build_vocabulary(snapshot, schema, context)
     excluded = excluded_terms(text)
     terms = context.terms if context is not None else ()
+    summed = _summed_columns(text)
     joins = probe.joins(text)
     dialect = probe.dialect(joins)
     ledger: list[Movement] = []
@@ -1161,7 +1173,7 @@ def sweep(
             if not axis or not candidates:
                 notes.append(f"{table}: no time axis or no measure, not swept")
                 continue
-            base = {"table": table, "date": axis, "measure": candidates[0], "aggregate": _aggregate_for(candidates[0])}
+            base = {"table": table, "date": axis, "measure": candidates[0], "aggregate": _aggregate_of(candidates[0], summed)}
             months = dialect.months(run(dialect.series(base, candidates)))
             fact_years = [int(y) for y in years] if years else _complete_years(months)
             if not years_used:
@@ -1170,6 +1182,9 @@ def sweep(
             if not wanted_comparisons:
                 notes.append(f"{table}: no comparison the time axis supports for {fact_years}")
                 continue
+            skipped = _skipped_tail(months, wanted_comparisons)
+            if skipped:
+                notes.append(f"{table}: {skipped}")
             try:
                 rows = run(dialect.max_date(base))
                 max_date = _iso_date(rows[0].get("value")) if rows and rows[0].get("value") is not None else None
@@ -1183,7 +1198,7 @@ def sweep(
             for index, measure in enumerate(candidates):
                 if len(measured) >= wanted:
                     break
-                fact = {"table": table, "date": axis, "measure": measure, "aggregate": _aggregate_for(measure)}
+                fact = {"table": table, "date": axis, "measure": measure, "aggregate": _aggregate_of(measure, summed)}
                 key = f"{table}|{measure}"
                 words[key] = _channel_measure(vocabulary.table(table), vocabulary.measure(measure.strip("[]")))
                 series[key] = _points(months, index, fact["aggregate"], fact_years)
@@ -1224,7 +1239,8 @@ def sweep(
         except _Budget:
             exhausted = True
             left = len(material) - index - (1 if decompositions else 0)
-            notes.append(f"the budget of {budget} queries was spent before the sweep finished; {left} material movement(s) were measured but not decomposed")
+            if left > 0:
+                notes.append(f"the budget of {budget} queries was spent before the sweep finished; {left} material movement(s) were measured but not decomposed")
         if decompositions:
             decompositions.sort(key=lambda d: (-_rank(d), _placeholder_lead(d), -d.explained))  # a real leader beats a placeholder at the same rank
             drill.sort(key=lambda d: (-_rank(d), _placeholder_lead(d), -d.explained))
@@ -1260,7 +1276,12 @@ def _measure_candidates(schema: SourceSchema, table: str, measures: int | Sequen
 
 def _choose_paths(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]], excluded: Any, terms: Sequence[str], paths: int | Sequence[str]) -> list[Mapping[str, Any]]:
     """The grouping paths to sweep: the role paths first, then the rest, up to a count; or the named columns in the order named."""
-    all_paths = [p for p in attribute_paths(schema, table, joins, excluded) if not _LOCAL_EXCLUDED.search(str(p["column"]))]  # a code, a SKU or a number is a label, not a grouping
+    all_paths = [
+        p
+        for p in attribute_paths(schema, table, joins, excluded)
+        if not _LOCAL_EXCLUDED.search(str(p["column"]))  # a code, a SKU or a number is a label, not a grouping
+        and not (_MEASUREMENT.search(str(p["column"])) and _NUMERIC_TYPE.search(schema.column_type(_path_table(p, table), str(p["column"]))))  # a numeric length or weight is a quantity, not a grouping
+    ]
     if not isinstance(paths, int):
         chosen_named: list[Mapping[str, Any]] = []
         for name in paths:
@@ -1329,17 +1350,47 @@ def _comparisons(months: Sequence[Mapping[str, Any]], years: Sequence[int]) -> l
     comparisons: list[Comparison] = []
     if len(years) >= 2:
         comparisons.append(Comparison("year", {"year": int(years[-2])}, {"year": int(years[-1])}))
-    present = sorted({(int(r["year"]), int(r["month"])) for r in months if r.get("year") is not None and r.get("month") is not None and int(r.get("n") or 0) > 0})
+    counts = {(int(r["year"]), int(r["month"])): int(r.get("n") or 0) for r in months if r.get("year") is not None and r.get("month") is not None and int(r.get("n") or 0) > 0}
+    present = sorted(counts)
     if present:
-        latest = present[-1]
-        if len(present) >= 2:
-            previous = present[-2]
+        latest = _latest_covered(present, counts)
+        at = present.index(latest)
+        if at >= 1:
+            previous = present[at - 1]
             consecutive = (previous[0] == latest[0] and previous[1] == latest[1] - 1) or (previous[0] == latest[0] - 1 and previous[1] == 12 and latest[1] == 1)
             if consecutive:
                 comparisons.append(Comparison("month", {"year": previous[0], "month": previous[1]}, {"year": latest[0], "month": latest[1]}))
-        if (latest[0] - 1, latest[1]) in present:
+        if (latest[0] - 1, latest[1]) in counts:
             comparisons.append(Comparison("same_month_prior_year", {"year": latest[0] - 1, "month": latest[1]}, {"year": latest[0], "month": latest[1]}))
     return comparisons
+
+
+def _skipped_tail(months: Sequence[Mapping[str, Any]], comparisons: Sequence[Comparison]) -> str | None:
+    """Says when the month comparison stops short of the latest month because the trailing months look still to arrive."""
+    counts = {(int(r["year"]), int(r["month"])): int(r.get("n") or 0) for r in months if r.get("year") is not None and r.get("month") is not None and int(r.get("n") or 0) > 0}
+    month = next((c for c in comparisons if c.kind == "month" and "month" in c.after), None)
+    if month is None or not counts:
+        return None
+    after = (int(month.after["year"]), int(month.after["month"]))
+    skipped = [m for m in sorted(counts) if m > after]
+    if not skipped:
+        return None
+    earlier = sorted(counts[m] for m in sorted(counts) if m <= after)[-6:]
+    typical = sorted(earlier)[len(earlier) // 2] if earlier else 0
+    names = ", ".join(f"{_month_name({'year': m[0], 'month': m[1]})} ({counts[m]:,} rows)" for m in skipped)
+    return f"{names} hold{'s' if len(skipped) == 1 else ''} far fewer rows than a typical month ({typical:,}), so the month comparison stops at {_month_name({'year': after[0], 'month': after[1]})}; pass comparisons=[Comparison('month', ...)] to compare a later month anyway"
+
+
+def _latest_covered(present: Sequence[tuple[int, int]], counts: Mapping[tuple[int, int], int]) -> tuple[int, int]:
+    """The latest month with real coverage: a trailing month holding under half the rows of a typical earlier month is a stub, so the month before it is compared."""
+    for position in range(len(present) - 1, -1, -1):
+        month = present[position]
+        earlier = sorted(counts[m] for m in present[max(0, position - 6) : position])
+        if len(earlier) < 2 or counts[month] >= 0.5 * earlier[len(earlier) // 2]:
+            return month
+        if len(present) - position > 3:
+            break  # more than three trailing stubs: take the data as it is
+    return present[-1]
 
 
 def _points(months: Sequence[Mapping[str, Any]], index: int, aggregate: str, years: Sequence[int], value_key: str | None = None) -> tuple[Point, ...]:

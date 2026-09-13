@@ -216,7 +216,14 @@
   statement, built from the same counts as the header badge, says how many
   figures were recomputed, how many were not, and what those carry.
   Notebook: `examples/notebooks/rlm_what_moved.ipynb`. Measures no longer
-  include order numbers, codes or text columns.
+  include order numbers, codes or text columns. The month compared is the
+  latest one with at least half the rows of a typical earlier month; a
+  trailing stub is skipped and named in a note, and an explicit
+  `Comparison` compares it anyway. `SUM(column)` in the instructions makes
+  that column a sum whatever its name suggests, so a `price` line item
+  defined as revenue is summed, not averaged. Every grouping tried is
+  listed under a movement (`Also by ...`), and numeric length, weight and
+  size columns are never groupings.
 - **Monday Morning Brief** (`fabric_rlm.brief`, or `report(source, "monday
   morning brief: revenue by region, orders")`). Name the metrics to track
   and the brief takes the latest complete Monday-to-Sunday week the source
@@ -236,7 +243,17 @@
   list, one section per metric with the weekly chart (the week, the
   expectation and the level shifts marked), the context table, the drivers,
   the pattern, and the queries. What it says about causes is what the
-  history supports and it says so.
+  history supports and it says so. The week briefed is the latest with
+  real coverage: a trailing week with under half the rows of a typical
+  recent week is read as data still arriving, skipped, and named in a note
+  with the `week=` override. Weeks with no rows count as zero rather than
+  disappearing, so a filtered series that stops early reads zero for the
+  briefed week; a series with rows in under 60% of its weeks is called
+  sparse and gets neither a verdict, a level shift nor a trend, since the
+  weekly grain is wrong for it. Co-movement is a rank correlation over
+  week-over-week changes with near-empty base weeks and the thin tail left
+  out, and only the strongest pairs are listed. The fitted trend is the end
+  of the fitted line against its start, a decline capped at -100%.
 - **KPIs from structure** (`fabric_rlm.kpis`, through `brief(source,
   metrics, kpis=[...])`). Nothing assumes customers or sales: an entity is
   any key on the fact that refers to something with repeat activity over
@@ -253,7 +270,12 @@
   Internet vs order quantity where channel = Reseller"``); concentration
   tracks the share the top groups hold and who entered the top. Every KPI
   gets the same context, level shifts, verdict and watch list as a metric,
-  and its definition is printed next to its number.
+  and its definition is printed next to its number. Entities are looked
+  for on every table with a time axis and a key, measures or not (an orders
+  table is where customers appear), and a name that matches nothing is
+  declined with the candidates listed rather than substituted. An id that
+  never recurs across months is said, in the definition, to be an event
+  rather than a lasting entity.
 
 ### Changed
 
