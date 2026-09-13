@@ -298,12 +298,13 @@ def _waterfall_svg(d: "Decomposition", title: str) -> str:
     from .sweep import _period_label
 
     before_name, after_name = _period_label(parent.comparison.before), _period_label(parent.comparison.after)
-    bars: list[tuple[str, float, float, str]] = [(before_name, 0.0, parent.before_value, _PY)]
+    before_short, after_short = (re.sub(r"^week of ", "", n) for n in (before_name, after_name))
+    bars: list[tuple[str, float, float, str]] = [(before_short, 0.0, parent.before_value, _PY)]
     running = parent.before_value
     for name, delta in steps:
         bars.append((name, running, running + delta, _UP if delta > 0 else _DOWN if delta < 0 else _RULE))
         running += delta
-    bars.append((after_name, 0.0, parent.after_value, _AC))
+    bars.append((after_short, 0.0, parent.after_value, _AC))
     width, height, left, right, top, bottom = 640, 290, 60, 12, 44, 60
     extremes = [v for _n, a, b, _c in bars for v in (a, b)]
     low, high = min(extremes), max(extremes)
@@ -373,13 +374,13 @@ def _variance_svg(d: "Decomposition", title: str) -> str:
         parts.append(_bar(level_x, y + 4, before_len, 6, _PY, f"{name}, {before_name}: {_full(g.before_value)}"))
         parts.append(_bar(level_x, y + 12, after_len, 7, _AC, f"{name}, {after_name}: {_full(g.after_value)}"))
         parts.append(f'<text x="{level_x + max(before_len, after_len) + 5:.1f}" y="{y + 18}" font-size="10.5" fill="{_MUTED}">{esc(_compact(g.after_value))}</text>')
-        length = (abs_w / 2 - 4) * abs(g.delta) / max_abs
+        length = (abs_w / 2 - 36) * abs(g.delta) / max_abs  # room for the label inside the panel
         up = g.delta > 0
         parts.append(_bar(abs_zero if up else abs_zero - length, y + 6, length, 12, _UP if up else _DOWN if g.delta < 0 else _RULE, f"{name}: {_signed(g.delta)}", hatch=g.delta < 0))
         anchor_x = abs_zero + length + 4 if up else abs_zero - length - 4
         parts.append(f'<text x="{anchor_x:.1f}" y="{y + 16}" font-size="10.5" font-weight="600" fill="{_UP_TEXT if up else _DOWN_TEXT if g.delta < 0 else _MUTED}" text-anchor="{"start" if up else "end"}">{esc(_signed(g.delta))}</text>')
         if g.pct is not None:
-            pin = (pct_w / 2 - 6) * min(1.0, abs(g.pct) / max_pct)
+            pin = (pct_w / 2 - 34) * min(1.0, abs(g.pct) / max_pct)  # room for the label inside the panel
             px = pct_zero + pin if g.pct > 0 else pct_zero - pin
             color = _UP if g.pct > 0 else _DOWN
             parts.append(f'<line x1="{pct_zero:.1f}" x2="{px:.1f}" y1="{y + 12}" y2="{y + 12}" stroke="{color}" stroke-width="2"/>')
@@ -410,13 +411,13 @@ def _scatter_svg(d: "Decomposition", title: str) -> str:
     def y(value: float) -> float:
         return top + (y_high - value) * (height - top - bottom) / (y_high - y_low or 1.0)
 
-    parts = _open(title, width, height, left=left, subtitle="share of the base (across) against share of the change (up); above the dashed line a group moved more than its size")
+    parts = _open(title, width, height, left=left, subtitle="across: share of the base; up: share of the change")
     _gridlines(parts, [t for t in _nice_ticks(y_low, y_high) if y_low <= t <= y_high], y, left, width - right, lambda t: f"{t:.0%}")
     for tick in [t for t in _nice_ticks(0.0, x_high) if 0 <= t <= x_high]:
         parts.append(f'<text x="{x(tick):.1f}" y="{height - bottom + 15}" font-size="11" fill="{_MUTED}" text-anchor="middle">{tick:.0%}</text>')
     diagonal_end = min(x_high, y_high)
     parts.append(f'<line x1="{x(0):.1f}" y1="{y(0):.1f}" x2="{x(diagonal_end):.1f}" y2="{y(diagonal_end):.1f}" stroke="{_RULE}" stroke-dasharray="4 4"/>')
-    parts.append(f'<text x="{x(diagonal_end) - 4:.1f}" y="{y(diagonal_end) - 6:.1f}" font-size="11" fill="{_MUTED}" text-anchor="end">moved in step with size</text>')
+    parts.append(f'<text x="{x(diagonal_end) - 4:.1f}" y="{y(diagonal_end) + 14:.1f}" font-size="11" fill="{_MUTED}" text-anchor="end">dashed: moved in step with size</text>')
     if y_low < 0:
         parts.append(f'<line x1="{left}" x2="{width - right}" y1="{y(0):.1f}" y2="{y(0):.1f}" stroke="{_RULE}"/>')
     for name, base, change in sorted(points, key=lambda p: -abs(p[2])):
