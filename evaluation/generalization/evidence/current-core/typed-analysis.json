@@ -1,0 +1,4974 @@
+{
+  "batch": {
+    "account_usage_end": 5.593747273,
+    "account_usage_start": 5.264020249,
+    "max_cost_usd": 2.0,
+    "model": "openai/gpt-4.1-mini",
+    "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "repetitions": 3,
+    "runs": [
+      {
+        "gate_passed": false,
+        "output": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\parquet.json",
+        "representation": "parquet",
+        "status": "complete",
+        "trials": 27
+      },
+      {
+        "gate_passed": false,
+        "output": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\lakehouse.json",
+        "representation": "lakehouse",
+        "status": "complete",
+        "trials": 27
+      },
+      {
+        "gate_passed": false,
+        "output": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\csv.json",
+        "representation": "csv",
+        "status": "complete",
+        "trials": 27
+      }
+    ],
+    "scope": "Previously used synthetic regression questions; not a new blinded holdout.",
+    "seed": 20260908,
+    "source_order": [
+      "parquet",
+      "lakehouse",
+      "csv"
+    ],
+    "status": "complete",
+    "versions": {
+      "deltalake": "1.5.0",
+      "dspy": "3.2.1",
+      "duckdb": "1.5.0",
+      "numpy": "2.4.0",
+      "pandas": "2.3.3",
+      "pyarrow": "23.0.1"
+    }
+  },
+  "account_delta_usd": 0.3297270240000003,
+  "sources": {
+    "csv": {
+      "status": "complete",
+      "sha": "d0306e93f573d54a5e624661dd2ceb34005161de",
+      "gate": {
+        "coverage_ok": true,
+        "integrity_ok": true,
+        "passed": false,
+        "questions": {
+          "inventory_available_units|descriptive": {
+            "A": {
+              "answer_correct": 3,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 28928
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 1518
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 0,
+              "grader_outcomes": {
+                "correct": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "None": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 37309
+              },
+              "provider_cost_usd": 0.008587260000000001,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 13.316946800012374,
+              "wall_seconds": 39.38762389999465,
+              "wrong_value_or_identity": 0
+            },
+            "B": {
+              "answer_correct": 3,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 27264
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 1885
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 1
+              },
+              "framing_only_mismatch": 0,
+              "grader_outcomes": {
+                "correct": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "fallback_operation_plan_rejected": 1,
+                "registered_operation": 2
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 34456
+              },
+              "provider_cost_usd": 0.008533008,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 12.776709800004028,
+              "wall_seconds": 37.25140880004619,
+              "wrong_value_or_identity": 0
+            },
+            "C": {
+              "answer_correct": 2,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 15488
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 2646
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 1
+              },
+              "framing_only_mismatch": 0,
+              "grader_outcomes": {
+                "correct": 2,
+                "incomplete": 1
+              },
+              "incomplete_tasks": 1,
+              "knowledge_modes": {
+                "fallback_operation_plan_rejected": 1,
+                "registered_operation": 2
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 25340
+              },
+              "provider_cost_usd": 0.009625968,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "value_identity_correct": 2,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 16.790264100010972,
+              "wall_seconds": 46.434673300012946,
+              "wrong_value_or_identity": 0
+            }
+          },
+          "manufacturing_complete_units|descriptive": {
+            "A": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 19328
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 1063
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 3,
+              "grader_outcomes": {
+                "confident_wrong": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "None": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 23598
+              },
+              "provider_cost_usd": 0.005288184,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 11.658697599981679,
+              "wall_seconds": 34.16058460000204,
+              "wrong_value_or_identity": 0
+            },
+            "B": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 27136
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 1268
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 3,
+              "grader_outcomes": {
+                "confident_wrong": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "registered_operation": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 35076
+              },
+              "provider_cost_usd": 0.007839216,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 12.616708200017456,
+              "wall_seconds": 38.05518680004752,
+              "wrong_value_or_identity": 0
+            },
+            "C": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 25088
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 1479
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 3,
+              "grader_outcomes": {
+                "confident_wrong": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "registered_operation": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 32996
+              },
+              "provider_cost_usd": 0.007958016,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 15.698231099988334,
+              "wall_seconds": 43.72243319998961,
+              "wrong_value_or_identity": 0
+            }
+          },
+          "service_first_response_sla_rate|descriptive": {
+            "A": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 25984
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 2519
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 1,
+              "grader_outcomes": {
+                "confident_wrong": 1,
+                "incomplete": 2
+              },
+              "incomplete_tasks": 2,
+              "knowledge_modes": {
+                "None": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 41637
+              },
+              "provider_cost_usd": 0.012761100000000001,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 1
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 1
+              },
+              "value_identity_correct": 1,
+              "verification_outcomes": {
+                "not_verified": 1,
+                "verified": 2
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 21.15844199998537,
+              "wall_seconds": 66.4026501000044,
+              "wrong_value_or_identity": 0
+            },
+            "B": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 29056
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 3686
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "framing_only_mismatch": 3,
+              "grader_outcomes": {
+                "confident_wrong": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "fallback_operation_plan_rejected": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 39618
+              },
+              "provider_cost_usd": 0.01289772,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 21.312418799992884,
+              "wall_seconds": 70.44462490003207,
+              "wrong_value_or_identity": 0
+            },
+            "C": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 21376
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 3469
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "framing_only_mismatch": 3,
+              "grader_outcomes": {
+                "confident_wrong": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "fallback_operation_plan_rejected": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 30324
+              },
+              "provider_cost_usd": 0.011154528,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 21.435673699976178,
+              "wall_seconds": 61.23808509996161,
+              "wrong_value_or_identity": 0
+            }
+          }
+        },
+        "regressions": [
+          {
+            "arm": "C",
+            "question_id": "inventory_available_units",
+            "reasons": [
+              "answer_correct",
+              "value_identity_correct",
+              "completion"
+            ],
+            "variant": "descriptive"
+          }
+        ],
+        "scope": "Fixed tested questions only. All abstentions are reported as incomplete; completion parity applies to answerable tasks. Expected abstention is graded separately. A parity pass is not an absolute accuracy floor or statistical proof of generalization."
+      },
+      "packages": {
+        "inventory:descriptive": {
+          "B_fingerprint": "060b057a7dd9816a49d82aac40337dd1704c9054bb2c34df8b064315b7adf9ed",
+          "C_fingerprint": "845780f1a04f182c107c30738f10bc05a50e235311035515035ecde8fbf89d27",
+          "active_enriched_lessons": 0,
+          "development_query_evidence": 2,
+          "development_runs": 2,
+          "enrich_seconds": 0.0006378999969456345,
+          "enriched_lessons": 1,
+          "learn_only_lessons": 0,
+          "learn_seconds": 0.0581104000157211
+        },
+        "manufacturing:descriptive": {
+          "B_fingerprint": "d73adbb27be3f772ddf14d213cba9216547a2efd8976638bac795016ca6cecab",
+          "C_fingerprint": "8735cc14f901f85ef977bb3101e06df2abbdadb3eaf40528f797ded9962ed97b",
+          "active_enriched_lessons": 0,
+          "development_query_evidence": 2,
+          "development_runs": 2,
+          "enrich_seconds": 0.0003549999964889139,
+          "enriched_lessons": 1,
+          "learn_only_lessons": 0,
+          "learn_seconds": 0.01050609999219887
+        },
+        "service:descriptive": {
+          "B_fingerprint": "15e95c7538fb096863a6041f2ef7586229883f873cd0c968a11a11910c1e5ee0",
+          "C_fingerprint": "b787ff5ed723e2aa2b53c8ed81b8edc9d771db8b1edb1141a115d75eac16d9b0",
+          "active_enriched_lessons": 0,
+          "development_query_evidence": 2,
+          "development_runs": 2,
+          "enrich_seconds": 0.0002801000082399696,
+          "enriched_lessons": 0,
+          "learn_only_lessons": 0,
+          "learn_seconds": 0.00737979999394156
+        }
+      },
+      "groups": {
+        "arm|A": {
+          "trials": 9,
+          "answerable_tasks": 9,
+          "answer_correct": 3,
+          "strict_correct": 0,
+          "value_identity_correct": 7,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 2,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 4,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 4,
+            "correct": 3,
+            "incomplete": 2
+          },
+          "provider_cost_usd": 0.026636544,
+          "cost_known_trials": 9,
+          "wall_seconds": 139.95085860000108,
+          "wall_median_seconds": 13.316946800012374,
+          "wall_known_trials": 9,
+          "verification_outcomes": {
+            "verified": 8,
+            "not_verified": 1
+          },
+          "knowledge_modes": {
+            "None": 9
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 7,
+            "applicable": 9
+          },
+          "units": {
+            "correct": 7,
+            "applicable": 9
+          },
+          "period": {
+            "correct": 3,
+            "applicable": 9
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 102544,
+            "known_trials": 9
+          },
+          "completion_tokens": {
+            "sum": 5100,
+            "known_trials": 9
+          },
+          "cached_tokens": {
+            "sum": 74240,
+            "known_trials": 9
+          },
+          "source_calls": {
+            "sum": 0,
+            "known_trials": 9
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 9
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 9
+          }
+        },
+        "arm|B": {
+          "trials": 9,
+          "answerable_tasks": 9,
+          "answer_correct": 3,
+          "strict_correct": 0,
+          "value_identity_correct": 9,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 6,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 6,
+            "correct": 3
+          },
+          "provider_cost_usd": 0.029269944,
+          "cost_known_trials": 9,
+          "wall_seconds": 145.75122050012578,
+          "wall_median_seconds": 14.346687700017355,
+          "wall_known_trials": 9,
+          "verification_outcomes": {
+            "verified": 9
+          },
+          "knowledge_modes": {
+            "registered_operation": 5,
+            "fallback_operation_plan_rejected": 4
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 9,
+            "applicable": 9
+          },
+          "units": {
+            "correct": 9,
+            "applicable": 9
+          },
+          "period": {
+            "correct": 3,
+            "applicable": 9
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 109150,
+            "known_trials": 9
+          },
+          "completion_tokens": {
+            "sum": 6839,
+            "known_trials": 9
+          },
+          "cached_tokens": {
+            "sum": 83456,
+            "known_trials": 9
+          },
+          "source_calls": {
+            "sum": 9,
+            "known_trials": 9
+          },
+          "failed_source_calls": {
+            "sum": 4,
+            "known_trials": 9
+          },
+          "operation_selection_lm_calls": {
+            "sum": 9,
+            "known_trials": 9
+          }
+        },
+        "arm|C": {
+          "trials": 9,
+          "answerable_tasks": 9,
+          "answer_correct": 2,
+          "strict_correct": 0,
+          "value_identity_correct": 8,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 1,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 6,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 6,
+            "correct": 2,
+            "incomplete": 1
+          },
+          "provider_cost_usd": 0.028738511999999997,
+          "cost_known_trials": 9,
+          "wall_seconds": 151.39519159996416,
+          "wall_median_seconds": 16.790264100010972,
+          "wall_known_trials": 9,
+          "verification_outcomes": {
+            "verified": 9
+          },
+          "knowledge_modes": {
+            "registered_operation": 5,
+            "fallback_operation_plan_rejected": 4
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 8,
+            "applicable": 9
+          },
+          "units": {
+            "correct": 8,
+            "applicable": 9
+          },
+          "period": {
+            "correct": 2,
+            "applicable": 9
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 88660,
+            "known_trials": 9
+          },
+          "completion_tokens": {
+            "sum": 7594,
+            "known_trials": 9
+          },
+          "cached_tokens": {
+            "sum": 61952,
+            "known_trials": 9
+          },
+          "source_calls": {
+            "sum": 9,
+            "known_trials": 9
+          },
+          "failed_source_calls": {
+            "sum": 4,
+            "known_trials": 9
+          },
+          "operation_selection_lm_calls": {
+            "sum": 9,
+            "known_trials": 9
+          }
+        },
+        "question|inventory_available_units|A": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 3,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 0,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "correct": 3
+          },
+          "provider_cost_usd": 0.008587260000000001,
+          "cost_known_trials": 3,
+          "wall_seconds": 39.38762389999465,
+          "wall_median_seconds": 13.316946800012374,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "None": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 37309,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 1518,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 28928,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 3
+          }
+        },
+        "question|inventory_available_units|B": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 3,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 0,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "correct": 3
+          },
+          "provider_cost_usd": 0.008533008,
+          "cost_known_trials": 3,
+          "wall_seconds": 37.25140880004619,
+          "wall_median_seconds": 12.776709800004028,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "fallback_operation_plan_rejected": 1,
+            "registered_operation": 2
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 34456,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 1885,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 27264,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 1,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|inventory_available_units|C": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 2,
+          "strict_correct": 0,
+          "value_identity_correct": 2,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 1,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 0,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "correct": 2,
+            "incomplete": 1
+          },
+          "provider_cost_usd": 0.009625968,
+          "cost_known_trials": 3,
+          "wall_seconds": 46.434673300012946,
+          "wall_median_seconds": 16.790264100010972,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "fallback_operation_plan_rejected": 1,
+            "registered_operation": 2
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 25340,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 2646,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 15488,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 1,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|manufacturing_complete_units|A": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 3,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 3
+          },
+          "provider_cost_usd": 0.005288184,
+          "cost_known_trials": 3,
+          "wall_seconds": 34.16058460000204,
+          "wall_median_seconds": 11.658697599981679,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "None": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 23598,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 1063,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 19328,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 3
+          }
+        },
+        "question|manufacturing_complete_units|B": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 3,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 3
+          },
+          "provider_cost_usd": 0.007839216,
+          "cost_known_trials": 3,
+          "wall_seconds": 38.05518680004752,
+          "wall_median_seconds": 12.616708200017456,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "registered_operation": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 35076,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 1268,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 27136,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|manufacturing_complete_units|C": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 3,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 3
+          },
+          "provider_cost_usd": 0.007958016,
+          "cost_known_trials": 3,
+          "wall_seconds": 43.72243319998961,
+          "wall_median_seconds": 15.698231099988334,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "registered_operation": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 32996,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 1479,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 25088,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|service_first_response_sla_rate|A": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 1,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 2,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 1,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 1,
+            "incomplete": 2
+          },
+          "provider_cost_usd": 0.012761100000000001,
+          "cost_known_trials": 3,
+          "wall_seconds": 66.4026501000044,
+          "wall_median_seconds": 21.15844199998537,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 2,
+            "not_verified": 1
+          },
+          "knowledge_modes": {
+            "None": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 1,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 1,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 41637,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 2519,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 25984,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 3
+          }
+        },
+        "question|service_first_response_sla_rate|B": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 3,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 3
+          },
+          "provider_cost_usd": 0.01289772,
+          "cost_known_trials": 3,
+          "wall_seconds": 70.44462490003207,
+          "wall_median_seconds": 21.312418799992884,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "fallback_operation_plan_rejected": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 39618,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 3686,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 29056,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|service_first_response_sla_rate|C": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 3,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 3
+          },
+          "provider_cost_usd": 0.011154528,
+          "cost_known_trials": 3,
+          "wall_seconds": 61.23808509996161,
+          "wall_median_seconds": 21.435673699976178,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "fallback_operation_plan_rejected": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 30324,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 3469,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 21376,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        }
+      },
+      "nonfinite_answers": [
+        {
+          "question": "service_first_response_sla_rate",
+          "arm": "A",
+          "repetition": 2,
+          "answer_repr": "{'claims': [{'supported': True, 'text': 'SLA threshold for first response is not defined or missing in sla_policies data.'}], 'entity_id': None, 'grain': 'ticket', 'period': 'unknown', 'status': 'needs_definition', 'units': 'ratio', 'value': nan}",
+          "row_keys": [
+            "answer",
+            "arm",
+            "cache",
+            "domain",
+            "error",
+            "evidence_coverage",
+            "expected",
+            "grade",
+            "max_turns",
+            "metrics",
+            "model",
+            "question_id",
+            "repetition",
+            "timeout",
+            "trace_files",
+            "variant",
+            "workbook_correctness"
+          ]
+        }
+      ]
+    },
+    "parquet": {
+      "status": "complete",
+      "sha": "d0306e93f573d54a5e624661dd2ceb34005161de",
+      "gate": {
+        "coverage_ok": true,
+        "integrity_ok": true,
+        "passed": false,
+        "questions": {
+          "inventory_available_units|descriptive": {
+            "A": {
+              "answer_correct": 2,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 16512
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 2096
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 1,
+              "grader_outcomes": {
+                "confident_wrong": 1,
+                "correct": 2
+              },
+              "incomplete_tasks": 1,
+              "knowledge_modes": {
+                "None": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 25957
+              },
+              "provider_cost_usd": 0.008694972,
+              "serialization_marker_trials": 1,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 15.545455800020136,
+              "wall_seconds": 45.19736890002969,
+              "wrong_value_or_identity": 0
+            },
+            "B": {
+              "answer_correct": 2,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 20992
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 1840
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 1,
+              "grader_outcomes": {
+                "confident_wrong": 1,
+                "correct": 2
+              },
+              "incomplete_tasks": 1,
+              "knowledge_modes": {
+                "registered_operation": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 25838
+              },
+              "provider_cost_usd": 0.006911784000000001,
+              "serialization_marker_trials": 1,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 19.471900099975755,
+              "wall_seconds": 50.51313020000816,
+              "wrong_value_or_identity": 0
+            },
+            "C": {
+              "answer_correct": 3,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 18560
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 1108
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 0,
+              "grader_outcomes": {
+                "correct": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "registered_operation": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 26471
+              },
+              "provider_cost_usd": 0.006725268,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 13.85051590000512,
+              "wall_seconds": 42.54886050001369,
+              "wrong_value_or_identity": 0
+            }
+          },
+          "manufacturing_complete_units|descriptive": {
+            "A": {
+              "answer_correct": 3,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 18432
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 1472
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 0,
+              "grader_outcomes": {
+                "correct": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "None": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 27187
+              },
+              "provider_cost_usd": 0.007623395999999999,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 14.280426200013608,
+              "wall_seconds": 43.651155700033996,
+              "wrong_value_or_identity": 0
+            },
+            "B": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 7936
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 341
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 3,
+              "grader_outcomes": {
+                "confident_wrong": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "registered_operation": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 13224
+              },
+              "provider_cost_usd": 0.0034198559999999998,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 5.73894890001975,
+              "wall_seconds": 28.791261200007284,
+              "wrong_value_or_identity": 0
+            },
+            "C": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 19200
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 1257
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 3,
+              "grader_outcomes": {
+                "confident_wrong": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "registered_operation": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 28587
+              },
+              "provider_cost_usd": 0.00760914,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 12.238260099984473,
+              "wall_seconds": 39.04029819997959,
+              "wrong_value_or_identity": 0
+            }
+          },
+          "service_first_response_sla_rate|descriptive": {
+            "A": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 28672
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 2935
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 2,
+              "grader_outcomes": {
+                "confident_wrong": 2,
+                "incomplete": 1
+              },
+              "incomplete_tasks": 1,
+              "knowledge_modes": {
+                "None": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 34206
+              },
+              "provider_cost_usd": 0.009679031999999999,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "value_identity_correct": 2,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 24.677109000011114,
+              "wall_seconds": 70.26724959997227,
+              "wrong_value_or_identity": 0
+            },
+            "B": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 34432
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 3166
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "framing_only_mismatch": 2,
+              "grader_outcomes": {
+                "confident_wrong": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "fallback_operation_plan_rejected": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 46739
+              },
+              "provider_cost_usd": 0.013297284,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "value_identity_correct": 2,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 24.943199500004994,
+              "wall_seconds": 77.8336835000373,
+              "wrong_value_or_identity": 1
+            },
+            "C": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 30848
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 3904
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "framing_only_mismatch": 2,
+              "grader_outcomes": {
+                "confident_wrong": 2,
+                "incomplete": 1
+              },
+              "incomplete_tasks": 1,
+              "knowledge_modes": {
+                "fallback_operation_plan_rejected": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 42803
+              },
+              "provider_cost_usd": 0.013972068,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 1
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "value_identity_correct": 2,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 26.073456200014334,
+              "wall_seconds": 75.91318689999753,
+              "wrong_value_or_identity": 0
+            }
+          }
+        },
+        "regressions": [
+          {
+            "arm": "B",
+            "question_id": "manufacturing_complete_units",
+            "reasons": [
+              "answer_correct"
+            ],
+            "variant": "descriptive"
+          },
+          {
+            "arm": "C",
+            "question_id": "manufacturing_complete_units",
+            "reasons": [
+              "answer_correct"
+            ],
+            "variant": "descriptive"
+          }
+        ],
+        "scope": "Fixed tested questions only. All abstentions are reported as incomplete; completion parity applies to answerable tasks. Expected abstention is graded separately. A parity pass is not an absolute accuracy floor or statistical proof of generalization."
+      },
+      "packages": {
+        "inventory:descriptive": {
+          "B_fingerprint": "811f83c0926126014e008a6e87e23f16c8b4636fa80774d56e993811de1e33fd",
+          "C_fingerprint": "d34f4b69b74039ce4bf287beb4008c53582058593227695e9a02ab8cccc3f4d3",
+          "active_enriched_lessons": 0,
+          "development_query_evidence": 2,
+          "development_runs": 2,
+          "enrich_seconds": 0.0005255000141914934,
+          "enriched_lessons": 1,
+          "learn_only_lessons": 0,
+          "learn_seconds": 1.1355709999916144
+        },
+        "manufacturing:descriptive": {
+          "B_fingerprint": "adaa5d69894ea124ede11674f3be1c56e41238218c235a41c0772af70f6bb36d",
+          "C_fingerprint": "e73c2acb87d3bd7ce02557c0ed28f39547c698e5d9d0a4e066d4f197d16caf9e",
+          "active_enriched_lessons": 0,
+          "development_query_evidence": 2,
+          "development_runs": 2,
+          "enrich_seconds": 0.0003759999817702919,
+          "enriched_lessons": 1,
+          "learn_only_lessons": 0,
+          "learn_seconds": 0.040104900021106005
+        },
+        "service:descriptive": {
+          "B_fingerprint": "03859d2b8a698777de9906c779425400b4ffd41b1bfd8a197f9e36d8c94f14c4",
+          "C_fingerprint": "f778f1b6b2635de5ca560d399751223f0ccbaf8793460dfa121a0f2243e338f3",
+          "active_enriched_lessons": 0,
+          "development_query_evidence": 2,
+          "development_runs": 2,
+          "enrich_seconds": 0.00019699998665601015,
+          "enriched_lessons": 0,
+          "learn_only_lessons": 0,
+          "learn_seconds": 0.12329340001451783
+        }
+      },
+      "groups": {
+        "arm|A": {
+          "trials": 9,
+          "answerable_tasks": 9,
+          "answer_correct": 5,
+          "strict_correct": 0,
+          "value_identity_correct": 8,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 2,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 3,
+          "serialization_marker_trials": 1,
+          "grader_outcomes": {
+            "correct": 5,
+            "incomplete": 1,
+            "confident_wrong": 3
+          },
+          "provider_cost_usd": 0.0259974,
+          "cost_known_trials": 9,
+          "wall_seconds": 159.11577420003596,
+          "wall_median_seconds": 18.369720400020014,
+          "wall_known_trials": 9,
+          "verification_outcomes": {
+            "verified": 9
+          },
+          "knowledge_modes": {
+            "None": 9
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 8,
+            "applicable": 9
+          },
+          "units": {
+            "correct": 8,
+            "applicable": 9
+          },
+          "period": {
+            "correct": 5,
+            "applicable": 9
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 87350,
+            "known_trials": 9
+          },
+          "completion_tokens": {
+            "sum": 6503,
+            "known_trials": 9
+          },
+          "cached_tokens": {
+            "sum": 63616,
+            "known_trials": 9
+          },
+          "source_calls": {
+            "sum": 0,
+            "known_trials": 9
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 9
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 9
+          }
+        },
+        "arm|B": {
+          "trials": 9,
+          "answerable_tasks": 9,
+          "answer_correct": 2,
+          "strict_correct": 0,
+          "value_identity_correct": 8,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 1,
+          "wrong_value_or_identity": 1,
+          "framing_only_mismatch": 6,
+          "serialization_marker_trials": 1,
+          "grader_outcomes": {
+            "confident_wrong": 7,
+            "correct": 2
+          },
+          "provider_cost_usd": 0.023628924,
+          "cost_known_trials": 9,
+          "wall_seconds": 157.13807490005274,
+          "wall_median_seconds": 19.471900099975755,
+          "wall_known_trials": 9,
+          "verification_outcomes": {
+            "verified": 9
+          },
+          "knowledge_modes": {
+            "registered_operation": 6,
+            "fallback_operation_plan_rejected": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 8,
+            "applicable": 9
+          },
+          "units": {
+            "correct": 9,
+            "applicable": 9
+          },
+          "period": {
+            "correct": 2,
+            "applicable": 9
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 85801,
+            "known_trials": 9
+          },
+          "completion_tokens": {
+            "sum": 5347,
+            "known_trials": 9
+          },
+          "cached_tokens": {
+            "sum": 63360,
+            "known_trials": 9
+          },
+          "source_calls": {
+            "sum": 9,
+            "known_trials": 9
+          },
+          "failed_source_calls": {
+            "sum": 3,
+            "known_trials": 9
+          },
+          "operation_selection_lm_calls": {
+            "sum": 9,
+            "known_trials": 9
+          }
+        },
+        "arm|C": {
+          "trials": 9,
+          "answerable_tasks": 9,
+          "answer_correct": 3,
+          "strict_correct": 0,
+          "value_identity_correct": 8,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 1,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 5,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 5,
+            "incomplete": 1,
+            "correct": 3
+          },
+          "provider_cost_usd": 0.028306476,
+          "cost_known_trials": 9,
+          "wall_seconds": 157.5023455999908,
+          "wall_median_seconds": 14.776700999995228,
+          "wall_known_trials": 9,
+          "verification_outcomes": {
+            "verified": 9
+          },
+          "knowledge_modes": {
+            "registered_operation": 6,
+            "fallback_operation_plan_rejected": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 8,
+            "applicable": 9
+          },
+          "units": {
+            "correct": 7,
+            "applicable": 9
+          },
+          "period": {
+            "correct": 3,
+            "applicable": 9
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 97861,
+            "known_trials": 9
+          },
+          "completion_tokens": {
+            "sum": 6269,
+            "known_trials": 9
+          },
+          "cached_tokens": {
+            "sum": 68608,
+            "known_trials": 9
+          },
+          "source_calls": {
+            "sum": 9,
+            "known_trials": 9
+          },
+          "failed_source_calls": {
+            "sum": 3,
+            "known_trials": 9
+          },
+          "operation_selection_lm_calls": {
+            "sum": 9,
+            "known_trials": 9
+          }
+        },
+        "question|inventory_available_units|A": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 2,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 1,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 1,
+          "serialization_marker_trials": 1,
+          "grader_outcomes": {
+            "correct": 2,
+            "confident_wrong": 1
+          },
+          "provider_cost_usd": 0.008694972,
+          "cost_known_trials": 3,
+          "wall_seconds": 45.19736890002969,
+          "wall_median_seconds": 15.545455800020136,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "None": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 25957,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 2096,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 16512,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 3
+          }
+        },
+        "question|inventory_available_units|B": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 2,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 1,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 1,
+          "serialization_marker_trials": 1,
+          "grader_outcomes": {
+            "confident_wrong": 1,
+            "correct": 2
+          },
+          "provider_cost_usd": 0.006911784000000001,
+          "cost_known_trials": 3,
+          "wall_seconds": 50.51313020000816,
+          "wall_median_seconds": 19.471900099975755,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "registered_operation": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 25838,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 1840,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 20992,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|inventory_available_units|C": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 3,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 0,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "correct": 3
+          },
+          "provider_cost_usd": 0.006725268,
+          "cost_known_trials": 3,
+          "wall_seconds": 42.54886050001369,
+          "wall_median_seconds": 13.85051590000512,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "registered_operation": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 26471,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 1108,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 18560,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|manufacturing_complete_units|A": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 3,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 0,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "correct": 3
+          },
+          "provider_cost_usd": 0.007623395999999999,
+          "cost_known_trials": 3,
+          "wall_seconds": 43.651155700033996,
+          "wall_median_seconds": 14.280426200013608,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "None": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 27187,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 1472,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 18432,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 3
+          }
+        },
+        "question|manufacturing_complete_units|B": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 3,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 3
+          },
+          "provider_cost_usd": 0.0034198559999999998,
+          "cost_known_trials": 3,
+          "wall_seconds": 28.791261200007284,
+          "wall_median_seconds": 5.73894890001975,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "registered_operation": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 13224,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 341,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 7936,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|manufacturing_complete_units|C": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 3,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 3
+          },
+          "provider_cost_usd": 0.00760914,
+          "cost_known_trials": 3,
+          "wall_seconds": 39.04029819997959,
+          "wall_median_seconds": 12.238260099984473,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "registered_operation": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 28587,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 1257,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 19200,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|service_first_response_sla_rate|A": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 2,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 1,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 2,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "incomplete": 1,
+            "confident_wrong": 2
+          },
+          "provider_cost_usd": 0.009679031999999999,
+          "cost_known_trials": 3,
+          "wall_seconds": 70.26724959997227,
+          "wall_median_seconds": 24.677109000011114,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "None": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 34206,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 2935,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 28672,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 3
+          }
+        },
+        "question|service_first_response_sla_rate|B": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 2,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 1,
+          "framing_only_mismatch": 2,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 3
+          },
+          "provider_cost_usd": 0.013297284,
+          "cost_known_trials": 3,
+          "wall_seconds": 77.8336835000373,
+          "wall_median_seconds": 24.943199500004994,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "fallback_operation_plan_rejected": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 46739,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 3166,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 34432,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|service_first_response_sla_rate|C": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 2,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 1,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 2,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "incomplete": 1,
+            "confident_wrong": 2
+          },
+          "provider_cost_usd": 0.013972068,
+          "cost_known_trials": 3,
+          "wall_seconds": 75.91318689999753,
+          "wall_median_seconds": 26.073456200014334,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "fallback_operation_plan_rejected": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 1,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 42803,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 3904,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 30848,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        }
+      },
+      "nonfinite_answers": []
+    },
+    "lakehouse": {
+      "status": "complete",
+      "sha": "d0306e93f573d54a5e624661dd2ceb34005161de",
+      "gate": {
+        "coverage_ok": true,
+        "integrity_ok": true,
+        "passed": false,
+        "questions": {
+          "inventory_available_units|descriptive": {
+            "A": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 32000
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 1552
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 1
+              },
+              "framing_only_mismatch": 0,
+              "grader_outcomes": {
+                "incomplete": 3
+              },
+              "incomplete_tasks": 3,
+              "knowledge_modes": {
+                "None": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 43367
+              },
+              "provider_cost_usd": 0.0101277,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 4
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "value_identity_correct": 0,
+              "verification_outcomes": {
+                "not_verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 13.366640699998243,
+              "wall_seconds": 42.218046900001355,
+              "wrong_value_or_identity": 0
+            },
+            "B": {
+              "answer_correct": 3,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 32128
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 4182
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 1
+              },
+              "framing_only_mismatch": 0,
+              "grader_outcomes": {
+                "correct": 3
+              },
+              "incomplete_tasks": 0,
+              "knowledge_modes": {
+                "fallback_operation_plan_rejected": 1,
+                "registered_operation": 2
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 40742
+              },
+              "provider_cost_usd": 0.013216104000000001,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 11
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 3
+              },
+              "value_identity_correct": 3,
+              "verification_outcomes": {
+                "verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 22.99309030000586,
+              "wall_seconds": 67.53441339998972,
+              "wrong_value_or_identity": 0
+            },
+            "C": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 47360
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 7010
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 0,
+              "grader_outcomes": {
+                "incomplete": 3
+              },
+              "incomplete_tasks": 3,
+              "knowledge_modes": {
+                "registered_operation": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 58001
+              },
+              "provider_cost_usd": 0.020006316,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 7
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "value_identity_correct": 0,
+              "verification_outcomes": {
+                "not_verified": 2,
+                "verified": 1
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 34.94014079999761,
+              "wall_seconds": 93.46980150000309,
+              "wrong_value_or_identity": 0
+            }
+          },
+          "manufacturing_complete_units|descriptive": {
+            "A": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 25344
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 1293
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "framing_only_mismatch": 0,
+              "grader_outcomes": {
+                "incomplete": 3
+              },
+              "incomplete_tasks": 3,
+              "knowledge_modes": {
+                "None": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 33828
+              },
+              "provider_cost_usd": 0.007916832,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 2
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "value_identity_correct": 0,
+              "verification_outcomes": {
+                "not_verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 11.629862700006925,
+              "wall_seconds": 35.48031860002084,
+              "wrong_value_or_identity": 0
+            },
+            "B": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 12160
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 919
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 1
+              },
+              "framing_only_mismatch": 2,
+              "grader_outcomes": {
+                "confident_wrong": 2,
+                "incomplete": 1
+              },
+              "incomplete_tasks": 1,
+              "knowledge_modes": {
+                "fallback_operation_plan_rejected": 1,
+                "registered_operation": 2
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 23137
+              },
+              "provider_cost_usd": 0.007006428000000001,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 4
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "value_identity_correct": 2,
+              "verification_outcomes": {
+                "not_verified": 1,
+                "verified": 2
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 6.191014200012432,
+              "wall_seconds": 37.44698240002617,
+              "wrong_value_or_identity": 0
+            },
+            "C": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 17920
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 807
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 1
+              },
+              "framing_only_mismatch": 2,
+              "grader_outcomes": {
+                "confident_wrong": 2,
+                "incomplete": 1
+              },
+              "incomplete_tasks": 1,
+              "knowledge_modes": {
+                "fallback_operation_plan_rejected": 1,
+                "registered_operation": 2
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 23205
+              },
+              "provider_cost_usd": 0.005145228,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 2
+              },
+              "value_identity_correct": 2,
+              "verification_outcomes": {
+                "not_verified": 1,
+                "verified": 2
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 6.168837200006237,
+              "wall_seconds": 22.858821800007718,
+              "wrong_value_or_identity": 0
+            }
+          },
+          "service_first_response_sla_rate|descriptive": {
+            "A": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 35072
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 5378
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 2
+              },
+              "framing_only_mismatch": 1,
+              "grader_outcomes": {
+                "confident_wrong": 1,
+                "incomplete": 2
+              },
+              "incomplete_tasks": 2,
+              "knowledge_modes": {
+                "None": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 0
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 45089
+              },
+              "provider_cost_usd": 0.015957612,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 9
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 1
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 1
+              },
+              "value_identity_correct": 1,
+              "verification_outcomes": {
+                "not_verified": 2,
+                "verified": 1
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 28.318874899996445,
+              "wall_seconds": 80.21868260001065,
+              "wrong_value_or_identity": 0
+            },
+            "B": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 39296
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 4946
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 5
+              },
+              "framing_only_mismatch": 0,
+              "grader_outcomes": {
+                "incomplete": 3
+              },
+              "incomplete_tasks": 3,
+              "knowledge_modes": {
+                "fallback_operation_plan_rejected": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 49259
+              },
+              "provider_cost_usd": 0.015670116,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 11
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "value_identity_correct": 0,
+              "verification_outcomes": {
+                "not_verified": 3
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 27.503472299984423,
+              "wall_seconds": 82.22663899997133,
+              "wrong_value_or_identity": 0
+            },
+            "C": {
+              "answer_correct": 0,
+              "answerable_tasks": 3,
+              "cached_tokens": {
+                "known_trials": 3,
+                "sum": 38016
+              },
+              "completion_tokens": {
+                "known_trials": 3,
+                "sum": 4563
+              },
+              "cost_known_trials": 3,
+              "entity_id": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "entity_ids": {
+                "applicable": 0,
+                "correct": 0
+              },
+              "expected_abstention_cases": 0,
+              "expected_abstention_detected": 0,
+              "failed_source_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "framing_only_mismatch": 0,
+              "grader_outcomes": {
+                "confident_wrong": 1,
+                "incomplete": 2
+              },
+              "incomplete_tasks": 2,
+              "knowledge_modes": {
+                "fallback_operation_plan_rejected": 3
+              },
+              "lessons_injected_total": 0,
+              "operation_selection_lm_calls": {
+                "known_trials": 3,
+                "sum": 3
+              },
+              "period": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "prompt_tokens": {
+                "known_trials": 3,
+                "sum": 50368
+              },
+              "provider_cost_usd": 0.015882768,
+              "serialization_marker_trials": 0,
+              "source_calls": {
+                "known_trials": 3,
+                "sum": 12
+              },
+              "strict_correct": 0,
+              "trials": 3,
+              "units": {
+                "applicable": 3,
+                "correct": 1
+              },
+              "value": {
+                "applicable": 3,
+                "correct": 0
+              },
+              "value_identity_correct": 0,
+              "verification_outcomes": {
+                "not_verified": 2,
+                "verified": 1
+              },
+              "wall_known_trials": 3,
+              "wall_median_seconds": 29.904195699986303,
+              "wall_seconds": 96.94860259999405,
+              "wrong_value_or_identity": 1
+            }
+          }
+        },
+        "regressions": [
+          {
+            "arm": "B",
+            "question_id": "service_first_response_sla_rate",
+            "reasons": [
+              "value_identity_correct",
+              "completion"
+            ],
+            "variant": "descriptive"
+          },
+          {
+            "arm": "C",
+            "question_id": "service_first_response_sla_rate",
+            "reasons": [
+              "value_identity_correct"
+            ],
+            "variant": "descriptive"
+          }
+        ],
+        "scope": "Fixed tested questions only. All abstentions are reported as incomplete; completion parity applies to answerable tasks. Expected abstention is graded separately. A parity pass is not an absolute accuracy floor or statistical proof of generalization."
+      },
+      "packages": {
+        "inventory:descriptive": {
+          "B_fingerprint": "f70c54368bc2cbabcee554825db634d606e9351156138cc207234683d16ebd3a",
+          "C_fingerprint": "13ec88987da21846ca95019fdb4cde6d962dc9f3a9199b441d6a9e4104961d89",
+          "active_enriched_lessons": 0,
+          "development_query_evidence": 4,
+          "development_runs": 2,
+          "enrich_seconds": 0.000509100005729124,
+          "enriched_lessons": 1,
+          "learn_only_lessons": 0,
+          "learn_seconds": 0.004683099978137761
+        },
+        "manufacturing:descriptive": {
+          "B_fingerprint": "05fec5206ec1959a75f8b580aa8d3929c4fcba306341e72b6cab7d350b9491b4",
+          "C_fingerprint": "b0e43f2abd027a5fbfc4b53b2a3812c72d2c481cb5e23d1f7044ed7a3f33db6a",
+          "active_enriched_lessons": 0,
+          "development_query_evidence": 7,
+          "development_runs": 2,
+          "enrich_seconds": 0.00032770002144388855,
+          "enriched_lessons": 1,
+          "learn_only_lessons": 0,
+          "learn_seconds": 0.0017174999811686575
+        },
+        "service:descriptive": {
+          "B_fingerprint": "07ccfe3aec0ca9356adadab24ce109230f8f34685faa54981aee49be6f0a4aa9",
+          "C_fingerprint": "3ba7e8910f84b6356dbbb72763e40b781186c3b85688f9a34b069c545d9e79b0",
+          "active_enriched_lessons": 0,
+          "development_query_evidence": 5,
+          "development_runs": 2,
+          "enrich_seconds": 0.00021410000044852495,
+          "enriched_lessons": 0,
+          "learn_only_lessons": 0,
+          "learn_seconds": 0.0021370000031311065
+        }
+      },
+      "groups": {
+        "arm|A": {
+          "trials": 9,
+          "answerable_tasks": 9,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 1,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 8,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 1,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "incomplete": 8,
+            "confident_wrong": 1
+          },
+          "provider_cost_usd": 0.034002144,
+          "cost_known_trials": 9,
+          "wall_seconds": 157.91704810003284,
+          "wall_median_seconds": 14.984416199993575,
+          "wall_known_trials": 9,
+          "verification_outcomes": {
+            "not_verified": 8,
+            "verified": 1
+          },
+          "knowledge_modes": {
+            "None": 9
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 1,
+            "applicable": 9
+          },
+          "units": {
+            "correct": 1,
+            "applicable": 9
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 9
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 122284,
+            "known_trials": 9
+          },
+          "completion_tokens": {
+            "sum": 8223,
+            "known_trials": 9
+          },
+          "cached_tokens": {
+            "sum": 92416,
+            "known_trials": 9
+          },
+          "source_calls": {
+            "sum": 15,
+            "known_trials": 9
+          },
+          "failed_source_calls": {
+            "sum": 3,
+            "known_trials": 9
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 9
+          }
+        },
+        "arm|B": {
+          "trials": 9,
+          "answerable_tasks": 9,
+          "answer_correct": 3,
+          "strict_correct": 0,
+          "value_identity_correct": 5,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 4,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 2,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "incomplete": 4,
+            "correct": 3,
+            "confident_wrong": 2
+          },
+          "provider_cost_usd": 0.035892648,
+          "cost_known_trials": 9,
+          "wall_seconds": 187.20803479998722,
+          "wall_median_seconds": 22.99309030000586,
+          "wall_known_trials": 9,
+          "verification_outcomes": {
+            "not_verified": 4,
+            "verified": 5
+          },
+          "knowledge_modes": {
+            "fallback_operation_plan_rejected": 5,
+            "registered_operation": 4
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 5,
+            "applicable": 9
+          },
+          "units": {
+            "correct": 5,
+            "applicable": 9
+          },
+          "period": {
+            "correct": 3,
+            "applicable": 9
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 113138,
+            "known_trials": 9
+          },
+          "completion_tokens": {
+            "sum": 10047,
+            "known_trials": 9
+          },
+          "cached_tokens": {
+            "sum": 83584,
+            "known_trials": 9
+          },
+          "source_calls": {
+            "sum": 26,
+            "known_trials": 9
+          },
+          "failed_source_calls": {
+            "sum": 7,
+            "known_trials": 9
+          },
+          "operation_selection_lm_calls": {
+            "sum": 9,
+            "known_trials": 9
+          }
+        },
+        "arm|C": {
+          "trials": 9,
+          "answerable_tasks": 9,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 2,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 6,
+          "wrong_value_or_identity": 1,
+          "framing_only_mismatch": 2,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 3,
+            "incomplete": 6
+          },
+          "provider_cost_usd": 0.041034312,
+          "cost_known_trials": 9,
+          "wall_seconds": 213.27722590000485,
+          "wall_median_seconds": 23.1296607000113,
+          "wall_known_trials": 9,
+          "verification_outcomes": {
+            "verified": 4,
+            "not_verified": 5
+          },
+          "knowledge_modes": {
+            "registered_operation": 5,
+            "fallback_operation_plan_rejected": 4
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 2,
+            "applicable": 9
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 9
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 9
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 131574,
+            "known_trials": 9
+          },
+          "completion_tokens": {
+            "sum": 12380,
+            "known_trials": 9
+          },
+          "cached_tokens": {
+            "sum": 103296,
+            "known_trials": 9
+          },
+          "source_calls": {
+            "sum": 22,
+            "known_trials": 9
+          },
+          "failed_source_calls": {
+            "sum": 4,
+            "known_trials": 9
+          },
+          "operation_selection_lm_calls": {
+            "sum": 9,
+            "known_trials": 9
+          }
+        },
+        "question|inventory_available_units|A": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 0,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 3,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 0,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "incomplete": 3
+          },
+          "provider_cost_usd": 0.0101277,
+          "cost_known_trials": 3,
+          "wall_seconds": 42.218046900001355,
+          "wall_median_seconds": 13.366640699998243,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "not_verified": 3
+          },
+          "knowledge_modes": {
+            "None": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 43367,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 1552,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 32000,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 4,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 1,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 3
+          }
+        },
+        "question|inventory_available_units|B": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 3,
+          "strict_correct": 0,
+          "value_identity_correct": 3,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 0,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 0,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "correct": 3
+          },
+          "provider_cost_usd": 0.013216104000000001,
+          "cost_known_trials": 3,
+          "wall_seconds": 67.53441339998972,
+          "wall_median_seconds": 22.99309030000586,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 3
+          },
+          "knowledge_modes": {
+            "registered_operation": 2,
+            "fallback_operation_plan_rejected": 1
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 3,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 40742,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 4182,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 32128,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 11,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 1,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|inventory_available_units|C": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 0,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 3,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 0,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "incomplete": 3
+          },
+          "provider_cost_usd": 0.020006316,
+          "cost_known_trials": 3,
+          "wall_seconds": 93.46980150000309,
+          "wall_median_seconds": 34.94014079999761,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "not_verified": 2,
+            "verified": 1
+          },
+          "knowledge_modes": {
+            "registered_operation": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 58001,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 7010,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 47360,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 7,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|manufacturing_complete_units|A": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 0,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 3,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 0,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "incomplete": 3
+          },
+          "provider_cost_usd": 0.007916832,
+          "cost_known_trials": 3,
+          "wall_seconds": 35.48031860002084,
+          "wall_median_seconds": 11.629862700006925,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "not_verified": 3
+          },
+          "knowledge_modes": {
+            "None": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 33828,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 1293,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 25344,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 2,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 0,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 3
+          }
+        },
+        "question|manufacturing_complete_units|B": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 2,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 1,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 2,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "incomplete": 1,
+            "confident_wrong": 2
+          },
+          "provider_cost_usd": 0.007006428000000001,
+          "cost_known_trials": 3,
+          "wall_seconds": 37.44698240002617,
+          "wall_median_seconds": 6.191014200012432,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "not_verified": 1,
+            "verified": 2
+          },
+          "knowledge_modes": {
+            "fallback_operation_plan_rejected": 1,
+            "registered_operation": 2
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 23137,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 919,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 12160,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 4,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 1,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|manufacturing_complete_units|C": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 2,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 1,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 2,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "confident_wrong": 2,
+            "incomplete": 1
+          },
+          "provider_cost_usd": 0.005145228,
+          "cost_known_trials": 3,
+          "wall_seconds": 22.858821800007718,
+          "wall_median_seconds": 6.168837200006237,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "verified": 2,
+            "not_verified": 1
+          },
+          "knowledge_modes": {
+            "registered_operation": 2,
+            "fallback_operation_plan_rejected": 1
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 2,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 23205,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 807,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 17920,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 1,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|service_first_response_sla_rate|A": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 1,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 2,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 1,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "incomplete": 2,
+            "confident_wrong": 1
+          },
+          "provider_cost_usd": 0.015957612,
+          "cost_known_trials": 3,
+          "wall_seconds": 80.21868260001065,
+          "wall_median_seconds": 28.318874899996445,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "not_verified": 2,
+            "verified": 1
+          },
+          "knowledge_modes": {
+            "None": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 1,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 1,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 45089,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 5378,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 35072,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 9,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 2,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 0,
+            "known_trials": 3
+          }
+        },
+        "question|service_first_response_sla_rate|B": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 0,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 3,
+          "wrong_value_or_identity": 0,
+          "framing_only_mismatch": 0,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "incomplete": 3
+          },
+          "provider_cost_usd": 0.015670116,
+          "cost_known_trials": 3,
+          "wall_seconds": 82.22663899997133,
+          "wall_median_seconds": 27.503472299984423,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "not_verified": 3
+          },
+          "knowledge_modes": {
+            "fallback_operation_plan_rejected": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 49259,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 4946,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 39296,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 11,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 5,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        },
+        "question|service_first_response_sla_rate|C": {
+          "trials": 3,
+          "answerable_tasks": 3,
+          "answer_correct": 0,
+          "strict_correct": 0,
+          "value_identity_correct": 0,
+          "expected_abstention_cases": 0,
+          "expected_abstention_detected": 0,
+          "incomplete_tasks": 2,
+          "wrong_value_or_identity": 1,
+          "framing_only_mismatch": 0,
+          "serialization_marker_trials": 0,
+          "grader_outcomes": {
+            "incomplete": 2,
+            "confident_wrong": 1
+          },
+          "provider_cost_usd": 0.015882768,
+          "cost_known_trials": 3,
+          "wall_seconds": 96.94860259999405,
+          "wall_median_seconds": 29.904195699986303,
+          "wall_known_trials": 3,
+          "verification_outcomes": {
+            "not_verified": 2,
+            "verified": 1
+          },
+          "knowledge_modes": {
+            "fallback_operation_plan_rejected": 3
+          },
+          "lessons_injected_total": 0,
+          "value": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "units": {
+            "correct": 1,
+            "applicable": 3
+          },
+          "period": {
+            "correct": 0,
+            "applicable": 3
+          },
+          "entity_id": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "entity_ids": {
+            "correct": 0,
+            "applicable": 0
+          },
+          "prompt_tokens": {
+            "sum": 50368,
+            "known_trials": 3
+          },
+          "completion_tokens": {
+            "sum": 4563,
+            "known_trials": 3
+          },
+          "cached_tokens": {
+            "sum": 38016,
+            "known_trials": 3
+          },
+          "source_calls": {
+            "sum": 12,
+            "known_trials": 3
+          },
+          "failed_source_calls": {
+            "sum": 3,
+            "known_trials": 3
+          },
+          "operation_selection_lm_calls": {
+            "sum": 3,
+            "known_trials": 3
+          }
+        }
+      },
+      "nonfinite_answers": []
+    }
+  },
+  "overall": {
+    "trials": 81,
+    "answerable_tasks": 81,
+    "answer_correct": 21,
+    "strict_correct": 0,
+    "value_identity_correct": 56,
+    "expected_abstention_cases": 0,
+    "expected_abstention_detected": 0,
+    "incomplete_tasks": 25,
+    "wrong_value_or_identity": 2,
+    "framing_only_mismatch": 35,
+    "serialization_marker_trials": 2,
+    "grader_outcomes": {
+      "confident_wrong": 37,
+      "correct": 21,
+      "incomplete": 23
+    },
+    "provider_cost_usd": 0.27350690400000005,
+    "cost_known_trials": 81,
+    "wall_seconds": 1469.2557742001954,
+    "wall_median_seconds": 16.790264100010972,
+    "wall_known_trials": 81,
+    "verification_outcomes": {
+      "verified": 63,
+      "not_verified": 18
+    },
+    "knowledge_modes": {
+      "registered_operation": 31,
+      "None": 27,
+      "fallback_operation_plan_rejected": 23
+    },
+    "lessons_injected_total": 0,
+    "value": {
+      "correct": 56,
+      "applicable": 81
+    },
+    "units": {
+      "correct": 57,
+      "applicable": 81
+    },
+    "period": {
+      "correct": 21,
+      "applicable": 81
+    },
+    "entity_id": {
+      "correct": 0,
+      "applicable": 0
+    },
+    "entity_ids": {
+      "correct": 0,
+      "applicable": 0
+    },
+    "prompt_tokens": {
+      "sum": 938362,
+      "known_trials": 81
+    },
+    "completion_tokens": {
+      "sum": 68302,
+      "known_trials": 81
+    },
+    "cached_tokens": {
+      "sum": 694528,
+      "known_trials": 81
+    },
+    "source_calls": {
+      "sum": 99,
+      "known_trials": 81
+    },
+    "failed_source_calls": {
+      "sum": 28,
+      "known_trials": 81
+    },
+    "operation_selection_lm_calls": {
+      "sum": 54,
+      "known_trials": 81
+    }
+  }
+}

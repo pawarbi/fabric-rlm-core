@@ -1,0 +1,152 @@
+[
+  {
+    "source": "csv",
+    "question": "inventory_available_units",
+    "arm": "C",
+    "repetition": 2,
+    "answer_repr": "{'claims': [{'supported': True, 'text': 'At the latest snapshot 2026-03-31, total available units (on_hand_units - allocated_units) summed across all products and warehouses is 186 units.'}], 'entity_ids': {'product_ids': ['P-001', 'P-002'], 'warehouse_ids': ['W-01', 'W-02']}, 'grain': 'latest inventory snapshot, product & warehouse', 'period': '2026-03-31', 'status': 'ready', 'units': 'units', 'value': 186}",
+    "checks": {},
+    "error": null,
+    "trace_files": {
+      "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\csv.artifacts\\traces\\inventory_available_units__descriptive__r2__C.provider.json",
+      "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\csv.artifacts\\traces\\inventory_available_units__descriptive__r2__C.trajectory.jsonl"
+    }
+  },
+  {
+    "source": "csv",
+    "question": "service_first_response_sla_rate",
+    "arm": "A",
+    "repetition": 2,
+    "answer_repr": "{'claims': [{'supported': True, 'text': 'SLA threshold for first response is not defined or missing in sla_policies data.'}], 'entity_id': None, 'grain': 'ticket', 'period': 'unknown', 'status': 'needs_definition', 'units': 'ratio', 'value': nan}",
+    "checks": {},
+    "error": null,
+    "trace_files": {
+      "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\csv.artifacts\\traces\\service_first_response_sla_rate__descriptive__r2__A.provider.json",
+      "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\csv.artifacts\\traces\\service_first_response_sla_rate__descriptive__r2__A.trajectory.jsonl"
+    }
+  },
+  {
+    "source": "parquet",
+    "question": "manufacturing_complete_units",
+    "arm": "A",
+    "repetition": 0,
+    "answer_repr": "{'claims': [{'supported': True, 'text': 'Total produced units include only production rows from complete reporting periods with matching defects.'}], 'entity_ids': [{'line_id': 'LN-A', 'product_id': 'SKU-1'}, {'line_id': 'LN-B', 'product_id': 'SKU-2'}], 'grain': 'reporting_period, line_id, product_id', 'period': ['2026-01'], 'status': 'success', 'units': 'units', 'value': 1800}",
+    "checks": {
+      "period": true,
+      "units": true,
+      "value": true
+    },
+    "error": null,
+    "trace_files": {
+      "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\parquet.artifacts\\traces\\manufacturing_complete_units__descriptive__r0__A.provider.json",
+      "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\parquet.artifacts\\traces\\manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl"
+    }
+  },
+  {
+    "source": "parquet",
+    "question": "manufacturing_complete_units",
+    "arm": "B",
+    "repetition": 0,
+    "answer_repr": "{'claims': [{'supported': True, 'text': 'Total produced units in complete reporting periods, filtered where reporting_complete is true and matching defects.'}], 'entity_id': None, 'grain': 'tabular_aggregate_result', 'period': None, 'status': 'success', 'units': 'units', 'value': 1800.0}",
+    "checks": {
+      "period": false,
+      "units": true,
+      "value": true
+    },
+    "error": null,
+    "trace_files": {
+      "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\parquet.artifacts\\traces\\manufacturing_complete_units__descriptive__r0__B.provider.json",
+      "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\parquet.artifacts\\traces\\manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl"
+    }
+  },
+  {
+    "source": "parquet",
+    "question": "inventory_available_units",
+    "arm": "B",
+    "repetition": 0,
+    "answer_repr": "{'claims': [{'supported': ['inventory_snapshots'], 'text': 'Available units at the latest snapshot date 2026-03-31 is 186 units, calculated as sum of on_hand_units minus allocated_units.'}], 'entity_ids': {'snapshot_date': {'__repr__': 'datetime.date(2026, 3, 31)', '__serializable__': False, '__type__': 'date'}}, 'grain': 'latest snapshot product warehouse', 'period': {'__repr__': 'datetime.date(2026, 3, 31)', '__serializable__': False, '__type__': 'date'}, 'status': 'ok', 'units': 'units', 'value': 186}",
+    "checks": {
+      "period": false,
+      "units": true,
+      "value": true
+    },
+    "error": null,
+    "trace_files": {
+      "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\parquet.artifacts\\traces\\inventory_available_units__descriptive__r0__B.provider.json",
+      "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\parquet.artifacts\\traces\\inventory_available_units__descriptive__r0__B.trajectory.jsonl"
+    }
+  },
+  {
+    "source": "parquet",
+    "question": "service_first_response_sla_rate",
+    "arm": "B",
+    "repetition": 1,
+    "answer_repr": "{'claims': [{'supported': True, 'text': '100.00% of tickets met their first-response SLA threshold based on available ticket and SLA policy data.'}], 'entity_ids': ['T-001', 'T-002', 'T-003'], 'grain': 'ticket', 'period': 'unknown', 'status': 'success', 'units': 'ratio', 'value': 1.0}",
+    "checks": {
+      "period": false,
+      "units": true,
+      "value": false
+    },
+    "error": null,
+    "trace_files": {
+      "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\parquet.artifacts\\traces\\service_first_response_sla_rate__descriptive__r1__B.provider.json",
+      "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\parquet.artifacts\\traces\\service_first_response_sla_rate__descriptive__r1__B.trajectory.jsonl"
+    }
+  },
+  {
+    "source": "parquet",
+    "question": "inventory_available_units",
+    "arm": "A",
+    "repetition": 2,
+    "answer_repr": "{'claims': [{'supported': [{'allocated_units': 20, 'available_units': 80, 'on_hand_units': 100, 'product_id': 'P-001', 'snapshot_date': {'__repr__': 'datetime.date(2026, 3, 31)', '__serializable__': False, '__type__': 'date'}, 'warehouse_id': 'W-01'}, {'allocated_units': 10, 'available_units': 70, 'on_hand_units': 80, 'product_id': 'P-002', 'snapshot_date': {'__repr__': 'datetime.date(2026, 3, 31)', '__serializable__': False, '__type__': 'date'}, 'warehouse_id': 'W-01'}, {'allocated_units': 14, 'available_units': 36, 'on_hand_units': 50, 'product_id': 'P-001', 'snapshot_date': {'__repr__': 'datetime.date(2026, 3, 31)', '__serializable__': False, '__type__': 'date'}, 'warehouse_id': 'W-02'}], 'text': 'At latest snapshot date 2026-03-31, total available units is sum(on_hand_units minus allocated_units) = 186.'}], 'entity_ids': {'product_id': ['P-001', 'P-002'], 'warehouse_id': ['W-01', 'W-02']}, 'grain': 'inventory_snapshot at product_id, warehouse_id level', 'period': {'__repr__': 'datetime.date(2026, 3, 31)', '__serializable__': False, '__type__': 'date'}, 'status': 'success', 'units': 'units', 'value': 186}",
+    "checks": {
+      "period": false,
+      "units": true,
+      "value": true
+    },
+    "error": null,
+    "trace_files": {
+      "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\parquet.artifacts\\traces\\inventory_available_units__descriptive__r2__A.provider.json",
+      "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\parquet.artifacts\\traces\\inventory_available_units__descriptive__r2__A.trajectory.jsonl"
+    }
+  },
+  {
+    "source": "lakehouse",
+    "question": "manufacturing_complete_units",
+    "arm": "A",
+    "repetition": 0,
+    "answer_repr": "{'status': 'failed'}",
+    "checks": {},
+    "error": null,
+    "trace_files": {
+      "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\lakehouse.artifacts\\traces\\manufacturing_complete_units__descriptive__r0__A.provider.json",
+      "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\lakehouse.artifacts\\traces\\manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl"
+    }
+  },
+  {
+    "source": "lakehouse",
+    "question": "service_first_response_sla_rate",
+    "arm": "C",
+    "repetition": 0,
+    "answer_repr": "{'status': 'failed'}",
+    "checks": {},
+    "error": null,
+    "trace_files": {
+      "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\lakehouse.artifacts\\traces\\service_first_response_sla_rate__descriptive__r0__C.provider.json",
+      "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\lakehouse.artifacts\\traces\\service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl"
+    }
+  },
+  {
+    "source": "lakehouse",
+    "question": "inventory_available_units",
+    "arm": "C",
+    "repetition": 0,
+    "answer_repr": "{'status': 'failed'}",
+    "checks": {},
+    "error": null,
+    "trace_files": {
+      "provider_history": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\lakehouse.artifacts\\traces\\inventory_available_units__descriptive__r0__C.provider.json",
+      "trajectory": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke\\lakehouse.artifacts\\traces\\inventory_available_units__descriptive__r0__C.trajectory.jsonl"
+    }
+  }
+]

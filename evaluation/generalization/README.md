@@ -6,6 +6,11 @@ are on `fix/knowledge-nonregression`; this separate evaluation branch
 freezes that implementation and its bundled skills. Each run records the
 actual evaluation checkout SHA and per-file hashes, not just this core SHA.
 
+**Completed results:** the corrected 81-trial smoke at `d0306e9` failed all
+three per-source nonregression gates. See [CURRENT_AUDIT.md](CURRENT_AUDIT.md)
+for the per-question results, protocol limitations, proposed next mechanisms,
+exact reproduction and independently preserved raw archives.
+
 The fixture generator, independent Python references, grader and trace
 controls are reused from `277cd3b782bec4290bff6034a586faacedd0dc86`.
 These are **regression questions previously used in development/evaluation,

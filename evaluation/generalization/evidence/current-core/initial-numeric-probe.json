@@ -1,0 +1,16 @@
+{
+  "sha": "f99c742f38fd33eba14364567caad4a25aa51fde",
+  "scope": "deterministic scripted-model serializer probe, not a live accuracy trial",
+  "submitted": true,
+  "answer": {
+    "answer": {
+      "integer": {
+        "__type__": "int64",
+        "__repr__": "np.int64(7)",
+        "__serializable__": false
+      },
+      "number": 2.5
+    }
+  },
+  "failure_reason": null
+}

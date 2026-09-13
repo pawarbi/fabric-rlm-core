@@ -1,0 +1,2160 @@
+{
+  "scope": "Exact original bytes; archive roots map absolute trace references to portable members.",
+  "secret_scan": {
+    "patterns": [
+      "openrouter_key",
+      "github_token",
+      "jwt",
+      "credential_assignment"
+    ],
+    "active_key_checked": true,
+    "findings": 0
+  },
+  "archives": [
+    {
+      "file": "initial-f99c742-raw.zip",
+      "source_root": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-current-smoke",
+      "file_count": 136,
+      "bytes": 664130,
+      "sha256": "5138fa2f6a31a92c7850a165bf610411dfbb75854d885c62e90b80e487f5cd22",
+      "entries": {
+        "batch.json": {
+          "sha256": "44c78597f08e2ac5991c2f77970ce09bd661da1f918854ecb18111df68a1b491",
+          "bytes": 1489
+        },
+        "csv.artifacts/core-freeze.json": {
+          "sha256": "004b13e1fced28ebead4bf615d0eb4ae2191903987a1057aa4ec1b984b4411d3",
+          "bytes": 8339
+        },
+        "csv.artifacts/packages/inventory__descriptive__B.json": {
+          "sha256": "7ac882a6e571b0f131de8a46200d29c172533a7ebfb89a33ee8954fbf46cfeb0",
+          "bytes": 15031
+        },
+        "csv.artifacts/packages/inventory__descriptive__C.json": {
+          "sha256": "67c30f41887826f059eddd981edd3b8926711919b778eda0c9644fda8aa09c6f",
+          "bytes": 20812
+        },
+        "csv.artifacts/packages/manufacturing__descriptive__B.json": {
+          "sha256": "14103f4704861d4055981c84ecfd4051207f1f4d0350eff39d3bf12d4fc6303e",
+          "bytes": 7383
+        },
+        "csv.artifacts/packages/manufacturing__descriptive__C.json": {
+          "sha256": "706b832a97e034da9b1cf061f9a31776f373757c146c83aefb2128d7c159d15f",
+          "bytes": 13157
+        },
+        "csv.artifacts/packages/service__descriptive__B.json": {
+          "sha256": "507fc7a8ce654c5848423a89f8f64bc95fcd40da45a110bb0a4844021d22dfea",
+          "bytes": 10697
+        },
+        "csv.artifacts/packages/service__descriptive__C.json": {
+          "sha256": "c2995b365895f7d438abe05a53d246d345c434d9e990ec10f5528f2e59dd1285",
+          "bytes": 16277
+        },
+        "csv.artifacts/provenance.json": {
+          "sha256": "c673ea0908bd5b94a791a3a15e7820dace338233eea55c3df03f4f6400198871",
+          "bytes": 21176
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__0.metrics.json": {
+          "sha256": "623149889b24512591ac05b59daa02e6f5dbfa19d8d5f9bdbb3cb6ed497224e6",
+          "bytes": 1270
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__0.provider.json": {
+          "sha256": "c984c1d91519008ec9d58a62f439e0062681da5624629db26b24e38bed5a7a44",
+          "bytes": 62413
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__0.trajectory.jsonl": {
+          "sha256": "5171ac6823c8ef479048b799f930aa342b084d801a99ad133ea33131ea7347ad",
+          "bytes": 16752
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__1.metrics.json": {
+          "sha256": "f130f73650cda529b1e1dd991df12e748551614347f4906890b59cdbf1f60dc5",
+          "bytes": 1262
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__1.provider.json": {
+          "sha256": "924ae3b32e0e806702fc876f7c6a147354e10011e80ac845b6533ce6439b52d6",
+          "bytes": 46709
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__1.trajectory.jsonl": {
+          "sha256": "557650bc3b4633f1a1b7257dc29a285b4ef16b8c2cbfedaef10fe7cf849d3db1",
+          "bytes": 13149
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__0.metrics.json": {
+          "sha256": "d8084ab8c2335b154131ab635fad46c3e749856becb1642a75dfe0ccf45e958c",
+          "bytes": 1281
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__0.provider.json": {
+          "sha256": "d04639bf40eb195814c7310b799706f759d0dcb54930740b683f0a7df0c6518a",
+          "bytes": 75882
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__0.trajectory.jsonl": {
+          "sha256": "b787324547af352324c0cf65dafee5fc25c1d1b6e1d777632c96b5cbd2c5607d",
+          "bytes": 26186
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__1.metrics.json": {
+          "sha256": "fd272fda7d9b139ca24cb8ba509968303a2879bf11a7e9627f83ee9e992da249",
+          "bytes": 1217
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__1.provider.json": {
+          "sha256": "08d5d1759bc042a6ff4341ffb212606bf92a5a25e7c1f47ea6ff4bcf3a7c8da0",
+          "bytes": 73781
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__1.trajectory.jsonl": {
+          "sha256": "b79024ab1cbbe4a128405f9cd57f562ffd4438c38807d97acebfde85482d282f",
+          "bytes": 23205
+        },
+        "csv.artifacts/traces/development__service__descriptive__0.metrics.json": {
+          "sha256": "9bf219773dd9c7560f2db5998cd2efb74ce64c1de02e150e6de5d48040ed0038",
+          "bytes": 1265
+        },
+        "csv.artifacts/traces/development__service__descriptive__0.provider.json": {
+          "sha256": "777c7e0630e433317b49afc74682f824199f79593459190f01bd1eda6221852e",
+          "bytes": 45527
+        },
+        "csv.artifacts/traces/development__service__descriptive__0.trajectory.jsonl": {
+          "sha256": "cfb4f6e3415e959a466c2611a954e81a5e0441ba6b751985145ed730e13f573f",
+          "bytes": 13310
+        },
+        "csv.artifacts/traces/development__service__descriptive__1.metrics.json": {
+          "sha256": "73b50b09ba93a3420e7884e9d71fe192741943ec8518017970b708f93ce842d7",
+          "bytes": 1258
+        },
+        "csv.artifacts/traces/development__service__descriptive__1.provider.json": {
+          "sha256": "c8d6a36559e10c945b89ad17b02ec22f08a87399077e5a0894254bb61e203bc5",
+          "bytes": 31882
+        },
+        "csv.artifacts/traces/development__service__descriptive__1.trajectory.jsonl": {
+          "sha256": "30befeb141fc65d04a78dbb12f4f28f39da450dae920689b7ec2c036e4a4d4a2",
+          "bytes": 10737
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+          "sha256": "436af2b75853aeea30f61c16b73d06dcb37f84af8741ce0b9f66f968c06b3193",
+          "bytes": 91689
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "bd885552c2ad586b99fc025d168c60eda712319917521834b1debe03442989ad",
+          "bytes": 20861
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+          "sha256": "01be4b505567cb6833d2d3063980bc979c6e0ca6e3928941ae9507f286e422a7",
+          "bytes": 138132
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "4e2d794f06910cfbe7acc1f44e9f0e9f45872d06629ffa01a79e06b0b5ce1a26",
+          "bytes": 32964
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+          "sha256": "9f4bd1fbc270f6e19c42b660e01223c6aa3c2d4f84b2343d779aa33a134ea85e",
+          "bytes": 127843
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "ff027e3881951d44a13bdc83bb7ce28d51d823ed8f072ff5baedb4e8b8b79beb",
+          "bytes": 29518
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+          "sha256": "d69a1bfa3450099df1a842401fd95f49a3957414fea60c54b66f36d7a9f8cd62",
+          "bytes": 66389
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "12a0245246371d257333dd9a0ef05c2da6631c4590a84ca927106332f4e7b4b6",
+          "bytes": 19718
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+          "sha256": "6df67ad1ef34ded9ddce79e5e4a244009c84ed4759529056127c78d239289df5",
+          "bytes": 27429
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "8c99b780466e48bf247e5feafac6dc3a7c34caa8aac9506d41525bb8bd3e2f06",
+          "bytes": 8567
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+          "sha256": "5815c12d79c9cbbcbecc841b8bdaf0ebabf5283cd297b3f95046ec9e42f72be2",
+          "bytes": 28969
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "198afcaae500272c06f1bbd77d3f2649e775600731306e5dd83c6555864258d9",
+          "bytes": 8925
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+          "sha256": "bb10ff09a5593b0ddeff912e163d8d300ca9b74d571929efd55cfd454a01a56d",
+          "bytes": 37032
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "10017dfe573b30b18f0aa9b59c0ef03f66f13a007259a680341221c9a254f5f8",
+          "bytes": 13152
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+          "sha256": "3e1eefe96284c363fb3df8249eab37c3c0c5d667b89abc2f4be1ab669f0dbb14",
+          "bytes": 89333
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "87d15d72d429c76bef61f69b41f134112c307085491051a60ccdf9780bcb8081",
+          "bytes": 28106
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+          "sha256": "6f7352682046ed6f9400ef6e5e1ba59b0afd77c07ae3b94a9752231a16724898",
+          "bytes": 88683
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "b905e6b34cc93f2b2f100056934cb049fc4438d686dd09d66047378ee3c91a5b",
+          "bytes": 25344
+        },
+        "csv.json": {
+          "sha256": "11cb6a752186cff2b11c0ee0031c681bc8a77145dc873e4adc55dc2580ed72bf",
+          "bytes": 80970
+        },
+        "lakehouse.artifacts/core-freeze.json": {
+          "sha256": "004b13e1fced28ebead4bf615d0eb4ae2191903987a1057aa4ec1b984b4411d3",
+          "bytes": 8339
+        },
+        "lakehouse.artifacts/packages/inventory__descriptive__B.json": {
+          "sha256": "b15e1535519f434b9cad1616dab49a2e5ebe7218678f9d396f608a94c4f2a33f",
+          "bytes": 16409
+        },
+        "lakehouse.artifacts/packages/inventory__descriptive__C.json": {
+          "sha256": "060ebb803512957fca1c97c757de7c44c3c1deff59a99b77309d75fc9bf25923",
+          "bytes": 23187
+        },
+        "lakehouse.artifacts/packages/manufacturing__descriptive__B.json": {
+          "sha256": "e954b707560663d4bdd44ee300303c2747563ac2336ecef707a6da1bfeba69a3",
+          "bytes": 8040
+        },
+        "lakehouse.artifacts/packages/manufacturing__descriptive__C.json": {
+          "sha256": "c0e35c0aa1274395e6c5a9a80ed24e0f1e7f4ee9791958ead6fdcf9e5c504f21",
+          "bytes": 14694
+        },
+        "lakehouse.artifacts/packages/service__descriptive__B.json": {
+          "sha256": "22ee621fc2fc5b4e31b5d34af42754f6db9b1996b95cdf68be2d3b6249f0d5e3",
+          "bytes": 11731
+        },
+        "lakehouse.artifacts/packages/service__descriptive__C.json": {
+          "sha256": "ac08a9fe49b3bf9b1861055ec44b2057f76e156ed00923b0a1e17b874a6f4144",
+          "bytes": 18159
+        },
+        "lakehouse.artifacts/provenance.json": {
+          "sha256": "9ad09ec0aac5619806e9bb5c8cfd164c45d2c767dd77699743c95916bae10811",
+          "bytes": 21181
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__0.metrics.json": {
+          "sha256": "bdb6de6976edd56135ef0351c5e97602df50bc04b8245b70a6b6f97f7c360be7",
+          "bytes": 1284
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__0.provider.json": {
+          "sha256": "b935e2a0aaab5a28a4a35369f3375d280fa8ffad6ede12b96ab96ed8aa446702",
+          "bytes": 37954
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__0.trajectory.jsonl": {
+          "sha256": "8a7e02197dfb0b75a41886b2a19f8a1f07610a33dbcd3d1065b39f4f7452b0e5",
+          "bytes": 14862
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__1.metrics.json": {
+          "sha256": "004e41bdd57446969dc28d12d114abedda50eb365029d6186c6c549053a5ad2b",
+          "bytes": 1291
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__1.provider.json": {
+          "sha256": "90c42ea9fdfb7f3e671ddd23b276456d70070cafe002f6e3782f2d5bcb321cb3",
+          "bytes": 92792
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__1.trajectory.jsonl": {
+          "sha256": "ecf6e6e4a7adf788e2d274d0cc44227a5bed5318b3d545a929301c272b08705e",
+          "bytes": 33097
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__0.metrics.json": {
+          "sha256": "099547ea19162eb0b9d5c5c1aa95e9be13df803099d248ddf3f9d5ce06cd1920",
+          "bytes": 1284
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__0.provider.json": {
+          "sha256": "dae0a184636121772177777b76adbbf3943e4a05c18af802fa2dce7d0cb7a32f",
+          "bytes": 111198
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__0.trajectory.jsonl": {
+          "sha256": "ce3e3079ca3313f30b9af09eb6923891eadd6fd192b44393f8e462b16981d001",
+          "bytes": 31585
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__1.metrics.json": {
+          "sha256": "a72a5638a8e12a749daade4314879973f79ee02817972cebe266412c6e498e5f",
+          "bytes": 1093
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__1.provider.json": {
+          "sha256": "4a1629768ec53f22b631f7d0d07a756998f0b5bef68e300acaf30f58ff56e557",
+          "bytes": 127572
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__1.trajectory.jsonl": {
+          "sha256": "a749233efd1fdd0f36c4e021bd87a5b56a455a6a12e1504f9a7a2e3541874735",
+          "bytes": 33960
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__0.metrics.json": {
+          "sha256": "51d1e620cd3e0dd06ffe080c6f6b9eaeb2e24311c93e983029f35f547472480c",
+          "bytes": 1271
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__0.provider.json": {
+          "sha256": "18a21e98f0adb007e5bc10eb9a92c50c9e95beba2b70f64044655b736fd0063f",
+          "bytes": 50129
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__0.trajectory.jsonl": {
+          "sha256": "017a1aa597db3f8e74312ace01538372467f5a9902a049e7d887e3b09f7404ec",
+          "bytes": 17033
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__1.metrics.json": {
+          "sha256": "73bb80c649d4844455002f15e87f1ff7f85fb78e3ebdad26a6ac54eec75ea090",
+          "bytes": 1083
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__1.provider.json": {
+          "sha256": "28d3a4c08cc612f01147493f6f51d817d239d92267601f4300abf3fda2a634e0",
+          "bytes": 141249
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__1.trajectory.jsonl": {
+          "sha256": "f3404b3536a279b723a0a4c5a4a3ff72b0710739326803388fbddbbed1244205",
+          "bytes": 40339
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+          "sha256": "71dda63e7264cfbc508e6bf7d726c98e77c28224312bbbb4a99437c04f87c361",
+          "bytes": 111473
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "93cd3fde319a12ee038f3f2d59541d1d02fc9d34b427a58a263a9804f3fc136c",
+          "bytes": 31238
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+          "sha256": "6a42f3d6cfd6fdf0df51a4c3626375f9bc29c216a342952b0ff7739cfffa71bd",
+          "bytes": 136448
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "e30f20b2ffdd42c1c16a0fcf74810c7427b24c36bf8ee94c78180581608f7d88",
+          "bytes": 41177
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+          "sha256": "f9ad3ad7d1c8abc5b4497fb33645f66e8d7431b5c0086239a0f26111d116d614",
+          "bytes": 148882
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "9ba3b0b2c6b7ed95892c74de7c0f7ec63fa09ffab8ccdc96f6a1b6e4f55eaa45",
+          "bytes": 43016
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+          "sha256": "11c5f9d2a30c6323970b7957cff6e86fd760733016ac66e32aed0be3e8560e4d",
+          "bytes": 111319
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "aca0b2577ddc5372351e02eeb997a2281b2325baf12619365db67b3a9e9c23b7",
+          "bytes": 25931
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+          "sha256": "7272c7267186cb47177f62582b5df8b446d9dba0d0effd3631bdda0ea320cf2c",
+          "bytes": 30559
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "b6283288583dfe81fd5df1268bce424a7e179c34450100ff1f56c2dfdb8e76e8",
+          "bytes": 10712
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+          "sha256": "2c2e7c15741af6772d3a977c48da4e641544b520e6d36a56bf68f18fc24fa7a9",
+          "bytes": 30932
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "058ce6903ee3f2e94d68d8941cc5838c6280edbb5cc2d97df2e64d91d36d5aae",
+          "bytes": 10755
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+          "sha256": "ca901863ea0ec29a981fe5ceff6504929a826331ea20fe8eb3e26863e3ebd185",
+          "bytes": 126847
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "ecc524ad9adfd82c5c1a689c2fb6a8f9b0372441e4f5369d16b91ab9407fd552",
+          "bytes": 35623
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+          "sha256": "e21ccab077d73eb68a4c0bc178893b0e6bed5db2100879a6eada72bb06086e4d",
+          "bytes": 148597
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "04eb34f00152a7ecd9b963415a3f591b6fc79eea1f61ad18863b5245983ada93",
+          "bytes": 53193
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+          "sha256": "9ef6007100e188b0ae7c72648db4129baa24f91bb78e798d0ae7a4c2f5ea4bc8",
+          "bytes": 148777
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "58c576c21d236be2af7193f8b7d2e30279b9d30fedbac0716a39c61e36bf2f6e",
+          "bytes": 56017
+        },
+        "lakehouse.json": {
+          "sha256": "b80f60ad98bd867cb44c33a6a3859d35925c53dbceca7f0f88b3f342f7657a33",
+          "bytes": 76108
+        },
+        "parquet.artifacts/core-freeze.json": {
+          "sha256": "004b13e1fced28ebead4bf615d0eb4ae2191903987a1057aa4ec1b984b4411d3",
+          "bytes": 8339
+        },
+        "parquet.artifacts/packages/inventory__descriptive__B.json": {
+          "sha256": "2ed01ca57a59a09a250d15fd56fa58829d09d36ec63cee70043e7b70264979b4",
+          "bytes": 15744
+        },
+        "parquet.artifacts/packages/inventory__descriptive__C.json": {
+          "sha256": "5d06fb1821ffad2411b6ce113c693f3d2ab9f7c7cf2ef6b6542319e6e00bdfe6",
+          "bytes": 21611
+        },
+        "parquet.artifacts/packages/manufacturing__descriptive__B.json": {
+          "sha256": "f01b1ba65d15dbfc0b06f6a74ef3ac2d96da134e4c7731c1bd7519e72cdaff86",
+          "bytes": 7706
+        },
+        "parquet.artifacts/packages/manufacturing__descriptive__C.json": {
+          "sha256": "f7bead7479ccce9994ebc1796fc7f91f69b42411cab0cb8ff3c2847b8afc7db1",
+          "bytes": 13548
+        },
+        "parquet.artifacts/packages/service__descriptive__B.json": {
+          "sha256": "50eb290d8dcf17c20b364b91e113878ccbfb333defe631271b3ad93b9d1d9409",
+          "bytes": 11173
+        },
+        "parquet.artifacts/packages/service__descriptive__C.json": {
+          "sha256": "0a4220aa2b17919b90c3635f1878ecdc57d74580a998957e5274a638e93c45ec",
+          "bytes": 16898
+        },
+        "parquet.artifacts/provenance.json": {
+          "sha256": "9cb6b29076425ac2984ff0838fd0d4fc9ac4d039ad58ba25f29c70ce28813b7a",
+          "bytes": 21169
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__0.metrics.json": {
+          "sha256": "9b920984a695a9d819bbddec21c047d1026fbf39a941c331620eba3bb1dd10f6",
+          "bytes": 1290
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__0.provider.json": {
+          "sha256": "2f973591811ac81a71fa51a7371f81915ae3a5c2aea8fcadf12d4c5315c0eaf6",
+          "bytes": 123719
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__0.trajectory.jsonl": {
+          "sha256": "90e878c1a49c39bad8434d6cd5829b15813075f190229a0dc033a3f9ac5fdc25",
+          "bytes": 55931
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__1.metrics.json": {
+          "sha256": "bcc453d0e18d50cfed959394a70b2d3152d06ce4286c3ed6ff3263faeb5a8023",
+          "bytes": 1091
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__1.provider.json": {
+          "sha256": "3cb4cc85db9d6707029ea810d28c22b49982c0b97f1e41bc5181b28d70f6b35c",
+          "bytes": 140054
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__1.trajectory.jsonl": {
+          "sha256": "c1da7eda084f8e16941758fb6ec072b7af0d8a3338b7c494ee5d754efa7811c4",
+          "bytes": 33080
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__0.metrics.json": {
+          "sha256": "b9aebbcb6e5b0a27b16777f00864545e12a0b27b581dae7b57ca579c89c66d65",
+          "bytes": 1279
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__0.provider.json": {
+          "sha256": "812f5df5a5b528ee379abe47b3d1f26b9555f4aa1442e109edb4da7e2725a224",
+          "bytes": 118143
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__0.trajectory.jsonl": {
+          "sha256": "01bf3112ea0a8cb94cae0f7ff18eeccf7c025fd5a99c1acfa5151f5377856683",
+          "bytes": 44894
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__1.metrics.json": {
+          "sha256": "a37a90bb03b0392089eb0c0454c4420d42941494a12de443046322537eb7b0c9",
+          "bytes": 1030
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__1.provider.json": {
+          "sha256": "08bea26873e8a8d3bb0a03ea302d0ba4d9bfb88222535dcb64dce27668ec1114",
+          "bytes": 105778
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__1.trajectory.jsonl": {
+          "sha256": "e4097fd943393a3bd6bd51b59d0f17f2604423a90ab210113d82c3d880b08fe1",
+          "bytes": 25879
+        },
+        "parquet.artifacts/traces/development__service__descriptive__0.metrics.json": {
+          "sha256": "113be073ad925b05b4e1de3f572b785dca3f0b6709da80134bc543238850ba01",
+          "bytes": 1255
+        },
+        "parquet.artifacts/traces/development__service__descriptive__0.provider.json": {
+          "sha256": "a418aa6846303e132047f645e60e62ff67cd89dfed5d4ea562867b119a87bf9f",
+          "bytes": 45039
+        },
+        "parquet.artifacts/traces/development__service__descriptive__0.trajectory.jsonl": {
+          "sha256": "70ac285421c9e2a730d389d78ae936fff5c2b61aa159262ac36365d01c4bfd79",
+          "bytes": 13193
+        },
+        "parquet.artifacts/traces/development__service__descriptive__1.metrics.json": {
+          "sha256": "b0dc68bcefbfe7d894a13eb21426b5476359b67ae0b29a99b689775501fa4803",
+          "bytes": 1221
+        },
+        "parquet.artifacts/traces/development__service__descriptive__1.provider.json": {
+          "sha256": "08db6fee4f75d618b8de2a59b2b2771d744550dd5136d768ffd423775bff3a89",
+          "bytes": 98346
+        },
+        "parquet.artifacts/traces/development__service__descriptive__1.trajectory.jsonl": {
+          "sha256": "579e6b9785689108eddd8e7429ad0abb8567536a84a8ac28d996945953d02ede",
+          "bytes": 32259
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+          "sha256": "067731b46e7117c24a8bb8f06e90c220b84a0dee3730013127fb17cadf078f60",
+          "bytes": 133851
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "cd9bf0915e21b104dacd6921ead366b0d446e0274d5b8d3a7336a8840f9778ce",
+          "bytes": 31099
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+          "sha256": "81c5f4ef86d22e6b1fa2a4332f17fdc4f097a1df75da64e1458c31a5c5004bf8",
+          "bytes": 152355
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "8fb1945330f815fda06290d3f6b1ce55a8a7da409f72d796952b1db0b7d3c08c",
+          "bytes": 39026
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+          "sha256": "e54dbfc56d8fb53d4d42904a5892e470ef55c3177f2478e1df0fc4cce7f180ec",
+          "bytes": 162848
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "f0cf078c4be48febc7a64fa3d520c6dc8e77db528ad40801e1dc422289aa982c",
+          "bytes": 39300
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+          "sha256": "9c1298651333ac166874ee81787725318598c10365d9ea225bd4634a323b9998",
+          "bytes": 113334
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "82f80ec9ab795ad1f5e5c90102f8744af2e875dcf3e9c838b97793671fa15de8",
+          "bytes": 24720
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+          "sha256": "a4c99d2732ce274e96ac1fa55557cc7b0c5c548c34539ffb47f34aebdd069efc",
+          "bytes": 28110
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "0ecdbbd1ab41e263b1858f31a76c24afacf1fe7350ea6148e0badebeef7bc729",
+          "bytes": 9097
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+          "sha256": "03004f1aacbb7253a9b99ff01b696abddb84778f2130afe474fc0f9029e1fdfd",
+          "bytes": 28598
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "b92e0e4305b089a410d6eedc5696b65900be4ed4063adc5d9d1b09bc03021769",
+          "bytes": 9601
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+          "sha256": "8aa809e8744a13060c4eaebb7fec28bb7ad44ffe9b2a16e3eaf12d36b10083a0",
+          "bytes": 101438
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "d95aca9060b64b3e173a0755b5a09fd7910d7da0261622f966fa7b897673e4ba",
+          "bytes": 29291
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+          "sha256": "b3b6f56bddf07f3f4aab39ef01eca9985621758663e2a0720e87b8de8cea186a",
+          "bytes": 183636
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "5e1260f68bd8e43666bb9ea85a339fd195c3ae007c6e8b6058b030cfbd462ed2",
+          "bytes": 42770
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+          "sha256": "42acbc37fad3d61b0bff5c5915713c05cb3f5d68d2dcb4a596baa1803a82bd7c",
+          "bytes": 92669
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "34a64e861de70abc6de357030286f2327e941374de3bf1887cf96e0a08357d20",
+          "bytes": 24585
+        },
+        "parquet.json": {
+          "sha256": "c2d3a52e3deb6af325f1ee41c34527bbd2990d6c280b6585df634393e0d73e38",
+          "bytes": 79664
+        }
+      }
+    },
+    {
+      "file": "typed-d0306e9-raw.zip",
+      "source_root": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke",
+      "file_count": 244,
+      "bytes": 1338985,
+      "sha256": "b6634bc48520922a06347776c6ba9d1aa55ea647dfa2eaccf0a61f56ceff71ef",
+      "entries": {
+        "batch.json": {
+          "sha256": "e6ea9abd87923a3724f82957a55cc6e83069157f791c63f9f2b7bac8c21cfeee",
+          "bytes": 1488
+        },
+        "csv.artifacts/core-freeze.json": {
+          "sha256": "34d4135a8769f47f0caa58f792c23ad9705ef995eb4f684e13ab3e408dd63c4d",
+          "bytes": 8339
+        },
+        "csv.artifacts/packages/inventory__descriptive__B.json": {
+          "sha256": "7ac882a6e571b0f131de8a46200d29c172533a7ebfb89a33ee8954fbf46cfeb0",
+          "bytes": 15031
+        },
+        "csv.artifacts/packages/inventory__descriptive__C.json": {
+          "sha256": "26bfcbac108acb50caf089d1898a85fbe891ed2540569d033b3985ee0d026cb8",
+          "bytes": 20814
+        },
+        "csv.artifacts/packages/manufacturing__descriptive__B.json": {
+          "sha256": "14103f4704861d4055981c84ecfd4051207f1f4d0350eff39d3bf12d4fc6303e",
+          "bytes": 7383
+        },
+        "csv.artifacts/packages/manufacturing__descriptive__C.json": {
+          "sha256": "6f5b6abb5a4c047ad848cc7c6f7477258ca04d519aba6324d9da269b681a9657",
+          "bytes": 13063
+        },
+        "csv.artifacts/packages/service__descriptive__B.json": {
+          "sha256": "507fc7a8ce654c5848423a89f8f64bc95fcd40da45a110bb0a4844021d22dfea",
+          "bytes": 10697
+        },
+        "csv.artifacts/packages/service__descriptive__C.json": {
+          "sha256": "4cea5c8e2a128f99782486e9baf64e444199f5a675721739c23f2e9f4b435de5",
+          "bytes": 14937
+        },
+        "csv.artifacts/provenance.json": {
+          "sha256": "fb59048094a19821c9518d806574e6a409f42b3157596f010f939f3501e20996",
+          "bytes": 21261
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__0.metrics.json": {
+          "sha256": "2964c2fa529f01055ff5f6e5f585f1c63fbf96220d53ae7d268e1f324b3a43b9",
+          "bytes": 1262
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__0.provider.json": {
+          "sha256": "eb3f75b1bb852fcd98209fa618d0e6180b2b34a118e5742cdbc2c477d8fdda7b",
+          "bytes": 37755
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__0.trajectory.jsonl": {
+          "sha256": "6e539ef0f281ffce5bc166e50c4958900f5436b71552bf252c3f20e489fd4c56",
+          "bytes": 13134
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__1.metrics.json": {
+          "sha256": "8ea61a359f4f3a857106a74173d44cb35c387545d120c98cf736131de7db1b6f",
+          "bytes": 1277
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__1.provider.json": {
+          "sha256": "aa4de0efbf130c2e3d6f3dbea382cd9bb2d8a96665ec73893a9bcb84eaf0a6b5",
+          "bytes": 49685
+        },
+        "csv.artifacts/traces/development__inventory__descriptive__1.trajectory.jsonl": {
+          "sha256": "7f4c63a28e21a1d227371041865a18c63ebb2ebbbb48bc4d389ca323da42daf2",
+          "bytes": 14708
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__0.metrics.json": {
+          "sha256": "0735513896fcfd2f109774efc30e1863c085d289f66a9115e4097c06c0b1e9af",
+          "bytes": 1272
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__0.provider.json": {
+          "sha256": "22a0314483bdbda0ac66708bc54b6ae42d1f2fdbcbb91790e313ee94a8580d85",
+          "bytes": 88073
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__0.trajectory.jsonl": {
+          "sha256": "b785056e85f1bc78f7465855af9913c95de5dfeb3a090e1e6ae7aba586c01ec9",
+          "bytes": 27865
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__1.metrics.json": {
+          "sha256": "bd98490cc3dfaee5f64756ba9d1c67c624609f4e5da6e5599efc77c5b6922ae8",
+          "bytes": 1269
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__1.provider.json": {
+          "sha256": "06ee4160c513ce53dff82a2f05c38d31f40084219ec654ca7edd9959cbd497cc",
+          "bytes": 63920
+        },
+        "csv.artifacts/traces/development__manufacturing__descriptive__1.trajectory.jsonl": {
+          "sha256": "121e9600b66441fc908d5b1f247fe731525dad51a0f7599897331f7054b3aaa8",
+          "bytes": 24776
+        },
+        "csv.artifacts/traces/development__service__descriptive__0.metrics.json": {
+          "sha256": "b7e4c9fafb1e69ad75c0ffb425bb790008691af3ed9c3a456bfe385509a8738c",
+          "bytes": 1283
+        },
+        "csv.artifacts/traces/development__service__descriptive__0.provider.json": {
+          "sha256": "0cb218dd17605cad8d21346110c27d39a6bcabfaea16a30ef3dbb74481c9a65a",
+          "bytes": 94454
+        },
+        "csv.artifacts/traces/development__service__descriptive__0.trajectory.jsonl": {
+          "sha256": "b1bb536468d37b654a6ba454b0de5ecb8093a162dc76dcd8673b1ffd963a02dd",
+          "bytes": 24190
+        },
+        "csv.artifacts/traces/development__service__descriptive__1.metrics.json": {
+          "sha256": "65d62856e2e9d410c27056afe633b7715389fb6862ef24ec53d13ff6dd59f5b3",
+          "bytes": 1256
+        },
+        "csv.artifacts/traces/development__service__descriptive__1.provider.json": {
+          "sha256": "78d4d9bbfa259b8051c495ccc0e86053d0fdfe398aa597d3e540df6864a2dd1b",
+          "bytes": 48339
+        },
+        "csv.artifacts/traces/development__service__descriptive__1.trajectory.jsonl": {
+          "sha256": "31f677b5ce6f318f9f93b37efa3ed26bfc1bb01bfe5a7c57cc0bece70ec08a85",
+          "bytes": 14491
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+          "sha256": "ade1bc2d1f1e1b53a3f73ce1380219ef508868f5b69fee082c003beb64935a32",
+          "bytes": 84901
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "a308b96a662080c08b004f51aac32c00fc420624edcfcabd66a1c0a6382fbb4e",
+          "bytes": 18660
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+          "sha256": "9015ad9d5096c1259f6660110fa3dcf68fc48e59340698ebd0b18aeb07a4c57e",
+          "bytes": 100417
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "bf0e7877b392ff1b57bd399c34e91d8b0bde9fa396173a7efd7a2a37973dec61",
+          "bytes": 24385
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+          "sha256": "3ad7fd8042162ca628644beb2cd2cd3749334e516140b3cd0f718be5923017cf",
+          "bytes": 86638
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "ae3942409538c47fd66be629e9fd4fa4d7850ce281a824d95d1cc02eb6be5522",
+          "bytes": 21608
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r1__A.provider.json": {
+          "sha256": "da25c13d216f965a409b2bd4059e2b8403050ed4e210e60f4d28833dbbe67d22",
+          "bytes": 86439
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r1__A.trajectory.jsonl": {
+          "sha256": "1fae4e35fda29ed4c53ab104dd244da395fd4fd92e78f70b702289c65294a553",
+          "bytes": 18631
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r1__B.provider.json": {
+          "sha256": "095703b1f3d704ffadd16b280a177332c0d32fb448f637f4fa4b477e593f4551",
+          "bytes": 76172
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r1__B.trajectory.jsonl": {
+          "sha256": "dbf3f1445d0b158640f0308e92ea647aed7848f9ed61558ff59b53e017121894",
+          "bytes": 19110
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r1__C.provider.json": {
+          "sha256": "6823f9b409faa78a0b00c105ec5dde03336ecc3f0e39ad44a2c8039359d523cc",
+          "bytes": 42739
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r1__C.trajectory.jsonl": {
+          "sha256": "37b25b095a208be52e005c74e0ecd8eda629ab522fdb7fb0b750e9789b30aaf4",
+          "bytes": 8901
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r2__A.provider.json": {
+          "sha256": "d9741f8f95a02c6fbb49c48550eefc5c1e158657b2b87394a3315b04cac2b42d",
+          "bytes": 92369
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r2__A.trajectory.jsonl": {
+          "sha256": "f514f49e7f1423fe0f6e114eff1faeb5f464e8770ea9680e94f318465b302d8c",
+          "bytes": 20777
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r2__B.provider.json": {
+          "sha256": "23d4631b96fcbb51503f4570c26b1085d36cb30279e16e0599662292d9584f96",
+          "bytes": 70193
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r2__B.trajectory.jsonl": {
+          "sha256": "013c1336629188c9647e00b00d55b7b887f83f743bdc7dab96bfe60a6d9233b5",
+          "bytes": 15701
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r2__C.provider.json": {
+          "sha256": "e4fe416d15e5c258da1dfe429a1a83f63cb9fa27afcb993cd416e18e78a867ba",
+          "bytes": 47836
+        },
+        "csv.artifacts/traces/inventory_available_units__descriptive__r2__C.trajectory.jsonl": {
+          "sha256": "0a0744680020f4b61d1898a3324a5e0aeb76f3f2abe4c2dfb6ec86b69fb49933",
+          "bytes": 10153
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+          "sha256": "c50c7444b04ed85917c9be47b6d1aef6bffd8b9b4fbb9c977916bd26047d95ab",
+          "bytes": 65719
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "3d4e34532a75e50b85afe0d3f0e19632ab3fdf3b5c847a67be5075e4968ddaad",
+          "bytes": 17681
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+          "sha256": "c5d339274a7c1a380c0838326464b3883179b08baaac4bc954041f2ae9b0d76f",
+          "bytes": 118294
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "9321d9390e15ab738306659da9aeabdcba5248639d2bedd844a84e24a7306f74",
+          "bytes": 32830
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+          "sha256": "a202fdec57e71b96fc63eb72077e6dd69a9df345425804e9a52a41a5dfe08797",
+          "bytes": 63384
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "27b5f7360ae951bcc784be56f9c9b89f8c7581635bfd2880037ce7e9db3d79de",
+          "bytes": 20789
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.provider.json": {
+          "sha256": "d2187fc44ed53335f87b9b45fb4427a63f7ad5ede8be24a16e6069e857e98eae",
+          "bytes": 51006
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.trajectory.jsonl": {
+          "sha256": "703de9cfbf5fd949ef42b8a119ec44a4092b62d453e23356f109631c704151f4",
+          "bytes": 15605
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.provider.json": {
+          "sha256": "abeb24e0bc3eb1b72e25add594c999c81bacb89f882c9527d210ec209094b69f",
+          "bytes": 90350
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.trajectory.jsonl": {
+          "sha256": "f5b297120171f04b77738fb3a7b9e57cd14ed69efabe959a3b131dc45a318bd2",
+          "bytes": 20633
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.provider.json": {
+          "sha256": "ecd43c9f98e1698684e97f8f983339abaa2ce9c1a0d83da41cda1a4f287dca20",
+          "bytes": 101130
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.trajectory.jsonl": {
+          "sha256": "fbcb8e945a3e2aa7abd3d38c38caf11e5e52fc16aff6cfeec75dd80d8d88788b",
+          "bytes": 25843
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.provider.json": {
+          "sha256": "77c1cfc955a553991191798740d700a97eabcca8790f3eb5fce96b6eeaa9d107",
+          "bytes": 54002
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.trajectory.jsonl": {
+          "sha256": "b94c89edd352636e527ab022c8392685128abbb40ff841675a2e093dacd0e7a9",
+          "bytes": 16925
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.provider.json": {
+          "sha256": "00f5326da7ed66ec5e8b43cd071fccd0a8f03fb20f0f58dd6024095125479152",
+          "bytes": 42749
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.trajectory.jsonl": {
+          "sha256": "0f850e0378c27a2c157d61336a724025067a750fcfb0759af39e7656da0c8916",
+          "bytes": 11076
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.provider.json": {
+          "sha256": "08028c991cbc30e82b2886ede95b1d08af622ed0568be1a41847dc6c65dbaabe",
+          "bytes": 77606
+        },
+        "csv.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.trajectory.jsonl": {
+          "sha256": "6e986335012cdbeadbb1ac6f2c25f93627969633ae00f859478967a21be38a59",
+          "bytes": 19214
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+          "sha256": "92defeaac59e50fb6f15fae35e76e517bfff67651d7c61e9d75042a5300747c4",
+          "bytes": 106742
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "69741cf905cc61c14bbd0c79c3e8ca261c7fdd7b4323e2455d306e7280d1fb9b",
+          "bytes": 29332
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+          "sha256": "d6ba564b39164618d2cc3572a4e971ca00f7d0609b1743d953e197ed20b2f27d",
+          "bytes": 87041
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "faf9210142924c09165bf39cdb2d15c4e4862cb5a6add9694dc1e9de75c76759",
+          "bytes": 28391
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+          "sha256": "a0d491669e541d666702f9667175297396148f610293e7fa1578bf3ba82b9f18",
+          "bytes": 61739
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "9a6ffaa4129a61c041c793faac9657bf4b1987a89eb23a48f42ecbc6b2db155a",
+          "bytes": 20943
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.provider.json": {
+          "sha256": "1adc8f0b04a3bc3582c653952a272b42e7a99bff15ea7398526a96eff7457251",
+          "bytes": 137027
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.trajectory.jsonl": {
+          "sha256": "7f79e754f93f24f96f79c5d8ede48bf83790ce4fb0a1a911ce732cb5c609f0e2",
+          "bytes": 36291
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.provider.json": {
+          "sha256": "2495fcc97f1beac060bce81e5af02407130bcf0a6f52a76dcf2795fb0df6d2d4",
+          "bytes": 116549
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.trajectory.jsonl": {
+          "sha256": "a4bebc8dfa845d6e298d77457a1260ea9e59793f8bdd7e78825d499e9a21e7c2",
+          "bytes": 35430
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.provider.json": {
+          "sha256": "2439d053b7de916d370c50584797d1cb7cf30556bb56c85e3c24a832f3e43897",
+          "bytes": 77767
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.trajectory.jsonl": {
+          "sha256": "3ff213aa9ae7354887bcd6061fa264c454fdf69f4c2736fdaaf8f4e375cc4851",
+          "bytes": 28798
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.provider.json": {
+          "sha256": "699ce8635865f862105e5e1500fe134631c6006f9131d077607b21b3a9b97534",
+          "bytes": 93336
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.trajectory.jsonl": {
+          "sha256": "3d060308bd9fc49ab77e6baf854c66195ab059230259a8e285f8a345277cbed5",
+          "bytes": 27400
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.provider.json": {
+          "sha256": "04e7812f3ecad2e4ec678d7f57a0e65a78490732bb8a89764c77129e058287f2",
+          "bytes": 92812
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.trajectory.jsonl": {
+          "sha256": "c405571d2bb5a95a3f44f275381025b72ede4ab3fa9954fbf8e395e02234290d",
+          "bytes": 31763
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.provider.json": {
+          "sha256": "4520f622b48728426f86040b444a9c8f4cab94df07570de75bee0e4eb2088f72",
+          "bytes": 76351
+        },
+        "csv.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.trajectory.jsonl": {
+          "sha256": "fa8d1d56c5eb1c2d648712bee50932983b6fbe721b8dbb380011b1ca6b62c925",
+          "bytes": 31967
+        },
+        "csv.json": {
+          "sha256": "ac1f4cf2026e3ad2b8ddce3c1d330ac50c14d7fb71ca3d1727bc54db8739a9a4",
+          "bytes": 153321
+        },
+        "lakehouse.artifacts/core-freeze.json": {
+          "sha256": "34d4135a8769f47f0caa58f792c23ad9705ef995eb4f684e13ab3e408dd63c4d",
+          "bytes": 8339
+        },
+        "lakehouse.artifacts/packages/inventory__descriptive__B.json": {
+          "sha256": "b15e1535519f434b9cad1616dab49a2e5ebe7218678f9d396f608a94c4f2a33f",
+          "bytes": 16409
+        },
+        "lakehouse.artifacts/packages/inventory__descriptive__C.json": {
+          "sha256": "7753ad29917684394ea9a09121065a33f87e9998f666022a11707073ad01a1ad",
+          "bytes": 24168
+        },
+        "lakehouse.artifacts/packages/manufacturing__descriptive__B.json": {
+          "sha256": "e954b707560663d4bdd44ee300303c2747563ac2336ecef707a6da1bfeba69a3",
+          "bytes": 8040
+        },
+        "lakehouse.artifacts/packages/manufacturing__descriptive__C.json": {
+          "sha256": "0700ab6c1b5cf638204b1be8dab0ac388a8fab35ac6fec49801aed5eda699a55",
+          "bytes": 18545
+        },
+        "lakehouse.artifacts/packages/service__descriptive__B.json": {
+          "sha256": "22ee621fc2fc5b4e31b5d34af42754f6db9b1996b95cdf68be2d3b6249f0d5e3",
+          "bytes": 11731
+        },
+        "lakehouse.artifacts/packages/service__descriptive__C.json": {
+          "sha256": "6f26c84151bd02ee8bfcc173bbcf9f9d3e40d225cfed179e1f6ff76e9ac76892",
+          "bytes": 19076
+        },
+        "lakehouse.artifacts/provenance.json": {
+          "sha256": "04bad83e0f34bc1eb90722375eba4fccbc83a8645913351f4d9aec1cd36d342d",
+          "bytes": 21273
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__0.metrics.json": {
+          "sha256": "2b36f48f15805ec73bde2e01c159cf814d24e7fda17187ee7632f66d184ca5d3",
+          "bytes": 1276
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__0.provider.json": {
+          "sha256": "6336432551f2da2938cd3c0771f89e647b9955bb4882d7543dc0271057cb3166",
+          "bytes": 61679
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__0.trajectory.jsonl": {
+          "sha256": "b68c790182ef1beb08ce6c7aaab02a97c1b8157dbf73aac8186be1cb9db401ae",
+          "bytes": 16000
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__1.metrics.json": {
+          "sha256": "e9c6a2b842601c03c6c7b8d0111c90ea252c953b8a7ae07e936f0761ec1acda6",
+          "bytes": 1306
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__1.provider.json": {
+          "sha256": "1863cf0125854dffe9a2ba03c653dbf69fefdf4541cf2aafb610b4c89469a316",
+          "bytes": 93522
+        },
+        "lakehouse.artifacts/traces/development__inventory__descriptive__1.trajectory.jsonl": {
+          "sha256": "fdc5a6d0195c07ea4ef261f7f99e1848184cdae2c207ab6de9688c508cabcc56",
+          "bytes": 34295
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__0.metrics.json": {
+          "sha256": "81be011e96ef674ab1762a9020db47c70db96fc46591c4a071c26af3d8725705",
+          "bytes": 1272
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__0.provider.json": {
+          "sha256": "5d0d1e536bc446b8a620f5af5f120cf2c4bba14e0b14b78c43b93f61a54e6f3e",
+          "bytes": 137841
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__0.trajectory.jsonl": {
+          "sha256": "d64349eae3b06912ca5f98f6d6489f60951dfd006d750b59f1320b177bc4dd21",
+          "bytes": 43522
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__1.metrics.json": {
+          "sha256": "96ca07b80831aa47f9c8930cf5e2069416b25eaa7eceb5c698035e24787e0a4f",
+          "bytes": 1016
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__1.provider.json": {
+          "sha256": "e173af1d973845dae1ee41dafeccd743153172c49e919e5b4fb1fde50b7b5d51",
+          "bytes": 100105
+        },
+        "lakehouse.artifacts/traces/development__manufacturing__descriptive__1.trajectory.jsonl": {
+          "sha256": "f940d64254a18aa0bbcd5df511d2b983329f52894afe1b783e17d02843f55eb1",
+          "bytes": 29616
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__0.metrics.json": {
+          "sha256": "dc11ab3bc88cdd95e0e9e2d20211fc7bb3798d9c0959167e7e50aec98ac18f45",
+          "bytes": 1290
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__0.provider.json": {
+          "sha256": "c271ed85c5c672b861b3cb231305f97457479b3fa4b778b1d2bd93e9b04ceeac",
+          "bytes": 161435
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__0.trajectory.jsonl": {
+          "sha256": "4eabdcf1bb193eaacbf62d9e4c25c51d3dd6f54dd89f8e5e4e9719258e7ef615",
+          "bytes": 61808
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__1.metrics.json": {
+          "sha256": "4965959c783d391275046362cfec52563aa722fc510528dd9397e98254af1937",
+          "bytes": 1245
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__1.provider.json": {
+          "sha256": "c2d3418feb473d54be9710f76108a1df55a16ae2f05622d3d391031419e08b94",
+          "bytes": 112757
+        },
+        "lakehouse.artifacts/traces/development__service__descriptive__1.trajectory.jsonl": {
+          "sha256": "ecd19e41a89b2efefc4a548aaa4479b07908f748def2c981a44ae51797361985",
+          "bytes": 32283
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+          "sha256": "6d867b171a15fecc0e0e62e9c9fe1eae26e83098d4bbb2f2f951cbb0a50e650c",
+          "bytes": 134260
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "f210f7d956ff8e5b88522eb2e4d2ca8c5343aee261cafee5c7751f41f584ecaf",
+          "bytes": 37932
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+          "sha256": "f473d934a91af55d15c119c3f50fd75056e6407be295ce736abafa28696ce6e3",
+          "bytes": 75625
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "5cebd6f5f422c70c6d6780636ac9a92559dd75a1eb14e6c4b6416724a645787f",
+          "bytes": 33605
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+          "sha256": "e46fde850c4fb51585135641ea5fa7a6ca3f8fadc4297df3daf1ad7f18106f42",
+          "bytes": 197640
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "af56c1229dcef43eb07e093badf9bcc4ae7da41ef8995ea07d4d9f210fb03490",
+          "bytes": 59409
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r1__A.provider.json": {
+          "sha256": "267a65b1ffb2c2f328db4894eed0dfd9abd3fd030e7709efd99d61447f1fca10",
+          "bytes": 106702
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r1__A.trajectory.jsonl": {
+          "sha256": "75d6c01b15e7e6f50e627eb093999fb68fca821a02f9fad255bee1f53d7df01b",
+          "bytes": 35288
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r1__B.provider.json": {
+          "sha256": "2807cb3b6213042ae11c1c31d8a4ab1facb25cf0c5a4d1ac1265b85c2f5262d8",
+          "bytes": 111462
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r1__B.trajectory.jsonl": {
+          "sha256": "f42d197c0706921c3b51c20883dd690ced95251a845e3e4d95d5efcbc5b68f07",
+          "bytes": 32458
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r1__C.provider.json": {
+          "sha256": "91647908d26a463df9bd4546f452f62f8d255fc0fdd7d139fa3dcef23f1abcb7",
+          "bytes": 228431
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r1__C.trajectory.jsonl": {
+          "sha256": "57442ea869359869688ed7a1eee5d92955a75108e5b7ffeb46cea75c3c6eded1",
+          "bytes": 68241
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r2__A.provider.json": {
+          "sha256": "f94cf6176419e8951fa306be91f2512bb271ba1de016379a111c38f21a53baf9",
+          "bytes": 115302
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r2__A.trajectory.jsonl": {
+          "sha256": "95dd407b6963652e708c8fdbe20a118d8c0e303c6ce805752eeb4145787aa662",
+          "bytes": 30519
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r2__B.provider.json": {
+          "sha256": "0164cd83b30023eeb0eb2a271f50ded9b2fa937e3ac4981613d803898afb0750",
+          "bytes": 129841
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r2__B.trajectory.jsonl": {
+          "sha256": "935563282888a4672de57658e6c6d9af35bbeeffebd00b8f9abb16af74373969",
+          "bytes": 45495
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r2__C.provider.json": {
+          "sha256": "ca13de94ce8670c750453500bfe39566036f4dc5831547c9f4e343b3ae90c5ad",
+          "bytes": 108786
+        },
+        "lakehouse.artifacts/traces/inventory_available_units__descriptive__r2__C.trajectory.jsonl": {
+          "sha256": "e0985cd57d6cafc0b500d37c06ed4c448747f54a40f2820930cab0daa5e9746e",
+          "bytes": 39006
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+          "sha256": "c987c7deccc9ad362763a998a0ad17fc913dccbd4ee4226d64f6037576497d31",
+          "bytes": 90254
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "f090910667a87c779bcd8f3243dbdaa081ff2a37dcc702d017c87beaa6933ad7",
+          "bytes": 24162
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+          "sha256": "ff9ae492bd3f594757b49900a0f6a95b02f770db2b1a687d5a8025279cfaf9df",
+          "bytes": 103383
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "43d511f77d27ab4090908318474d20c93b17929ba5f64ed4a7067510e770757a",
+          "bytes": 26710
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+          "sha256": "c235d773bce83b22a5ccf3e6970d2cec325cdbe45f976871bcffb09837e29215",
+          "bytes": 44299
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "8d51e2ae08a04d6ffcecb387d8e9152a2114fd756ce1738ea16a4303f0c888fc",
+          "bytes": 14421
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.provider.json": {
+          "sha256": "f75d28321b36917f541acb1f38ca243355cdedd5868d4206fe48079d1d643aca",
+          "bytes": 80014
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.trajectory.jsonl": {
+          "sha256": "913fb2615afea625f52eb039dfc3e14b98bc81c3192b0c10204306d95b010ae6",
+          "bytes": 16765
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.provider.json": {
+          "sha256": "d2c659074ae3f4d0979dee5e907807d42d9f97035025f6971483a06bbe8eae7a",
+          "bytes": 31106
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.trajectory.jsonl": {
+          "sha256": "f2eba2cb1be364758d34480d6ed4bb7beaed14a99a310bf9dbe87c8f587d23c9",
+          "bytes": 10996
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.provider.json": {
+          "sha256": "e627ee1394615e072615947fa176c0c1c262f9892d870fa197c5278b04f22856",
+          "bytes": 32132
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.trajectory.jsonl": {
+          "sha256": "6b6a46fe1fa56c7172fdebf181f5c7e6865aee446c3fe7bcdb4ac73b169ecae6",
+          "bytes": 11381
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.provider.json": {
+          "sha256": "f695150ebc3ec2670fd77a4dc1e2f2aa1bb5073d8c769dd0effa76aea54435df",
+          "bytes": 84603
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.trajectory.jsonl": {
+          "sha256": "7750e1553edd1f75449e05a901d9e2f59051b0322a2b6578d2670ac2bf58cb08",
+          "bytes": 21950
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.provider.json": {
+          "sha256": "54860162af91499fa4c9ab5c51763ae21c3aa5244d84e15a5fc39869d68de6cb",
+          "bytes": 32505
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.trajectory.jsonl": {
+          "sha256": "32f38d7ec652c34c9119cec33e6b5913a5170cf2cffd4612271ae8c379226f4b",
+          "bytes": 11618
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.provider.json": {
+          "sha256": "91fd05d86db8dfff632fadaeeafafce67d8aef5aeea23b2278f66d7cd5883c8b",
+          "bytes": 94061
+        },
+        "lakehouse.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.trajectory.jsonl": {
+          "sha256": "d32bf9a9ef6fe69c3e4716df78efc3b26e6317ac2f0869efafbe6d2d4ebcee76",
+          "bytes": 19624
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+          "sha256": "f816b2075129ac6300c1fcaa2df51cc0d03798b0c9080b6155c6809c9a415773",
+          "bytes": 146813
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "b8c4701f97e1e13c4f4013fd59e52ef74347438a4e296a3339013155ea500266",
+          "bytes": 35570
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+          "sha256": "74574ad53968213dca3fa1124034ad23616d17d3db53c3ac6144dc7ffaa2dcb2",
+          "bytes": 171917
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "13a7779b5c8009dd249791d4295f115accd9d12ca9eac5f27317b4ef8936368b",
+          "bytes": 48221
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+          "sha256": "13abfb20047dc3bca311feef8c0db980ee97fb766a8043c98a13f637eecb0eec",
+          "bytes": 179543
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "0c3752dc1f264c385b5530b86a8719687f8cdc40517e667fb2b17d4645c7ac09",
+          "bytes": 54180
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.provider.json": {
+          "sha256": "5e42b4aa1f74d019b6ac14156681750166a65a8c5dece8e2ea6638900386f398",
+          "bytes": 136980
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.trajectory.jsonl": {
+          "sha256": "c5a0a9bb5e4d01f9c5edaf582c2c408a579b98c93d35dfc3331564240fe9dd84",
+          "bytes": 40613
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.provider.json": {
+          "sha256": "88eac47c6d8d93e1758391b54056c004e998522ca7c74c9535192055ab2f310e",
+          "bytes": 149411
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.trajectory.jsonl": {
+          "sha256": "075f917071cae7f28abc425be33ed9b4a8e925e3bd504f0e5adc39118283b278",
+          "bytes": 45768
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.provider.json": {
+          "sha256": "f26b760f62269ae24573c38ac21043f5d18657878805eece86798f2ebabacf25",
+          "bytes": 175770
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.trajectory.jsonl": {
+          "sha256": "4858faaab75922a296db6342c5ce1a64fd5f65436197accfc9db786ddc7587e4",
+          "bytes": 43928
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.provider.json": {
+          "sha256": "5acaf21261e70ff7eb8fdee166ef6b1fc9415ed39b8e5ebcbb5f11c23bef50ca",
+          "bytes": 130158
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.trajectory.jsonl": {
+          "sha256": "16a0982fda95a59f9dd5e8057147079d5a01340ec026b29107bfef9508fc7a80",
+          "bytes": 45784
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.provider.json": {
+          "sha256": "eb4fc9e4fbe31cc1d2746a1741ad10ae6d8f473f80c8308609929efd8d74827c",
+          "bytes": 124529
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.trajectory.jsonl": {
+          "sha256": "47471953eb9fb9ab8b167f770ba7bb8597ead8bc33bc5404ff5c10d09624b560",
+          "bytes": 36283
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.provider.json": {
+          "sha256": "a2d2cd5e2999c52de37ac662c2fb185e1a805777dc9f690a0b7b055fb45d8695",
+          "bytes": 123182
+        },
+        "lakehouse.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.trajectory.jsonl": {
+          "sha256": "5d785bb100858d5bb1be36ecde41cfd7ca3a85ccccc371b8413ac778cd5b2e9c",
+          "bytes": 39710
+        },
+        "lakehouse.json": {
+          "sha256": "5aa9022eaff05743f2ba39e2a72f1e5eac6fd7738857066fc33aa2ad82bda0a3",
+          "bytes": 133939
+        },
+        "parquet.artifacts/core-freeze.json": {
+          "sha256": "34d4135a8769f47f0caa58f792c23ad9705ef995eb4f684e13ab3e408dd63c4d",
+          "bytes": 8339
+        },
+        "parquet.artifacts/packages/inventory__descriptive__B.json": {
+          "sha256": "2ed01ca57a59a09a250d15fd56fa58829d09d36ec63cee70043e7b70264979b4",
+          "bytes": 15744
+        },
+        "parquet.artifacts/packages/inventory__descriptive__C.json": {
+          "sha256": "e84cd8d0b100c1596d0772c3dfe1b6b7417ba2f11325a2b952b5f01ae242a934",
+          "bytes": 21487
+        },
+        "parquet.artifacts/packages/manufacturing__descriptive__B.json": {
+          "sha256": "f01b1ba65d15dbfc0b06f6a74ef3ac2d96da134e4c7731c1bd7519e72cdaff86",
+          "bytes": 7706
+        },
+        "parquet.artifacts/packages/manufacturing__descriptive__C.json": {
+          "sha256": "1e3c6ae5e5ccc3ded2b89d6f206a817bd8fc606903966c49a6fb733cf2c837f2",
+          "bytes": 13386
+        },
+        "parquet.artifacts/packages/service__descriptive__B.json": {
+          "sha256": "50eb290d8dcf17c20b364b91e113878ccbfb333defe631271b3ad93b9d1d9409",
+          "bytes": 11173
+        },
+        "parquet.artifacts/packages/service__descriptive__C.json": {
+          "sha256": "5270157750d4f1a718f4ecec4de6114dfb7357a451f3f8d5551215a5ca74e667",
+          "bytes": 15367
+        },
+        "parquet.artifacts/provenance.json": {
+          "sha256": "305d791a22731d76e81352b6a702b86be8c6089f9a4b8e06e495e215f10c2553",
+          "bytes": 21254
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__0.metrics.json": {
+          "sha256": "87c309b6bf27a3157ecb2a0805f9a631a69016941eebe8a443eaa910f085382b",
+          "bytes": 1263
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__0.provider.json": {
+          "sha256": "5577e8a34b45ac216beb5124bcde35511a9ef639430a94d8680db7663ef39a4e",
+          "bytes": 67958
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__0.trajectory.jsonl": {
+          "sha256": "365a30896911a1ef0f9b4c41014a40e4be0fffaf8fd48617d9ec71fa834f2c25",
+          "bytes": 17784
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__1.metrics.json": {
+          "sha256": "a4744c1c81557bb478202d5eba0950f7c78fdf8eaf8720d47da46ad478817bbe",
+          "bytes": 1264
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__1.provider.json": {
+          "sha256": "081d977589d9c92c5aa90bc380bc19825cbd2e97f2b12ba2021bbcc5303d6790",
+          "bytes": 35541
+        },
+        "parquet.artifacts/traces/development__inventory__descriptive__1.trajectory.jsonl": {
+          "sha256": "d40216cf6d295f47ab293107e52e0b0b6ae38a56b185cd41681df975471d99ed",
+          "bytes": 10969
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__0.metrics.json": {
+          "sha256": "c4b878a2e913afc7da9ce0432a26fee97128d2d660641bfff53e40d67d3e7b43",
+          "bytes": 1266
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__0.provider.json": {
+          "sha256": "7c829c8139e4a8067ab3d52c958cf7ae0556fd9b60766e5d394365bec55f4b6c",
+          "bytes": 54668
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__0.trajectory.jsonl": {
+          "sha256": "0ef37da4d527ed2e9e09785578178c0ac9c7823776998ab68327fd3b8efaa2e5",
+          "bytes": 21849
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__1.metrics.json": {
+          "sha256": "442350abf28ec8a31ed7594922dd11c271bc26441140c45adc4aaabdc8af3892",
+          "bytes": 1271
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__1.provider.json": {
+          "sha256": "350a14012c9ed6d73382480389152a70805aadce3eb0de2574752e200c208789",
+          "bytes": 80962
+        },
+        "parquet.artifacts/traces/development__manufacturing__descriptive__1.trajectory.jsonl": {
+          "sha256": "3698cb014a10bf84f4bf6d738ebb84c8e99fe1b29e095779eda665a2527e1dab",
+          "bytes": 29565
+        },
+        "parquet.artifacts/traces/development__service__descriptive__0.metrics.json": {
+          "sha256": "ea3d295698e0169a7b2d6b99477455d58d86c18ec9d145d6d572a4385f2bab9f",
+          "bytes": 1278
+        },
+        "parquet.artifacts/traces/development__service__descriptive__0.provider.json": {
+          "sha256": "5104260fbee992f14023078be62161189178d2f1a33ac9accc61509e3dd6a7b6",
+          "bytes": 56853
+        },
+        "parquet.artifacts/traces/development__service__descriptive__0.trajectory.jsonl": {
+          "sha256": "7ab76895342d1ab1e45475312e860064c097f278305a92e055678f1c7536a80e",
+          "bytes": 18352
+        },
+        "parquet.artifacts/traces/development__service__descriptive__1.metrics.json": {
+          "sha256": "16959c31302264b2c358b45d01e95249aa8e0889342958b2cadd5113ef4b956a",
+          "bytes": 1273
+        },
+        "parquet.artifacts/traces/development__service__descriptive__1.provider.json": {
+          "sha256": "499dab99b3fb952c5515ae146404a97b62c628b87465a736da389dd872686e8a",
+          "bytes": 91938
+        },
+        "parquet.artifacts/traces/development__service__descriptive__1.trajectory.jsonl": {
+          "sha256": "71ff024d8f8495f77f7468e551fce5e7bb360bc329601692866212b7252017c2",
+          "bytes": 28948
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+          "sha256": "d80ca9508f33be32b317f3f1140098f2485e6cccc1575e14471d3292df5a3965",
+          "bytes": 43208
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "c5ac323702aef81bd23c3e4f24ba995285ae7e6ab3e20aeae165cff9d3042772",
+          "bytes": 13315
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+          "sha256": "d03b0a27a15cfa6e99ea85667f4dcd2aee9365434a5ba95a95306e8581fcd984",
+          "bytes": 35511
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "bf8edb6360abe5cb1f67a08286760b9ffce7e474fde89e86cf1e707310ae881b",
+          "bytes": 13514
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+          "sha256": "83e96d86000f5c9bd5ae1eb7d84536c44af25993b00eda74002b36031751d1af",
+          "bytes": 66670
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "0c3826f44d3245746671ddf2575c7ea13390efde1023830b620b5e3a2eeb3f3e",
+          "bytes": 19825
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r1__A.provider.json": {
+          "sha256": "4fa7fc9df26c533f9828e744744d88cde14522e4178000ace9605b04009ab2c6",
+          "bytes": 72831
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r1__A.trajectory.jsonl": {
+          "sha256": "8072b905c8834d32ec455d52ceee3f4eab3ce9fcd67a1f63960709be6179b18d",
+          "bytes": 18991
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r1__B.provider.json": {
+          "sha256": "e3d74271f39fa808d3d8829ca4f1187f5a0371c22ad2ff2ea6138c9aff2fdc1d",
+          "bytes": 49617
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r1__B.trajectory.jsonl": {
+          "sha256": "ac5b8db23a132b66b40c7f96cd71c0c09889ece8a14162faab453a9aca9d8d1d",
+          "bytes": 16660
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r1__C.provider.json": {
+          "sha256": "2dcfe930dead06a9363e3d03ff5f816d4ada3086fd2549d1a863a51e2874100c",
+          "bytes": 35085
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r1__C.trajectory.jsonl": {
+          "sha256": "72811b643dc71e7507095ed2aa4f53eddb89aa4ea1bf3300d2c4dda9cc36f4c2",
+          "bytes": 12261
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r2__A.provider.json": {
+          "sha256": "52fb49f82004ed475ba85734115eb0c0e47d18c1d3dc19189d24f96c385d4d37",
+          "bytes": 65255
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r2__A.trajectory.jsonl": {
+          "sha256": "5d45580306c8a263c3e277cde880f737d2be5faf05621071027ffed22b45a889",
+          "bytes": 21256
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r2__B.provider.json": {
+          "sha256": "f412e54a66556e80b28650467045b1dc48309446c282868f23df7fb7b02c9ccf",
+          "bytes": 89987
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r2__B.trajectory.jsonl": {
+          "sha256": "97a4ef814120c92664af7b9b234193dd2b81d17de178cee301fe2b3bb63ac1c7",
+          "bytes": 17935
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r2__C.provider.json": {
+          "sha256": "913b21dc5058e927ae6776695ef694b9ce0597d7c12e32d61d71907439010dba",
+          "bytes": 77918
+        },
+        "parquet.artifacts/traces/inventory_available_units__descriptive__r2__C.trajectory.jsonl": {
+          "sha256": "87769971e358d8856ceaae17d08a4b1edb4bfdcef0aaf7ccafef7cd51137d1f0",
+          "bytes": 17524
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+          "sha256": "dad2a4ce467f54a8bd6bae40ee746befc6de39198b321bf5a1e81bfffe3acf2d",
+          "bytes": 52739
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "55bc821aab8f629e57717dd42cb50c74a0091f0bd32399b5db23bb67f12233c2",
+          "bytes": 16668
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+          "sha256": "f7b21077f72f226ae691691fe495b6a1e27bba8b44c7119adc5b46276260855a",
+          "bytes": 29441
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "00b84d34f76bada3aca2e8477c5fad343d6607590dfd606b708aed82e3b3c2b8",
+          "bytes": 8788
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+          "sha256": "34985b66ca7bad63ba1aae4ff696fc74739fb9f3903293ea00d8c947c608801a",
+          "bytes": 65509
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "34d41277251fb8d043286ae2400b8530d001bac3cf2f4bf44d427792368bee38",
+          "bytes": 17929
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.provider.json": {
+          "sha256": "851cd8637f77f97c365cc2ec6a101572749d01dbbf368690fa2755d5173e0aa8",
+          "bytes": 75967
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.trajectory.jsonl": {
+          "sha256": "c2b4766357e50911b783214adf9b6ce111e0259d87e7e79ee4984eb9c745f555",
+          "bytes": 20749
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.provider.json": {
+          "sha256": "ca8448ac870655a01b7f3dbc4d80bd9092ee285ff1f83d08da0496d919ffb0d2",
+          "bytes": 29617
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.trajectory.jsonl": {
+          "sha256": "291a0b94bf034b52f5bbf66faa1e1910bee2276234b74348eded36cbc4a6e9dc",
+          "bytes": 8950
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.provider.json": {
+          "sha256": "318339a13b3c8a22d62a83f2fed87585cfca3b51023ee6b7d8dab41f5c2dabb1",
+          "bytes": 63488
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.trajectory.jsonl": {
+          "sha256": "f06288c05df5342d4d9024a60a1ac49c4b1f946a752ff203a2715df3f7638cf4",
+          "bytes": 19575
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.provider.json": {
+          "sha256": "849570e0402bb69f9e1fbd1ff99c017e9d0a57b04ca0561033ba6fecf7123ed5",
+          "bytes": 70738
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.trajectory.jsonl": {
+          "sha256": "70f7d003634fdd89eaf81e85c5a8a1bcf859143dbfbc8098b07e257d767b861f",
+          "bytes": 18487
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.provider.json": {
+          "sha256": "215eba0c8294a728949a7556f9159a9ab1f3339eb8a3d2e3b12ab58d02c590fc",
+          "bytes": 31211
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.trajectory.jsonl": {
+          "sha256": "094b9ae98d738ddebb1618ff7755e105c417cb406688793511025061b4b520eb",
+          "bytes": 9262
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.provider.json": {
+          "sha256": "7e477e61f4d909a3e9286859d0649c1a514e7070d99ad8cd01dfac9974b75309",
+          "bytes": 78807
+        },
+        "parquet.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.trajectory.jsonl": {
+          "sha256": "723a9c9ec7b98d76b0938f92600cef95bb090a726d78f94921079cedf103adec",
+          "bytes": 19432
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+          "sha256": "f525599e48c838a4bd34fe0a4161efe0a3bf925791351a259fd6602474e2560e",
+          "bytes": 111804
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+          "sha256": "911f499486080813ce8520144250c0d793b4a7aff2bd8f8dda85251a65ec4e60",
+          "bytes": 30879
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+          "sha256": "dccb1ce3b7d52d67e4f7d17bf8ab2289a5e70831e89c5acf7d9a589edd2ccb5c",
+          "bytes": 80320
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+          "sha256": "155c71fa99fdc84d7ba05601fd3b4045cb856626f143cb5ff800fb59b2d129a7",
+          "bytes": 28820
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+          "sha256": "f97de4f2b0759eda6f0948105361d5d18496130c0491def492550e84336d4940",
+          "bytes": 115136
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+          "sha256": "6eb14cf40c8508e0d5195f5cfe9397db36edb755a0236e3ff08add8a95ff181e",
+          "bytes": 35845
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.provider.json": {
+          "sha256": "0b6da81461d060d44555ea3c97580c69e610f9fcfca5ec17f13b876544cd9f52",
+          "bytes": 48564
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.trajectory.jsonl": {
+          "sha256": "37b695e1cef30fcfa3ff3b7ad5d89b6d37839f12aa6467c144ac23643afe7d08",
+          "bytes": 21844
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.provider.json": {
+          "sha256": "96805ee2ade8850b82cf787ebf495c93aae9d8f060d19e8a65b376d4adb7ec03",
+          "bytes": 167526
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.trajectory.jsonl": {
+          "sha256": "3703b65d94a81d1d3d02252683c0bd524ed2f0070f5ce35ce5a7d89d7c6b7785",
+          "bytes": 46731
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.provider.json": {
+          "sha256": "0c13ac6127096f845f76caa27dfc2fcf95790870628a6115d38740352414ad0a",
+          "bytes": 104659
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.trajectory.jsonl": {
+          "sha256": "a4f5523e57847c9c78423e618cddb5fd16442cf0cdec2f752a3874ba136c7a33",
+          "bytes": 29671
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.provider.json": {
+          "sha256": "d89126fcbb85f77c8d65c340e9ff8e32c526cbf2c024ea25312b6346b84090a9",
+          "bytes": 96146
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.trajectory.jsonl": {
+          "sha256": "5776d3ccfc0fe2c15bbe49304291b84a0b3c50366ae7960cf6bf7195d22d017f",
+          "bytes": 28996
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.provider.json": {
+          "sha256": "b55c6867c664e27ca2be6668a8abc20414f49ad652cf934c69353a46b7a10667",
+          "bytes": 112398
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.trajectory.jsonl": {
+          "sha256": "bf5a5ab3e6af141e5c7757a10e3947271f32ab6d350a5e706955e9ef013267e2",
+          "bytes": 30745
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.provider.json": {
+          "sha256": "47fd70fdbf43c45de991f47a1d322a5ea2e44708725ef12de4087e02feb22509",
+          "bytes": 109633
+        },
+        "parquet.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.trajectory.jsonl": {
+          "sha256": "5fe4423c6a75a24b08d028b0f4e5829fdf748d663ea8b906351dff6c8fa4e1d9",
+          "bytes": 31232
+        },
+        "parquet.json": {
+          "sha256": "499cffbc717e230a8b3127684263a5758970c1c47d367707daf235bd495036db",
+          "bytes": 156552
+        }
+      }
+    },
+    {
+      "file": "seeded-fixtures.zip",
+      "source_root": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-current-data",
+      "file_count": 140,
+      "bytes": 4492466,
+      "sha256": "ffd26ccbdad42cf891a44aa7abb7477d8b9f1bff1f5cb1a82a01aa02187bdcb7",
+      "entries": {
+        "definitions.json": {
+          "sha256": "9a922953db9b08c153d5087bc631c97477c6d9566e33b6110315b47644ea1c17",
+          "bytes": 9904
+        },
+        "inventory/abbreviated/inventory_snapshots.csv": {
+          "sha256": "7fffe5f0ee125052133a9dda3543ed3abe7124a92937fc55176599ec47126f45",
+          "bytes": 156
+        },
+        "inventory/abbreviated/inventory_snapshots.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "8d09c1c4f70a558ba45943dd93668f61543b5662afa2cf5e5056f519bf69e5d0",
+          "bytes": 1590
+        },
+        "inventory/abbreviated/inventory_snapshots.delta/part-00000-b83a6b74-7fe0-4371-a89f-523f1b1c3bd7-c000.snappy.parquet": {
+          "sha256": "c278d345abc5038dc59ee74033b4f5270dad214d945b4f45b352587659af87a5",
+          "bytes": 1683
+        },
+        "inventory/abbreviated/inventory_snapshots.parquet": {
+          "sha256": "400bee0473b4d0e760387529bd39ac06d32bedf544d49624c1ad1a0e379f54c1",
+          "bytes": 1598
+        },
+        "inventory/abbreviated/inventory_snapshots.source.json": {
+          "sha256": "0955428502152cf46c03bd2606808b6ba056a35741b02ccec8ffa6f24bd2f68c",
+          "bytes": 393
+        },
+        "inventory/abbreviated/order_lines.csv": {
+          "sha256": "c9f2ab3f523b56a30c2949257610703bb577c8ee3dc1c6a49485fd002becb191",
+          "bytes": 220
+        },
+        "inventory/abbreviated/order_lines.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "59f5e450035e3ec7a03b333b0d9ee054d2636f0b0f1d02e6b3c719c400fbf6d2",
+          "bytes": 1852
+        },
+        "inventory/abbreviated/order_lines.delta/part-00000-0f052ded-9e1b-4069-8c96-c382f77c324d-c000.snappy.parquet": {
+          "sha256": "2d079a4a7f4cee9b37726ab5a729f9a5f6474de82c58570826ac24f4916e61b0",
+          "bytes": 2254
+        },
+        "inventory/abbreviated/order_lines.parquet": {
+          "sha256": "25682fa4ddf750f54f6f93958176d8d2fae960e2dfc2c50dc0acf1c334949462",
+          "bytes": 2090
+        },
+        "inventory/abbreviated/order_lines.source.json": {
+          "sha256": "3c0fbd1429f8c51993d884616f1c4d9790ae620fe1fa5653e97ba0a2c037fdee",
+          "bytes": 485
+        },
+        "inventory/abbreviated/products.csv": {
+          "sha256": "22e720118c5dd9340e45606a48b1f7b2f79a9f8b8386a07bdc5b0f5b987e464f",
+          "bytes": 60
+        },
+        "inventory/abbreviated/products.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "a040b829039e33da52e433c4455aab8b6965e5064bfb7ed685f365b64362a606",
+          "bytes": 1334
+        },
+        "inventory/abbreviated/products.delta/part-00000-0f06ee82-47fc-41bc-8c8b-199d08ce3cad-c000.snappy.parquet": {
+          "sha256": "caccebc5e9b8f9d5acc03d5dcc1c54832f119c1be2381844a78a3096c64c5fe1",
+          "bytes": 1077
+        },
+        "inventory/abbreviated/products.parquet": {
+          "sha256": "38bb1a08131610e730d2950a4a04ffca0920253091dfccf13d638f120056654a",
+          "bytes": 1000
+        },
+        "inventory/abbreviated/products.source.json": {
+          "sha256": "3ee391c0428a49dcaca01c17cfdfe483c4c143696fa41b1a69a7d53a5b2f0d9c",
+          "bytes": 285
+        },
+        "inventory/abbreviated/shipment_events.csv": {
+          "sha256": "2f3923168ba72ae13d6bb081332abea17c4f16800f161f6ed123ecdbeea19fa3",
+          "bytes": 181
+        },
+        "inventory/abbreviated/shipment_events.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "948f297c46c54aff711d4fb22bbf5251d7b2cdf078a19b8a41bc3a5e8ad16a91",
+          "bytes": 1577
+        },
+        "inventory/abbreviated/shipment_events.delta/part-00000-bfed550e-c5b6-4710-b031-165f8fdb4883-c000.snappy.parquet": {
+          "sha256": "f06330671754bfdd396afee376b646ef9c70ca6645481804157b9fd633215501",
+          "bytes": 1705
+        },
+        "inventory/abbreviated/shipment_events.parquet": {
+          "sha256": "d8419413b59cf3e58fd034cc2c1baf38621bbc15b65967e8ac4b91c8a2808382",
+          "bytes": 1621
+        },
+        "inventory/abbreviated/shipment_events.source.json": {
+          "sha256": "36d72ad07785d8fb2c9f914c59e6a7aebc97e6d0974cbc4b5bc5e4060303ee6e",
+          "bytes": 386
+        },
+        "inventory/camel/inventory_snapshots.csv": {
+          "sha256": "668f6cd27d24c9a69aac65e7f6383c4826ac3ba819b5eeb84093e270e6f09920",
+          "bytes": 180
+        },
+        "inventory/camel/inventory_snapshots.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "1abe1a718dc92ea1893537f8d3cc0e5a27cd32be8a79c41daefe94a7af84631e",
+          "bytes": 1686
+        },
+        "inventory/camel/inventory_snapshots.delta/part-00000-456d3f82-8f0a-4baa-8e83-1dba5d7c1275-c000.snappy.parquet": {
+          "sha256": "a1a305382e8022e66661e5c267e6dbeb61217628994d87132f7bea0553ce44f2",
+          "bytes": 1763
+        },
+        "inventory/camel/inventory_snapshots.parquet": {
+          "sha256": "74ed39e7c661c2d12673acaa4f00e125819e6ee175b6e2f64b51c45dbb85b3ce",
+          "bytes": 1678
+        },
+        "inventory/camel/inventory_snapshots.source.json": {
+          "sha256": "c4ac03f6d540b2c4141050b7a8a5e856f0d66e6a3e3258c935f7196eb7f85706",
+          "bytes": 417
+        },
+        "inventory/camel/order_lines.csv": {
+          "sha256": "ab964c155c840576eabc3c065aa904bc34e62b1ca262a36e66271076b304b419",
+          "bytes": 243
+        },
+        "inventory/camel/order_lines.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "a9818dee543aa0d28fa90359f524daa66f137b59fd66e33ddf1a40b7269470b7",
+          "bytes": 1945
+        },
+        "inventory/camel/order_lines.delta/part-00000-70d5d4d8-7261-4108-8ea1-970dcab34732-c000.snappy.parquet": {
+          "sha256": "4ab09d87762bd041efc5c63e8ab6969695b99f94b0ba0f231d590ddfc314f2ff",
+          "bytes": 2340
+        },
+        "inventory/camel/order_lines.parquet": {
+          "sha256": "f39ac95e9e768873eaa408a0d42a2c47b5ee3cbbfedc3ebb594e21b072bb9267",
+          "bytes": 2180
+        },
+        "inventory/camel/order_lines.source.json": {
+          "sha256": "acf18a215f31cd48b16c56929c321012c9fe2b9ba18734b364a7975d4f859dab",
+          "bytes": 508
+        },
+        "inventory/camel/products.csv": {
+          "sha256": "c960e078e5194eaa8ac14ea752b741603890cf09f1ec2734ee10e7a54cae63df",
+          "bytes": 70
+        },
+        "inventory/camel/products.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "2d532102440c1b15884b6502e232495de8a8b49f27e0161858653206bfad24f3",
+          "bytes": 1373
+        },
+        "inventory/camel/products.delta/part-00000-479c0548-0e61-420f-a3cd-a7b3902bec56-c000.snappy.parquet": {
+          "sha256": "568452465ed6896fa97c7acf0cfe44362a218032f2703706affff5781789af15",
+          "bytes": 1113
+        },
+        "inventory/camel/products.parquet": {
+          "sha256": "3938d80e695158b3cd24d09544b6509f4e71e8e74bb0c14ff2482a08b722f8aa",
+          "bytes": 1032
+        },
+        "inventory/camel/products.source.json": {
+          "sha256": "dc6695ed8a084604211c7120d6e4f7a60efa79c2858c8fce0d947193d0b6c37f",
+          "bytes": 295
+        },
+        "inventory/camel/shipment_events.csv": {
+          "sha256": "488d3f7ed881a09b083ec2b53f793955fc76dfe9f55f06730abef9fe3979a5ef",
+          "bytes": 195
+        },
+        "inventory/camel/shipment_events.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "51e232120089e555d5d04a4fbdef618e3ec7fe1f2c9bd5c51f09e09807c76b8c",
+          "bytes": 1634
+        },
+        "inventory/camel/shipment_events.delta/part-00000-502f5c01-e1e6-4f2d-8d0a-23cc9739143a-c000.snappy.parquet": {
+          "sha256": "e6c5ddb5742c5b0b4a483089b5de866b3af1d182e6180a503220826d69c28839",
+          "bytes": 1753
+        },
+        "inventory/camel/shipment_events.parquet": {
+          "sha256": "d23c792374b595ff88682e1e5d372f18505599cff90b6533b2c1e1534b03301a",
+          "bytes": 1661
+        },
+        "inventory/camel/shipment_events.source.json": {
+          "sha256": "9fb54d57bf74511a55833fcc33d2610b843a18ca8f77113a418601c79b4b7aa5",
+          "bytes": 400
+        },
+        "inventory/descriptive/inventory_snapshots.csv": {
+          "sha256": "ae8810550ff8573b8c3215a79e02fd6df82c9fdec9604486901ede578ad3066e",
+          "bytes": 186
+        },
+        "inventory/descriptive/inventory_snapshots.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "fa3d0561c7e2529714421c9903bd68e27df9b8e50197d639b9397613e8cfb75c",
+          "bytes": 1710
+        },
+        "inventory/descriptive/inventory_snapshots.delta/part-00000-81010315-6dc0-4f25-b0db-b5b18d0752d5-c000.snappy.parquet": {
+          "sha256": "99474ec15250536f6397bcb41ccb6b45ff7dc6fcf59d7fea64f25cccab47a5fe",
+          "bytes": 1787
+        },
+        "inventory/descriptive/inventory_snapshots.parquet": {
+          "sha256": "ea12736f64d2f3fa1871f7ebdf2e1c7cd1fc4c1ad663978fb1ff923888b6b8bf",
+          "bytes": 1702
+        },
+        "inventory/descriptive/inventory_snapshots.source.json": {
+          "sha256": "d1f5d57497b5a3297c263ec64e917e9766eb4073cc45d056c804f2c18bf84eb5",
+          "bytes": 423
+        },
+        "inventory/descriptive/order_lines.csv": {
+          "sha256": "dc14255c947d934fd21f7d926aa464642e4c36b610182b2e96cdea608ac30080",
+          "bytes": 250
+        },
+        "inventory/descriptive/order_lines.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "84b55b5fb1cf537320245a06f7afcbd166477754d070490818460d555ded43a3",
+          "bytes": 1972
+        },
+        "inventory/descriptive/order_lines.delta/part-00000-9157f309-5a40-4102-8046-544ca4d8846f-c000.snappy.parquet": {
+          "sha256": "deaf00b984cc90ae6cebc91ed28e5096069b96f310ebf21ecf63ae71c47ced95",
+          "bytes": 2362
+        },
+        "inventory/descriptive/order_lines.parquet": {
+          "sha256": "f8d5f5932b66a2ae5a2fb2d2e26be8364aa71e8a2246fb1e77f51536955210d6",
+          "bytes": 2206
+        },
+        "inventory/descriptive/order_lines.source.json": {
+          "sha256": "ebc5a14daa4555dcfb5130b7c1470df06ab3b9f0e1f9f4217c854cbe2d8522ef",
+          "bytes": 515
+        },
+        "inventory/descriptive/products.csv": {
+          "sha256": "a5a3110c0dbed488c1e1cf46d54c8939ce64b74d2784ae2c966d69674c1afff0",
+          "bytes": 73
+        },
+        "inventory/descriptive/products.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "c93bf186384f9fa43505408e1921a2fdf469cc3f340f973336b6f2b45e24040e",
+          "bytes": 1385
+        },
+        "inventory/descriptive/products.delta/part-00000-84258932-c036-4c6a-9ffd-863cdbc45600-c000.snappy.parquet": {
+          "sha256": "c6220c009772df465a79e650e1c207aeb08e20288f187cc785ce069a23244874",
+          "bytes": 1123
+        },
+        "inventory/descriptive/products.parquet": {
+          "sha256": "23574210c5d4e0480cb988cbbeba20104a82869ab50bf897c71cdb220b5f8fae",
+          "bytes": 1038
+        },
+        "inventory/descriptive/products.source.json": {
+          "sha256": "fcd1b51043025386a2f8344bce612e552d0b0ec334c3a04de020b6d0f1d998c5",
+          "bytes": 298
+        },
+        "inventory/descriptive/shipment_events.csv": {
+          "sha256": "15af795a5daaca16ad0d62cdb0495a36199dde1380004b55d22d56071394abe2",
+          "bytes": 200
+        },
+        "inventory/descriptive/shipment_events.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "eee7bd4b7e585e5ab25c732d418cf6aea34ad39f2c01ced6d754b2a5eec03615",
+          "bytes": 1653
+        },
+        "inventory/descriptive/shipment_events.delta/part-00000-cd64303d-b158-4bae-bdeb-d46a38eaf281-c000.snappy.parquet": {
+          "sha256": "ec394ae3d61a6baae6176a9d9bc7e7248fc9820c35660a21aeb8f9e2b3a113fe",
+          "bytes": 1771
+        },
+        "inventory/descriptive/shipment_events.parquet": {
+          "sha256": "f2b245c62197bb0fa05d57b063caeac567e4572842a03c03c0e367bc9772aa74",
+          "bytes": 1683
+        },
+        "inventory/descriptive/shipment_events.source.json": {
+          "sha256": "991b28a884ad076756c0bd50f5e6b7d16df5af48afa27d64eb786002c58bb5da",
+          "bytes": 405
+        },
+        "manifest.json": {
+          "sha256": "e780f9cf51a4739f4bf9e731226567c00d74b300d05c4a78090fb74c7d83181e",
+          "bytes": 343
+        },
+        "manufacturing/abbreviated/defects.csv": {
+          "sha256": "f75a8480474010c292a62a57eff7a673ca420415aac940835650662633fbf909",
+          "bytes": 159
+        },
+        "manufacturing/abbreviated/defects.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "0c3ad4e8d5fab0d6b3905d2e186b1ac8e186a7fc737de9bbf794c787dd480d1d",
+          "bytes": 1471
+        },
+        "manufacturing/abbreviated/defects.delta/part-00000-8fae3c38-2c16-4145-8fec-0c66b95fe546-c000.snappy.parquet": {
+          "sha256": "a3bcb186b2525343dc5c1c9e7a07a4809fc8f3bdac70f1a08b9d3f0357eeb9ea",
+          "bytes": 1395
+        },
+        "manufacturing/abbreviated/defects.parquet": {
+          "sha256": "bc67cc8770006239ed042288c0f0bd8ea4072ace726c966ba534579b12b271a9",
+          "bytes": 1299
+        },
+        "manufacturing/abbreviated/defects.source.json": {
+          "sha256": "bc044114f639bc97e3846c64a5b6945ef0f8778ce7b59ba8de91f94c351b3220",
+          "bytes": 335
+        },
+        "manufacturing/abbreviated/production.csv": {
+          "sha256": "e58be04e6a8bb7f6a052438df356c4308aea7c730baa566f47c1f9b904596bf2",
+          "bytes": 126
+        },
+        "manufacturing/abbreviated/production.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "701cb5921925158638d00a14ece44f2ccf04489ceffbfb19a9d60810d7890741",
+          "bytes": 1589
+        },
+        "manufacturing/abbreviated/production.delta/part-00000-466a6cea-7efe-420a-8f55-ff2893d994c6-c000.snappy.parquet": {
+          "sha256": "703daa490d2cf88f6e0c6cfb1cebf6cf625336e2e471b0d2e60b09f22f4fd6e9",
+          "bytes": 1566
+        },
+        "manufacturing/abbreviated/production.parquet": {
+          "sha256": "5ba0d4de7808ba1e0bef741d3db0a7ba8e283ac7c4f9dbc9eacf01f89268c04f",
+          "bytes": 1460
+        },
+        "manufacturing/abbreviated/production.source.json": {
+          "sha256": "ef33f0896a4b206c96c38e8d3bf6c968884b28a157602583ff36ddb3e41a55d2",
+          "bytes": 386
+        },
+        "manufacturing/camel/defects.csv": {
+          "sha256": "089be2efd75a1949ffc21dbc50b24aaf33f57e0238983d56e45148294f62b541",
+          "bytes": 175
+        },
+        "manufacturing/camel/defects.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "8ccbd60b1ae15d625330a33849182ca64e924be2d75a09015d64f0678937d212",
+          "bytes": 1535
+        },
+        "manufacturing/camel/defects.delta/part-00000-c028329d-de0e-4f5a-a0c3-9bc0b7ad500c-c000.snappy.parquet": {
+          "sha256": "ede645cfa2f69607a51c865a3e30d4aab3dff4ef686873ce9012765031c0e387",
+          "bytes": 1443
+        },
+        "manufacturing/camel/defects.parquet": {
+          "sha256": "db90f23e5ad03dafd5b3fffe870511122e4eeef84fc525e915d24ff1c3047f19",
+          "bytes": 1351
+        },
+        "manufacturing/camel/defects.source.json": {
+          "sha256": "1830fbb4cdd8a94ecd6ceee52ffae22277ba375a252066c57373cc0ae2685e0d",
+          "bytes": 351
+        },
+        "manufacturing/camel/production.csv": {
+          "sha256": "e18222173d65995a41ed1d91f3b03bb7a73689418db8e22c0f528f6b606986d8",
+          "bytes": 155
+        },
+        "manufacturing/camel/production.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "3b2438f29d0fff95ec99a3fdb82960f579c32d8e41bb979b28fd36e7f2a004e0",
+          "bytes": 1704
+        },
+        "manufacturing/camel/production.delta/part-00000-44976aab-4703-47ce-8a06-bdc3a6400c32-c000.snappy.parquet": {
+          "sha256": "1cb53f23e133d64e5a42d652789a9ff9bdb487a22d6e5ab527a91cdcce445b4f",
+          "bytes": 1660
+        },
+        "manufacturing/camel/production.parquet": {
+          "sha256": "7b004ecb9e541844417be31b58f3e578ac71d5d9ab53c2418256a29aef7f044a",
+          "bytes": 1550
+        },
+        "manufacturing/camel/production.source.json": {
+          "sha256": "382c119f5530885d63cf288eabd4568c18ed764e9c67b5694723db4f32f01b4f",
+          "bytes": 415
+        },
+        "manufacturing/descriptive/defects.csv": {
+          "sha256": "2c5489f58ed8db0f86f570a0377fd94aea9d0a3bb5344480c37486ef574dd381",
+          "bytes": 179
+        },
+        "manufacturing/descriptive/defects.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "e9885f334dffce243e8c9b57dfabc23f8ecda8a9e00b38d74248f3d3d165d46d",
+          "bytes": 1551
+        },
+        "manufacturing/descriptive/defects.delta/part-00000-8d9d63a9-7410-4de3-bd05-69302788aecc-c000.snappy.parquet": {
+          "sha256": "4ee63cde03586cd0221a7c4b33ff3b093cf11b1e8452671d4bc561eb60ee510a",
+          "bytes": 1463
+        },
+        "manufacturing/descriptive/defects.parquet": {
+          "sha256": "c2c46d9ca4ca905391e4fbafa0828985140a90bab0d980b92c79daf64414ee5e",
+          "bytes": 1371
+        },
+        "manufacturing/descriptive/defects.source.json": {
+          "sha256": "472f463b235409162c3ae27ca732eb9d8cabe8b5415a05d1db0a04d726dda921",
+          "bytes": 355
+        },
+        "manufacturing/descriptive/production.csv": {
+          "sha256": "a07f28d09da1ed8a9c072e6a29ce80af2331925720d263c50312aaa5eabd6dec",
+          "bytes": 160
+        },
+        "manufacturing/descriptive/production.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "90be2693e1b2488651acad6c2e888bd88eb3654303e158ea6f6f1791684b33ab",
+          "bytes": 1724
+        },
+        "manufacturing/descriptive/production.delta/part-00000-ba65faa6-45a7-4bb5-abb2-8c41e97cc6a9-c000.snappy.parquet": {
+          "sha256": "a57e5d1b6f3a02c181bcc4131dd8a60a233b4f0e923c91d9bb09b6280d631185",
+          "bytes": 1674
+        },
+        "manufacturing/descriptive/production.parquet": {
+          "sha256": "36c59aea28d490a4cfeab5eba62ee1a91739847d75e2c85ebb350bf374228941",
+          "bytes": 1572
+        },
+        "manufacturing/descriptive/production.source.json": {
+          "sha256": "1b7767df296c41377fd8bb409941a3cdcf412253fc246bdac46027a445866c6c",
+          "bytes": 420
+        },
+        "private/references.json": {
+          "sha256": "ffc89c0dbfbfe29af2ef507e2ca4c03898f06ce7e777aa39f658e3ba4688c71a",
+          "bytes": 11179
+        },
+        "questions.json": {
+          "sha256": "d32ba61ea95d5e5c1ced8d71368130eb037988704dfdb02ce10d37fe209218db",
+          "bytes": 4342
+        },
+        "service/abbreviated/sla_policies.csv": {
+          "sha256": "7446c77608ed22cc0c832a4b1c7e55dc2281043c52567918827d446b05756966",
+          "bytes": 51
+        },
+        "service/abbreviated/sla_policies.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "2415276e3e2daaa47dd26a7f46288dcea1fe8f838dc1b0a1780abe5490c37856",
+          "bytes": 1325
+        },
+        "service/abbreviated/sla_policies.delta/part-00000-422d6c01-77f7-46fd-b1e3-3b942b41a32d-c000.snappy.parquet": {
+          "sha256": "9926071174b8ead603e113dee43a9ad60eef4b9aa37dcc41c53e2f119a53028f",
+          "bytes": 1055
+        },
+        "service/abbreviated/sla_policies.parquet": {
+          "sha256": "4420d875980d40bae654f317755c1696570e48a33725b8c50b44fd4da5eb64d6",
+          "bytes": 994
+        },
+        "service/abbreviated/sla_policies.source.json": {
+          "sha256": "2cbfb772125c664d6ecec04a11a1a63f56653bfa30d37e88662d7e60ad6fce7d",
+          "bytes": 290
+        },
+        "service/abbreviated/ticket_events.csv": {
+          "sha256": "882ce8b6e94a5742fe1956b1c63634c059b4f6549d5715d02a83ad56c05a1196",
+          "bytes": 268
+        },
+        "service/abbreviated/ticket_events.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "95bd77f51f9e78d06127f6b41ee15f2d5694e176da053a2ffce2637e0592052b",
+          "bytes": 1518
+        },
+        "service/abbreviated/ticket_events.delta/part-00000-d7937e81-5e80-4833-9696-bd62ce4c0ad8-c000.snappy.parquet": {
+          "sha256": "757866dbd90b15da54ba54caa28f5e4f45078492f2c86ac9d22195adbbf99422",
+          "bytes": 1449
+        },
+        "service/abbreviated/ticket_events.parquet": {
+          "sha256": "c1c1fe34d893c760ff084d1488d052f02e4b814cb064cc89fde5288034b54a0a",
+          "bytes": 1377
+        },
+        "service/abbreviated/ticket_events.source.json": {
+          "sha256": "40b1ae367e14d6e764bc6240a7d5836b0d4810192bc051b2774bf64d9d544f10",
+          "bytes": 357
+        },
+        "service/abbreviated/tickets.csv": {
+          "sha256": "84dff4a5455d96a9a97f5f1d95528242a2c8d02a9dbb0392bd62f6d2723322ba",
+          "bytes": 240
+        },
+        "service/abbreviated/tickets.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "de84a3dd4d5f4717c26a22e763a54cdb6d01593c1768e71032e28ac2dc2e1554",
+          "bytes": 1800
+        },
+        "service/abbreviated/tickets.delta/part-00000-1d913c0c-bb8c-4762-89ab-ee54f75c3175-c000.snappy.parquet": {
+          "sha256": "027877875aa2cadf6d3c3a88f06326b3d79f7b14568059eec844834336f9dce3",
+          "bytes": 1982
+        },
+        "service/abbreviated/tickets.parquet": {
+          "sha256": "97e74219d7505537e6489ee4aac72aba682089665378414261ffceb9448af93f",
+          "bytes": 1898
+        },
+        "service/abbreviated/tickets.source.json": {
+          "sha256": "a9b3f7a3f161b4c6a6617ad307060444d7deaa9445e65e54a3a49e41bd934983",
+          "bytes": 467
+        },
+        "service/camel/sla_policies.csv": {
+          "sha256": "b1c5d8687d276d924231a8bc519f0ea8b08fdd0334f345f4b19b9a6d721fbb65",
+          "bytes": 68
+        },
+        "service/camel/sla_policies.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "916741ceb42adcd3a82a02bfbe196d7e6d1facd9b696f888b7dbe271f5fdbfc6",
+          "bytes": 1394
+        },
+        "service/camel/sla_policies.delta/part-00000-c893194d-902d-4f09-b2d1-a2fe8241f7b6-c000.snappy.parquet": {
+          "sha256": "2abafa65a722be71070cc239df242eef424d393bda4e1247a10d7c7e73f98f17",
+          "bytes": 1121
+        },
+        "service/camel/sla_policies.parquet": {
+          "sha256": "41cbc868c21ff9272faa1ba63dc0d9be82d9a71ffded5197a1d9ba378b458eb8",
+          "bytes": 1060
+        },
+        "service/camel/sla_policies.source.json": {
+          "sha256": "7f6a2af86c7f48f48f703a3788ae8ea1d2ea954a2a432c59b766ab1eb05a8db5",
+          "bytes": 307
+        },
+        "service/camel/ticket_events.csv": {
+          "sha256": "b06824f154378bdb9c7da2d81647c6f9f56ade0b9ea6a3b4e52ad51897cfaa87",
+          "bytes": 275
+        },
+        "service/camel/ticket_events.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "1d3301b2591e87744d35f9b1cb0516a35562c8c76995f65d2e29d53a6177c6d3",
+          "bytes": 1546
+        },
+        "service/camel/ticket_events.delta/part-00000-5aa5ca20-1a5f-4780-bc9f-60c660aff1dc-c000.snappy.parquet": {
+          "sha256": "9f8af6bf36f72f6170bff8db380976452f1aa77dd49d913341d4b7c80b299ebd",
+          "bytes": 1475
+        },
+        "service/camel/ticket_events.parquet": {
+          "sha256": "d981039da4d09fe1c33279c16533a34253536e2b62cf3f307966cec37558e1c6",
+          "bytes": 1403
+        },
+        "service/camel/ticket_events.source.json": {
+          "sha256": "4462d821eacc27b19f15bfda549707b5c0038c76f723f4d566cd472bc181d926",
+          "bytes": 364
+        },
+        "service/camel/tickets.csv": {
+          "sha256": "7c4a0ce7dabd6ef1274c09d75925efc27b0b7fb41e3c5385708dc926b4f75fb7",
+          "bytes": 253
+        },
+        "service/camel/tickets.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "38c5b03fff64b090a92d08f84a3fa00ee35dbbf0ce875158b869fbb230318534",
+          "bytes": 1852
+        },
+        "service/camel/tickets.delta/part-00000-7f1a75b7-6f3d-4ebf-869b-8dae6776c19a-c000.snappy.parquet": {
+          "sha256": "85dc2b433ed1f3e815bd1a74fe7333e00a4953fad20e8c36d81379e0300ac870",
+          "bytes": 2040
+        },
+        "service/camel/tickets.parquet": {
+          "sha256": "2c816a80895284b95573bb41516e9822160db16c1bc5c94ecfc13be0c2d8d4b4",
+          "bytes": 1956
+        },
+        "service/camel/tickets.source.json": {
+          "sha256": "881c0c8e8cab1c22ac61b70dee93359a2397d70c76c725dd9fa44d70d9362611",
+          "bytes": 480
+        },
+        "service/descriptive/sla_policies.csv": {
+          "sha256": "70715b6e4e69d12ee8c124d3af47f82672fde3d2816f2e1b0126c9e587647cb3",
+          "bytes": 71
+        },
+        "service/descriptive/sla_policies.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "61f6dc78c2ad1128dff2cf9b5dea51bbc9fe72f9f7840a182399a25c8239eb7e",
+          "bytes": 1405
+        },
+        "service/descriptive/sla_policies.delta/part-00000-981fba53-9486-4e1e-bbcf-d0bb5d8cb85e-c000.snappy.parquet": {
+          "sha256": "32ec98c20b248a08f982d71287af4898ea5fbb036911655f8dec77bcbf5debdc",
+          "bytes": 1127
+        },
+        "service/descriptive/sla_policies.parquet": {
+          "sha256": "97767d468b90531b88f1c3b5ce38482e5c36e35e20626a94c146f540a82bea9f",
+          "bytes": 1066
+        },
+        "service/descriptive/sla_policies.source.json": {
+          "sha256": "6e88c4f896aee7a5c68482f2371060e91aab232703be978d2ebd5d4c4ba096cd",
+          "bytes": 310
+        },
+        "service/descriptive/ticket_event_history_large.csv": {
+          "sha256": "86304ac64e8d49c43d758ab316d740e2131b9738089e75b6d18a503d0424f1ad",
+          "bytes": 30000049
+        },
+        "service/descriptive/ticket_events.csv": {
+          "sha256": "f1574e83bc1035ca5d7dd30e9b3acdfa5607473acf8590cf364cb7648a3b6bd0",
+          "bytes": 279
+        },
+        "service/descriptive/ticket_events.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "6d0cbfe6dfe7bafd6886051ab4ec36f58c3ec39e27ef93a1fb735464b4474140",
+          "bytes": 1561
+        },
+        "service/descriptive/ticket_events.delta/part-00000-34bf09f8-ff30-41e7-988b-ab1ef77bc2db-c000.snappy.parquet": {
+          "sha256": "9114e444e711a84114e9a085a6e9e63a4723c40c6d9cb0bdc2332c9c14beb01d",
+          "bytes": 1495
+        },
+        "service/descriptive/ticket_events.parquet": {
+          "sha256": "4e784abf0697c00d3f0fca84e1a0c8fea8aa7fe6ebd2046ce865b5b7eb6fc29a",
+          "bytes": 1419
+        },
+        "service/descriptive/ticket_events.source.json": {
+          "sha256": "543363f2680a5a471f98444e0b19f889eb66555c7c5bf4ef8b937445a2f99cbc",
+          "bytes": 368
+        },
+        "service/descriptive/tickets.csv": {
+          "sha256": "a83579ee12f81e051c3de10635d15f2139f06fa330f9a1d46541026c586a13c1",
+          "bytes": 258
+        },
+        "service/descriptive/tickets.delta/_delta_log/00000000000000000000.json": {
+          "sha256": "25077865e9883ea88397af324b935cff90338ce22e22a112890d4bceea786461",
+          "bytes": 1872
+        },
+        "service/descriptive/tickets.delta/part-00000-b559056c-091a-4677-b722-ca75cf97a039-c000.snappy.parquet": {
+          "sha256": "a8d3c4a2e4a459810ff2bb9eb5234993cec5560abd695b1e5aa3649ea3787b3b",
+          "bytes": 2050
+        },
+        "service/descriptive/tickets.parquet": {
+          "sha256": "1ec4c0cecab0eb9d8ae5f92b038d9acad86e3cbff1fe74b837c4238cb617b959",
+          "bytes": 1966
+        },
+        "service/descriptive/tickets.source.json": {
+          "sha256": "7a8c389f834cf8f50849fc7d5c1a2f04bf61a4c712cff41a6ade49cc63821bd6",
+          "bytes": 485
+        }
+      }
+    }
+  ],
+  "derived_files": [
+    {
+      "file": "initial-analysis.json",
+      "source": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-initial-analysis.json",
+      "bytes": 76477,
+      "sha256": "7f715f426f2931bd986eff07723f0229e535345a5ae8ff1e0cdf721d8fa7c80b"
+    },
+    {
+      "file": "typed-analysis.json",
+      "source": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-analysis.json",
+      "bytes": 151864,
+      "sha256": "442ddaa2c1603193b64a8587ca76481cb211eaf9059c0aeb87d0bf144f53a078"
+    },
+    {
+      "file": "typed-failure-cases.json",
+      "source": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-failure-cases.json",
+      "bytes": 10549,
+      "sha256": "cfd44b8c933f8372aafa71593504e14d185e86fc887d598bd863fbb459c11bd3"
+    },
+    {
+      "file": "typed-trace-slices.json",
+      "source": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-trace-slices.json",
+      "bytes": 74867,
+      "sha256": "2e28b515eac69bdfee690799325be82ac0094f158100a3688622df3af336e343"
+    },
+    {
+      "file": "initial-numeric-probe.json",
+      "source": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-current-numpy-probe.json",
+      "bytes": 391,
+      "sha256": "b7cb6f3e9c8b9d4d9dbb9a9e54b31d6d287c405372809a080c4122f5cf2de555"
+    },
+    {
+      "file": "offline-tests.xml",
+      "source": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-candidate-tests.xml",
+      "bytes": 457066,
+      "sha256": "d6782138e7742ca3a63f31aa54dd2659a0edcc450c691fc7b81ff2eaa709b703"
+    }
+  ]
+}
