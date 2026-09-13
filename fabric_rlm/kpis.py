@@ -66,13 +66,15 @@ class Entity:
     repeaters: int
     score: float
     reasons: tuple[str, ...] = ()
+    fact: str = ""  # the fact whose activity defines new, active and gone
 
     @property
     def repeat_rate(self) -> float:
         return self.repeaters / self.entities if self.entities else 0.0
 
     def describe(self) -> str:
-        return f"{self.name} ({self.column}: {self.entities:,} distinct, {self.repeat_rate:.0%} active in more than one month)"
+        where = f" on {self.fact}" if self.fact else ""
+        return f"{self.name} ({self.column}{where}: {self.entities:,} distinct, {self.repeat_rate:.0%} active in more than one month)"
 
 
 def _entity_word(column: str, joins: Mapping[tuple[str, str], tuple[str, str]], table: str) -> str:
@@ -101,8 +103,15 @@ def _candidate_keys(schema: Any, table: str, dialect: Any) -> list[str]:
     return out
 
 
-def discover_entities(probe: Any, dialect: Any, fact: Mapping[str, Any], joins: Mapping[tuple[str, str], tuple[str, str]], run: Any) -> list[Entity]:
-    """Rank the keys of a fact as entities: how many there are, how many recur across months, and whether the name says entity."""
+def discover_entities(probe: Any, dialect: Any, facts: Sequence[Mapping[str, Any]], joins: Mapping[tuple[str, str], tuple[str, str]], run: Any) -> list[Entity]:
+    """Rank the keys of the facts as entities: how many there are, how many recur across months, and whether the name says entity."""
+    found: list[Entity] = []
+    for fact in facts:
+        found.extend(_entities_of(probe, dialect, fact, joins, run))
+    return sorted(found, key=lambda e: (-e.score, -e.entities, e.column))
+
+
+def _entities_of(probe: Any, dialect: Any, fact: Mapping[str, Any], joins: Mapping[tuple[str, str], tuple[str, str]], run: Any) -> list[Entity]:
     schema = probe.schema
     table = fact["table"]
     found: list[Entity] = []
@@ -138,8 +147,8 @@ def discover_entities(probe: Any, dialect: Any, fact: Mapping[str, Any], joins: 
             reasons.append(f"{rate:.0%} recur every month, more a dimension than a population")
         else:
             reasons.append(f"only {rate:.0%} recur, more an event than a population")
-        found.append(Entity(column, name, entities, rows_n, repeaters, score, tuple(reasons)))
-    return sorted(found, key=lambda e: (-e.score, -e.entities, e.column))
+        found.append(Entity(column, name, entities, rows_n, repeaters, score, tuple(reasons), table))
+    return found
 
 
 def _month_index_sql(dialect: Any, fact: Mapping[str, Any]) -> str:
@@ -251,7 +260,8 @@ def resolve_entity(spec: KpiSpec, entities: Sequence[Entity], override: str | No
                 return e, f"entity {e.describe()}, matching '{spec.entity_words}'"
     best = entities[0]
     others = ", ".join(e.describe() for e in entities[1:4])
-    return best, f"entity {best.describe()}, ranked first because it is {', '.join(best.reasons)}" + (f"; other candidates: {others}" if others else "") + "; say entity=... to change"
+    missing = f"nothing on any fact is called '{spec.entity_words}'; " if words else ""
+    return best, f"{missing}entity {best.describe()}, ranked first because it is {', '.join(best.reasons)}" + (f"; other candidates: {others}" if others else "") + "; say entity=... to change"
 
 
 # --------------------------------------------------------------------------- #
@@ -660,7 +670,9 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
     briefs: list[Any] = []
     entities: list[Entity] = []
     entity_choice = ""
-    lifecycle_cache: dict[tuple[str, int], tuple[list[LifecyclePoint], list[str]]] = {}
+    lifecycle_cache: dict[tuple[str, str, int], tuple[list[LifecyclePoint], list[str]]] = {}
+    produced: dict[tuple[str, str, str, int], str] = {}
+    facts_with_axis: list[dict[str, Any]] = []
     try:
         if target_week is None:
             rows = run(dialect.daily(fact, [measure0] if measure0 else []))
@@ -676,7 +688,11 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
         target_index = period_of(_dt.date.fromisoformat(target_week.start), grain)
         first_index = target_index - history_weeks + 1
         if any(s.kind in _LIFECYCLE_KINDS for s in kpi_specs):
-            entities = discover_entities(probe, dialect, fact, joins, run)
+            for table in [fact_name] + [t for t in probe.facts(text) if t != fact_name][:4]:
+                table_axis = dialect.axis(table)
+                if table_axis is not None:
+                    facts_with_axis.append({"table": table, "date": table_axis, "measure": default_measure(schema, table) or "", "aggregate": "sum"})
+            entities = discover_entities(probe, dialect, facts_with_axis, joins, run)
     except _Budget:
         return [], [], "", spent, ["the budget ran out before the KPIs could be measured"], target_week
 
@@ -691,7 +707,13 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
                 if not entity_choice:
                     entity_choice = why
                 span = spec.window if spec.window else window
-                cache_key = (chosen.column, span)
+                same_count = (spec.kind, chosen.fact, chosen.column, span)
+                if same_count in produced:
+                    notes.append(f"{spec.name}: the same count as '{produced[same_count]}' ({why.split('; say entity')[0]}); not repeated")
+                    continue
+                produced[same_count] = spec.name
+                entity_fact = next((f for f in facts_with_axis if f["table"] == chosen.fact), fact)
+                cache_key = (chosen.fact, chosen.column, span)
                 if cache_key in lifecycle_cache:
                     points, missing = lifecycle_cache[cache_key]  # new, active, retained and churned all come from the same growth accounting
                 else:
@@ -702,13 +724,13 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
                         if affordable < len(periods):
                             kpi_notes.append(f"history limited to {affordable} weeks by the query budget")
                             periods = periods[-affordable:]
-                    points, missing = skipped_periods(lifecycle_series(probe, dialect, fact, chosen.column, grain, span, run, periods=periods))
+                    points, missing = skipped_periods(lifecycle_series(probe, dialect, entity_fact, chosen.column, grain, span, run, periods=periods))
                     lifecycle_cache[cache_key] = (points, missing)
                 if missing:
                     kpi_notes.append(f"{len(missing)} week(s) the model would not answer were left out: {', '.join(missing[:3])}")
                 weeks = [Week(p.start, p.value(spec.kind), p.active, 7) for p in points if first_index <= p.index <= target_index]
                 name = f"{spec.kind} {chosen.name}"
-                definition = kpi_definition(spec, entity=chosen, grain=grain, how=f"{chosen.column} on {fact_name}")
+                definition = kpi_definition(spec, entity=chosen, grain=grain, how=f"{chosen.column} on {chosen.fact}")
                 extra = {"growth": [p for p in points if p.index <= target_index][-26:], "entity": chosen}
             elif spec.kind == "ratio":
                 num, num_filters, missing_n = _side(spec.numerator, probe, joins, instructions, scope)

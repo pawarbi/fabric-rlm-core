@@ -70,7 +70,7 @@ def test_entities_are_ranked_by_structure_and_the_lifecycle_counts_are_exact():
     customers, products = result.entities
     assert customers.entities == 101 and customers.name == "customers" and "named like an entity" in customers.reasons and customers.score > products.score
     assert products.entities == 5 and any("recur every month" in reason for reason in products.reasons)
-    assert result.entity_choice.startswith("entity customers (customer_id: 101 distinct")
+    assert result.entity_choice.startswith("entity customers (customer_id on sales: 101 distinct")
     new = next(m for m in result.metrics if m.kind == "new")
     churned = next(m for m in result.metrics if m.kind == "churned")
     active = next(m for m in result.metrics if m.kind == "active")
@@ -86,7 +86,7 @@ def test_entities_are_ranked_by_structure_and_the_lifecycle_counts_are_exact():
     assert result.mismatches == () and result.queries <= 90
     html = result.to_html()
     assert "<h2>Definitions</h2>" in html and "customers whose first activity falls in the week" in html and "who stayed, who joined, who came back, who left" in html
-    assert "Entities: entity customers (customer_id: 101 distinct" in html
+    assert "Entities: entity customers (customer_id on sales: 101 distinct" in html
     markdown = result.to_markdown()
     assert "Definition: customers whose first activity falls in the week (customer_id on sales)." in markdown
 

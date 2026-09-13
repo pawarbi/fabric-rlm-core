@@ -485,7 +485,11 @@ def _expectation(weeks: Sequence[Week], index: int) -> tuple[float | None, list[
 
 
 def _ordinal(n: int) -> str:
-    return {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth", 6: "sixth", 7: "seventh", 8: "eighth"}.get(n, f"{n}th")
+    words = {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth", 6: "sixth", 7: "seventh", 8: "eighth"}
+    if n in words:
+        return words[n]
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
 
 
 def _change_points(weeks: Sequence[Week], *, min_size: int = 4, threshold: float = 3.0, limit: int = 2) -> list[ChangePoint]:
@@ -732,6 +736,12 @@ def brief(
             if index < 0:
                 notes.append(f"{spec['name']}: no complete week starting {monday}; the latest complete week is briefed")
                 index = len(weeks) - 1
+        elif target_week is not None:
+            # every metric briefs the same week: the one the first metric settled on
+            index = next((i for i, w in enumerate(weeks) if w.start == target_week.start), -1)
+            if index < 0:
+                notes.append(f"{spec['name']}: no complete week starting {target_week.start} in its data (it ends on {max_day.isoformat()}); left out")
+                continue
         else:
             index = len(weeks) - 1
         if index < 0:
@@ -812,7 +822,12 @@ def _watch(metrics: Sequence[MetricBrief]) -> list[str]:
         c = metric.context
         z = c.get("z")
         if c.get("coverage_note"):
-            watch.append(f"{metric.name.capitalize()}: {c['coverage_note']}.")
+            # a week that may not have fully arrived: one line, and the movements it would otherwise raise are read as coverage
+            superseded = [f"{_pct(c['wow_pct'])} week over week"] if c.get("wow_pct") is not None and abs(c["wow_pct"]) >= 0.15 else []
+            if z is not None and abs(z) >= 2:
+                superseded.append(c["verdict"].split(":")[0])
+            watch.append(f"{metric.name.capitalize()}: {c['coverage_note']}" + (f" ({', '.join(superseded)} read as coverage)." if superseded else "."))
+            continue
         if z is not None and abs(z) >= 2:
             watch.append(f"{metric.name.capitalize()}: {c['verdict']}.")
         recent = [p for p in metric.change_points if metric.target and (_dt.date.fromisoformat(metric.target.start) - _dt.date.fromisoformat(p.start)).days <= 42]
