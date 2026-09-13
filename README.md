@@ -209,6 +209,20 @@ it took), and a check of whether the answers follow the instructions' own
 rules (stating the period and the channel, rank and trend formats, currency
 format, the partial-year caveat, no personal data, the join and calendar
 rules), and compute each reference by executing a query against the source.
+What moved in the data is a separate tool over the source itself:
+`fabric_rlm.reports.report` takes a lakehouse or a semantic model and a
+request in plain words ("trend of revenue by product category", "why did
+reseller sales fall in December 2013 by territory", "top movers by customer
+year over year", "weekly recap"), reads it against the source's own
+vocabulary, measures every figure with the source's engine (SQL over
+OneLake, DAX for a model), recomputes each reported figure with an
+independent query, and renders a dashboard with trend, waterfall and driver
+scatter charts (`examples/notebooks/rlm_what_moved.ipynb`). No model
+touches the numbers. `fabric_rlm.brief.brief(source, ["revenue by region",
+"orders"])` is the Monday Morning Brief: last week for the metrics you name,
+against the week before, the same week last year, the recent averages and
+the seasonal expectation, with level shifts, the drivers of the move, the
+volume and rate split, the day-of-week pattern and what moved together.
 It also asks the data what nobody would think to put in the instructions
 (keys with no match in their dimension, dimension keys that repeat, values
 spelled in several cases in a case-sensitive lakehouse, the vocabulary of

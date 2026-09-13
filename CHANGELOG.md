@@ -176,6 +176,67 @@
   transactions, invoices); every question the schema supports is generated
   before the limit is applied, so a source with many facts keeps its trend,
   driver and period questions. Tests cover each of those shapes end to end.
+- **What moved: a sweep and reports over a source** (`fabric_rlm.sweep`,
+  `fabric_rlm.reports`). `what_moved(source)` takes a `LakehouseSource` or
+  a `SemanticModel` directly and measures, with the source's own engine
+  (DuckDB SQL over OneLake; DAX through the model's relationships), how
+  every measure of every fact moved between the periods the time axis
+  supports: the latest month against the month before, the same month a
+  year earlier, the latest complete year against the previous one. Material
+  movements are decomposed by every grouping the joins or relationships
+  reach and classified (one group carries it, a few do, groups moved in
+  proportion to their size so the grouping explains nothing, groups moved
+  both ways), and the leading group is drilled one level further. The
+  sweep runs in two phases so the budget goes where it matters (every total
+  first, then the material ones largest relative change first), collapses
+  measures that move identically, averages scores and rates instead of
+  summing them, and flags volume-driven changes, small bases and an
+  incomplete last month. Every figure carries the query that produced it
+  and an independent per-period query that recomputes it; `verify_sweep`
+  runs those, grouped so a decomposition costs two queries to check.
+  `report(source, request)` reads a request in plain words against the
+  source's vocabulary (its tables, measures, grouping columns and the
+  instructions' words for them) into a `ReportSpec` and builds one of four
+  reports: trend (by month, and by the largest groups of each grouping
+  asked for), root cause (one movement decomposed by the groupings asked
+  for and drilled), recap (the full sweep) and top movers (the groups that
+  rose and fell most); the page states how the request was read.
+  `Sweep.to_html()` and `Report.to_html()` render a self-contained
+  dashboard with headline cards, trend lines, a waterfall of drivers, a
+  driver scatter (share of base against share of change), the tables and
+  the queries behind every figure; `save(path)` writes it as a page. The
+  page leads with the answer: up to three takeaways, one sentence each with
+  the figure, the comparison, the driver and the caveat, linked to their
+  detail, then a short paragraph with the picture, then the supporting
+  detail. Every compared period passes a completeness check first: a month
+  with fewer than half the rows of a typical month before it, or a year
+  with fewer than half the other's months of data, is flagged as coverage
+  rather than business change, set aside from the takeaways and shown last
+  in the driver analysis, whatever date the data runs to. One verification
+  statement, built from the same counts as the header badge, says how many
+  figures were recomputed, how many were not, and what those carry.
+  Notebook: `examples/notebooks/rlm_what_moved.ipynb`. Measures no longer
+  include order numbers, codes or text columns.
+- **Monday Morning Brief** (`fabric_rlm.brief`, or `report(source, "monday
+  morning brief: revenue by region, orders")`). Name the metrics to track
+  and the brief takes the latest complete Monday-to-Sunday week the source
+  holds (or the week you name), measures each metric for it with the
+  source's engine at day grain, and puts it in context: the week before, the
+  same week a year earlier, the averages of the last four and thirteen
+  weeks, the seasonal expectation (the recent level scaled by how that week
+  of the year ran against its own level in prior years) and the rank against
+  the record. It finds level shifts in the weekly history (binary
+  segmentation on the means), calls a week unusual when it sits far from
+  the expectation in units of the recent residuals, decomposes the
+  week-over-week move by the groupings named and drills the leading group,
+  splits the move into volume and value per row, states the counterfactual
+  for the leading group, reads the day-of-week pattern against the twelve
+  weeks before, notes which metrics moved together and which led by a week,
+  and keeps a watch list. The page is a newsletter: one look, the watch
+  list, one section per metric with the weekly chart (the week, the
+  expectation and the level shifts marked), the context table, the drivers,
+  the pattern, and the queries. What it says about causes is what the
+  history supports and it says so.
 
 ### Changed
 

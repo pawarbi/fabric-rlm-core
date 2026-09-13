@@ -1172,7 +1172,7 @@ def declared_from_snapshot(snapshot: AgentSnapshot, schemas: Sequence[SourceSche
 # Questions and references
 # --------------------------------------------------------------------------- #
 
-_MEASURE_HINT = re.compile(r"(amount|qty|quantity|units|revenue|sales|cost|price|margin|total|profit|value|hours|minutes|count|arr|mrr|usd|eur|gbp|calls|duration|balance|fee|charge|spend|volume)", re.IGNORECASE)
+_MEASURE_HINT = re.compile(r"(amount|qty|quantity|units|revenue|sales|cost|price|margin|total|profit|value|hours|minutes|count|arr|mrr|usd|eur|gbp|calls|duration|balance|fee|charge|spend|volume|score|rating)", re.IGNORECASE)
 _KEY_HINT = re.compile(r"(key|id)$", re.IGNORECASE)  # kept for callers outside this module; the module uses _is_key
 _KEY_FORMS = re.compile(r"(?:^|[_ ])(?:[Ii][Dd]|[Kk][Ee][Yy])$|[a-z0-9](?:Id|ID|Key|KEY)$")
 _KEY_STOPWORDS = frozenset({"paid", "unpaid", "prepaid", "valid", "invalid", "grid", "void", "avoid", "rapid", "solid", "liquid", "fluid", "acid", "hybrid", "said", "laid", "mid", "bid", "kid", "lid", "rid", "amid", "turkey", "monkey", "hockey", "jockey", "donkey", "whiskey", "journey", "period", "bandwidth"})
@@ -1295,13 +1295,22 @@ def _measure_columns(schema: SourceSchema, table: str) -> list[str]:
     preferred = ("salesamount", "revenue", "amount", "sales", "price", "total", "net", "gross", "totalproductcost", "orderquantity", "quantity", "units", "value")
     secondary = re.compile(r"(freight|tax|discount|shipping|fee|handling|cost)", re.IGNORECASE)
     def usable(c: str) -> bool:
-        return not _is_key(c) and not _is_time_column(schema, table, c) and not _PERIOD_COLUMN.search(c) and not _FLAG_COLUMN.search(c) and "bool" not in schema.column_type(table, c)
+        return (
+            not _is_key(c)
+            and not _is_time_column(schema, table, c)
+            and not _PERIOD_COLUMN.search(c)
+            and not _FLAG_COLUMN.search(c)
+            and not _LOCAL_EXCLUDED.search(c)
+            and not _ORDER_ID_HINT.search(c)
+            and "bool" not in schema.column_type(table, c)
+            and not _TEXT_TYPE.search(schema.column_type(table, c))
+        )
 
     columns = [c for c in schema.tables[table] if _MEASURE_HINT.search(c) and usable(c)]
     if not columns and schema.types.get(table):
         # names say nothing; the profile's types do
         columns = [c for c in schema.tables[table] if _NUMERIC_TYPE.search(schema.column_type(table, c)) and usable(c)]
-    return sorted(columns, key=lambda c: (next((i for i, p in enumerate(preferred) if p in c.casefold()), 99) + (50 if secondary.search(c) else 0), c))
+    return sorted(columns, key=lambda c: (next((i for i, p in enumerate(preferred) if p in c.casefold().replace(" ", "").replace("_", "")), 99) + (50 if secondary.search(c) else 0), c))
 
 
 def _date_candidates(columns: Sequence[str]) -> list[str]:
