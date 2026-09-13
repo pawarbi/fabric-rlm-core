@@ -17,6 +17,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .attribution import REASONING, flip_causes, mechanical_share
 from .noise import Metric, Verdict, compare, flip_rate, spread, spread_kind
 from .trials import CORRECTNESS_SCORERS, TrialSet, load_trials
 
@@ -84,6 +85,7 @@ def calibrate(trials: TrialSet, baseline_arm: str) -> dict:
     unstable = sorted(
         qid for qid, results in outcomes.items() if len(set(results)) > 1
     )
+    causes = flip_causes(trials, baseline_arm)
     return {
         "arm": baseline_arm,
         "floors": floors,
@@ -91,6 +93,8 @@ def calibrate(trials: TrialSet, baseline_arm: str) -> dict:
         "flip_rate": flip_rate(outcomes),
         "unstable_questions": unstable,
         "question_count": len(outcomes),
+        "flip_causes": dict(causes),
+        "mechanical_share": mechanical_share(causes),
     }
 
 
@@ -181,6 +185,18 @@ def render(report: dict) -> str:
     )
     if cal["unstable_questions"]:
         add(f"  {', '.join(cal['unstable_questions'])}")
+    if cal["flip_causes"]:
+        add("")
+        add("  Why they flip:")
+        for cause, count in sorted(
+            cal["flip_causes"].items(), key=lambda kv: (-kv[1], kv[0])
+        ):
+            note = "" if cause == REASONING else "  (mechanical, fixable)"
+            add(f"    {cause:<28} {count}{note}")
+        add(
+            f"    -> {cal['mechanical_share'] * 100:.0f}% of the disagreement "
+            "has a mechanical cause, not a reasoning one."
+        )
     add("")
     add(
         f"--- 2. {report['baseline_arm']} vs {report['candidate_arm']}, "

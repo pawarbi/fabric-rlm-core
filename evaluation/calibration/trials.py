@@ -20,6 +20,10 @@ __all__ = [
     "Trial",
     "TrialSet",
     "load_trials",
+    "classify_answer",
+    "ANSWERED",
+    "NO_VALUE",
+    "UNSERIALIZABLE",
     "CORRECTNESS_SCORERS",
 ]
 
@@ -35,10 +39,41 @@ class Trial:
     seconds: float
     prompt_tokens: float
     completion_tokens: float
+    # Why this trial carries no usable answer, if it does not. Set at load time
+    # because attribution needs the raw payload, which is discarded here.
+    answer_state: str = "answered"
 
     @property
     def total_tokens(self) -> float:
         return self.prompt_tokens + self.completion_tokens
+
+
+ANSWERED = "answered"
+NO_VALUE = "no_value"
+UNSERIALIZABLE = "unserializable"
+
+
+def classify_answer(record: dict[str, Any]) -> str:
+    """Describe whether a recorded trial carries a usable answer value.
+
+    Distinguishes two mechanical failures from a real answer:
+
+    ``unserializable``
+        A value was computed but frozen as an opaque marker — the number was
+        right, the transport lost it.
+    ``no_value``
+        The run submitted without a value at all.
+    """
+    answer = record.get("answer")
+    if not isinstance(answer, dict):
+        return NO_VALUE if answer is None else ANSWERED
+    value = answer.get("value")
+    if isinstance(value, dict) and value.get("__serializable__") is False:
+        return UNSERIALIZABLE
+    if value is None:
+        return NO_VALUE
+    return ANSWERED
+
 
 
 def _analytic_correct(grade: dict[str, Any]) -> bool:
@@ -164,6 +199,7 @@ def load_trials(path: Path, *, scorer: str = "analytic") -> TrialSet:
                 seconds=float(record.get("wall_seconds") or 0),
                 prompt_tokens=float(record.get("prompt_tokens") or 0),
                 completion_tokens=float(record.get("completion_tokens") or 0),
+                answer_state=classify_answer(record),
             )
         )
     return TrialSet(trials)
