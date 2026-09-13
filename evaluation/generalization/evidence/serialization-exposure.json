@@ -1,0 +1,311 @@
+{
+  "baseline_rev": "4878627",
+  "cases": 27,
+  "errors": [],
+  "totals": {
+    "cases": 27,
+    "leaked_before": 10,
+    "leaked_after": 0
+  },
+  "by_domain": {
+    "inventory": {
+      "cases": 11,
+      "leaked_before": 5,
+      "leaked_after": 0
+    },
+    "manufacturing": {
+      "cases": 8,
+      "leaked_before": 3,
+      "leaked_after": 0
+    },
+    "service": {
+      "cases": 8,
+      "leaked_before": 2,
+      "leaked_after": 0
+    }
+  },
+  "by_engine": {
+    "duckdb": {
+      "cases": 14,
+      "leaked_before": 3,
+      "leaked_after": 0
+    },
+    "pandas": {
+      "cases": 13,
+      "leaked_before": 7,
+      "leaked_after": 0
+    }
+  },
+  "rows": [
+    {
+      "question_id": "inventory_available_units",
+      "domain": "inventory",
+      "engine": "duckdb",
+      "python_type": "int",
+      "repr": "186",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 186
+    },
+    {
+      "question_id": "inventory_open_order_units",
+      "domain": "inventory",
+      "engine": "duckdb",
+      "python_type": "int",
+      "repr": "48",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 48
+    },
+    {
+      "question_id": "inventory_join_safe_value",
+      "domain": "inventory",
+      "engine": "duckdb",
+      "python_type": "float",
+      "repr": "2250.0",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 2250.0
+    },
+    {
+      "question_id": "inventory_fill_rate",
+      "domain": "inventory",
+      "engine": "duckdb",
+      "python_type": "float",
+      "repr": "0.8451612903225807",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 0.8451612903225807
+    },
+    {
+      "question_id": "inventory_latest_snapshot_date",
+      "domain": "inventory",
+      "engine": "duckdb",
+      "python_type": "date",
+      "repr": "datetime.date(2026, 3, 31)",
+      "leaked_before": true,
+      "leaked_after": false,
+      "frozen_after": "2026-03-31"
+    },
+    {
+      "question_id": "inventory_value_decimal",
+      "domain": "inventory",
+      "engine": "duckdb",
+      "python_type": "Decimal",
+      "repr": "Decimal('3060.00')",
+      "leaked_before": true,
+      "leaked_after": false,
+      "frozen_after": 3060.0
+    },
+    {
+      "question_id": "manufacturing_complete_units",
+      "domain": "manufacturing",
+      "engine": "duckdb",
+      "python_type": "int",
+      "repr": "1800",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 1800
+    },
+    {
+      "question_id": "manufacturing_weighted_defect_rate",
+      "domain": "manufacturing",
+      "engine": "duckdb",
+      "python_type": "float",
+      "repr": "0.025",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 0.025
+    },
+    {
+      "question_id": "manufacturing_incomplete_excluded",
+      "domain": "manufacturing",
+      "engine": "duckdb",
+      "python_type": "int",
+      "repr": "200",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 200
+    },
+    {
+      "question_id": "manufacturing_any_incomplete",
+      "domain": "manufacturing",
+      "engine": "duckdb",
+      "python_type": "bool",
+      "repr": "True",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": true
+    },
+    {
+      "question_id": "service_reopened_tickets",
+      "domain": "service",
+      "engine": "duckdb",
+      "python_type": "int",
+      "repr": "0",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 0
+    },
+    {
+      "question_id": "service_first_response_sla_rate",
+      "domain": "service",
+      "engine": "duckdb",
+      "python_type": "float",
+      "repr": "0.6666666666666666",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 0.6666666666666666
+    },
+    {
+      "question_id": "service_first_response_dedup",
+      "domain": "service",
+      "engine": "duckdb",
+      "python_type": "timedelta",
+      "repr": "datetime.timedelta(seconds=1200)",
+      "leaked_before": true,
+      "leaked_after": false,
+      "frozen_after": 0.013888888888888888
+    },
+    {
+      "question_id": "service_large_history_rows",
+      "domain": "service",
+      "engine": "duckdb",
+      "python_type": "int",
+      "repr": "250000",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 250000
+    },
+    {
+      "question_id": "inventory_available_units",
+      "domain": "inventory",
+      "engine": "pandas",
+      "python_type": "int64",
+      "repr": "np.int64(186)",
+      "leaked_before": true,
+      "leaked_after": false,
+      "frozen_after": 186
+    },
+    {
+      "question_id": "inventory_open_order_units",
+      "domain": "inventory",
+      "engine": "pandas",
+      "python_type": "int64",
+      "repr": "np.int64(48)",
+      "leaked_before": true,
+      "leaked_after": false,
+      "frozen_after": 48
+    },
+    {
+      "question_id": "inventory_join_safe_value",
+      "domain": "inventory",
+      "engine": "pandas",
+      "python_type": "float64",
+      "repr": "np.float64(2250.0)",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 2250.0
+    },
+    {
+      "question_id": "inventory_fill_rate",
+      "domain": "inventory",
+      "engine": "pandas",
+      "python_type": "float64",
+      "repr": "np.float64(0.8451612903225807)",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 0.8451612903225807
+    },
+    {
+      "question_id": "inventory_latest_snapshot_date",
+      "domain": "inventory",
+      "engine": "pandas",
+      "python_type": "Timestamp",
+      "repr": "Timestamp('2026-03-31 00:00:00')",
+      "leaked_before": true,
+      "leaked_after": false,
+      "frozen_after": "2026-03-31T00:00:00"
+    },
+    {
+      "question_id": "manufacturing_complete_units",
+      "domain": "manufacturing",
+      "engine": "pandas",
+      "python_type": "int64",
+      "repr": "np.int64(1800)",
+      "leaked_before": true,
+      "leaked_after": false,
+      "frozen_after": 1800
+    },
+    {
+      "question_id": "manufacturing_weighted_defect_rate",
+      "domain": "manufacturing",
+      "engine": "pandas",
+      "python_type": "float64",
+      "repr": "np.float64(0.025)",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 0.025
+    },
+    {
+      "question_id": "manufacturing_incomplete_excluded",
+      "domain": "manufacturing",
+      "engine": "pandas",
+      "python_type": "int64",
+      "repr": "np.int64(200)",
+      "leaked_before": true,
+      "leaked_after": false,
+      "frozen_after": 200
+    },
+    {
+      "question_id": "manufacturing_any_incomplete",
+      "domain": "manufacturing",
+      "engine": "pandas",
+      "python_type": "bool",
+      "repr": "np.True_",
+      "leaked_before": true,
+      "leaked_after": false,
+      "frozen_after": true
+    },
+    {
+      "question_id": "service_reopened_tickets",
+      "domain": "service",
+      "engine": "pandas",
+      "python_type": "int",
+      "repr": "0",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 0
+    },
+    {
+      "question_id": "service_first_response_dedup",
+      "domain": "service",
+      "engine": "pandas",
+      "python_type": "Timedelta",
+      "repr": "Timedelta('0 days 00:20:00')",
+      "leaked_before": true,
+      "leaked_after": false,
+      "frozen_after": 0.013888888888888888
+    },
+    {
+      "question_id": "service_first_response_sla_rate",
+      "domain": "service",
+      "engine": "pandas",
+      "python_type": "float64",
+      "repr": "np.float64(0.6666666666666666)",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 0.6666666666666666
+    },
+    {
+      "question_id": "service_large_history_rows",
+      "domain": "service",
+      "engine": "pandas",
+      "python_type": "int",
+      "repr": "5000",
+      "leaked_before": false,
+      "leaked_after": false,
+      "frozen_after": 5000
+    }
+  ]
+}
