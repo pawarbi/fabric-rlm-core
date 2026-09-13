@@ -5,6 +5,7 @@ import json
 import duckdb
 import pytest
 
+from fabric_rlm import File, RLM
 from evaluation.generalization.fixtures import generate_fixtures
 from evaluation.generalization import representations, runner
 
@@ -26,6 +27,10 @@ def _rows(values):
     return Counter(json.dumps(row, default=encode) for row in values)
 
 
+def _path(source):
+    return str(source.path) if isinstance(source, File) else source
+
+
 @pytest.mark.parametrize("domain", ["inventory", "manufacturing", "service"])
 @pytest.mark.parametrize("variant", ["descriptive", "abbreviated", "camel"])
 @pytest.mark.parametrize("representation", ["parquet", "lakehouse"])
@@ -36,11 +41,11 @@ def test_representations_preserve_every_row_and_column(fixtures, domain, variant
     assert all(not name.endswith("_large") for name in sources)
     with duckdb.connect() as connection:
         for alias, source in sources.items():
-            cursor = connection.execute("SELECT * FROM read_csv_auto(?)", [csv_sources[alias]])
+            cursor = connection.execute("SELECT * FROM read_csv_auto(?)", [_path(csv_sources[alias])])
             columns = [column[0] for column in cursor.description]
             expected = cursor.fetchall()
             if representation == "parquet":
-                cursor = connection.execute("SELECT * FROM read_parquet(?)", [source])
+                cursor = connection.execute("SELECT * FROM read_parquet(?)", [_path(source)])
                 actual_columns = [column[0] for column in cursor.description]
                 actual_rows = cursor.fetchall()
             else:
@@ -74,3 +79,18 @@ def test_live_cli_selects_representation_without_changing_arm_settings(tmp_path)
     assert args.representation == "lakehouse"
     assert args.repetitions == 3
     assert args.max_turns == 6
+
+
+@pytest.mark.parametrize("representation", ["csv", "parquet"])
+def test_file_bindings_are_explicit_without_changing_source_semantics(fixtures, representation):
+    sources = runner._domain_sources(
+        fixtures, "inventory", "descriptive", representation=representation,
+    )
+    assert all(isinstance(source, File) for source in sources.values())
+    alias, source = next(iter(sources.items()))
+    typed = RLM.learn(sources={alias: source}).package
+    path = RLM.learn(sources={alias: str(source.path)}).package
+    assert typed.sources[0].schema == path.sources[0].schema
+    assert typed.sources[0].schema_fingerprint == path.sources[0].schema_fingerprint
+    assert typed.sources[0].snapshot_fingerprint == path.sources[0].snapshot_fingerprint
+    assert typed.operations == path.operations

@@ -538,6 +538,7 @@ def run_live(
     provenance = {
         "actual_sha": actual_sha, "core_freeze": str(artifacts / "core-freeze.json"),
         "runtime_root": str(repo / "fabric_rlm"), "representation": representation,
+        "input_binding": "File handles for CSV/Parquet; LakehouseSource handles for Delta",
         "integration_scope": "real local sources; not a live Fabric service",
         "wall_scope": "LM initialization, task construction and execution; excludes persistence and budget checks",
         "fixture_sha256": fixture_hashes, "max_cost_usd": max_cost_usd,

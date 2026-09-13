@@ -60,17 +60,19 @@ def prepare_representations(fixtures: Path) -> None:
 def domain_sources(
     fixtures: Path, domain: str, variant: str, representation: str = "csv",
 ) -> dict[str, object]:
+    from fabric_rlm import File
+
     if representation not in REPRESENTATIONS:
         raise ValueError(f"unsupported representation: {representation}")
     sources: dict[str, object] = {}
     for path in _csv_paths(fixtures, domain, variant):
         if representation == "csv":
-            sources[path.stem] = str(path)
+            sources[path.stem] = File(path)
         elif representation == "parquet":
             parquet_path = path.with_suffix(".parquet")
             if not parquet_path.is_file():
                 raise FileNotFoundError(parquet_path)
-            sources[path.stem] = str(parquet_path)
+            sources[path.stem] = File(parquet_path)
         else:
             from fabric_rlm import LakehouseSource
 

@@ -12,6 +12,12 @@ not a new blinded holdout**. Their old results are not measurements of this
 core. No reference answers or evaluation-run evidence enter development or
 subsequent model trials.
 
+The first smoke at `f99c742f38fd33eba14364567caad4a25aa51fde` used plain
+path strings for CSV/Parquet. Traces showed these being mistaken for inline
+CSV content. This revision uses the public `File(...)` input contract for
+both formats, identically in A/B/C. Tests confirm unchanged source schemas,
+snapshots and operation catalogs; original raw results must remain separate.
+
 ## Run in PowerShell
 
 Use a checkout of `eval/knowledge-nonregression`. The evaluation environment
