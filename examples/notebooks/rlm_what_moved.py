@@ -17,20 +17,34 @@
 # Point this notebook at a data source and ask for a report in plain words.
 # The source's own query engine measures every figure (SQL over OneLake for
 # a lakehouse, DAX for a semantic model), every reported figure is recomputed
-# by an independent query, and the page renders as a dashboard with trend,
-# waterfall and driver scatter charts. No language model touches the numbers.
+# by an independent query, and the page renders as a dashboard in IBCS
+# notation: the message as the title, this period dark and the period
+# compared with grey, a rise green and a fall red with the sign and a hatch
+# as a second cue, the bridge of drivers, a variance chart (every group
+# before and after, its change and its change in percent), the driver
+# scatter, and a Pareto view for groupings with many members. Movements on
+# incomplete periods sit collapsed at the bottom; an "About this page" block
+# records when the page was made, from what, and with which request. No
+# language model touches the numbers.
+#
+# Tables with no amount (cases, tickets, sessions, events) are measured by
+# their row count; any numeric column that is not a key is a measure; the
+# tables, joins and definitions in `INSTRUCTIONS` are read the way a Data
+# Agent reads its instructions.
 #
 # Four report kinds, chosen from the request:
 #
 # - **trend**: `"trend of revenue by product category"`
 # - **root cause**: `"why did reseller sales fall in December 2013 by product and territory"`
-# - **recap**: `"weekly recap"` or `"what moved"`
+# - **recap**: `"weekly recap"` or `"what moved"` (every fact with a time axis, four by default)
 # - **top movers**: `"top 10 movers by customer year over year"`
-# - **Monday Morning Brief**: `"monday morning brief: revenue by region, orders"`,
-#   last week for the metrics you name, in context (the week before, the same
-#   week last year, the recent averages, the seasonal expectation), with level
-#   shifts, drivers, the volume and rate split, the day-of-week pattern and what
-#   moved together
+#
+# And the **Monday Morning Brief**: last week for the metrics you name, in
+# context (the week before, the same week last year, the recent averages,
+# the seasonal expectation), with level shifts, drivers, the volume and rate
+# split, the day-of-week pattern, what moved together, and KPIs built from
+# the structure of the data (new, active and churned entities, ratios,
+# crossings, the share of the top groups).
 #
 # The page says how the request was read; a wrong reading is fixed by
 # rewording, or by passing a `ReportSpec` with the exact columns.
@@ -51,6 +65,7 @@
 import os
 
 from fabric_rlm import LakehouseSource, SemanticModel
+from fabric_rlm.brief import brief
 from fabric_rlm.reports import ReportSpec, report
 from fabric_rlm.sweep import what_moved
 
@@ -62,12 +77,23 @@ LAKEHOUSE_ROOT = "abfss://<workspace>@onelake.dfs.fabric.microsoft.com/<lakehous
 LAKEHOUSE_TABLES = "Tables"           # or "Tables/dbo", or a list such as ["Tables/dbo/factinternetsales", "Tables/dbo/dimproduct"]
 SEMANTIC_MODEL = None                 # a model name or id, for example "AdventureWorks Sales"; None uses the lakehouse
 
-# --- the request ----------------------------------------------------------------
+# --- what the source is, in words ------------------------------------------------
+# joins the catalog cannot see, definitions, which tables matter: "sales.custName = customers.custName; Revenue = SUM(Amount)"
+INSTRUCTIONS = ""
+
+# --- the report -------------------------------------------------------------------
 REQUEST = "what moved"                # plain words; see the list above
 YEARS = None                          # None discovers the complete years from the data; or [2012, 2013]
-INSTRUCTIONS = ""                     # anything a Data Agent's instructions would say: joins, definitions, which tables matter
-BUDGET = 40                           # queries the report may run (about 30 s each over OneLake from outside Fabric, faster inside)
+BUDGET = 80                           # queries the report may run (a few seconds each inside Fabric)
 REPORT_PATH = "/lakehouse/default/Files/what_moved.html"   # or None to skip saving
+
+# --- the Monday Morning Brief (leave METRICS and KPIS empty to skip) --------------
+METRICS = []                          # for example ["revenue by region", "orders"]; a table name alone counts its rows
+KPIS = []                             # for example ["new customers", "churned customers over 4 weeks", "active customers",
+#                                       "average order value = sales amount / order quantity", "top 3 share of revenue by product",
+#                                       "orders where channel = Internet vs orders where channel = Reseller"]
+WEEK = None                           # None takes the latest complete week with real coverage; or "2024-12-23"
+BRIEF_PATH = "/lakehouse/default/Files/monday_morning_brief.html"
 
 # METADATA ********************
 
@@ -130,9 +156,10 @@ for note in result.notes:
 
 # ## The dashboard
 #
-# Headline cards, trends, and for every finding the waterfall of drivers,
-# the driver scatter (above the diagonal a group moved more than its size),
-# the tables and the queries behind the figures.
+# Three things to know, the picture, the cards, the trends, and for every
+# finding the bridge, the variance chart, the scatter and the Pareto view,
+# with the tables and the queries behind the figures. Set-aside movements
+# and the reference block are collapsed at the bottom.
 
 # CELL ********************
 
@@ -159,12 +186,39 @@ if REPORT_PATH:
 
 # MARKDOWN ********************
 
+# ## The Monday Morning Brief
+#
+# Name the metrics and the KPIs to track; the entity behind "new" and
+# "churned" (customers, devices, accounts, whatever the data has) is
+# discovered from the structure and its choice is explained on the page.
+# Schedule this notebook for Monday mornings and read the saved page.
+
+# CELL ********************
+
+if METRICS or KPIS:
+    monday = brief(source, METRICS, kpis=KPIS, week=WEEK, instructions=INSTRUCTIONS, budget=max(BUDGET, 120))
+    print(monday.summary(), "| week:", monday.week_label)
+    print(monday.narrative())
+    for note in monday.notes:
+        print("note:", note)
+    displayHTML(monday.to_html())  # noqa: F821
+    if BRIEF_PATH:
+        print("saved", monday.save(BRIEF_PATH))
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "jupyter_python"
+# META }
+
+# MARKDOWN ********************
+
 # ## Without a request
 #
-# `what_moved` is the recap without the reading step: every fact, every
-# measure, the comparisons the time axis supports, decomposed by every
-# grouping until the budget runs out. A `ReportSpec` names exactly what to
-# compute when the plain-words reading is not what you meant.
+# `what_moved` is the recap without the reading step. A `ReportSpec` names
+# exactly what to compute when the plain-words reading is not what you
+# meant.
 
 # CELL ********************
 
@@ -173,23 +227,6 @@ if REPORT_PATH:
 #
 # exact = report(source, ReportSpec(kind="root_cause", facts=("factresellersales",), measures=("SalesAmount",), groupings=("EnglishProductCategoryName", "SalesTerritoryRegion"), period={"year": 2013, "month": 12}, against={"year": 2012, "month": 12}), years=YEARS, instructions=INSTRUCTIONS, budget=BUDGET)
 # displayHTML(exact.to_html())
-#
-# the brief, straight from the metrics you track; schedule this notebook for Monday mornings
-# from fabric_rlm.brief import brief
-# monday = brief(source, ["internet sales revenue by product category and country", "reseller sales revenue by reseller"], instructions=INSTRUCTIONS, budget=90)
-# displayHTML(monday.to_html())
-# monday.save("/lakehouse/default/Files/monday_morning_brief.html")
-#
-# KPIs built from the structure: the entity (customers, devices, accounts...) is discovered and its choice explained on the page;
-# say entity="ResellerKey" to change it. Ratios, crossings with filters, and the share of the top groups work the same way.
-# monday = brief(
-#     source,
-#     ["sales amount by country"],
-#     kpis=["new customers", "churned customers over 4 weeks", "active customers", "average order value = sales amount / order quantity",
-#           "order quantity where channel = Internet vs order quantity where channel = Reseller", "top 3 share of sales amount by product"],
-#     instructions=INSTRUCTIONS, budget=120,
-# )
-# displayHTML(monday.to_html())
 
 # METADATA ********************
 
