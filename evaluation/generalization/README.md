@@ -1,0 +1,83 @@
+# Current-main knowledge regression evaluation
+
+Core baseline: `7347c278525c6bdebb586eaa78db541c2ed9d7d7`, based on
+`origin/main` at `abb092456dd47bc71f56292fbda95ec07ac0db6c`. The three core
+fixes are on `fix/knowledge-nonregression`; this separate evaluation branch
+freezes that implementation and its bundled skills.
+
+The fixture generator, independent Python references, grader and trace
+controls are reused from `277cd3b782bec4290bff6034a586faacedd0dc86`.
+These are **regression questions previously used in development/evaluation,
+not a new blinded holdout**. Their old results are not measurements of this
+core. No reference answers or evaluation-run evidence enter development or
+subsequent model trials.
+
+## Run in PowerShell
+
+Use a checkout of `eval/knowledge-nonregression`. The evaluation environment
+used DuckDB 1.5.0, PyArrow 23.0.1, delta-rs 1.5.0 and DSPy 3.2.1. The batch
+also records Python, pandas and NumPy versions. No dependency changes are
+required in the core package.
+
+```powershell
+$data = Join-Path $env:TEMP ('knowledge-data-' + [guid]::NewGuid())
+$results = Join-Path $env:TEMP ('knowledge-smoke-' + [guid]::NewGuid())
+python -m evaluation.generalization.runner prepare --output $data --representations
+python -m pytest evaluation\generalization\tests
+python -m evaluation.generalization.current_smoke --fixtures $data --output $results --max-cost-usd 2 --repetitions 1
+```
+
+Set `OPENROUTER_API_KEY` in the environment; never put it in a command or
+artifact. The batch shares one monetary ceiling, including development,
+and reserves $1 for in-flight work and delayed provider accounting. It
+randomizes source order and A/B/C configuration order. DSPy caching is off;
+provider caching is not controllable, and cached tokens are recorded.
+`openai/gpt-4.1-mini` is an alias, not an immutable provider-version guarantee.
+
+Each source representation has six separate development runs and nine
+smoke trials at one repetition. `--repetitions 3` makes 27 evaluation
+trials per representation, still only three distinct questions. For all
+15 questions, omit `--smoke` when using `runner live` and supply at least
+141 task calls for three repetitions:
+
+```powershell
+python -m evaluation.generalization.runner live --fixtures $data --output "$results\full-csv.json" --representation csv --variants descriptive --repetitions 3 --max-live-calls 141 --max-cost-usd 3
+```
+
+CSV, Parquet and local Delta through `LakehouseSource` are real
+implementations, not mocked adapters. Conversion tests compare every
+column and the complete multiset of rows across three domains and three
+naming variants, retaining duplicates. Data is read as typed Arrow tables
+and written without overwriting existing representations:
+[DuckDB Arrow conversion](https://duckdb.org/docs/current/clients/python/conversion.html#apache-arrow),
+[Arrow Parquet writer](https://arrow.apache.org/docs/python/generated/pyarrow.parquet.write_table.html),
+[delta-rs writer](https://delta-io.github.io/delta-rs/usage/writing/).
+The 250,000-row fixture is retained but excluded from live smoke prompts.
+
+## Gate and interpretation
+
+`batch.json` describes execution coverage and spending; each source JSON
+contains raw answers, unchanged reference grades, actual verifier outcomes,
+timings, tokens, frozen package references and the complete planned schedule.
+Its sibling `.artifacts` directory contains provider/trajectory traces,
+development metrics, package snapshots and code/fixture hashes. The live
+runner refuses a mismatched imported library checkout.
+
+`gate.passed` requires full planned-trial coverage, unchanged core/fixtures,
+and no per-question loss in reference correctness, value/entity correctness,
+or completion on answerable tasks. Expected abstention is graded separately;
+all abstentions remain reported as incomplete. A parity pass is not an
+absolute accuracy floor or statistical proof of generalization. Setup costs,
+unknown measurements and regressions must remain visible; faster failures
+are not wins.
+
+The original strict grade remains alongside the value/units/period/entity
+grade. Self-reported `supported` flags and a passed shape validator do not
+establish independent analytical verification. Source-call metrics cover
+instrumented calls/host operations, not every direct pandas or filesystem
+operation. Workbooks are not requested in this smoke.
+
+Live Fabric services, live semantic models, new held-out task families,
+the full live naming matrix and live mutation/recovery are **not established
+by this local smoke**. PR #79's NumPy scalar fix is not included in the
+baseline; serialization markers are reported rather than silently removed.
