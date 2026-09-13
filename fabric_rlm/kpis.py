@@ -87,14 +87,16 @@ def _entity_word(column: str, joins: Mapping[tuple[str, str], tuple[str, str]], 
     return word
 
 
-def _candidate_keys(schema: Any, table: str, dialect: Any) -> list[str]:
+def _candidate_keys(schema: Any, table: str, dialect: Any, joins: Mapping[tuple[str, str], tuple[str, str]] | None = None) -> list[str]:
     columns = schema.tables[table]
     own = table.rsplit(".", 1)[-1].casefold()
     axis = dialect.axis(table) or {}
     time_keys = {str(axis.get("column", "")), str(axis.get("via", ""))}
+    # a column that joins a dimension names that dimension's rows whether or not it is called an id: custName joining customers is the customer
+    joined = {column for (t, column), (to_table, _to) in (joins or {}).items() if t == table and not re.search(r"(date|calendar|time)", to_table, re.IGNORECASE)}
     out = []
     for column in columns:
-        if column in time_keys or _TIME_COLUMN.search(column) or _ORDER_ID_HINT.search(column) or not _is_key(column):
+        if column in time_keys or _TIME_COLUMN.search(column) or _ORDER_ID_HINT.search(column) or not (_is_key(column) or column in joined):
             continue
         stem = re.sub(r"[_ ]?(?:id|key)$", "", column, flags=re.IGNORECASE).casefold()
         if stem and (stem == own or own.startswith(stem) and len(stem) >= 4 and stem not in {"fact"}):
@@ -115,7 +117,7 @@ def _entities_of(probe: Any, dialect: Any, fact: Mapping[str, Any], joins: Mappi
     schema = probe.schema
     table = fact["table"]
     found: list[Entity] = []
-    for column in _candidate_keys(schema, table, dialect):
+    for column in _candidate_keys(schema, table, dialect, joins):
         query = _entity_stats_query(dialect, fact, column)
         try:
             rows = run(query)
@@ -419,8 +421,9 @@ def concentration_sql(dialect: Any, fact: Mapping[str, Any], path: Mapping[str, 
     time_join = _time_join(fact["date"])
     source = f"FROM {fact['table']} f" + (f" {time_join}" if time_join else "") + "".join(" " + c for c in joins.clauses)
     p = period_index_sql(dialect, fact, grain)
+    value = "COUNT(*)" if fact["measure"] == "rows" else f"SUM(f.{_q(fact['measure'])})"  # a table with no amount is measured by its rows
     return (
-        f"WITH t AS (SELECT {p} AS p, {label} AS label, SUM(f.{_q(fact['measure'])}) AS v {source} GROUP BY 1, 2), "
+        f"WITH t AS (SELECT {p} AS p, {label} AS label, {value} AS v {source} GROUP BY 1, 2), "
         f"r AS (SELECT p, label, v, ROW_NUMBER() OVER (PARTITION BY p ORDER BY v DESC NULLS LAST) AS rn FROM t) "
         f"SELECT p, SUM(v) AS total, SUM(CASE WHEN rn <= {int(top)} THEN v ELSE 0 END) AS top_value, COUNT(*) AS groups, "
         f"STRING_AGG(CASE WHEN rn <= {int(top)} THEN CAST(label AS VARCHAR) END, ' | ' ORDER BY rn) AS leaders FROM r GROUP BY p ORDER BY p DESC LIMIT {int(last)}"
@@ -541,7 +544,7 @@ def sql_literal(value: Any) -> str:
 
 
 def default_measure(schema: Any, table: str) -> str | None:
-    columns = _measure_columns(schema, table)
+    columns = _measure_columns(schema, table, broad=True)
     return columns[0] if columns else None
 
 
@@ -581,12 +584,12 @@ class _Budget(Exception):
     pass
 
 
-def _side(phrase: str, probe: Any, joins: Mapping[tuple[str, str], tuple[str, str]], instructions: str, scope: str) -> tuple[dict[str, Any], list[tuple[Mapping[str, Any], Any]], str]:
-    """A metric phrase with optional filters -> (metric spec, [(path, value)], what could not be matched)."""
+def _side(phrase: str, probe: Any, joins: Mapping[tuple[str, str], tuple[str, str]], instructions: str, scope: str, prefer: str = "") -> tuple[dict[str, Any], list[tuple[Mapping[str, Any], Any]], str]:
+    """A metric phrase with optional filters -> (metric spec, [(path, value)], what could not be matched); ``prefer`` is the fact tried first."""
     from .brief import _metric_specs
 
     words, pairs = measure_phrase_filters(phrase)
-    spec = _metric_specs([words], probe, instructions, scope)[0]
+    spec = _metric_specs([words], probe, instructions, scope, prefer=prefer)[0]
     filters: list[tuple[Mapping[str, Any], Any]] = []
     unmatched = []
     for column_words, value in pairs:
@@ -620,7 +623,7 @@ def _kpi_headline(spec: KpiSpec, name: str, target: Any, c: Mapping[str, Any]) -
     if spec.kind == "concentration":
         value = f"{target.value:.0%}"
     elif spec.kind == "ratio":
-        value = f"{target.value:,.2f}"
+        value = f"{target.value:.1%}" if abs(target.value) < 1 and re.search(r"(rate|share|pct|percent|ratio|yield|margin)", name, re.IGNORECASE) else f"{target.value:,.2f}"
     else:
         value = f"{target.value:,.0f}"
     text = f"{name.capitalize()} came in at {value} for the {target.label}"
@@ -704,7 +707,7 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
             ordered = [fact_name] + [t for t in fact_tables if t != fact_name] + [t for t in schema.tables if t != fact_name and t not in fact_tables and not re.search(r"(date|calendar|time)", t, re.IGNORECASE)]
             for table in ordered[:8]:
                 table_axis = dialect.axis(table)
-                if table_axis is not None and _candidate_keys(schema, table, dialect):
+                if table_axis is not None and _candidate_keys(schema, table, dialect, joins):
                     facts_with_axis.append({"table": table, "date": table_axis, "measure": default_measure(schema, table) or "", "aggregate": "sum"})
             entities = discover_entities(probe, dialect, facts_with_axis, joins, run)
     except _Budget:
@@ -750,9 +753,9 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
                 num, num_filters, missing_n = _side(spec.numerator, probe, joins, instructions, scope)
                 den_words, _den_pairs = measure_phrase_filters(spec.denominator)
                 rows_denominator = den_words.casefold() in _ROW_WORDS
-                den, den_filters, missing_d = (None, [], "") if rows_denominator else _side(spec.denominator, probe, joins, instructions, scope)
+                den, den_filters, missing_d = (None, [], "") if rows_denominator else _side(spec.denominator, probe, joins, instructions, scope, prefer=str(num.get("fact") or ""))  # scrap / qty: both sides on the same fact when the words allow it
                 if not num.get("measure") or (den is not None and not den.get("measure")):
-                    notes.append(f"{spec.name}: could not read the measures ({spec.numerator} / {spec.denominator})")
+                    notes.append(f"{spec.name}: {num.get('note') or (den or {}).get('note') or 'could not read the measures'} ({spec.numerator} / {spec.denominator})")
                     continue
                 fact_n = {"table": num["fact"], "date": dialect.axis(num["fact"]), "measure": num["measure"], "aggregate": "sum"}
                 if den is not None and den["fact"] == num["fact"] and den_filters == num_filters:
@@ -792,7 +795,7 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
                     weeks_r = [Week(w.start, threshold, w.rows, w.days) for w in weeks_l]
                     right_name = f"{threshold:,.0f}"
                 else:
-                    right, right_filters, missing_r = _side(spec.right, probe, joins, instructions, scope)
+                    right, right_filters, missing_r = _side(spec.right, probe, joins, instructions, scope, prefer=str(left.get("fact") or ""))
                     if not right.get("measure"):
                         notes.append(f"{spec.name}: could not read {spec.right}")
                         continue
@@ -855,4 +858,6 @@ def build_kpis(probe: Any, dialect: Any, joins: Mapping[tuple[str, str], tuple[s
             break
         except ValueError as exc:
             notes.append(f"{spec.name}: {exc}")
+        except Exception as exc:  # noqa: BLE001 - one KPI the source cannot answer must not take the brief down
+            notes.append(f"{spec.name}: could not be measured ({type(exc).__name__}: {str(exc)[:160]})")
     return briefs, entities, entity_choice, spent, notes, target_week

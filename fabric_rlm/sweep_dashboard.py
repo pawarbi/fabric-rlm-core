@@ -119,6 +119,7 @@ def _concentration_words(concentration: str) -> str:
         "proportional": "in proportion to size",
         "broad": "spread across groups",
         "offsetting": "offsetting moves",
+        "fragmented": "fragmented, too fine to explain",
         "none": "nothing to split",
     }.get(concentration, concentration)
 
@@ -424,7 +425,7 @@ def _period_word(m: Any) -> str:
 def _takeaways(result: "Sweep") -> str:
     takeaways = result.takeaways()
     aside = result.set_aside()
-    if not takeaways and not aside:
+    if not takeaways and not aside and not result.narrative():
         return ""
     parts = []
     if takeaways:
@@ -454,18 +455,19 @@ def _trends(result: "Sweep") -> str:
 
 
 def _finding(result: "Sweep", finding: "SweepFinding", index: int, *, others_as_tables: int = 0) -> str:
-    from .sweep import _concentration_sentence
+    from .sweep import _concentration_sentence, _qualified_words
 
     m = finding.movement
     best = finding.best
+    named = _qualified_words([d.path for d in finding.decompositions], m.fact)
     parts = [f'<div class="card" id="{esc(finding.anchor)}"><h3>{index}. {esc(result.headline(m))}</h3>']
     if not finding.trusted:
         parts.append('<div class="note"><b>Not read as business change.</b> One of the periods is incomplete; the figures below are shown for completeness.</div>')
     for flag in finding.flags:
         parts.append(f'<div class="note">{esc(_flag_text(flag))}</div>')
     if best is not None:
-        parts.append(f'<div class="story"><b>By {esc(_word(best.path))}:</b> {esc(_concentration_sentence(best))}</div>')
-        parts.append('<div class="grid2">' + _waterfall_svg(best, f"What moved {m.comparison.label}, by {_word(best.path)}") + _scatter_svg(best, f"Who moved more than their size, by {_word(best.path)}") + "</div>")
+        parts.append(f'<div class="story"><b>By {esc(named.get(id(best.path), _word(best.path)))}:</b> {esc(_concentration_sentence(best))}</div>')
+        parts.append('<div class="grid2">' + _waterfall_svg(best, f"What moved {m.comparison.label}, by {named.get(id(best.path), _word(best.path))}") + _scatter_svg(best, f"Who moved more than their size, by {named.get(id(best.path), _word(best.path))}") + "</div>")
         parts.append(_groups_table(best))
         lead = finding.lead_drill
         if lead is not None:
@@ -477,10 +479,10 @@ def _finding(result: "Sweep", finding: "SweepFinding", index: int, *, others_as_
             parts.append(f'<div class="story">Within {esc(_label(finding.drill[0].parent.group))}, nothing stands out by {esc(tried)}.</div>')
         others = finding.decompositions[1:]
         for d in others[:others_as_tables]:
-            parts.append(f'<div class="story"><b>By {esc(_word(d.path))}:</b> {esc(_concentration_sentence(d))}</div>')
+            parts.append(f'<div class="story"><b>By {esc(named.get(id(d.path), _word(d.path)))}:</b> {esc(_concentration_sentence(d))}</div>')
             parts.append(_groups_table(d))
         if others[others_as_tables:]:
-            chips = "".join(f'<span class="chip">by <b>{esc(_word(d.path))}</b>: {esc(_concentration_words(d.concentration))}</span>' for d in others[others_as_tables:])
+            chips = "".join(f'<span class="chip">by <b>{esc(named.get(id(d.path), _word(d.path)))}</b>: {esc(_concentration_words(d.concentration))}</span>' for d in others[others_as_tables:])
             parts.append(f'<div class="caption">Other groupings tried: {chips}</div>')
     queries = [("Measured by", m.query), ("Recomputed by (after)", m.verification.get("after", "")), ("Recomputed by (before)", m.verification.get("before", ""))]
     if best is not None and best.verification:
@@ -519,7 +521,8 @@ def _recap_body(result: "Sweep") -> list[str]:
         for index, finding in enumerate(result.findings, start=1):
             parts.append(_finding(result, finding, index))
     else:
-        parts.append('<div class="card">No material movement to decompose.</div>')
+        steady = result.steady()
+        parts.append('<div class="card">No movement of 5% or more on a complete period, so nothing to decompose.' + ('<ul style="margin:6px 0 0 18px">' + "".join(f"<li>{esc(result.headline(m))}</li>" for m in steady) + "</ul>" if steady else "") + "</div>")
     if result.mismatches:
         parts.append("<h2>Figures that did not recompute</h2>")
         parts.append("".join(f'<div class="note">{esc(text)}</div>' for text in result.mismatches[:10]))

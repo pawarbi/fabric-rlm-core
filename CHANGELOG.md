@@ -223,7 +223,20 @@
   that column a sum whatever its name suggests, so a `price` line item
   defined as revenue is summed, not averaged. Every grouping tried is
   listed under a movement (`Also by ...`), and numeric length, weight and
-  size columns are never groupings.
+  size columns are never groupings. A table with no amount (cases, tickets,
+  sessions, events) is measured by its row count, decomposed and recomputed
+  like any measure; every numeric non-key column is a measure for the
+  driver tools (Good, Scrap and Down on a production log, not only the
+  columns named like amounts), a unit price beside an amount is averaged,
+  and every fact with a time axis is swept, four by default. A root-cause
+  request takes the fact carrying the measure it names. A grouping with
+  hundreds of values where no group carries 2% of the change reads as
+  fragmented; logins, aliases, first and last names, prose columns and
+  numeric lengths or weights are never groupings; two paths that share a
+  word are told apart by their table; two measures that agree within 1% in
+  every comparison, on any fact, are one figure; and when nothing moved by
+  5% or more the largest movements are listed as steady, so a page is never
+  empty.
 - **Monday Morning Brief** (`fabric_rlm.brief`, or `report(source, "monday
   morning brief: revenue by region, orders")`). Name the metrics to track
   and the brief takes the latest complete Monday-to-Sunday week the source
@@ -253,7 +266,14 @@
   weekly grain is wrong for it. Co-movement is a rank correlation over
   week-over-week changes with near-empty base weeks and the thin tail left
   out, and only the strongest pairs are listed. The fitted trend is the end
-  of the fitted line against its start, a decline capped at -100%.
+  of the fitted line against its start, a decline capped at -100%. A metric
+  named after its table counts rows (`cases by priority`, `number of
+  tickets`); words that name no measure on any fact are declined with the
+  measures listed, never replaced by a default; a metric whose data reaches
+  into the briefed week but stops short of its Sunday (no weekend shift, a
+  feed a day behind) is measured for it with the shortfall said next to the
+  number; two metrics on one measure are told apart by their grouping; and
+  a flat week reads as flat.
 - **KPIs from structure** (`fabric_rlm.kpis`, through `brief(source,
   metrics, kpis=[...])`). Nothing assumes customers or sales: an entity is
   any key on the fact that refers to something with repeat activity over
@@ -275,7 +295,11 @@
   table is where customers appear), and a name that matches nothing is
   declined with the candidates listed rather than substituted. An id that
   never recurs across months is said, in the definition, to be an event
-  rather than a lasting entity.
+  rather than a lasting entity. A fact column that joins a dimension is an
+  entity key whether or not it is called an id (a customer name joining the
+  customers table is the customer); a ratio named like a rate prints as a
+  percentage; the denominator of a ratio is looked for on the numerator's
+  fact first, so `scrap / qty` stays on the production log.
 
 ### Changed
 

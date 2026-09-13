@@ -26,8 +26,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .data_agent_review import AgentDataSource, AgentSnapshot, ReviewContext, _measure_columns, build_vocabulary, excluded_terms
-from .sweep import Comparison, Sweep, SweepFinding, _aggregate_of, _concentration_sentence, _iso_date, _label, _num, _probe_for, _summed_columns, _word, sweep, verify_sweep
+from .data_agent_review import _MEASURE_HINT, AgentDataSource, AgentSnapshot, ReviewContext, _measure_columns, build_vocabulary, excluded_terms
+from .sweep import _ROWS, Comparison, Sweep, SweepFinding, _aggregate_of, _concentration_sentence, _iso_date, _label, _num, _probe_for, _summed_columns, _word, sweep, verify_sweep
 
 __all__ = ["Brief", "ChangePoint", "MetricBrief", "Week", "brief"]
 
@@ -206,7 +206,7 @@ class Brief:
             if metric.kind == "concentration" and metric.target is not None:
                 moves.append(f"{metric.name} held at {metric.target.value:.0%}" if pct is not None and abs(pct) < 0.02 else f"{metric.name} {'fell' if (pct or 0) < 0 else 'rose'} to {metric.target.value:.0%}")
             elif pct is not None:
-                moves.append(f"{metric.name} {'fell' if pct < 0 else 'rose'} {abs(pct):.0%}")
+                moves.append(f"{metric.name} was flat" if abs(pct) < 0.005 else f"{metric.name} {'fell' if pct < 0 else 'rose'} {abs(pct):.0%}")
         first = f"In the {self.week.label}, " + (", ".join(moves[:-1]) + (" and " if len(moves) > 1 else "") + moves[-1] + " on the week before." if moves else "no metric has a week before with rows to compare with.")
         sentences = [first[0].upper() + first[1:]]
         judged = [m for m in self.metrics if m.context.get("z") is not None and abs(m.context["z"]) >= 1.5]
@@ -275,8 +275,15 @@ def _pct(value: float | None) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _metric_specs(metrics: Sequence[Any], probe: Any, instructions: str, scope: str) -> list[dict[str, Any]]:
-    """Each metric as {name, fact, measure, groupings}: a spec mapping as given, plain words read against the source."""
+def _metric_specs(metrics: Sequence[Any], probe: Any, instructions: str, scope: str, prefer: str = "") -> list[dict[str, Any]]:
+    """Each metric as {name, fact, measure, groupings}: a spec mapping as given, plain words read against the source.
+
+    The measure is looked for on the fact the words name, else on ``prefer`` and then every fact in turn; words that name no
+    measure anywhere are declined with a note, never replaced by a default.
+    """
+    from collections import Counter
+
+    from .data_agent_review import humanize_column
     from .reports import _GROUPING_CLAUSE, _grouping_phrases, _match_facts, _match_groupings, _match_measures
 
     schema = probe.schema
@@ -300,18 +307,38 @@ def _metric_specs(metrics: Sequence[Any], probe: Any, instructions: str, scope: 
             specs.append({"name": name, "fact": fact, "measure": measure, "groupings": groupings})
             continue
         words = str(metric)
-        facts = _match_facts(words, probe, vocabulary, text) or default_facts[:1]
-        if not facts:
+        named = _match_facts(words, probe, vocabulary, text)
+        ordered = named or ([prefer] if prefer in schema.tables else []) + [f for f in default_facts if f != prefer]
+        if not ordered:
             specs.append({"name": words, "fact": "", "measure": "", "groupings": (), "note": "no fact table found for it"})
             continue
-        fact = facts[0]
-        measures, _matched = _match_measures(_GROUPING_CLAUSE.sub(" ", words), schema, fact, vocabulary)
-        measure = measures[0] if measures else (_measure_columns(schema, fact)[:1] or [""])[0]
+        measure_words = _GROUPING_CLAUSE.sub(" ", words)
+        fact, measure = ordered[0], ""
+        for candidate in ordered[:1] if named else ordered:
+            measures, _matched = _match_measures(measure_words, schema, candidate, vocabulary)
+            if measures:
+                fact, measure = candidate, measures[0]
+                break
+        counted = bool(re.search(r"\b(count|number|rows)\b", measure_words, re.IGNORECASE))
+        if named and (not measure or counted):
+            # words that only name the fact: "sales by region" is the first amount of a table named like a measure; "sessions by device",
+            # "cases" or "number of tickets" count the rows of a table named like a thing that happens
+            amounts = _measure_columns(schema, fact, broad=True)
+            named_like_a_measure = bool(_MEASURE_HINT.search(vocabulary.table(fact)) or _MEASURE_HINT.search(fact.rsplit(".", 1)[-1]))
+            measure = amounts[0] if amounts and not counted and named_like_a_measure else _ROWS
+        if not measure:
+            available = "; ".join(f"{vocabulary.table(f)}: {', '.join(_measure_columns(schema, f, broad=True)[:6])}" for f in ordered[:4] if _measure_columns(schema, f, broad=True))
+            specs.append({"name": words, "fact": fact, "measure": "", "groupings": (), "note": f"no measure called '{measure_words.strip()}' on any fact; the measures are {available}"})
+            continue
         groupings, unmatched = _match_groupings(_grouping_phrases(words), schema, fact, joins, excluded, terms) if _grouping_phrases(words) else ([], [])
-        phrase = vocabulary.measure(measure.strip("[]")) if measure else words
+        phrase = vocabulary.table(fact) if measure == _ROWS else vocabulary.measure(measure.strip("[]")) if measure else words
         table_word = vocabulary.table(fact)
         name = phrase if phrase.split()[:1] == table_word.split()[-1:] or table_word in phrase else f"{table_word} {phrase}"
         specs.append({"name": name, "fact": fact, "measure": measure, "groupings": tuple(groupings), "note": (f"no grouping matched {', '.join(unmatched)}" if unmatched else "")})
+    counts = Counter(s["name"] for s in specs)
+    for s in specs:
+        if counts[s["name"]] > 1 and s.get("groupings"):
+            s["name"] = f"{s['name']} by {' and '.join(humanize_column(str(g)).lower() for g in s['groupings'])}"  # two metrics on one measure are told apart by their grouping
     return specs
 
 
@@ -787,7 +814,7 @@ def brief(
         if axis is None:
             notes.append(f"{spec['name']}: {fact_name} has no time axis")
             continue
-        aggregate = _aggregate_of(measure, _summed_columns(instructions))
+        aggregate = _aggregate_of(measure, _summed_columns(instructions), schema.tables[fact_name])
         fact = {"table": fact_name, "date": axis, "measure": measure, "aggregate": aggregate}
         try:
             rows = probe.run(dialect.daily(fact, [measure]))
@@ -805,7 +832,11 @@ def brief(
             continue
         daily.sort()
         max_day = daily[-1][0]
-        weeks = _weeks(daily, aggregate, max_day)
+        # a metric whose data reaches into the briefed week is measured for it even when its last day falls short of the Sunday
+        # (no weekend shifts, a feed a day behind); the shortfall is said next to the number
+        wanted_monday = (_dt.date.fromisoformat(str(week)) - _dt.timedelta(days=_dt.date.fromisoformat(str(week)).weekday())) if week else (_dt.date.fromisoformat(target_week.start) if target_week is not None else None)
+        through = wanted_monday + _dt.timedelta(days=6) if wanted_monday is not None and max_day >= wanted_monday else None
+        weeks = _weeks(daily, aggregate, max(max_day, through) if through is not None else max_day)
         if week:
             wanted = _dt.date.fromisoformat(str(week))
             monday = (wanted - _dt.timedelta(days=wanted.weekday())).isoformat()
@@ -838,6 +869,8 @@ def brief(
         if target_week is None:
             target_week = target
         metric_notes = [spec["note"]] if spec.get("note") else []
+        if through is not None and max_day < through and target.start == wanted_monday.isoformat():
+            metric_notes.append(f"its data ends on {_day_label(max_day.isoformat())}, {(through - max_day).days} day(s) before the end of the week")
         ctx = _context(weeks, index, aggregate)
         points = _change_points(weeks[: index + 1]) if not ctx.get("sparse") else []  # a level shift needs a series that has rows in most weeks
         shares, pattern = _weekday_pattern(daily, target, weeks, index)

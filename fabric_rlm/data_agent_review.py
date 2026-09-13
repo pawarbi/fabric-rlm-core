@@ -814,9 +814,10 @@ def _tables_named_in(text: str, schema: SourceSchema) -> list[str]:
     lower = {t.casefold(): t for t in schema.tables}
     named: list[str] = []
     for match in _IDENTIFIER.finditer(text or ""):
-        table = lower.get(match.group(1).split(".")[-1].casefold())
-        if table and table not in named:
-            named.append(table)
+        for segment in match.group(1).split("."):  # sales.custName names sales; dbo.sales names sales
+            table = lower.get(segment.casefold())
+            if table and table not in named:
+                named.append(table)
     return named
 
 
@@ -855,10 +856,10 @@ def excluded_tables(schema: SourceSchema, instructions: str) -> list[str]:
     return sorted(t for t in schema.tables if _mentions_excluded(t, excluded))
 
 
-def _scoped_facts(schema: SourceSchema, instructions: str) -> list[str]:
+def _scoped_facts(schema: SourceSchema, instructions: str, *, broad: bool = False) -> list[str]:
     """Fact tables in the agent's declared scope first; all of them when it names none; never an out-of-scope one."""
     excluded = excluded_terms(instructions)
-    facts = [t for t in _fact_tables(schema) if not _mentions_excluded(t, excluded)]
+    facts = [t for t in _fact_tables(schema, broad=broad) if not _mentions_excluded(t, excluded)]
     named = _tables_named_in(instructions, schema)
     in_scope = [t for t in named if t in facts]
     return in_scope or facts
@@ -1262,14 +1263,14 @@ def _heuristic_joins(schema: SourceSchema) -> dict[tuple[str, str], tuple[str, s
     return joins
 
 
-def _fact_tables(schema: SourceSchema) -> list[str]:
+def _fact_tables(schema: SourceSchema, *, broad: bool = False) -> list[str]:
     facts = []
     joins = _heuristic_joins(schema)
     referenced = _referenced_tables(schema, joins)
     for table, columns in schema.tables.items():
         if re.match(r"^(?:[a-z0-9_]+\.)?dim[_a-z]", table, re.IGNORECASE) or re.search(r"(?:^|[._])(?:date|dates|calendar|time|dim_date)$", table, re.IGNORECASE):
             continue  # a dimension by name (dimproduct carries prices and a start date, and is still not a fact)
-        measures = _measure_columns(schema, table)
+        measures = _measure_columns(schema, table, broad=broad)
         if measures and not any(_MEASURE_HINT.search(c) for c in measures) and table in referenced:
             continue  # numeric columns on a table others reference are attributes of a dimension, not measures
         dates = [c for c in columns if _is_time_column(schema, table, c) or (_PERIOD_COLUMN.search(c) and (not schema.types.get(table) or _TEXT_TYPE.search(schema.column_type(table, c))))]
@@ -1281,18 +1282,24 @@ def _fact_tables(schema: SourceSchema) -> list[str]:
             for other_column in schema.tables[target[0]]
         )
         references_dimension = any(joins.get((table, c)) is not None for c in columns)
-        if measures and (dates or joined_time) and (table.casefold().startswith("fact") or len(measures) >= 2 or references_dimension or _local_attributes(schema, table)):
+        countable = broad and not measures and bool(references_dimension or _local_attributes(schema, table))  # cases, tickets, events: no amount, but rows in time
+        if (measures or countable) and (dates or joined_time) and (table.casefold().startswith("fact") or len(measures) >= 2 or references_dimension or _local_attributes(schema, table)):
             facts.append(table)
 
     def richness(t: str) -> tuple[bool, int, int, str]:
         # a fact named as one first; then the ones with the most grouping columns and measures
-        return (not t.casefold().startswith("fact"), -len(attribute_paths(schema, t, joins)), -len(_measure_columns(schema, t)), t)
+        return (not t.casefold().startswith("fact"), -len(attribute_paths(schema, t, joins)), -len(_measure_columns(schema, t, broad=broad)), t)
 
     return sorted(facts, key=richness)
 
 
-def _measure_columns(schema: SourceSchema, table: str) -> list[str]:
-    preferred = ("salesamount", "revenue", "amount", "sales", "price", "total", "net", "gross", "totalproductcost", "orderquantity", "quantity", "units", "value")
+def _measure_columns(schema: SourceSchema, table: str, *, broad: bool = False) -> list[str]:
+    """The measure columns of a table: the ones named like measures, or the numeric ones when no name says so.
+
+    ``broad`` adds every numeric non-key column the profile types allow (Good, Scrap, Down, Planned on a production log):
+    what the driver tools sweep, where a column that is never asked about costs nothing.
+    """
+    preferred = ("salesamount", "revenue", "amount", "sales", "price", "total", "net", "gross", "totalproductcost", "orderquantity", "quantity", "qty", "units", "value")
     secondary = re.compile(r"(freight|tax|discount|shipping|fee|handling|cost)", re.IGNORECASE)
     def usable(c: str) -> bool:
         return (
@@ -1307,10 +1314,15 @@ def _measure_columns(schema: SourceSchema, table: str) -> list[str]:
         )
 
     columns = [c for c in schema.tables[table] if _MEASURE_HINT.search(c) and usable(c)]
-    if not columns and schema.types.get(table):
-        # names say nothing; the profile's types do
-        columns = [c for c in schema.tables[table] if _NUMERIC_TYPE.search(schema.column_type(table, c)) and usable(c)]
+    if (not columns or broad) and schema.types.get(table):
+        # names say nothing (or every number is wanted); the profile's types do
+        typed = [c for c in schema.tables[table] if _NUMERIC_TYPE.search(schema.column_type(table, c)) and usable(c) and not _NOT_A_MEASURE.search(c) and not _NUMBERED.search(c)]
+        columns = columns + [c for c in typed if c not in columns]
     return sorted(columns, key=lambda c: (next((i for i, p in enumerate(preferred) if p in c.casefold().replace(" ", "").replace("_", "")), 99) + (50 if secondary.search(c) else 0), c))
+
+
+_NUMBERED = re.compile(r"(?:^|_| )no$|[a-z]No$|(?:^|_| )NO$|(?:^|_| )num$|[a-z]Num$")  # OrderNo, invoice_no, LineNum: a label, not a quantity
+_NOT_A_MEASURE = re.compile(r"^(?:year|yr|month|mo|day|week|wk|quarter|qtr|fiscal[_ ]?year|period)$|(?:latitude|longitude|^lat$|^lng$|^lon$|zip|postal|phone|fax|ssn|sequence|^seq$|ordinal|^rank$|version)", re.IGNORECASE)  # a number that is a label, a place or a position
 
 
 def _date_candidates(columns: Sequence[str]) -> list[str]:

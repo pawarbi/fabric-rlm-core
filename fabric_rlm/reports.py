@@ -247,9 +247,12 @@ def _match_facts(text: str, probe: Any, vocabulary: Any, instructions: str) -> l
 
 def _match_measures(text: str, schema: Any, table: str, vocabulary: Any) -> tuple[list[str], list[str]]:
     """Measure columns the request names, best first, and the request words that named them."""
-    tokens = _tokens(text)
+    candidates = _measure_columns(schema, table, broad=True)
+    # a word that names the table is not a measure word ("sessions by device" is not "sessions revenue"), unless a measure column carries it itself (SalesAmount for "sales")
+    own_words = {w for c in candidates for w in _tokens(humanize_column(c))}
+    table_words = (set(_tokens(vocabulary.table(table))) | set(_tokens(humanize_column(table.rsplit(".", 1)[-1])))) - own_words
+    tokens = [t for t in _tokens(text) if t not in table_words]
     lowered_text = " " + " ".join(tokens) + " "
-    candidates = _measure_columns(schema, table)
     scored: list[tuple[int, int, str]] = []
     matched_words: list[str] = []
     for column in schema.tables[table]:
@@ -348,14 +351,19 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
         return ReportSpec(kind, request=text, reading=tuple(reading), metrics=tuple(metrics))
     facts = _match_facts(text, probe, vocabulary, joined_text)
     default_facts = list(probe.facts(joined_text))
+    without_groupings = _GROUPING_CLAUSE.sub(" ", text)  # "by product" names a grouping, not the product cost
+    derived = False
+    if not facts and default_facts and kind in {"root_cause", "trend", "top_movers"}:
+        # the fact is the one whose measure the request names: "why did down rise" is the production log, not the first fact
+        facts = [next((f for f in default_facts if _match_measures(without_groupings, schema, f, vocabulary)[0]), default_facts[0])]
+        derived = True
     if facts:
-        reading.append("fact: " + ", ".join(f"{t} ({vocabulary.table(t)})" for t in facts))
+        reading.append("fact: " + ", ".join(f"{t} ({vocabulary.table(t)})" for t in facts) + (" (the fact with the measure named)" if derived else ""))
     elif default_facts:
         facts = default_facts[:1] if kind in {"root_cause", "trend", "top_movers"} else []
         reading.append(("fact: " + ", ".join(f"{t} ({vocabulary.table(t)})" for t in (facts or default_facts[:2]))) + " (the request named none)")
     table = facts[0] if facts else (default_facts[0] if default_facts else None)
     measures: list[str] = []
-    without_groupings = _GROUPING_CLAUSE.sub(" ", text)  # "by product" names a grouping, not the product cost
     if table is not None:
         measures, _words = _match_measures(without_groupings, schema, table, vocabulary)
         if kind != "recap":
@@ -363,7 +371,7 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
         if measures:
             reading.append("measure: " + ", ".join(f"{m} ({vocabulary.measure(m.strip('[]'))})" for m in measures))
         else:
-            reading.append(f"measure: {', '.join(_measure_columns(schema, table)[:2]) or 'none found'} (the request named none)")
+            reading.append(f"measure: {', '.join(_measure_columns(schema, table, broad=True)[:2]) or 'none found'} (the request named none)")
     groupings: list[str] = []
     unmatched: list[str] = []
     phrases = _grouping_phrases(text)
@@ -421,11 +429,11 @@ def report(
         metrics: list[Any] = list(spec.metrics)
         if not metrics:
             facts = list(probe.facts(instructions))
-            metrics = [{"measure": m, "fact": facts[0]} for m in _measure_columns(probe.schema, facts[0])[:2]] if facts else []
+            metrics = [{"measure": m, "fact": facts[0]} for m in _measure_columns(probe.schema, facts[0], broad=True)[:2]] if facts else []
         return build_brief(probe, metrics, instructions=instructions, scope=scope, budget=budget, verify=verify, timeout=timeout, name=name)  # type: ignore[return-value]
     explicit = _explicit_comparisons(spec.period, spec.against)
     comparisons: Sequence[Any] | None = explicit or (list(spec.comparisons) if spec.comparisons else None)
-    facts: int | Sequence[str] = list(spec.facts) if spec.facts else 2
+    facts: int | Sequence[str] = list(spec.facts) if spec.facts else (4 if spec.kind == "recap" else 2)  # a recap covers the source; four facts fit a budget of 60 to 80
     measures: int | Sequence[str] = list(spec.measures) if spec.measures else 2
     paths: int | Sequence[str] = list(spec.groupings) if spec.groupings else 8
     common = dict(instructions=instructions, scope=scope, facts=facts, measures=measures, paths=paths, comparisons=comparisons, budget=budget, top=spec.top)
@@ -447,7 +455,23 @@ def report(
     if verify:
         result = verify_sweep(result, probe)
     result = replace(result, elapsed=round(time.monotonic() - started, 1))
+    if not spec.facts or not spec.measures:
+        spec = replace(spec, reading=_reading_after(spec, result))  # the request named no fact or measure: say what was actually swept, not what was guessed
     return Report(spec, result, grouped, queries, result.elapsed)
+
+
+def _reading_after(spec: ReportSpec, result: Sweep) -> tuple[str, ...]:
+    """The reading lines with the guessed fact and measure lines replaced by the facts and measures the sweep measured."""
+    swept: dict[str, list[str]] = {}
+    for m in result.ledger:
+        if m.path is None and m.measure not in swept.setdefault(m.fact, []):
+            swept[m.fact].append(m.measure)
+    if not swept:
+        return spec.reading
+    kept = [line for line in spec.reading if not line.startswith(("fact:", "measure:"))]
+    said = "; ".join(f"{fact}: {', '.join(result.words.get(f'{fact}|{m}', m) for m in measures)}" for fact, measures in swept.items())
+    kept.insert(1, f"swept: {said}" + (" (the request named none)" if not spec.facts and not spec.measures else ""))
+    return tuple(kept)
 
 
 def _trend_by_group(probe: Any, result: Sweep, spec: ReportSpec, *, instructions: str, scope: str, budget: int) -> tuple[dict[str, dict[Any, tuple[Point, ...]]], int, list[str]]:
