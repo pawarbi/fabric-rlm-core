@@ -110,6 +110,7 @@ def analyze(path: Path) -> dict:
                 regressions.append({"key": key, "arm": arm, "A": baseline, "candidate": candidate})
     return {
         "input": str(path), "input_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "repetitions": document.get("repetitions"),
         "provenance": document.get("provenance", {"warning": "legacy run; actual SHA not captured"}),
         "packages": document.get("packages"), "overall": summarize(rows),
         "groups": groups_summary, "observed_regressions": regressions,
@@ -119,7 +120,7 @@ def analyze(path: Path) -> dict:
             "verification": "Runtime checker outcome only; does not establish semantic correctness.",
             "evidence_coverage": "Independent claim-to-evidence coverage not measured; supported flags are self-reported.",
             "source_calls": "Instrumented adapter calls only; direct filesystem/pandas calls excluded.",
-            "sampling": "Three repetitions of fixed synthetic questions; not an IID population or proof of general reliability.",
+            "sampling": "Repeated fixed synthetic questions; not an IID population or proof of general reliability.",
         },
     }
 
