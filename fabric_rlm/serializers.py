@@ -47,8 +47,46 @@ def validate_max_submit_bytes(value: int) -> int:
     return value
 
 
+_NOT_SCALAR = object()
+
+
 def _stable_repr(value: Any, max_chars: int = 300) -> str:
     return _DEFAULT_REPR_ADDRESS.sub("", repr(value))[:max_chars]
+
+
+def _as_scalar(value: Any) -> Any:
+    """Return the Python native behind a 0-d array scalar, else ``_NOT_SCALAR``.
+
+    ``np.float64`` subclasses Python ``float``, but ``np.int64`` and ``np.bool_``
+    subclass nothing, so integer and boolean scalars miss the native-type branch
+    in ``freeze`` and would be emitted as opaque markers. A correct answer such
+    as ``df["qty"].sum()`` then reads back as unusable.
+
+    Detection is duck-typed rather than an ``import numpy``: numpy is an optional
+    dependency here, and the same shape covers other array libraries. Requiring
+    both ``ndim == 0`` and an empty ``shape`` keeps real containers — arrays,
+    Series, DataFrames — out, including single-element 1-D arrays, whose data a
+    lone scalar cannot faithfully represent.
+    """
+
+    if getattr(value, "ndim", None) != 0:
+        return _NOT_SCALAR
+    try:
+        if tuple(getattr(value, "shape", (0,))) != ():
+            return _NOT_SCALAR
+    except TypeError:
+        return _NOT_SCALAR
+    item = getattr(value, "item", None)
+    if not callable(item):
+        return _NOT_SCALAR
+    try:
+        unwrapped = item()
+    except Exception:
+        return _NOT_SCALAR
+    # Guard the caller's recursion: only a genuine unwrapping makes progress.
+    if type(unwrapped) is type(value):
+        return _NOT_SCALAR
+    return unwrapped
 
 
 def freeze(
@@ -96,6 +134,13 @@ def freeze(
         return value[:max_string_length] + f"...<truncated, total {len(value)} chars>"
     if isinstance(value, (int, float, bool)) or value is None:
         return value
+    scalar = _as_scalar(value)
+    if scalar is not _NOT_SCALAR:
+        return freeze(
+            scalar,
+            max_string_length=max_string_length,
+            max_collection_items=max_collection_items,
+        )
     if isinstance(value, tuple):
         items = value if max_collection_items is None else value[:max_collection_items]
         return [
