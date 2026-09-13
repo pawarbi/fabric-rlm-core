@@ -14,6 +14,12 @@
 
 ### Fixed
 
+- **Knowledge persistence accepts SQL timestamp timezone type descriptors.**
+  `TIMESTAMP WITH TIME ZONE` and `TIMESTAMP WITHOUT TIME ZONE` were rejected
+  as free text even when produced by Lakehouse profiling. These exact type
+  forms now round-trip unchanged in type fields; fingerprints, unsafe-string
+  checks, diagnostic-code limits and rejection of arbitrary schema text remain.
+  Type syntax: https://duckdb.org/docs/current/sql/data_types/timestamp.html
 - **Grouped Lakehouse SQL can produce valid-grain lessons.** Successful
   grouped reads were captured but excluded by their `lakehouse_sql` type.
   Aggregation evidence is now recognized consistently during harvesting

@@ -28,6 +28,7 @@ MAX_PACKAGE_BYTES = 4 * 1024 * 1024
 _WINDOWS_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
 _URL_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _SAFE_METADATA_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_SQL_TIMESTAMP_TYPE = re.compile(r"TIMESTAMP (?:WITH|WITHOUT) TIME ZONE", re.IGNORECASE)
 _CREDENTIAL_FIELD_NAMES = {
     "credential",
     "credentials",
@@ -276,10 +277,15 @@ def _validate_schema_descriptor(
         return
     if isinstance(value, str):
         _validate_string_value(value, path)
+        field = _normalized_field_name(field_name) if field_name is not None else None
+        timestamp_type = (
+            field is not None
+            and (field == "type" or field.endswith("_type"))
+            and _SQL_TIMESTAMP_TYPE.fullmatch(value)
+        )
         if (
-            field_name is not None
-            and _normalized_field_name(field_name) not in _SCHEMA_STRING_FIELDS
-        ) or not _SAFE_METADATA_CODE.fullmatch(value):
+            field is not None and field not in _SCHEMA_STRING_FIELDS
+        ) or not (_SAFE_METADATA_CODE.fullmatch(value) or timestamp_type):
             raise ValueError(f"{path} must be a structural schema descriptor")
     elif value is not None and type(value) not in {bool, int, float}:
         raise ValueError(f"{path} must be a structural schema descriptor")
