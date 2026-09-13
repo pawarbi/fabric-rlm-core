@@ -39,6 +39,7 @@ class _Knowledge:
 def _rlm_with_knowledge(bindings):
     rlm = RLM.__new__(RLM)
     rlm._knowledge = _Knowledge(bindings)
+    rlm.knowledge_execution = "auto"
     return rlm
 
 

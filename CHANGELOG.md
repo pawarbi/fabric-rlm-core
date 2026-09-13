@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- **Opt-in context-only knowledge execution on the default engine.**
+  `knowledge_execution="context_only"` retains validated source bindings,
+  retrieved source facts / learned lessons and ordinary answer checks, but skips
+  automatic host-operation planning. The existing `"auto"` default is unchanged.
+  Invalid modes fail early; DSPy/adaptive engines reject the new mode explicitly
+  because their agent paths do not yet deliver retrieved lesson guidance.
+  Source drift and alias conflicts still fail closed, and packages are unchanged.
+
 ### Fixed
 
 - **Grouped Lakehouse SQL can produce valid-grain lessons.** Successful

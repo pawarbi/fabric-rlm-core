@@ -175,14 +175,43 @@ called. For a `SemanticModel`, learning also registers one bounded
 RLM may select that operation through a strict scalar JSON plan; the host
 validates the allowlisted measure, group-by, and up to three filters, executes
 `SemanticModel.measure(...)`, audits row/column/byte bounds, and gives the model
-only the compact fingerprinted result packet for synthesis. The model never
-supplies arbitrary DAX. CSV, Parquet, and Delta profiles also register a
+a compact fingerprinted result packet alongside the original source handles.
+In this registered-operation path the model never supplies arbitrary DAX.
+CSV, Parquet, and Delta profiles also register a
 compiler-owned `tabular.aggregate.v1` operation. Exact Lakehouse Delta catalogs
 register bounded aggregate operations, plus a two-fact operation that
 pre-aggregates each fact at the shared key grain before joining. The model
 selects only typed scalar parameters; it never supplies SQL or file-reader
 expressions. Inexact Lakehouse file catalogs and stale source snapshots fail
 closed rather than entering registered execution.
+
+To use the package's validated bindings and retrieved guidance without an
+automatic host-operation planning call, opt into `knowledge_execution="context_only"`:
+
+```python
+result = RLM.task(
+    question,
+    knowledge=knowledge,
+    knowledge_execution="context_only",
+    outputs=["answer"],
+    lm=lm,
+).run()
+```
+
+The default, `"auto"`, preserves existing behavior. Context-only execution still
+checks source identity and freshness, rejects conflicting aliases, retains
+active source facts and learned lessons, and applies the ordinary output /
+integrity checks. It does not mutate the package or remove its operation catalog.
+The trajectory records `knowledge_mode="context_only"` and makes no operation
+selection LM call. With no package, it behaves like an ordinary cold run.
+
+This opt-in mode currently requires the default engine (`engine="auto"` without
+tools, or `engine="default"`). DSPy and adaptive engines do not yet deliver
+retrieved lesson guidance to their agents; the new mode raises
+`NotImplementedError` for those engines instead of silently dropping context.
+Their existing `"auto"` knowledge behavior is unchanged. A context-only package
+with no retrieved lessons supplies no learned-lesson advantage; neither accuracy
+parity nor a speed/token benefit follows from selecting this mode.
 
 A package can also carry what earlier runs learned about a source. Every turn
 records its source calls as typed telemetry (the grain a semantic-model query

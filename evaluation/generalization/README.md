@@ -1,10 +1,14 @@
 # Current-main knowledge regression evaluation
 
-Candidate core: `b75c60e7c7d89f943a7ee02ecae4477a0e64c93f`, based on
+Core of the recorded 81-trial candidate: `b75c60e7c7d89f943a7ee02ecae4477a0e64c93f`, based on
 `origin/main` at `abb092456dd47bc71f56292fbda95ec07ac0db6c`. The core fixes
 are on `fix/knowledge-nonregression`; this separate evaluation branch
 freezes that implementation and its bundled skills. Each run records the
 actual evaluation checkout SHA and per-file hashes, not just this core SHA.
+
+The current branch also contains the opt-in context-only API from
+`a45ebbddb90e04f84daaa1b14dd66b1c3e70e368`; that mode was not present in the
+recorded 81-trial study. Its live effect must be measured separately.
 
 **Completed results:** the corrected 81-trial smoke at `d0306e9` failed all
 three per-source nonregression gates. See [CURRENT_AUDIT.md](CURRENT_AUDIT.md)
