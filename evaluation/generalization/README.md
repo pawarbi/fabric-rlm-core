@@ -1,9 +1,10 @@
 # Current-main knowledge regression evaluation
 
-Core baseline: `7347c278525c6bdebb586eaa78db541c2ed9d7d7`, based on
-`origin/main` at `abb092456dd47bc71f56292fbda95ec07ac0db6c`. The three core
-fixes are on `fix/knowledge-nonregression`; this separate evaluation branch
-freezes that implementation and its bundled skills.
+Candidate core: `b75c60e7c7d89f943a7ee02ecae4477a0e64c93f`, based on
+`origin/main` at `abb092456dd47bc71f56292fbda95ec07ac0db6c`. The core fixes
+are on `fix/knowledge-nonregression`; this separate evaluation branch
+freezes that implementation and its bundled skills. Each run records the
+actual evaluation checkout SHA and per-file hashes, not just this core SHA.
 
 The fixture generator, independent Python references, grader and trace
 controls are reused from `277cd3b782bec4290bff6034a586faacedd0dc86`.
@@ -17,6 +18,12 @@ path strings for CSV/Parquet. Traces showed these being mistaken for inline
 CSV content. This revision uses the public `File(...)` input contract for
 both formats, identically in A/B/C. Tests confirm unchanged source schemas,
 snapshots and operation catalogs; original raw results must remain separate.
+
+The candidate also includes numeric-only scalar serialization, optional
+complete-task/grounded-literal operation planning, and promotion of complete
+grouped SQL observations. The planner change is guidance, not a semantic
+correctness guarantee. SQL learning retains independent-run thresholds and
+does not turn unverified execution into verified analytical evidence.
 
 ## Run in PowerShell
 
@@ -86,4 +93,6 @@ operation. Workbooks are not requested in this smoke.
 Live Fabric services, live semantic models, new held-out task families,
 the full live naming matrix and live mutation/recovery are **not established
 by this local smoke**. PR #79's NumPy scalar fix is not included in the
-baseline; serialization markers are reported rather than silently removed.
+original `f99c742` baseline. Its numeric-only fix is included in this
+candidate; the broader Decimal/date/time conversion policy is not.
+Serialization markers are always reported rather than silently removed.

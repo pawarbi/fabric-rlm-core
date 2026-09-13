@@ -203,11 +203,54 @@ def test_a_typed_number_the_output_showed_is_accepted(tmp_path: Path) -> None:
     assert "verifier_repair_history" not in result.trajectory.metadata
 
 
+def test_file_integer_and_boolean_aggregates_survive_submission(tmp_path: Path) -> None:
+    path = tmp_path / "quantities.csv"
+    path.write_text("quantity\n3\n4\n", encoding="utf-8")
+    lm = ScriptedLM(_code(
+        "import pandas as pd\n"
+        "rows = pd.read_csv(quantities)\n"
+        "total = rows['quantity'].sum()\n"
+        "positive = (rows['quantity'] > 0).any()\n"
+        "print(total, positive)\n"
+        "SUBMIT(answer={'value': total, 'positive': positive})"
+    ))
+
+    result = RLM.task(
+        "Return the total and whether any quantity is positive.",
+        inputs={"quantities": path}, outputs={"answer": dict},
+        lm=lm, max_turns=1, timeout=10, enable_skill_autoloading=False, skills=[],
+    ).run()
+
+    assert result.submitted
+    assert result.payload["answer"] == {"value": 7, "positive": True}
+
+
 # ------------------------------------------------ registered operations --
 
 
 def _plan(operation_id: str, **parameters: str) -> str:
     return json.dumps({"operation_id": operation_id, "parameters": parameters})
+
+
+def test_planner_contract_requires_complete_grounded_operations(tmp_path: Path) -> None:
+    knowledge = RLM.learn(sources={"production": _production_csv(tmp_path)})
+    lm = ScriptedLM(
+        '{"fallback":true,"reason":"The operation does not cover the complete task."}',
+        _code("SUBMIT(answer=production.name)"),
+    )
+    result = RLM.task(
+        "Return the source filename.", outputs={"answer": str},
+        knowledge=knowledge, lm=lm, max_turns=1, timeout=10,
+        enable_skill_autoloading=False, skills=[],
+    ).run()
+
+    planner = lm.messages[0][0]["content"]
+    assert "complete task" in planner
+    assert "literal parameter values" in planner
+    assert "data-dependent" in planner
+    assert result.payload == {"answer": "production.csv"}
+    assert result.trajectory.metadata["knowledge_mode"] == "fallback_no_compatible_operation"
+    assert "operation_execution" not in result.trajectory.metadata
 
 
 def test_the_packet_introduces_itself_and_the_raw_source_stays_bound(tmp_path: Path) -> None:
@@ -441,6 +484,45 @@ def test_lakehouse_queries_record_their_grain_as_evidence(tmp_path: Path) -> Non
     assert query.source_ids == ("service",) and tuple(query.observation["grain"]) == ("region",)
     again = harvest_evidence(result, sources=knowledge.bindings, known_source_ids=["service"], source_fingerprints={"service": knowledge.package.sources[0].schema_fingerprint})
     assert {e.evidence_id for e in again} == {e.evidence_id for e in result.evidence}
+
+
+@pytest.mark.parametrize("max_rows", [10, 1])
+def test_grouped_lakehouse_sql_learns_only_from_complete_results(tmp_path: Path, max_rows) -> None:
+    knowledge = RLM.learn(sources={"service": _service_lakehouse(tmp_path)})
+    results = []
+    for _ in range(2):
+        lm = ScriptedLM(
+            '{"fallback":true,"reason":"Use a grouped SQL read."}',
+            _code(
+                "rows = service.query("
+                "'SELECT region, SUM(hours) AS hours FROM tickets GROUP BY region',"
+                f"sources={{'tickets':'tickets'}}, max_rows={max_rows})\n"
+                "print(rows['rows'])\n"
+                "SUBMIT(answer={'rows': rows['rows']})"
+            ),
+        )
+        result = RLM.task(
+            "Group hours by region.", outputs={"answer": dict}, knowledge=knowledge,
+            lm=lm, max_turns=1, timeout=30, capture_evidence=True,
+            enable_skill_autoloading=False, skills=[],
+        ).run()
+        assert result.submitted
+        (query,) = [e for e in result.evidence if e.observation_type == "query_execution"]
+        assert query.observation["query_type"] == "lakehouse_sql"
+        assert query.observation["truncated"] is (max_rows == 1)
+        assert not query.analytically_trusted
+        results.append(result)
+
+    enriched = RLM.enrich(knowledge, results)
+    lessons = [lesson for lesson in enriched.package.lessons if lesson.kind == "valid_grain"]
+    if max_rows == 1:
+        assert lessons == []
+    else:
+        assert len(lessons) == 1
+        assert lessons[0].status == "active"
+        assert tuple(lessons[0].structured_rule["grain"]) == ("region",)
+        assert lessons[0].structured_rule["runs"] == 2
+        assert lessons[0].structured_rule["verified_successes"] == 0
 
 
 def test_a_shared_glossary_renders_once_and_never_crowds_out_the_grain(tmp_path: Path) -> None:

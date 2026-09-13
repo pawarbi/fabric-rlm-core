@@ -85,6 +85,19 @@ def _execution_status(record: Mapping[str, Any]) -> str:
     return "success"
 
 
+def _is_aggregate_observation(observation: Mapping[str, Any]) -> bool:
+    """Typed, untruncated observations eligible for aggregation learning."""
+    if observation.get("truncated"):
+        return False
+    query_type = observation.get("query_type")
+    if not isinstance(query_type, str):
+        return False
+    return query_type in {"aggregate", "measure", "registered_operation"} or (
+        query_type == "lakehouse_sql"
+        and bool(observation.get("grain") or observation.get("groupby"))
+    )
+
+
 def _clean_value(value: Any, depth: int = 0) -> Any:
     if depth > 4:
         return None
@@ -403,7 +416,7 @@ def harvest_evidence(
                     turn=turn.turn,
                 )
             )
-            if status == "success" and observation.get("query_type") in {"aggregate", "measure"}:
+            if status == "success" and _is_aggregate_observation(observation):
                 successful_grains.append(
                     (
                         source_id,
