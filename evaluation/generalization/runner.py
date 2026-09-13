@@ -331,6 +331,33 @@ def _task_text(
     )
 
 
+def _require_value(payload: Mapping[str, object]) -> None:
+    """Reject a SUBMIT whose ``answer.value`` is missing or null.
+
+    Without this a run that describes its approach instead of computing one is
+    recorded as a success with ``failure_reason: None``. In the dbo lakehouse
+    evaluation that accounted for 53% of all run-to-run grade flips, and the
+    cause was the same there: ``assert_keys`` already rejects nulls, but no
+    ``output_validator`` was passed, so the output contract stated in the
+    prompt was never enforced.
+
+    Only ``value`` is enforced. ``period``, ``grain`` and ``units`` are left
+    unenforced on purpose -- whether the model volunteers them is one of the
+    behaviours this evaluation measures, and enforcing them would destroy the
+    measurement.
+    """
+    answer = payload.get("answer") if isinstance(payload, Mapping) else None
+    assert isinstance(answer, Mapping), (
+        "SUBMIT payload must contain 'answer' as a dictionary with status, "
+        "value, units, grain, period and claims."
+    )
+    assert answer.get("value") is not None, (
+        "answer.value is missing or null. Compute the value and submit it. If "
+        "a required definition is genuinely missing, set status to 'abstain' "
+        "or 'needs_definition' and name the missing definition in value."
+    )
+
+
 def _run_rlm(
     *,
     model: str,
@@ -356,6 +383,7 @@ def _run_rlm(
         capture_evidence=True,
         enable_skill_autoloading=False,
         skills=[],
+        output_validator=_require_value,
     )
     started = time.perf_counter()
     result = rlm.run()
