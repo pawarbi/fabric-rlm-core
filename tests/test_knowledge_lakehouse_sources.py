@@ -13,7 +13,7 @@ from fabric_rlm.artifacts import File
 from fabric_rlm.knowledge import KnowledgePackage, canonical_json
 from fabric_rlm.knowledge_preflight import preflight_knowledge
 from fabric_rlm.knowledge_sources import ProfileLimits, profile_sources
-from fabric_rlm.knowledge_store import save_knowledge_package
+from fabric_rlm.knowledge_store import read_knowledge_package, save_knowledge_package
 from fabric_rlm.lakehouse import LakehouseSource
 
 
@@ -412,14 +412,18 @@ def test_lakehouse_adapter_resolves_metadata_without_querying(
     assert profile.locator.startswith("lakehouse/v1/")
 
 
-def test_lakehouse_profile_can_be_persisted_as_knowledge(tmp_path: Path) -> None:
+@pytest.mark.parametrize("time_type", [
+    "TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITHOUT TIME ZONE",
+    "timestamp with time zone",
+])
+def test_lakehouse_profile_can_be_persisted_as_knowledge(tmp_path: Path, time_type) -> None:
     source = _lakehouse(
         catalog=[
             {
                 "kind": "delta",
                 "name": "dbo.orders",
                 "path": "abfss://private/Tables/dbo/orders",
-                "columns": [["order_id", "BIGINT"], ["amount", "DOUBLE"]],
+                "columns": [["order_id", "BIGINT"], ["amount", "DOUBLE"], ["event_at", time_type]],
                 "version": 3,
                 "table_id": "orders-table-id",
             }
@@ -430,15 +434,16 @@ def test_lakehouse_profile_can_be_persisted_as_knowledge(tmp_path: Path) -> None
         registry=_module().fabric_source_registry(),
     )[0]
 
-    save_knowledge_package(
-        tmp_path / "knowledge.json",
-        KnowledgePackage(
-            package_id="lakehouse.persistence.v1",
-            sources=(profile,),
-        ),
+    package = KnowledgePackage(
+        package_id="lakehouse.persistence.v1",
+        sources=(profile,),
     )
+    save_knowledge_package(tmp_path / "knowledge.json", package)
 
-    assert (tmp_path / "knowledge.json").is_file()
+    restored = read_knowledge_package(tmp_path / "knowledge.json")
+    assert restored == package
+    assert restored.fingerprint == package.fingerprint
+    assert restored.sources[0].schema["dbo.orders"]["columns"]["event_at"]["lakehouse_type"] == time_type
 
 
 def test_lakehouse_files_make_snapshot_inexact() -> None:

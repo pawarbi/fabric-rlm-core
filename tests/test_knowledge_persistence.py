@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+from dataclasses import replace
 import os
 from pathlib import Path
 from typing import Callable
@@ -726,6 +727,31 @@ def test_flexible_diagnostics_reject_arbitrary_free_text(
 ) -> None:
     package = _package(diagnostics={"note": value})
 
+    with pytest.raises(ValueError, match="bounded metadata"):
+        save_knowledge_package(tmp_path / "knowledge.json", package)
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("lakehouse_type", "TIMESTAMP WITH TIME ZONE customer details"),
+    ("lakehouse_type", "TIMESTAMP WITH TIME ZONE; SELECT 1"),
+    ("lakehouse_type", "TIMESTAMP WITH TIME ZONE\ncustomer details"),
+    ("lakehouse_type", "customer details are not a data type"),
+    ("labels", "TIMESTAMP WITH TIME ZONE"),
+])
+def test_temporal_type_support_does_not_admit_schema_free_text(tmp_path: Path, field, value) -> None:
+    package = _package()
+    source = replace(
+        package.sources[0],
+        schema={"event_at": {"type": "string", field: value}},
+    )
+    with pytest.raises(ValueError, match="structural schema descriptor"):
+        save_knowledge_package(
+            tmp_path / "knowledge.json", replace(package, sources=(source,)),
+        )
+
+
+def test_temporal_type_support_does_not_relax_diagnostic_codes(tmp_path: Path) -> None:
+    package = _package(diagnostics={"state_type": "TIMESTAMP WITH TIME ZONE"})
     with pytest.raises(ValueError, match="bounded metadata"):
         save_knowledge_package(tmp_path / "knowledge.json", package)
 
