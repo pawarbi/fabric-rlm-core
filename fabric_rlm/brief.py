@@ -415,6 +415,12 @@ def _context(weeks: Sequence[Week], index: int, aggregate: str) -> dict[str, Any
         c["verdict"] = f"very unusual: {abs(c['z']):.1f} standard deviations {'above' if c['z'] > 0 else 'below'} the expectation"
     if c.get("z") is not None and abs(c["z"]) >= 1.5 and len(index_values) == 1 and c.get("yoy_pct") is not None and abs(c["yoy_pct"]) >= 1.0:
         c["verdict"] += ", though the seasonal pattern comes from a single prior year that ran at a very different level"
+    # coverage: a week with far fewer rows than the weeks before it may be data that has not fully arrived
+    recent_rows = sorted(w.rows for w in weeks[max(0, index - 13) : index] if w.rows)
+    if recent_rows and len(recent_rows) >= 4:
+        typical_rows = recent_rows[len(recent_rows) // 2]
+        if target.rows < 0.5 * typical_rows:
+            c["coverage_note"] = f"this week holds {target.rows:,} rows against a typical {typical_rows:,} a week, so the data may be incomplete; read the movement as coverage until it fills"
     # the record
     earlier = values[:index]
     if earlier:
@@ -795,6 +801,8 @@ def _headline(name: str, target: Week, c: Mapping[str, Any], aggregate: str) -> 
     text = parts[0] + (": " + ", ".join(against) if against else "") + "."
     if c.get("verdict"):
         text += f" Against {c['expected_source']}, this week is {c['verdict']}." if c.get("expected_source") else f" {c['verdict'].capitalize()}."
+    if c.get("coverage_note"):
+        text += f" Caution: {c['coverage_note']}."
     return text
 
 
@@ -803,6 +811,8 @@ def _watch(metrics: Sequence[MetricBrief]) -> list[str]:
     for metric in metrics:
         c = metric.context
         z = c.get("z")
+        if c.get("coverage_note"):
+            watch.append(f"{metric.name.capitalize()}: {c['coverage_note']}.")
         if z is not None and abs(z) >= 2:
             watch.append(f"{metric.name.capitalize()}: {c['verdict']}.")
         recent = [p for p in metric.change_points if metric.target and (_dt.date.fromisoformat(metric.target.start) - _dt.date.fromisoformat(p.start)).days <= 42]
