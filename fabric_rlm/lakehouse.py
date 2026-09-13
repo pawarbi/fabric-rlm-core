@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 
+from .serializers import freeze
+
 
 class LakehouseDiscoveryError(RuntimeError):
     """Raised when a Lakehouse scope cannot produce a complete catalog."""
@@ -757,15 +759,19 @@ def query_group_by(sql: str) -> list[str]:
 
 
 def _json_value(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, decimal.Decimal):
-        return float(value)
-    if isinstance(value, (dt.date, dt.datetime, dt.time)):
-        return value.isoformat()
-    if isinstance(value, bytes):
-        return value.hex()
-    return str(value)
+    """Normalize one query-result cell for JSON.
+
+    Delegates to the serializer so a value means the same thing whether it
+    reaches the model through a query result or through a SUBMIT payload.
+    Unlike a payload, a result cell has no use for an opaque marker — a row
+    should stay readable — so anything the serializer cannot convert falls back
+    to its string form, as this function has always done.
+    """
+
+    frozen = freeze(value, max_string_length=None, max_collection_items=None)
+    if isinstance(frozen, dict) and frozen.get("__serializable__") is False:
+        return str(value)
+    return frozen
 
 
 def _fetch_query_result(

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
+import decimal
 import json
 import re
+import sys
 import types
 from pathlib import Path
 from typing import Any, Mapping
@@ -47,8 +50,78 @@ def validate_max_submit_bytes(value: int) -> int:
     return value
 
 
+_NOT_SCALAR = object()
+
+
+SECONDS_PER_DAY = 86_400.0
+
+
+def _is_pandas_missing(value: Any) -> bool:
+    """True for ``pd.NaT``/``pd.NA`` without importing pandas.
+
+    Checked by identity against an already-imported pandas: if pandas was never
+    imported, the value cannot be one of its singletons. ``NaT`` must be caught
+    before the date branch below, because it subclasses ``datetime`` and its
+    ``isoformat()`` returns the string ``"NaT"``.
+    """
+
+    pandas = sys.modules.get("pandas")
+    if pandas is None:
+        return False
+    return any(
+        value is getattr(pandas, name, _NOT_SCALAR) for name in ("NaT", "NA")
+    )
+
+
+def _as_arrow_scalar(value: Any) -> Any:
+    """Unwrap a pyarrow-style scalar via ``as_py()``, else ``_NOT_SCALAR``."""
+
+    as_py = getattr(value, "as_py", None)
+    if not callable(as_py):
+        return _NOT_SCALAR
+    try:
+        return as_py()
+    except Exception:
+        return _NOT_SCALAR
+
+
 def _stable_repr(value: Any, max_chars: int = 300) -> str:
     return _DEFAULT_REPR_ADDRESS.sub("", repr(value))[:max_chars]
+
+
+def _as_scalar(value: Any) -> Any:
+    """Return the Python native behind a 0-d array scalar, else ``_NOT_SCALAR``.
+
+    ``np.float64`` subclasses Python ``float``, but ``np.int64`` and ``np.bool_``
+    subclass nothing, so integer and boolean scalars miss the native-type branch
+    in ``freeze`` and would be emitted as opaque markers. A correct answer such
+    as ``df["qty"].sum()`` then reads back as unusable.
+
+    Detection is duck-typed rather than an ``import numpy``: numpy is an optional
+    dependency here, and the same shape covers other array libraries. Requiring
+    both ``ndim == 0`` and an empty ``shape`` keeps real containers — arrays,
+    Series, DataFrames — out, including single-element 1-D arrays, whose data a
+    lone scalar cannot faithfully represent.
+    """
+
+    if getattr(value, "ndim", None) != 0:
+        return _NOT_SCALAR
+    try:
+        if tuple(getattr(value, "shape", (0,))) != ():
+            return _NOT_SCALAR
+    except TypeError:
+        return _NOT_SCALAR
+    item = getattr(value, "item", None)
+    if not callable(item):
+        return _NOT_SCALAR
+    try:
+        unwrapped = item()
+    except Exception:
+        return _NOT_SCALAR
+    # Guard the caller's recursion: only a genuine unwrapping makes progress.
+    if type(unwrapped) is type(value):
+        return _NOT_SCALAR
+    return unwrapped
 
 
 def freeze(
@@ -96,6 +169,30 @@ def freeze(
         return value[:max_string_length] + f"...<truncated, total {len(value)} chars>"
     if isinstance(value, (int, float, bool)) or value is None:
         return value
+    # A missing marker is an absent value, not an object worth describing. This
+    # must precede the date branch: pd.NaT subclasses datetime.
+    if _is_pandas_missing(value):
+        return None
+    # Scalars that arrive from SQL sources and from date arithmetic. These
+    # conversions match LakehouseSource's own row normalization, which now
+    # delegates here so the two paths cannot drift apart.
+    if isinstance(value, decimal.Decimal):
+        return float(value)
+    if isinstance(value, (dt.date, dt.time)):  # dt.datetime subclasses dt.date
+        return value.isoformat()
+    if isinstance(value, dt.timedelta):
+        return value.total_seconds() / SECONDS_PER_DAY
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).hex()
+    scalar = _as_scalar(value)
+    if scalar is _NOT_SCALAR:
+        scalar = _as_arrow_scalar(value)
+    if scalar is not _NOT_SCALAR:
+        return freeze(
+            scalar,
+            max_string_length=max_string_length,
+            max_collection_items=max_collection_items,
+        )
     if isinstance(value, tuple):
         items = value if max_collection_items is None else value[:max_collection_items]
         return [

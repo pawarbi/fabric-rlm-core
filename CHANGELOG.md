@@ -4,6 +4,33 @@
 
 ### Fixed
 
+- **Scalars from SQL sources and date arithmetic no longer become unserializable
+  answers.** `freeze` recognized Python's own numeric types and little else, so
+  a value computed in the worker rather than fetched through
+  `LakehouseSource.query` was frozen as an opaque
+  `{"__serializable__": false}` marker. That covered the results this library
+  exists to produce: `Decimal` (what `SUM(amount)` returns from a warehouse),
+  `date`/`datetime`/`time`, `timedelta` (every "days to payment" answer),
+  `bytes`, pandas `Timestamp`/`Timedelta`/`NaT`/`NA`, numpy `datetime64`/
+  `timedelta64`, and pyarrow scalars. Decimals become floats, dates and times
+  ISO strings, durations fractional days, bytes hex, and missing markers null —
+  the conventions `LakehouseSource` already applied to query rows. It now
+  delegates here, so a value means the same thing whichever path it arrives by,
+  and the two policies cannot drift apart. Real containers — arrays, Series,
+  DataFrames, connections — still serialize as opaque markers, including a
+  single-element array, since a lone scalar cannot represent their data.
+- **An integer or boolean aggregate is no longer reported as an unserializable
+  value.** `np.float64` subclasses Python `float`, but `np.int64` and `np.bool_`
+  subclass nothing, so they missed `freeze`'s native-scalar branch and were
+  emitted as opaque `{"__serializable__": false}` markers. The everyday
+  `df["qty"].sum()` and `(df["qty"] > 1).any()` therefore returned a correct
+  number or flag that read back as unusable — and `np.True_` labelled itself
+  `"__type__": "bool"` while doing so. Zero-dimensional array scalars are now
+  unwrapped to their Python natives. Detection is duck-typed on `ndim`/`shape`
+  rather than importing numpy, which is an optional dependency, so other array
+  libraries behave the same. In the dbo evaluation this affected 4/150 trials,
+  every one of them graded wrong despite carrying the right number.
+
 - **A value containing `--`, `/*` or `*/` no longer looks like a SQL comment to
   `LakehouseSource.query`.** The read-only gate scanned the raw query text for
   comment markers, so an ordinary filter on data that happens to contain them —
