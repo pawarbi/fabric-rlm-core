@@ -590,3 +590,24 @@ def test_a_real_leader_beats_a_placeholder_and_a_placeholder_is_named_for_what_i
     assert year.best.groups[0].group == "Internet" and year.decompositions[1].groups[0].group == "[Not Applicable]"
     assert result.takeaways()[0].text == "Orders quantity rose 127% 2023 to 2024, 2,640 to 7,200, led by Internet (95% of the change on 9% of the base); the row count moved as much as the value, so this is volume, not a change in rate." or "led by Internet (95% of the change on 9% of the base)" in result.takeaways()[0].text
     assert "sits with Internet (channel)" in result.narrative() and "[Not Applicable]" not in result.narrative()
+
+
+def test_the_lakehouse_probe_asks_for_the_full_row_limit_and_refuses_a_cut_result():
+    seen = {}
+
+    class Handle:
+        root = "abfss://ws@onelake.dfs.fabric.microsoft.com/shop.Lakehouse"
+        catalog = [{"kind": "delta", "name": "sales", "path": "x", "columns": [["sale_date", "DATE"], ["amount", "DOUBLE"]]}]
+
+        def resolve(self):
+            return self
+
+        def query(self, sql, *, sources, max_rows=1000, timeout=None):
+            seen["max_rows"] = max_rows
+            return {"columns": ["day", "n", "v0"], "rows": [["2024-01-01", 1, 1.0]], "truncated": seen.get("truncate", False)}
+
+    probe = LakehouseProbe(Handle())
+    assert probe.name == "shop.Lakehouse" and probe.run("SELECT 1 AS day FROM sales") == [{"day": "2024-01-01", "n": 1, "v0": 1.0}] and seen["max_rows"] == 10_000
+    seen["truncate"] = True
+    with pytest.raises(ValueError, match="more than 10,000 rows and was cut"):
+        probe.run("SELECT 1 AS day FROM sales")
