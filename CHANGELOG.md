@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **Host work is included in source-call metrics and run outcomes.**
+  Runtime results, evidence and benchmarks share the same accounting;
+  adapter telemetry and its operation wrapper are not double-counted.
+  Host-only file and Lakehouse runs no longer appear to use zero calls.
+  A first useful query turn of `0` identifies work before turn one.
 - **An oversized host result is rejected evidence, not a successful
   observation.** Exceeding the operation's output-row bound can still
   recover through the raw-source path, but the rejected operation is no

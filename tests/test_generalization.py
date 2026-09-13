@@ -270,6 +270,51 @@ def test_host_operations_are_evidence_and_a_file_source_learns_its_grain(tmp_pat
     assert [e.execution_status for e in rejected.evidence if e.observation_type == "query_execution"] == ["rejected"]
 
 
+@pytest.mark.parametrize("source_kind", ["csv", "parquet", "delta"])
+def test_real_host_call_accounting_is_passive_across_sources(tmp_path: Path, source_kind) -> None:
+    if source_kind == "csv":
+        source = _production_csv(tmp_path)
+        groupby, measure = "line", "produced_units"
+        expected = {"L1": 1200 + 1300, "L2": 800 + 700, "L3": 500 + 600}
+    elif source_kind == "parquet":
+        source = _inventory_parquet(tmp_path)
+        groupby, measure = "warehouse", "on_hand"
+        expected = {"W1": 50 + 20, "W2": 70 + 46}
+    else:
+        source = _service_lakehouse(tmp_path)
+        groupby, measure = "region", "hours"
+        expected = {"EU": 2 + 5, "US": 1 + 3}
+    knowledge = RLM.learn(sources={"source": source})
+    operation = knowledge.package.operations[0]
+    parameters = {"aggregate": "sum", "measure": measure, "groupby": groupby}
+    if source_kind == "delta":
+        parameters["catalog_source"] = "tickets"
+    runs = []
+    for capture in (False, True):
+        lm = ScriptedLM(
+            _plan(operation.operation_id, **parameters),
+            _code("SUBMIT(answer={'rows': knowledge_result['rows']})"),
+        )
+        result = RLM.task(
+            "Report grouped totals.", outputs=["answer"], knowledge=knowledge,
+            lm=lm, max_turns=1, timeout=30, capture_evidence=capture,
+            enable_skill_autoloading=False, skills=[],
+        ).run()
+        assert result.submitted
+        assert {row[groupby]: row["value"] for row in result.payload["answer"]["rows"]} == expected
+        summary = result.trajectory.metadata.get("source_call_summary", {})
+        assert summary.get("source_calls") == 1
+        assert summary["failed_source_calls"] == 0
+        assert summary["first_useful_query_turn"] == 0
+        assert summary["source_seconds"] >= 0
+        runs.append((result, lm.messages))
+    assert runs[0][0].payload == runs[1][0].payload
+    assert runs[0][1] == runs[1][1]
+    assert not runs[0][0].evidence
+    outcome = next(e for e in runs[1][0].evidence if e.observation_type == "run_outcome")
+    assert outcome.observation["source_calls"] == 1
+
+
 def test_over_bound_host_result_is_not_successful_learning_evidence(tmp_path: Path) -> None:
     path = tmp_path / "counts.csv"
     path.write_text(

@@ -258,6 +258,61 @@ def test_harvest_turns_typed_telemetry_into_evidence_without_data() -> None:
     assert summary == {"source_calls": 5, "failed_source_calls": 2, "source_seconds": pytest.approx(16.4), "first_useful_query_turn": 2}
 
 
+@pytest.mark.parametrize("host_kind", ["file", "semantic", "lakehouse", "bounds", "empty"])
+def test_host_work_reaches_benchmark_and_run_outcome_without_double_counting(host_kind) -> None:
+    host = {
+        "query_type": "registered_operation",
+        "operation_id": "source.tabular.aggregate.v1",
+        "required_sources": ["source"],
+        "executed": True,
+        "returned_rows": 0 if host_kind == "empty" else 2,
+        "total_seconds": 2.0,
+    }
+    if host_kind == "bounds":
+        host["reason"] = "result_bound_exceeded"
+    adapter_calls = []
+    if host_kind in {"semantic", "lakehouse"}:
+        adapter_calls = [{
+            "input": "source",
+            "query_type": "aggregate" if host_kind == "semantic" else "lakehouse_sql",
+            "executed": True,
+            "returned_rows": 2,
+            "total_seconds": 0.5,
+        }]
+    worker_call = {
+        "input": "source", "query_type": "aggregate", "executed": True,
+        "returned_rows": 1, "total_seconds": 0.3,
+    }
+    result = _result(
+        [_turn(1, "x=1"), _turn(2, "query()", calls=[worker_call], submitted=True)],
+        metadata={"operation_execution": host, "operation_source_calls": adapter_calls},
+    )
+    task = KnowledgeBenchmarkTask(
+        "units", "How many units?", host["operation_id"],
+        lambda payload: payload == {"answer": "x"},
+    )
+    report = run_knowledge_benchmark(
+        tasks=[task], repetitions=1, seed=1,
+        make_lm=lambda **_kwargs: type("LM", (), {"cache": False})(),
+        run=lambda *_args: result,
+    )
+    outcome = next(
+        e for e in harvest_evidence(result, sources={"source": object()})
+        if e.observation_type == "run_outcome"
+    )
+    first_useful = 2 if host_kind in {"bounds", "empty"} else 0
+    failures = 1 if host_kind == "bounds" else 0
+    seconds = 0.8 if adapter_calls else 2.3
+
+    for trial in report.trials:
+        assert trial.source_calls == outcome.observation["source_calls"] == 2
+        assert trial.failed_source_calls == outcome.observation["failed_source_calls"] == failures
+        assert trial.source_seconds == pytest.approx(seconds)
+        assert trial.first_useful_query_turn == first_useful
+    assert outcome.observation["first_useful_query_turn"] == first_useful
+    assert source_call_summary(result.turns)["source_calls"] == 1
+
+
 def test_harvest_reflects_run_outcome_and_restricts_to_known_sources() -> None:
     failed = _result(
         [_turn(1, "m.aggregate(...)", calls=[{"input": "arr_model", **AGGREGATE_OK}], error="ValueError: boom")],

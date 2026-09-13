@@ -12,7 +12,7 @@ import statistics
 import time
 from typing import Any, Literal
 
-from fabric_rlm.knowledge_evidence import source_call_summary
+from fabric_rlm.knowledge_evidence import _trajectory_source_call_summary
 from fabric_rlm.runtime import RLMResult
 
 
@@ -70,9 +70,9 @@ class KnowledgeBenchmarkTrial:
     operation_id: str | None
     operation_result_fingerprint: str | None
     # Cold-parity metrics. Source calls and their failures come from the
-    # typed per-turn telemetry; the first useful query is the first turn a
-    # source call returned rows; verifier repairs count repair turns; the
-    # integrity status is what the analytical screen ended with.
+    # typed turn and host telemetry; first useful query is zero for host
+    # work before turn one. Verifier repairs count repair turns; integrity
+    # status is what the analytical screen ended with.
     reasoning_tokens: int | None = None
     source_calls: int = 0
     failed_source_calls: int = 0
@@ -274,7 +274,7 @@ def _trial(
     audit_status = metadata.get("operation_audit_status")
     payload = result.payload if isinstance(result.payload, Mapping) else None
     correct = bool(result.submitted and task.is_correct(payload))
-    calls = source_call_summary(result.trajectory.turns)
+    calls = _trajectory_source_call_summary(result.trajectory)
     repairs = sum(
         1
         for turn in result.trajectory.turns

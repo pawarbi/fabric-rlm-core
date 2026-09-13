@@ -2011,13 +2011,13 @@ class RLM:
         the result is returned without it.
         """
         trajectory = getattr(result, "trajectory", None)
-        turns = list(getattr(trajectory, "turns", None) or [])
         if trajectory is None or not hasattr(trajectory, "metadata"):
             return result
-        from .knowledge_evidence import harvest_evidence, source_call_summary
+        from .knowledge_evidence import _trajectory_source_call_summary, harvest_evidence
 
-        if any(getattr(turn, "source_calls", None) for turn in turns):
-            trajectory.metadata["source_call_summary"] = source_call_summary(turns)
+        calls = _trajectory_source_call_summary(trajectory)
+        if calls["source_calls"]:
+            trajectory.metadata["source_call_summary"] = calls
         # Whether a check existed for this run, and, separately, what
         # actually ran against the accepted answer. Evidence harvesting reads
         # the execution record only: a configured verifier that was skipped,

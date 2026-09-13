@@ -250,11 +250,11 @@ never removes the cold path. A package with no evidence and no lessons
 serializes exactly as before. Each lesson carries a dependency scope: a
 schema change stales the schema-scoped lessons that depend on the changed
 source, and a data-only change stales the snapshot- and operational-scoped
-ones (grains, costs, strategies) while leaving the schema facts. Today the
-typed source-call telemetry that feeds richer lessons comes from
-`SemanticModel` (and Lakehouse SQL timings); file sources contribute run
-outcomes only, so the behavioural learner is not yet equally deep across
-source types.
+ones (grains, costs, strategies) while leaving the schema facts. Typed query
+evidence comes from `SemanticModel`, Lakehouse SQL, and registered host
+operations on files and Lakehouse sources. Direct, uninstrumented pandas
+or SQL code may contribute only a run outcome; zero recorded calls does
+not mean that no source I/O occurred.
 
 The development notebook
 `examples/notebooks/development/rlm_knowledge_benchmark_matrix.py` runs seeded,
@@ -262,7 +262,16 @@ cache-disabled cold-versus-learned trials across these paths and records
 correctness, operation selection, audit status, turns, token usage, LM/worker/
 host/wall time, provenance, and drift rejection. `KnowledgeBenchmarkReport`
 also records source calls, failed calls, source seconds, the first useful
-query turn, verifier repairs, integrity status and injected lessons, and
+query turn, verifier repairs, integrity status and injected lessons. Host
+work counts once: adapter telemetry is used when available, otherwise the
+registered operation is one recorded call, not an extra call on top of its
+adapter. A first useful query turn of `0` means a successful host call
+returned rows before the agent's first turn, not that its answer was
+independently verified. Counts and source seconds cover instrumented work,
+not all profiling or direct file/SQL I/O. The public
+`source_call_summary(turns)` helper remains turn-only; runtime and benchmark
+reports also account for host metadata.
+
 `cold_parity()` states the release rule: learned correctness and completion
 must not fall below cold on any task. Abstentions and timeouts are incomplete,
 not efficiency wins. The report must be nonempty and contain exactly one

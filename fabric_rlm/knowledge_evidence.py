@@ -9,7 +9,7 @@ analytical-integrity screen. This module turns those typed records into
 
 It reads only what the runtime recorded as data: ``TurnRecord.source_calls``
 (worker-side semantic-model telemetry and parent-side Lakehouse timings),
-the run outcome, and the trajectory's typed error classes. It never mines
+host operation metadata, the run outcome, and typed error classes. It never mines
 stdout or agent prose, and it never copies a data value: filter values,
 result rows and DAX text stay out; names, counts, codes and timings go in.
 
@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from fabric_rlm.knowledge import EvidenceRecord, _domain_fingerprint
 from fabric_rlm.trajectory import (
+    Trajectory,
     TurnRecord,
     _call_name,
     _referenced_names,
@@ -504,26 +505,7 @@ def harvest_evidence(
     outcome_sources = touched_sources or bound_ids
     if outcome_sources:
         turns = result.trajectory.turns
-        source_call_count = sum(len(turn.source_calls or ()) for turn in turns)
-        failed_calls = sum(
-            1
-            for turn in turns
-            for raw in (turn.source_calls or ())
-            if isinstance(raw, Mapping) and _execution_status(raw) != "success"
-        )
-        first_useful = next(
-            (
-                turn.turn
-                for turn in turns
-                if any(
-                    isinstance(raw, Mapping)
-                    and _execution_status(raw) == "success"
-                    and (raw.get("returned_rows") or 0) > 0
-                    for raw in (turn.source_calls or ())
-                )
-            ),
-            None,
-        )
+        calls = _trajectory_source_call_summary(result.trajectory)
         metadata = result.trajectory.metadata or {}
         observation = {
             "turns": len(turns),
@@ -531,10 +513,11 @@ def harvest_evidence(
             "failure_reason": str(result.failure_reason or "none")[:64],
             "verifier_repairs": len(metadata.get("verifier_repair_history") or []),
             "integrity_findings": len(metadata.get("analytical_integrity_unresolved") or []),
-            "source_calls": source_call_count,
-            "failed_source_calls": failed_calls,
+            "source_calls": calls["source_calls"],
+            "failed_source_calls": calls["failed_source_calls"],
+            "source_seconds": calls["source_seconds"],
             "error_turns": sum(1 for turn in turns if turn.error),
-            "first_useful_query_turn": first_useful,
+            "first_useful_query_turn": calls["first_useful_query_turn"],
             "error_classes": sorted(
                 {
                     cls
@@ -566,21 +549,23 @@ def harvest_evidence(
     return tuple(records)
 
 
+def _source_call_seconds(record: Mapping[str, Any]) -> float:
+    for key in ("total_seconds", "execution_seconds", "preflight_seconds"):
+        value = record.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return 0.0
+
+
 def source_call_summary(turns: Sequence[TurnRecord]) -> dict[str, Any]:
-    """Counts a benchmark reads off a trajectory without harvesting."""
+    """Counts from telemetry attached to turns, without harvesting."""
     calls = [
         raw
         for turn in turns
         for raw in (turn.source_calls or ())
         if isinstance(raw, Mapping)
     ]
-    seconds = 0.0
-    for raw in calls:
-        for key in ("total_seconds", "execution_seconds", "preflight_seconds"):
-            value = raw.get(key)
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                seconds += float(value)
-                break
+    seconds = sum(_source_call_seconds(raw) for raw in calls)
     first_useful = next(
         (
             turn.turn
@@ -600,6 +585,34 @@ def source_call_summary(turns: Sequence[TurnRecord]) -> dict[str, Any]:
         "source_seconds": round(seconds, 3),
         "first_useful_query_turn": first_useful,
     }
+
+
+def _trajectory_source_call_summary(trajectory: Trajectory) -> dict[str, Any]:
+    """Include host work once; zero denotes a useful query before turn one."""
+    summary = source_call_summary(getattr(trajectory, "turns", None) or ())
+    metadata = trajectory.metadata or {}
+    host_calls = [
+        raw for raw in (metadata.get("operation_source_calls") or ())
+        if isinstance(raw, Mapping)
+    ]
+    execution = metadata.get("operation_execution")
+    # A wrapper and its adapter telemetry describe the same work. Use the
+    # wrapper only when the source has no lower-level instrumentation.
+    if not host_calls and isinstance(execution, Mapping):
+        host_calls = [execution]
+    summary["source_calls"] += len(host_calls)
+    summary["failed_source_calls"] += sum(
+        _execution_status(raw) != "success" for raw in host_calls
+    )
+    summary["source_seconds"] = round(
+        summary["source_seconds"] + sum(_source_call_seconds(raw) for raw in host_calls), 3
+    )
+    if any(
+        _execution_status(raw) == "success" and (raw.get("returned_rows") or 0) > 0
+        for raw in host_calls
+    ):
+        summary["first_useful_query_turn"] = 0
+    return summary
 
 
 __all__ = [
