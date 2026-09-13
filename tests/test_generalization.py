@@ -253,7 +253,120 @@ def test_planner_contract_requires_complete_grounded_operations(tmp_path: Path) 
     assert "operation_execution" not in result.trajectory.metadata
 
 
-def test_the_packet_introduces_itself_and_the_raw_source_stays_bound(tmp_path: Path) -> None:
+@pytest.mark.parametrize("source_kind", ["csv", "parquet", "delta"])
+def test_context_only_keeps_sources_and_guidance_without_host_planning(tmp_path: Path, source_kind) -> None:
+    if source_kind == "csv":
+        source = _production_csv(tmp_path)
+        code = "import pandas as pd\nvalue = pd.read_csv(source).query('reporting_complete')['produced_units'].sum()"
+        expected = COMPLETE_TOTAL
+    elif source_kind == "parquet":
+        source = _inventory_parquet(tmp_path)
+        code = "import pandas as pd\nvalue = pd.read_parquet(source)['on_hand'].sum()"
+        expected = 186
+    else:
+        source = _service_lakehouse(tmp_path)
+        code = "value = source.query('SELECT SUM(hours) FROM tickets', sources={'tickets': 'tickets'})['rows'][0][0]"
+        expected = 11
+    note = "Preserve the source measurement units."
+    knowledge = RLM.learn(sources={"source": source}, declared={"source": {"notes": [note]}})
+    fingerprint = knowledge.package.fingerprint
+    operations = knowledge.package.operations
+    assert operations
+    lm = ScriptedLM(_code(code + "\nSUBMIT(answer={'value': value})"))
+
+    result = RLM.task(
+        "Return the requested total.", outputs={"answer": dict},
+        knowledge=knowledge, knowledge_execution="context_only",
+        lm=lm, max_turns=1, timeout=30, capture_evidence=True,
+        enable_skill_autoloading=False, skills=[],
+    ).run()
+
+    assert result.payload == {"answer": {"value": expected}}
+    assert len(lm.messages) == 1
+    assert note in _system(lm)
+    assert result.trajectory.metadata["knowledge_mode"] == "context_only"
+    assert result.trajectory.metadata["knowledge_lessons_injected"]
+    assert result.trajectory.metadata.get("operation_selection_lm_calls", 0) == 0
+    assert "operation_execution" not in result.trajectory.metadata
+    assert result.trajectory.metadata["knowledge_fingerprint"] == fingerprint
+    assert knowledge.package.fingerprint == fingerprint
+    assert knowledge.package.operations == operations
+    assert any(record.observation_type == "run_outcome" for record in result.evidence)
+
+
+@pytest.mark.parametrize("change", ["data", "schema"])
+@pytest.mark.parametrize("policy", ["auto", "context_only"])
+def test_knowledge_execution_policy_preserves_stale_source_rejection(tmp_path: Path, change, policy) -> None:
+    source = _production_csv(tmp_path)
+    knowledge = RLM.learn(sources={"source": source})
+    content = source.read_text(encoding="utf-8")
+    changed = content + "L4,2024-02,10,0,true,true\n" if change == "data" else content.replace("produced_units", "quantity")
+    source.write_text(changed, encoding="utf-8")
+    lm = ScriptedLM(_code("SUBMIT(answer=1)"))
+
+    with pytest.raises(ValueError, match="stale knowledge.*source"):
+        RLM.task(
+            "Return the total.", outputs={"answer": int},
+            knowledge=knowledge, knowledge_execution=policy, lm=lm,
+        ).run()
+    assert not lm.messages
+
+
+@pytest.mark.parametrize(("alias", "message"), [
+    ("source", "inputs conflict.*source"),
+    ("knowledge_result", "knowledge_result.*reserved"),
+])
+def test_context_only_preserves_binding_conflict_rejection(tmp_path: Path, alias, message) -> None:
+    source = _production_csv(tmp_path)
+    knowledge = RLM.learn(sources={"source": source})
+    lm = ScriptedLM(_code("SUBMIT(answer=1)"))
+
+    with pytest.raises(ValueError, match=message):
+        RLM.task(
+            "Return the total.", inputs={alias: source}, outputs={"answer": int},
+            knowledge=knowledge, knowledge_execution="context_only", lm=lm,
+        ).run()
+    assert not lm.messages
+
+
+@pytest.mark.parametrize("policy", ["auto", "context_only"])
+@pytest.mark.parametrize(("body", "submitted"), [
+    ("value = 3 + 4\nprint(value)\nSUBMIT(answer=value)", True),
+    ("SUBMIT(answer=7)", False),
+])
+def test_context_only_without_a_package_keeps_cold_execution(policy, body, submitted) -> None:
+    lm = ScriptedLM(_code(body))
+    result = RLM.from_task(
+        "Return seven.", outputs={"answer": int}, knowledge_execution=policy,
+        lm=lm, max_turns=1, timeout=10,
+    ).run()
+    assert result.submitted is submitted
+    assert result.payload == ({"answer": 7} if submitted else None)
+    assert len(lm.messages) == 1
+    assert "knowledge_mode" not in result.trajectory.metadata
+
+
+@pytest.mark.parametrize("policy", ["", "disabled", None, False, []])
+def test_invalid_knowledge_execution_policy_is_rejected_before_model_use(policy) -> None:
+    lm = ScriptedLM(_code("SUBMIT(answer=1)"))
+    with pytest.raises(ValueError, match="knowledge_execution"):
+        RLM.task("Return one.", outputs={"answer": int}, knowledge_execution=policy, lm=lm)
+    assert not lm.messages
+
+
+@pytest.mark.parametrize("engine", ["dspy", "adaptive"])
+def test_context_only_rejects_engines_that_do_not_deliver_learned_guidance(engine) -> None:
+    lm = ScriptedLM(_code("SUBMIT(answer=1)"))
+    with pytest.raises(NotImplementedError, match="context_only.*default"):
+        RLM.task(
+            "Return one.", outputs={"answer": int}, knowledge_execution="context_only",
+            engine=engine, lm=lm,
+        )
+    assert not lm.messages
+
+
+@pytest.mark.parametrize("policy", [None, "auto"])
+def test_the_packet_introduces_itself_and_the_raw_source_stays_bound(tmp_path: Path, policy) -> None:
     knowledge = RLM.learn(sources={"production": _production_csv(tmp_path)})
     operation = knowledge.package.operations[0]
     plan = _plan(operation.operation_id, aggregate="sum", measure="produced_units", filter_column="reporting_complete", filter_value="true")
@@ -265,9 +378,11 @@ def test_the_packet_introduces_itself_and_the_raw_source_stays_bound(tmp_path: P
         "SUBMIT(answer={'value': packet_total, 'cross_check': raw_total})"
     )
     lm = ScriptedLM(plan, agent)
-    result = RLM.task(TASK, outputs=["answer"], knowledge=knowledge, lm=lm, max_turns=2, timeout=60).run()
+    options = {} if policy is None else {"knowledge_execution": policy}
+    result = RLM.task(TASK, outputs=["answer"], knowledge=knowledge, lm=lm, max_turns=2, timeout=60, **options).run()
 
     assert result.trajectory.metadata["knowledge_mode"] == "registered_operation"
+    assert len(lm.messages) == 2
     assert result.submitted and result.payload["answer"] == {"value": COMPLETE_TOTAL, "cross_check": COMPLETE_TOTAL}
     prompt = _system(lm)
     assert f"host-computed result of registered operation {operation.operation_id}" in prompt
@@ -304,6 +419,20 @@ def test_host_operations_are_evidence_and_a_file_source_learns_its_grain(tmp_pat
     lessons = retrieve_lessons(enriched.package, "Produced units by line for complete reports")
     assert any(l.kind == "valid_grain" for l in lessons)
     assert "by line executed successfully in prior runs" in render_learned_guidance(lessons)
+
+    context_lm = ScriptedLM(_code(
+        "import pandas as pd\n"
+        "totals = pd.read_csv(production).groupby('line')['produced_units'].sum().to_dict()\n"
+        "SUBMIT(answer=totals)"
+    ))
+    context_result = RLM.task(
+        "Produced units by line.", outputs={"answer": dict},
+        knowledge=enriched, knowledge_execution="context_only",
+        lm=context_lm, max_turns=1, timeout=30,
+    ).run()
+    assert context_result.payload == {"answer": {"L1": 2500, "L2": 1500, "L3": 1100}}
+    assert len(context_lm.messages) == 1
+    assert "by line executed successfully in prior runs" in _system(context_lm)
 
     # a plan the contract rejects is evidence too, without a row count
     lm = ScriptedLM(_plan(operation.operation_id, aggregate="sum", measure="produced_units", filter_column="produced_units", filter_value="lots"), _code("SUBMIT(answer=1)"))

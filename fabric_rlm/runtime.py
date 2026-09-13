@@ -1042,8 +1042,14 @@ class RLM:
         security: SecurityPolicy | None = None,
         max_submit_bytes: int = DEFAULT_MAX_SUBMIT_BYTES,
         knowledge: Knowledge | None = None,
+        knowledge_execution: str = "auto",
         capture_evidence: bool = False,
     ):
+        if not isinstance(knowledge_execution, str) or knowledge_execution not in (
+            "auto", "context_only",
+        ):
+            raise ValueError("knowledge_execution must be 'auto' or 'context_only'")
+        self.knowledge_execution = knowledge_execution
         # Evidence capture is observational: with it on, the finished result
         # carries typed EvidenceRecords harvested from the run's telemetry.
         # Prompts, execution and the answer are the same either way.
@@ -1093,6 +1099,11 @@ class RLM:
         # v6-custom (the historic default).
         if engine == "auto":
             engine = "v7-dspy" if tool_list else "v6-custom"
+        if knowledge_execution == "context_only" and engine != "v6-custom":
+            raise NotImplementedError(
+                "knowledge_execution='context_only' requires the default engine; "
+                "DSPy and adaptive engines do not yet deliver retrieved lesson guidance."
+            )
         if tool_list and engine != "v7-dspy":
             raise NotImplementedError(
                 "tools= requires the DSPy/tool-call engine "
@@ -1376,7 +1387,9 @@ class RLM:
             _is_supported_knowledge_operation(operation)
             for operation in self._knowledge.package.operations
         )
-        if supported:
+        if self.knowledge_execution == "context_only":
+            mode = "context_only"
+        elif supported:
             mode = "registered_operations_available"
         elif self._knowledge.package.operations:
             mode = "registered_operations_unavailable"
@@ -1748,6 +1761,10 @@ class RLM:
         ``outputs`` may be a list of field names for backward-compatible,
         name-only validation, or a mapping from field names to concrete Python
         types for runtime type enforcement and repair feedback.
+
+        ``knowledge_execution="context_only"`` keeps source validation and
+        retrieved guidance but skips host-operation preplanning on the default
+        engine. The default ``"auto"`` preserves existing behavior.
         """
         return cls._from_task_impl(
             task,

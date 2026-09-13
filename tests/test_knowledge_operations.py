@@ -526,6 +526,24 @@ def test_invalid_operation_plan_falls_back_without_host_execution() -> None:
     assert result.trajectory.metadata["operation_selection_lm_calls"] == 1
 
 
+def test_context_only_keeps_semantic_model_binding_without_host_execution() -> None:
+    model = FakeSemanticModel()
+    knowledge = RLM.learn(sources={"sales": model})
+    lm = SequenceLM(["```python\nSUBMIT(answer=sales.dataset)\n```"])
+
+    result = RLM.task(
+        "Return the model identity.", knowledge=knowledge,
+        knowledge_execution="context_only", outputs={"answer": str},
+        lm=lm, max_turns=1, timeout=5,
+    ).run()
+
+    assert result.payload == {"answer": "Sales Model"}
+    assert model.measure_calls == []
+    assert lm.calls == 1
+    assert result.trajectory.metadata["knowledge_mode"] == "context_only"
+    assert result.trajectory.metadata.get("operation_selection_lm_calls", 0) == 0
+
+
 def test_planner_can_decline_incompatible_registered_operation() -> None:
     model = FakeSemanticModel()
     knowledge = RLM.learn(sources={"sales": model})
