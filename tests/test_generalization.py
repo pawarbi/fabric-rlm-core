@@ -270,6 +270,35 @@ def test_host_operations_are_evidence_and_a_file_source_learns_its_grain(tmp_pat
     assert [e.execution_status for e in rejected.evidence if e.observation_type == "query_execution"] == ["rejected"]
 
 
+def test_over_bound_host_result_is_not_successful_learning_evidence(tmp_path: Path) -> None:
+    path = tmp_path / "counts.csv"
+    path.write_text(
+        "period,units\n" + "".join(f"P{index},1\n" for index in range(101)),
+        encoding="utf-8",
+    )
+    knowledge = RLM.learn(sources={"counts": path})
+    operation = knowledge.package.operations[0]
+    lm = ScriptedLM(
+        _plan(operation.operation_id, aggregate="sum", measure="units", groupby="period"),
+        _code("ABSTAIN('The requested detail exceeds the result limit.')"),
+    )
+
+    result = RLM.task(
+        "Units by period.", outputs=["answer"], knowledge=knowledge,
+        lm=lm, max_turns=1, timeout=30, capture_evidence=True,
+        enable_skill_autoloading=False, skills=[],
+    ).run()
+
+    assert result.failure_reason == "abstained"
+    (query,) = [e for e in result.evidence if e.observation_type == "query_execution"]
+    assert query.observation["reason"] == "result_bound_exceeded"
+    assert query.execution_status == "rejected"
+    assert not query.execution_trusted
+    assert not query.analytically_trusted
+    enriched = RLM.enrich(knowledge, [result])
+    assert not any(lesson.kind == "valid_grain" for lesson in enriched.package.lessons)
+
+
 # ---------------------------------------------------- declared metadata --
 
 

@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- **An oversized host result is rejected evidence, not a successful
+  observation.** Exceeding the operation's output-row bound can still
+  recover through the raw-source path, but the rejected operation is no
+  longer eligible for execution or analytical trust.
 - **The knowledge parity gate rejects unmeasured work and completion
   regressions.** Empty reports, missing or duplicate repetitions, and
   unexpected repetition indices no longer pass. Completion is checked per

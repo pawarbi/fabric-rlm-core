@@ -69,7 +69,10 @@ def _error_class(error: str | None) -> str | None:
 
 def _execution_status(record: Mapping[str, Any]) -> str:
     reason = record.get("reason")
-    if reason in {"cardinality_limit", "validation", "audit_failed", "plan_rejected"}:
+    if reason in {
+        "cardinality_limit", "validation", "audit_failed", "plan_rejected",
+        "result_bound_exceeded",
+    }:
         return "rejected"
     if reason == "preflight_timeout":
         return "timeout"
