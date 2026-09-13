@@ -263,8 +263,15 @@ correctness, operation selection, audit status, turns, token usage, LM/worker/
 host/wall time, provenance, and drift rejection. `KnowledgeBenchmarkReport`
 also records source calls, failed calls, source seconds, the first useful
 query turn, verifier repairs, integrity status and injected lessons, and
-`cold_parity()` states the release rule: learned correctness must not fall
-below cold, overall and on every task.
+`cold_parity()` states the release rule: learned correctness and completion
+must not fall below cold on any task. Abstentions and timeouts are incomplete,
+not efficiency wins. The report must be nonempty and contain exactly one
+trial for each represented task, arm and expected repetition; missing,
+duplicate and out-of-range repetitions fail `coverage_ok`. Keep the planned
+task manifest alongside the report: a task omitted entirely cannot be
+recovered from its trials. `task_completion` exposes per-task completion
+rates separately from correctness; `completion_ok` and `coverage_ok` both
+must pass before parity can pass.
 
 ```python
 from fabric_rlm import FabricLM, FileDestination, LakehouseSource, RLM

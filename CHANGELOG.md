@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **The knowledge parity gate rejects unmeasured work and completion
+  regressions.** Empty reports, missing or duplicate repetitions, and
+  unexpected repetition indices no longer pass. Completion is checked per
+  task separately from correctness, so a faster abstention or timeout
+  cannot be hidden by equal accuracy or a gain on a different task.
 - **A value containing `--`, `/*` or `*/` no longer looks like a SQL comment to
   `LakehouseSource.query`.** The read-only gate scanned the raw query text for
   comment markers, so an ordinary filter on data that happens to contain them —

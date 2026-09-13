@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import math
@@ -164,10 +165,10 @@ class KnowledgeBenchmarkReport:
     def cold_parity(self) -> dict[str, object]:
         """The release rule: learned must not be worse than cold.
 
-        Correctness is the hard requirement; failed source calls and
-        unresolved integrity findings must not rise; turns and tokens are
-        reported, not gated, because a learned run may spend more thinking
-        on a better answer.
+        Every represented task needs exactly one trial per arm and expected
+        repetition. Correctness and completion must not fall on any task;
+        failed source calls and unresolved integrity findings must not rise.
+        Turns and tokens are reported, not gated.
         """
         summary = self.summary()
         cold, learned = summary["cold"], summary["learned"]
@@ -179,31 +180,57 @@ class KnowledgeBenchmarkReport:
         correctness_ok = value(learned, "numeric_correct_rate") >= value(cold, "numeric_correct_rate")
         failures_ok = value(learned, "mean_failed_source_calls") <= value(cold, "mean_failed_source_calls")
         integrity_ok = value(learned, "integrity_ok_rate") >= value(cold, "integrity_ok_rate")
+        task_ids = sorted({trial.task_id for trial in self.trials})
+        coverage_ok = bool(task_ids) and self.repetitions > 0 and Counter(
+            (trial.task_id, trial.arm, trial.repetition) for trial in self.trials
+        ) == Counter(
+            (task_id, arm, repetition)
+            for task_id in task_ids
+            for arm in ("cold", "learned")
+            for repetition in range(self.repetitions)
+        )
         # Per task as well: a gain on one question must not hide a loss on
         # another, because the rule is that learned is never worse than cold.
         task_results: dict[str, dict[str, object]] = {}
-        for task_id in sorted({trial.task_id for trial in self.trials}):
+        task_completion: dict[str, dict[str, object]] = {}
+        for task_id in task_ids:
             rates = {}
+            completion_rates = {}
             for arm in ("cold", "learned"):
-                outcomes = [trial.numeric_correct for trial in self.trials if trial.task_id == task_id and trial.arm == arm]
-                rates[arm] = _rate(outcomes)
+                trials = [trial for trial in self.trials if trial.task_id == task_id and trial.arm == arm]
+                rates[arm] = _rate([trial.numeric_correct for trial in trials])
+                completion_rates[arm] = _rate([trial.submitted for trial in trials])
             cold_rate, learned_rate = rates["cold"], rates["learned"]
             # Fail closed: a task without both arms is not proven.
             ok = cold_rate is not None and learned_rate is not None and learned_rate >= cold_rate
             task_results[task_id] = {"cold": cold_rate, "learned": learned_rate, "ok": ok}
+            cold_completion, learned_completion = completion_rates["cold"], completion_rates["learned"]
+            task_completion[task_id] = {
+                "cold": cold_completion,
+                "learned": learned_completion,
+                "ok": (
+                    cold_completion is not None
+                    and learned_completion is not None
+                    and learned_completion >= cold_completion
+                ),
+            }
         per_task_ok = all(bool(item["ok"]) for item in task_results.values())
+        completion_ok = bool(task_completion) and all(bool(item["ok"]) for item in task_completion.values())
         return {
             "cold_correct_rate": cold.get("numeric_correct_rate"),
             "learned_correct_rate": learned.get("numeric_correct_rate"),
             "correctness_ok": correctness_ok,
             "per_task_correctness_ok": per_task_ok,
             "task_results": task_results,
+            "coverage_ok": coverage_ok,
+            "completion_ok": completion_ok,
+            "task_completion": task_completion,
             "failed_source_calls_ok": failures_ok,
             "integrity_ok": integrity_ok,
             "turns_delta": value(learned, "mean_turns") - value(cold, "mean_turns"),
             "prompt_tokens_delta": value(learned, "mean_prompt_tokens") - value(cold, "mean_prompt_tokens"),
             "source_calls_delta": value(learned, "mean_source_calls") - value(cold, "mean_source_calls"),
-            "parity": correctness_ok and per_task_ok and failures_ok and integrity_ok,
+            "parity": coverage_ok and correctness_ok and per_task_ok and completion_ok and failures_ok and integrity_ok,
         }
 
 

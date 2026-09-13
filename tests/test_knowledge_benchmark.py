@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 
@@ -220,3 +220,79 @@ def test_benchmark_rejects_non_natural_questions_and_cache_enabled_lms() -> None
             make_lm=lambda **_kwargs: FakeLM(kwargs={"cache": True}),
             run=lambda *_args: _result(answer=30.5, turns=1),
         )
+
+
+@pytest.fixture
+def parity_report():
+    tasks = [
+        KnowledgeBenchmarkTask(
+            task_id=domain,
+            question=question,
+            expected_operation_id="source.tabular.aggregate.v1",
+            is_correct=lambda payload: payload == {"answer": 30.5},
+        )
+        for domain, question in (
+            ("inventory", "How many units are on hand?"),
+            ("quality", "How many units passed inspection?"),
+        )
+    ]
+    return run_knowledge_benchmark(
+        tasks=tasks,
+        repetitions=3,
+        seed=17,
+        make_lm=lambda **_kwargs: FakeLM(kwargs={"cache": False}),
+        run=lambda *_args: _result(answer=30.5, turns=1),
+    )
+
+
+@pytest.mark.parametrize(
+    "case", ["empty", "missing_repeat", "duplicate_repeat", "wrong_repetition"]
+)
+def test_parity_requires_exact_repetition_coverage(parity_report, case) -> None:
+    trials = list(parity_report.trials)
+    if case == "empty":
+        trials = []
+    elif case == "missing_repeat":
+        trials.pop()
+    elif case == "duplicate_repeat":
+        trials.append(trials[0])
+    else:
+        trials[0] = replace(trials[0], repetition=parity_report.repetitions)
+
+    parity = replace(parity_report, trials=tuple(trials)).cold_parity()
+
+    assert parity["parity"] is False
+    assert parity["coverage_ok"] is False
+
+
+def test_parity_rejects_completion_regression_hidden_by_equal_accuracy(parity_report) -> None:
+    trials = tuple(
+        replace(
+            trial,
+            numeric_correct=False,
+            submitted=(
+                (trial.task_id == "inventory" and trial.arm == "cold")
+                or (trial.task_id == "quality" and trial.arm == "learned")
+            ),
+        )
+        for trial in parity_report.trials
+    )
+
+    parity = replace(parity_report, trials=trials).cold_parity()
+
+    assert parity["parity"] is False
+    assert parity["coverage_ok"] is True
+    assert parity["correctness_ok"] is True
+    assert parity["per_task_correctness_ok"] is True
+    assert parity["completion_ok"] is False
+    assert parity["task_completion"]["inventory"] == {
+        "cold": 1.0, "learned": 0.0, "ok": False,
+    }
+
+
+def test_complete_nonregressing_trials_pass_parity(parity_report) -> None:
+    parity = parity_report.cold_parity()
+
+    assert parity["parity"] is True
+    assert parity["coverage_ok"] is True
+    assert parity["completion_ok"] is True
