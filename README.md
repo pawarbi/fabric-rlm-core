@@ -184,6 +184,78 @@ selects only typed scalar parameters; it never supplies SQL or file-reader
 expressions. Inexact Lakehouse file catalogs and stale source snapshots fail
 closed rather than entering registered execution.
 
+### Reviewing a Fabric Data Agent
+
+`fabric_rlm.data_agent_review` turns the same machinery on a Data Agent: read
+its sources, instructions, descriptions and few-shots; profile the sources
+with `RLM.learn`; check the setup against the documented guidance (schema
+names belong in data-source instructions, references must exist, definitions
+must not conflict between levels, descriptions drive routing, instructions
+truncate past about 4,600 characters); generate questions from the schemas,
+phrased the way a business user asks them with the words the agent's own
+instructions use, across the skills an author wants tested (aggregation,
+ranking, change, counts, a filter, a KPI from the definitions, the right
+measure column, an ambiguous total, a channel abbreviation, an out-of-scope
+topic the agent should decline), plus the driver-based questions a real
+user asks once a discovery step has pulled real names and periods from the
+data (why the measure dropped between two months and which products drove
+it, how a named reseller performs over time and on a category, shares of
+the total, a count above a threshold, churned entities, a comparison of two
+entities, the leading category per territory), the time expressions users
+write (the same month last year, the month before, last month, the week
+after Thanksgiving, winter, year to date, the last 30 days, a quarter; a
+relative period read another way is right when the answer says which dates
+it took), and a check of whether the answers follow the instructions' own
+rules (stating the period and the channel, rank and trend formats, currency
+format, the partial-year caveat, no personal data, the join and calendar
+rules), and compute each reference by executing a query against the source.
+It also asks the data what nobody would think to put in the instructions
+(keys with no match in their dimension, dimension keys that repeat, values
+spelled in several cases in a case-sensitive lakehouse, the vocabulary of
+small attributes so "bikes" maps to the Bikes category, partial years,
+negative measures, snowflaked join paths, personal data on joined tables) and
+proposes each as an instruction line the author confirms or turns into a
+data fix;
+ask the
+agent the same questions through its Responses endpoint, whose run steps
+carry the query it executed and the source it routed to, grade that query or
+its prose, classify the failures (misrouting included on multi-source
+agents); and render suggested instructions, descriptions and few-shots
+into a report. `examples/notebooks/rlm_data_agent_review.py` is the Fabric
+Python notebook (runtime 3.12) that runs the whole loop; applying the
+suggestions to the agent's draft stage is its last, explicit cell. The
+notebook scopes a lakehouse to the tables the agent has selected (read from
+the datasource's elements tree, and resolved under either OneLake layout,
+with or without schemas) and raises the profile limits, since a lakehouse
+catalog is many tables rather than one file. A `ReviewContext` carries what the reviewer knows beyond the agent's
+configuration: the scope in plain words, priorities that order the questions,
+definitions declared to the RLM, the reviewer's own questions with a query or
+an answer as ground truth (graded first), and notes every RLM task receives.
+When nothing can be evaluated, the report says why (year discovery, fact
+tables, the time axis). The generator works from the shape of the data, not
+from one sample's names: a fact is a table with measures and a time axis, the
+time axis is a date dimension with a year column, a date or timestamp column on
+the fact, or one on a joined header table (order lines through their order),
+joins follow key and id columns to the table that carries them (irregular
+plurals and prefixed dimension tables included), grouping columns may sit on
+the fact itself, an integer or text date and a period written as text
+(2024/Q1) are time axes too, and when the column names say nothing the column
+types the profile recorded decide what is a measure, a time column or a
+grouping column. The generator was checked blind, with no agent and no
+instructions, on a SaaS schema, a bakery chain, a flat retail file and ARR
+tables keyed by quarter, as well as on AdventureWorks. Topics the agent's instructions put out of scope are
+not asked about, and a decline on one is graded as policy. The report renders
+as Markdown or as a self-contained HTML page and includes what `RLM.learn`
+recorded, read the way the review uses it: the selected tables as the RLM
+sees them (fact or dimension, time axis, measures, personal-data columns,
+whether an aggregate operation covers them), the operations by kind and the
+lessons. With a language model `deepen` adds RLM-proposed questions whose
+references come from two blind solves that must agree, plus an explanation
+and a proposed change for every question that is not correct; those solves
+run with evidence capture, the package learns from them through
+`RLM.enrich`, the report lists the lessons that appeared, and the enriched
+package is returned as `report.learned_knowledge` for saving.
+
 A package can also carry what earlier runs learned about a source. Every turn
 records its source calls as typed telemetry (the grain a semantic-model query
 or a Lakehouse query asked for, the estimated group count, whether it ran, was

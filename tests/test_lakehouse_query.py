@@ -729,6 +729,179 @@ def test_lakehouse_query_redacts_storage_token_from_errors(monkeypatch) -> None:
     assert "[REDACTED]" in str(exc_info.value)
 
 
+# ---------------------------------------------------- Delta tables via Parquet --
+
+
+def _delta_source(name: str, path, columns) -> LakehouseSource:
+    return LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "delta", "name": name, "path": str(path), "columns": columns}],
+    )
+
+
+def _void_table(root, name: str, with_deletion_vectors: bool = False):
+    """A Delta table whose schema declares a Spark void column, which the Delta readers reject."""
+    pyarrow = pytest.importorskip("pyarrow")
+    parquet = pytest.importorskip("pyarrow.parquet")
+    table = root / name
+    (table / "_delta_log").mkdir(parents=True)
+    parquet.write_table(pyarrow.table({"id": [1, 2], "amount": [1.5, 2.5]}), str(table / "part-0.parquet"))
+    schema = {"type": "struct", "fields": [
+        {"name": "id", "type": "long", "nullable": True, "metadata": {}},
+        {"name": "amount", "type": "double", "nullable": True, "metadata": {}},
+        {"name": "tracking", "type": "void", "nullable": True, "metadata": {}},
+    ]}
+    protocol = {"minReaderVersion": 3, "minWriterVersion": 7, "readerFeatures": ["deletionVectors"], "writerFeatures": ["deletionVectors"]} if with_deletion_vectors else {"minReaderVersion": 1, "minWriterVersion": 2}
+    lines = [
+        {"protocol": protocol},
+        {"metaData": {"id": name, "format": {"provider": "parquet", "options": {}}, "schemaString": json.dumps(schema), "partitionColumns": [], "configuration": {}, "createdTime": 1}},
+        {"add": {"path": "part-0.parquet", "size": 1, "modificationTime": 1, "dataChange": True, "partitionValues": {}}},
+    ]
+    (table / "_delta_log" / "00000000000000000000.json").write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
+    return table
+
+
+def test_a_table_the_delta_reader_rejects_is_read_from_its_own_files(tmp_path) -> None:
+    pytest.importorskip("duckdb")
+    table = _void_table(tmp_path, "shipments")
+    source = _delta_source("shipments", table, [["id", "BIGINT"], ["amount", "DOUBLE"], ["tracking", "void"]])
+    result = source.query("SELECT COUNT(*) AS n, SUM(amount) AS total, COUNT(tracking) AS tracked FROM shipments", sources={"shipments": "shipments"})
+    assert result["rows"] == [[2, 4.0, 0]]
+    assert str(table) in lakehouse_module._DELTA_READER_REJECTED  # the failing reader attempt is not repeated
+
+    vectors = _void_table(tmp_path, "vectors", with_deletion_vectors=True)
+    source = _delta_source("vectors", vectors, [["id", "BIGINT"], ["amount", "DOUBLE"], ["tracking", "void"]])
+    with pytest.raises(RuntimeError, match="cannot stand in"):
+        source.query("SELECT COUNT(*) AS n FROM vectors", sources={"vectors": "vectors"})
+
+
+def test_delta_tables_go_through_the_delta_reader_with_missing_catalog_columns_as_null(tmp_path) -> None:
+    deltalake = pytest.importorskip("deltalake")
+    pyarrow = pytest.importorskip("pyarrow")
+    pytest.importorskip("duckdb")
+    table = tmp_path / "orders"
+    deltalake.write_deltalake(str(table), pyarrow.table({"order_id": [1, 2], "amount": [10.0, 20.0]}))
+    deltalake.write_deltalake(str(table), pyarrow.table({"order_id": [3], "amount": [5.0]}), mode="append")
+    # the catalog declares a column the table does not have yet; it comes back as NULL
+    source = _delta_source("orders", table, [["order_id", "BIGINT"], ["amount", "DOUBLE"], ["tracking", "void"]])
+
+    result = source.query(
+        "SELECT COUNT(*) AS n, SUM(amount) AS total, COUNT(tracking) AS tracked FROM orders",
+        sources={"orders": "orders"},
+    )
+    assert result["rows"] == [[3, 35.0, 0]]
+
+    deltalake.write_deltalake(str(table), pyarrow.table({"order_id": [9], "amount": [1.0]}), mode="overwrite")
+    result = source.query("SELECT order_id FROM orders", sources={"orders": "orders"})
+    assert result["rows"] == [[9]]  # the overwritten files left the log, and the cache noticed
+
+
+def test_partition_columns_come_from_the_file_paths(tmp_path) -> None:
+    deltalake = pytest.importorskip("deltalake")
+    pyarrow = pytest.importorskip("pyarrow")
+    pytest.importorskip("duckdb")
+    table = tmp_path / "sales"
+    deltalake.write_deltalake(
+        str(table),
+        pyarrow.table({"year": [2012, 2013, 2013], "amount": [1.0, 2.0, 3.0]}),
+        partition_by=["year"],
+    )
+    source = _delta_source("sales", table, [["year", "BIGINT"], ["amount", "DOUBLE"]])
+
+    result = source.query(
+        "SELECT year, SUM(amount) AS total FROM sales GROUP BY year ORDER BY year",
+        sources={"sales": "sales"},
+    )
+    assert result["rows"] == [[2012, 1.0], [2013, 5.0]]
+
+
+def test_log_replay_applies_removes_decodes_paths_and_defers_unsupported_features(tmp_path) -> None:
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+
+    plain = tmp_path / "plain" / "_delta_log"
+    plain.mkdir(parents=True)
+    (plain / "00000000000000000000.json").write_text(
+        '{"protocol":{"minReaderVersion":1,"minWriterVersion":2}}\n'
+        '{"metaData":{"id":"t","schemaString":"{\\"type\\":\\"struct\\",\\"fields\\":[]}","partitionColumns":["a"],"configuration":{}}}\n'
+        '{"add":{"path":"a=1/part-0.parquet","size":1,"modificationTime":1,"dataChange":true}}\n'
+        '{"add":{"path":"part-1%20x.parquet","size":1,"modificationTime":1,"dataChange":true}}\n',
+        encoding="utf-8",
+    )
+    (plain / "00000000000000000001.json").write_text(
+        '{"remove":{"path":"part-1%20x.parquet","deletionTimestamp":1,"dataChange":true}}\n',
+        encoding="utf-8",
+    )
+    files = lakehouse_module._delta_parquet_files(con, str(tmp_path / "plain"))
+    assert files == [str(tmp_path / "plain") + "/a=1/part-0.parquet"]
+
+    vectors = tmp_path / "dv" / "_delta_log"
+    vectors.mkdir(parents=True)
+    (vectors / "00000000000000000000.json").write_text(
+        '{"protocol":{"minReaderVersion":3,"minWriterVersion":7,"readerFeatures":["deletionVectors"],"writerFeatures":["deletionVectors"]}}\n'
+        '{"add":{"path":"part-0.parquet","size":1,"modificationTime":1,"dataChange":true}}\n',
+        encoding="utf-8",
+    )
+    assert lakehouse_module._delta_parquet_files(con, str(tmp_path / "dv")) is None
+
+    mapped = tmp_path / "mapped" / "_delta_log"
+    mapped.mkdir(parents=True)
+    (mapped / "00000000000000000000.json").write_text(
+        '{"metaData":{"id":"m","schemaString":"{\\"type\\":\\"struct\\",\\"fields\\":[]}","partitionColumns":[],"configuration":{"delta.columnMapping.mode":"name"}}}\n'
+        '{"add":{"path":"part-0.parquet","size":1,"modificationTime":1,"dataChange":true}}\n',
+        encoding="utf-8",
+    )
+    assert lakehouse_module._delta_parquet_files(con, str(tmp_path / "mapped")) is None
+
+    gap = tmp_path / "gap" / "_delta_log"
+    gap.mkdir(parents=True)
+    (gap / "00000000000000000000.json").write_text('{"add":{"path":"part-0.parquet","size":1,"modificationTime":1,"dataChange":true}}\n', encoding="utf-8")
+    (gap / "00000000000000000002.json").write_text('{"add":{"path":"part-2.parquet","size":1,"modificationTime":1,"dataChange":true}}\n', encoding="utf-8")
+    assert lakehouse_module._delta_parquet_files(con, str(tmp_path / "gap")) is None
+
+
+def test_checkpoints_seed_the_replay(tmp_path) -> None:
+    duckdb = pytest.importorskip("duckdb")
+    pyarrow = pytest.importorskip("pyarrow")
+    parquet = pytest.importorskip("pyarrow.parquet")
+    log = tmp_path / "cp" / "_delta_log"
+    log.mkdir(parents=True)
+    file_type = pyarrow.struct([("path", pyarrow.string())])
+    protocol_type = pyarrow.struct([("minReaderVersion", pyarrow.int32()), ("readerFeatures", pyarrow.list_(pyarrow.string()))])
+    checkpoint = pyarrow.table(
+        {
+            "add": pyarrow.array([{"path": "old.parquet"}, {"path": "kept.parquet"}, None], type=file_type),
+            "remove": pyarrow.array([None, None, {"path": "kept.parquet"}], type=file_type),  # a tombstone is history, not state
+            "protocol": pyarrow.array([None, None, {"minReaderVersion": 1, "readerFeatures": None}], type=protocol_type),
+        }
+    )
+    parquet.write_table(checkpoint, str(log / "00000000000000000010.checkpoint.parquet"))
+    (log / "_last_checkpoint").write_text('{"version":10,"size":3}', encoding="utf-8")
+    (log / "00000000000000000011.json").write_text(
+        '{"remove":{"path":"old.parquet","deletionTimestamp":1,"dataChange":true}}\n'
+        '{"add":{"path":"new.parquet","size":1,"modificationTime":1,"dataChange":true}}\n',
+        encoding="utf-8",
+    )
+
+    files = lakehouse_module._delta_parquet_files(duckdb.connect(), str(tmp_path / "cp"))
+    assert sorted(item.rsplit("/", 1)[-1] for item in files) == ["kept.parquet", "new.parquet"]
+
+    # a commit missing between the checkpoint and the newest log entry: leave it to the Delta reader
+    (log / "00000000000000000013.json").write_text('{"add":{"path":"later.parquet","size":1,"modificationTime":1,"dataChange":true}}\n', encoding="utf-8")
+    assert lakehouse_module._delta_parquet_files(duckdb.connect(), str(tmp_path / "cp")) is None
+
+
+def test_query_timeout_is_validated_and_passed_to_the_deadline(tmp_path) -> None:
+    csv_path = tmp_path / "companies.csv"
+    csv_path.write_text("region,mrr\nNorth America,10.5\n", encoding="utf-8")
+    source = LakehouseSource(
+        "file:///lakehouse",
+        catalog=[{"kind": "csv", "name": "files.companies", "path": str(csv_path), "columns": [["region", "VARCHAR"], ["mrr", "DOUBLE"]]}],
+    )
+    assert source.query("SELECT SUM(mrr) AS total FROM companies", sources={"companies": "files.companies"}, timeout=120)["rows"] == [[10.5]]
+    for bad in (0, -1, True, 10_000):
+        with pytest.raises(ValueError, match="timeout"):
+            source.query("SELECT 1 FROM companies", sources={"companies": "files.companies"}, timeout=bad)
 # --- F11: comment markers inside data must not be mistaken for SQL comments ---
 
 
