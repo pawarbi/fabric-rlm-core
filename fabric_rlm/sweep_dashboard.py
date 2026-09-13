@@ -10,6 +10,7 @@ each finding are on the page.
 from __future__ import annotations
 
 import calendar
+import re
 from collections.abc import Sequence
 from html import escape as esc
 from typing import TYPE_CHECKING, Any
@@ -929,6 +930,9 @@ def _metric_section(metric: Any, index: int) -> str:
     return "".join(parts)
 
 
+_RATE_NAME = re.compile(r"(rate|share|pct|percent|ratio|yield|margin)", re.IGNORECASE)
+
+
 def render_brief(brief: Any) -> str:
     """The brief as an HTML fragment with its own styles: one look, the watch list, every metric, what moves together."""
     kind = "semantic model" if brief.kind == "semantic_model" else brief.kind
@@ -950,7 +954,9 @@ def render_brief(brief: Any) -> str:
             c = metric.context
             values = [w.value for w in metric.weeks[-13:]]
             chips = "".join(f'<span class="{_direction(v)}">{esc(label)} {esc(_pct(v))}</span> ' for label, v in (("wow", c.get("wow_pct")), ("yoy", c.get("yoy_pct")), ("vs 13w", c.get("vs_avg13_pct"))) if v is not None)
-            cards.append(f'<div class="kpi"><div class="t" title="{esc(metric.name)}">{esc(metric.name.capitalize())}</div><div class="v">{esc(_compact(c.get("value", 0.0)))}</div><div class="d">{chips}</div>{_spark_svg(values)}</div>')
+            shown = c.get("value", 0.0)
+            as_share = metric.kind == "concentration" or (metric.kind == "ratio" and abs(shown) < 1 and _RATE_NAME.search(metric.name))  # a share or a rate reads as a percentage, as the headline says it
+            cards.append(f'<div class="kpi"><div class="t" title="{esc(metric.name)}">{esc(metric.name.capitalize())}</div><div class="v">{esc(f"{shown:.1%}" if as_share else _compact(shown))}</div><div class="d">{chips}</div>{_spark_svg(values)}</div>')
         parts.append(f'<div class="kpis">{"".join(cards)}</div>')
     if brief.watch:
         parts.append("<h2>Watch</h2>")
