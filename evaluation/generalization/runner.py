@@ -55,7 +55,9 @@ def runtime_checkout() -> Path:
 
 
 def _git_sha(root: Path) -> str:
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True, env=os.environ.copy(),
+    ).strip()
 
 
 def reserve_artifacts(output: Path) -> Path:

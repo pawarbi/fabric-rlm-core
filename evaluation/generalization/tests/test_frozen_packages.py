@@ -122,3 +122,13 @@ def test_live_cli_records_policy_and_frozen_package_directory(tmp_path):
     ])
     assert args.knowledge_execution == "context_only"
     assert args.frozen_packages == tmp_path / "packages"
+
+
+def test_git_sha_preserves_empty_configuration_after_environment_restore(monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "credential.helper")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "")
+
+    sha = runner._git_sha(runner.runtime_checkout())
+
+    assert len(sha) == 40 and all(character in "0123456789abcdef" for character in sha)
