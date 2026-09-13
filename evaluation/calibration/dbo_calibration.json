@@ -1,0 +1,164 @@
+{
+  "path": "evaluation\\dbo_lakehouse\\dbo_eval_results.json",
+  "scorer": "analytic",
+  "arms": 2,
+  "question_count": 25,
+  "rep_count": 3,
+  "trial_count": 150,
+  "baseline_arm": "A",
+  "candidate_arm": "B",
+  "calibration": {
+    "arm": "A",
+    "floors": {
+      "accuracy": 12.0,
+      "abstention": 0.0,
+      "turns": 0.8799999999999999,
+      "seconds": 4.809200000000001,
+      "tokens": 1416.7600000000002
+    },
+    "detail": {
+      "accuracy": {
+        "label": "Accuracy",
+        "unit": "pp",
+        "per_rep": [
+          80.0,
+          88.0,
+          76.0
+        ],
+        "spread": 12.0,
+        "spread_kind": "range"
+      },
+      "abstention": {
+        "label": "Abstention rate",
+        "unit": "pp",
+        "per_rep": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "spread": 0.0,
+        "spread_kind": "range"
+      },
+      "turns": {
+        "label": "Turns per question",
+        "unit": "turns",
+        "per_rep": [
+          4.76,
+          4.88,
+          5.64
+        ],
+        "spread": 0.8799999999999999,
+        "spread_kind": "range"
+      },
+      "seconds": {
+        "label": "Latency per question",
+        "unit": "s",
+        "per_rep": [
+          20.781600000000005,
+          17.64,
+          22.4492
+        ],
+        "spread": 4.809200000000001,
+        "spread_kind": "range"
+      },
+      "tokens": {
+        "label": "Tokens per question",
+        "unit": "tok",
+        "per_rep": [
+          9469.6,
+          9360.36,
+          10777.12
+        ],
+        "spread": 1416.7600000000002,
+        "spread_kind": "range"
+      }
+    },
+    "flip_rate": 0.24,
+    "unstable_questions": [
+      "q03",
+      "q09",
+      "q11",
+      "q13",
+      "q21",
+      "q24"
+    ],
+    "question_count": 25
+  },
+  "comparisons": [
+    {
+      "metric": "accuracy",
+      "label": "Accuracy",
+      "unit": "pp",
+      "baseline": 80.0,
+      "candidate": 68.0,
+      "delta": -12.0,
+      "relative_change": -0.15,
+      "point_verdict": "regression",
+      "naive_verdict": "no_clear_change",
+      "calibrated_verdict": "no_clear_change",
+      "calibrated_floor": 12.0,
+      "overturned": true,
+      "survives": false
+    },
+    {
+      "metric": "abstention",
+      "label": "Abstention rate",
+      "unit": "pp",
+      "baseline": 0.0,
+      "candidate": 4.0,
+      "delta": 4.0,
+      "relative_change": null,
+      "point_verdict": "no_clear_change",
+      "naive_verdict": "no_clear_change",
+      "calibrated_verdict": "no_clear_change",
+      "calibrated_floor": 0.0,
+      "overturned": false,
+      "survives": false
+    },
+    {
+      "metric": "turns",
+      "label": "Turns per question",
+      "unit": "turns",
+      "baseline": 4.88,
+      "candidate": 4.92,
+      "delta": 0.040000000000000036,
+      "relative_change": 0.008196721311475417,
+      "point_verdict": "no_clear_change",
+      "naive_verdict": "no_clear_change",
+      "calibrated_verdict": "no_clear_change",
+      "calibrated_floor": 0.8799999999999999,
+      "overturned": false,
+      "survives": false
+    },
+    {
+      "metric": "seconds",
+      "label": "Latency per question",
+      "unit": "s",
+      "baseline": 20.781600000000005,
+      "candidate": 35.812000000000005,
+      "delta": 15.0304,
+      "relative_change": 0.7232551872810562,
+      "point_verdict": "regression",
+      "naive_verdict": "regression",
+      "calibrated_verdict": "regression",
+      "calibrated_floor": 4.809200000000001,
+      "overturned": false,
+      "survives": true
+    },
+    {
+      "metric": "tokens",
+      "label": "Tokens per question",
+      "unit": "tok",
+      "baseline": 9469.6,
+      "candidate": 17154.16,
+      "delta": 7684.5599999999995,
+      "relative_change": 0.8114978457379403,
+      "point_verdict": "regression",
+      "naive_verdict": "regression",
+      "calibrated_verdict": "regression",
+      "calibrated_floor": 1416.7600000000002,
+      "overturned": false,
+      "survives": true
+    }
+  ]
+}
