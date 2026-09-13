@@ -144,8 +144,31 @@ TASK_SUFFIX = (
     "Return answer as a dictionary with keys: status, value, units, grain, and "
     "sql (the query or pandas expression you used), and reasoning (one or two "
     "sentences on how you computed it). Put ONLY the bare number or the bare "
-    "entity name in value -- no commentary, no units, no formatting."
+    "entity name in value -- no commentary, no units, no formatting. "
+    "value must never be null: if you cannot compute it, set status to "
+    "\"abstain\" and put a short phrase in value naming what is missing."
 )
+
+
+def require_value(payload) -> None:
+    """Reject a SUBMIT whose answer.value is missing or null.
+
+    Without this, a run that describes an approach instead of computing it is
+    recorded as a success with ``failure_reason: None`` -- it grades wrong, but
+    silently, and the trial is spent. Rejecting it costs one re-prompt inside
+    the same run and keeps the grade attributable to reasoning rather than to
+    an unenforced output contract.
+    """
+    answer = payload.get("answer") if isinstance(payload, dict) else None
+    assert isinstance(answer, dict), (
+        "SUBMIT payload must contain 'answer' as a dictionary with keys: "
+        "status, value, units, grain, sql, reasoning."
+    )
+    assert answer.get("value") is not None, (
+        "answer.value is missing or null. Compute the value and submit it. "
+        "If it genuinely cannot be computed, set status to 'abstain' and put "
+        "a short phrase in value naming the missing definition or data."
+    )
 
 
 # --------------------------------------------------------------------------
@@ -569,6 +592,7 @@ def main() -> int:
                 capture_evidence=True,
                 enable_skill_autoloading=False,
                 skills=[],
+                output_validator=require_value,
             )
             res = rlm.run()
             payload = res.payload
