@@ -182,11 +182,26 @@ mistake is easy to repeat.
 | id | defect | evidence | class |
 |---|---|---|---|
 | **F19** *(harness — fixed `7360c25`)* | `grader.py` compared the free-text `grain` and `period` fields with `==`, so a correct answer failed whenever it described the same grain in different words. The failure mode was not merely a lost point: a right answer landed in the **`confident_wrong`** bucket, the most alarming category in the report. | The 9-trial post-fix smoke: **6 of 6 answered trials carried the correct value and the grader scored 0 of 6**, every one as `confident_wrong`. `'latest inventory snapshot product grain'` vs reference `'latest warehouse-product snapshot rows'`. Regrading under the revised criterion moved the smoke to 1/9, **not** 6/9 — the grader was wrong, and the run was still mostly wrong, which is why both numbers are reported. | **harness gap** |
-| **F20** *(harness — fixed `7ee067f`)* | `run_live` set `inputs = _domain_sources(...) if arm == "A" else None`, so arms B and C were given a knowledge package **and no data sources at all**. Every A-vs-B gap therefore mixes two independent changes, and the obvious reading — "learning hurts" — is not a claim this design can support. The two harnesses in the repository also disagreed: the dbo runner starves only B and returns sources to C, so the same arm letter meant different things in different result files. | First descriptive matrix, 135 trials: A 60.0% value correctness vs B and C both 26.7%, with **arm B incomplete on 51.1% of trials** — the signature of a run with nothing to read, not of bad advice. New arms `BS`/`CS` hold source access fixed and vary only the package. | **harness gap** |
+| **F20** *(withdrawn — not a defect)* | I filed this as a confound: `run_live` sets `inputs = _domain_sources(...) if arm == "A" else None`, so arms B and C appeared to receive a knowledge package and no data at all, making every A-vs-B gap a mix of two changes. **That diagnosis was wrong.** A knowledge package carries its own source bindings, and `runtime.py:1268` `bound.update(self._knowledge.bindings)` merges them into the task inputs, so B and C reach the same data through a different door. The `ValueError` at `runtime.py:1233` refusing a duplicate alias is deliberate: an alias must not have two meanings in one task. | Two independent checks. Arm B produced the **correct value on 12 of 45 trials** in the descriptive matrix — impossible with no data. And the "corrected" arms `BS`/`CS`, which pass sources *and* a package, failed **45 of 45 trials each** with `task inputs conflict with knowledge source aliases`, which is the library declining a request that was never coherent. | **not a defect** — the arm design was already controlled |
 
-Both are worth stating plainly: **every arm-comparison number produced before
-`7ee067f` measures data access, not learning**, and every `confident_wrong`
-count produced before `7360c25` is inflated by vocabulary disagreement.
+The way this was caught is the part worth keeping. The corrected arms were
+built, committed, and run live, and the run came back **100% failed on both new
+arms** — a result too clean to be a real effect and cheap enough to read
+immediately. Reverted in full; `tests/test_arm_contract.py` now pins the
+binding contract so the same wrong reading costs a test run instead of a live
+one.
+
+Two lessons, both about me rather than the library: **a uniform result is a bug
+report about the harness**, and the rule I had already written down — find the
+emitting line in `fabric_rlm/` before filing — is exactly the step I skipped.
+Ten minutes in `runtime.py` would have prevented the whole detour.
+
+The one number F20 surfaced is real and still open: **arm B was incomplete on
+51.1% of trials against 15.6% for arm A.** That is not a data-access artifact,
+because arm B demonstrably reaches the data. With a knowledge package bound,
+half the tasks fail to produce an answer at all — a more serious finding than
+the accuracy gap it was hiding behind, and one that belongs with the
+learning-effectiveness defects in section 2.
 
 **F14 and F16 are the two I would fix first.** F14 turns a recoverable
 size-limit into a dead task; F16 lets an evasion be scored as an answer.

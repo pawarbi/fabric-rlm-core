@@ -22,31 +22,6 @@ from .references import calculate_references
 BASELINE_SHA = "b5226712a9aa41c3173d5f427e81244c333c0179"
 DEFAULT_MODEL = "openai/gpt-4.1-mini"
 ARMS = ("A", "B", "C")
-
-# Arms BS and CS hold source access fixed and vary only the knowledge package.
-# They exist because A/B/C cannot answer the question the evaluation is for:
-# B and C receive a package and no sources, so any gap against A mixes two
-# changes at once and cannot show what learning contributes.
-ALL_ARMS = ("A", "B", "C", "BS", "CS")
-
-_ARM_SOURCES = {"A": True, "B": False, "C": False, "BS": True, "CS": True}
-_ARM_KNOWLEDGE = {"A": None, "B": "learned", "C": "enriched",
-                  "BS": "learned", "CS": "enriched"}
-
-
-def arm_uses_sources(arm: str) -> bool:
-    """Whether an arm is given the raw data sources."""
-    if arm not in _ARM_SOURCES:
-        raise ValueError(f"unknown arm: {arm!r}")
-    return _ARM_SOURCES[arm]
-
-
-def arm_knowledge_kind(arm: str) -> str | None:
-    """Which knowledge package an arm receives: none, learned, or enriched."""
-    if arm not in _ARM_KNOWLEDGE:
-        raise ValueError(f"unknown arm: {arm!r}")
-    return _ARM_KNOWLEDGE[arm]
-
 RELIABILITY_TESTS = (
     "tests/test_knowledge_preflight.py",
     "tests/test_knowledge_api.py",
@@ -139,7 +114,6 @@ def build_schedule(
     *,
     repetitions: int,
     seed: int,
-    arms: Sequence[str] = ARMS,
 ) -> list[dict[str, object]]:
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
@@ -149,9 +123,9 @@ def build_schedule(
         ordered = [dict(question) for question in questions]
         rng.shuffle(ordered)
         for question in ordered:
-            trial_arms = list(arms)
-            rng.shuffle(trial_arms)
-            for arm in trial_arms:
+            arms = list(ARMS)
+            rng.shuffle(arms)
+            for arm in arms:
                 schedule.append(
                     {
                         "question_id": question["question_id"],
@@ -477,7 +451,6 @@ def run_live(
     max_turns: int,
     timeout: float,
     smoke: bool,
-    arms: Sequence[str] = ARMS,
 ) -> dict[str, object]:
     if not os.environ.get("OPENROUTER_API_KEY"):
         result = {
@@ -501,7 +474,7 @@ def run_live(
                 continue
             selected.append({**question, "variant": variant})
             domain_counts[domain] += 1
-    schedule = build_schedule(selected, repetitions=repetitions, seed=seed, arms=arms)
+    schedule = build_schedule(selected, repetitions=repetitions, seed=seed)
     budget = [max_live_calls]
     trace_dir = output.parent / "traces"
     packages: dict[tuple[str, str, str], object | None] = {}
@@ -526,8 +499,6 @@ def run_live(
                 )
                 enriched = RLM.enrich(learned, development) if development else learned
                 packages[(domain, variant, "C")] = enriched
-                packages[(domain, variant, "BS")] = learned
-                packages[(domain, variant, "CS")] = enriched
                 package_summaries[f"{domain}:{variant}"] = {
                     "learn_only_lessons": len(learned.package.lessons),
                     "enriched_lessons": len(enriched.package.lessons),
@@ -560,7 +531,7 @@ def run_live(
         variant = str(trial["variant"])
         arm = str(trial["arm"])
         knowledge = packages[(domain, variant, arm)]
-        inputs = _domain_sources(fixtures, domain, variant) if arm_uses_sources(arm) else None
+        inputs = _domain_sources(fixtures, domain, variant) if arm == "A" else None
         result = None
         lm = None
         error = None
@@ -726,13 +697,6 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--max-turns", type=int, default=6)
     live.add_argument("--timeout", type=float, default=120.0)
     live.add_argument("--smoke", action="store_true")
-    live.add_argument(
-        "--arms",
-        default=",".join(ARMS),
-        help="Comma-separated arms. A=sources only, B=learned package only, "
-             "C=enriched package only, BS=sources+learned, CS=sources+enriched. "
-             "Use A,BS,CS to vary only the knowledge package.",
-    )
     return parser
 
 
@@ -755,10 +719,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         unknown = sorted(set(variants) - set(VARIANTS))
         if unknown:
             raise ValueError(f"unknown variants: {', '.join(unknown)}")
-        arms = tuple(item.strip() for item in args.arms.split(",") if item.strip())
-        unknown_arms = sorted(set(arms) - set(ALL_ARMS))
-        if unknown_arms:
-            raise ValueError(f"unknown arms: {', '.join(unknown_arms)}")
         run_live(
             fixtures=args.fixtures,
             output=args.output,
@@ -770,7 +730,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_turns=args.max_turns,
             timeout=args.timeout,
             smoke=args.smoke,
-            arms=arms,
         )
     return 0
 
