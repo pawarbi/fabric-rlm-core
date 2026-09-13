@@ -144,3 +144,35 @@ def test_entity_words_match_the_column_stem_a_synonym_or_the_name_and_a_roster_i
     assert chosen is customers and "ranked first" in why
     roster = kpi_definition(parse_kpi("new customers"), entity=customers, how="custName on sales")
     assert roster == "customers whose first activity falls in the week (custName on sales; 100% recur across months, a fixed roster rather than a population, so new and churned stay near zero)"
+
+
+def test_the_model_concentration_query_filters_the_window_as_rows_and_refuses_answers_outside_it():
+    import datetime as dt
+
+    from fabric_rlm.kpis import concentration_dax, concentration_series
+
+    class Dialect:
+        kind = "semantic_model"
+
+        def _ref(self, fact, path):
+            return "'Product'[Product]"
+
+        def _expr(self, fact):
+            return "SUM('Sales'[Sales Amount])"
+
+    fact = {"table": "Sales", "date": {"kind": "date", "table": "Date", "column": "Date"}, "measure": "Sales Amount", "aggregate": "sum"}
+    query = concentration_dax(Dialect(), fact, {"column": "Product"}, "week", dt.date(2020, 5, 25), dt.date(2020, 6, 15))
+    assert "FILTER(ALL('Date'[Date]), 'Date'[Date] >= DATE(2020,5,25) && 'Date'[Date] < DATE(2020,6,15))" in query and "CALCULATE(" not in query
+    assert "GROUPBY(ADDCOLUMNS(" in query and "INT(DATEDIFF(DATE(1970,1,5), 'Date'[Date], DAY) / 7)" in query
+
+    def answers_everything(_query):  # the old shape: every week of the model, each carrying the whole window
+        return [{"p": p, "label": "Helmet", "v": 100.0} for p in range(2400, 2700)]
+
+    with pytest.raises(ValueError, match="outside the window"):
+        concentration_series(None, Dialect(), fact, {"column": "Product"}, "week", 3, answers_everything, last=3, until=dt.date(2020, 6, 14))
+
+    def answers_the_window(_query):
+        return [{"p": p, "label": label, "v": v} for p in (2629, 2630, 2631) for label, v in (("Helmet", 60.0), ("Tyre", 30.0), ("Bell", 10.0))]
+
+    points = concentration_series(None, Dialect(), fact, {"column": "Product"}, "week", 1, answers_the_window, last=3, until=dt.date(2020, 6, 14))
+    assert [p.index for p in points] == [2629, 2630, 2631] and all(p.total == 100.0 and p.top_value == 60.0 and p.groups == 3 for p in points)

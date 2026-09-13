@@ -273,6 +273,20 @@
   message, and the concentration KPI over a model groups by week inside
   DAX (falling back to one row per day and group when a model will not),
   so a fine grouping no longer returns days times groups.
+
+### Fixed
+
+- The concentration KPI over a semantic model ("top 3 share of sales
+  amount by product") read wrongly: the window was a `CALCULATE` filter on
+  the date column inside the measure, which overrides the row's own date,
+  so every day of the model carried the whole window's total and the share
+  came out the same for every week. The window is now a filter on the rows
+  (`FILTER(ALL(date), ...)` inside `SUMMARIZECOLUMNS`), checked against
+  the live AdventureWorks model (the week and day shapes agree with a
+  direct total of the window), and the series refuses a result whose rows
+  fall outside the window asked for, so a wrong query shape fails loudly
+  rather than producing a flat share. The lakehouse SQL for the same KPI
+  was right all along.
 - **Monday Morning Brief** (`fabric_rlm.brief`, or `report(source, "monday
   morning brief: revenue by region, orders")`). Name the metrics to track
   and the brief takes the latest complete Monday-to-Sunday week the source

@@ -471,7 +471,7 @@ def concentration_dax(dialect: Any, fact: Mapping[str, Any], path: Mapping[str, 
     ref = dialect._ref(fact, path)
     date_ref = _dax_day_ref(fact)
     span = f"{date_ref} >= DATE({first.year},{first.month},{first.day}) && {date_ref} < DATE({last.year},{last.month},{last.day})"
-    inner = f'SUMMARIZECOLUMNS({date_ref}, {ref}, "v", CALCULATE({dialect._expr(fact)}, {span}))'
+    inner = f'SUMMARIZECOLUMNS({date_ref}, {ref}, FILTER(ALL({date_ref}), {span}), "v", {dialect._expr(fact)})'
     if grain == "week":
         # one row per week and group: the week index counted from the epoch Monday, the same index the SQL and the Python use
         bucket = f"INT(DATEDIFF(DATE({_EPOCH_MONDAY.year},{_EPOCH_MONDAY.month},{_EPOCH_MONDAY.day}), {date_ref}, DAY) / 7)"
@@ -510,6 +510,8 @@ def concentration_series(probe: Any, dialect: Any, fact: Mapping[str, Any], path
         raise
     except Exception:  # noqa: BLE001 - a model that will not group by the computed week gets the plain shape, one row per day and group
         rows = run(concentration_dax(dialect, fact, path, "day", start, end + _dt.timedelta(days=1)))
+    first_index, last_index = period_of(start, grain), period_of(end, grain)
+    outside = 0
     for row in rows:
         if row.get("v") is None:
             continue
@@ -520,8 +522,14 @@ def concentration_series(probe: Any, dialect: Any, fact: Mapping[str, Any], path
             if not iso:
                 continue
             index = period_of(_dt.date.fromisoformat(iso), grain)
+        if index < first_index or index > last_index:
+            outside += 1
+            continue
         bucket = by_period.setdefault(index, {})
         bucket[row.get("label")] = bucket.get(row.get("label"), 0.0) + float(row.get("v") or 0)
+    if rows and outside > 0.1 * len(rows):
+        # a query answering outside the window it was given is the wrong shape; a wrong share is worse than none
+        raise ValueError(f"the model returned {outside:,} of {len(rows):,} rows outside the window asked for, so the concentration query did not read the way it was written")
     points = []
     for index in sorted(by_period):
         values = by_period[index]
