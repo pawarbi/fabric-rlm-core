@@ -9,6 +9,7 @@ import random
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from collections import defaultdict
@@ -76,6 +77,34 @@ def check_package(knowledge: object, snapshot: Mapping[str, str]) -> None:
         raise RuntimeError("frozen evaluation package changed during evaluation")
     if hashlib.sha256(Path(snapshot["path"]).read_bytes()).hexdigest() != snapshot["sha256"]:
         raise RuntimeError("saved evaluation package changed during evaluation")
+
+
+def _load_frozen_packages(
+    directory: Path, *, domain: str, variant: str, sources: Mapping[str, object],
+) -> tuple[dict[str, object], dict[str, dict[str, str]]]:
+    from fabric_rlm import load_knowledge
+    from fabric_rlm.knowledge import KnowledgePackage
+    from fabric_rlm.knowledge_store import _reject_duplicate_keys, save_knowledge_package
+
+    packages = {}
+    snapshots = {}
+    for arm in ("B", "C"):
+        path = directory / f"{domain}__{variant}__{arm}.json"
+        data = path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        package = KnowledgePackage.from_dict(json.loads(data, object_pairs_hook=_reject_duplicate_keys))
+        with tempfile.TemporaryDirectory(prefix="rlm_frozen_package_") as scratch:
+            store = Path(scratch) / "package.json"
+            save_knowledge_package(store, package)
+            knowledge = load_knowledge(store, sources=sources)
+        snapshot = {
+            "path": str(path), "sha256": digest,
+            "fingerprint": knowledge.package.fingerprint,
+        }
+        check_package(knowledge, snapshot)
+        packages[arm] = knowledge
+        snapshots[arm] = snapshot
+    return packages, snapshots
 
 
 def account_usage() -> float:
@@ -420,6 +449,7 @@ def _run_rlm(
     knowledge: object | None,
     max_turns: int,
     timeout: float,
+    knowledge_execution: str = "auto",
 ) -> tuple[object, object, float]:
     from fabric_rlm import RLM
 
@@ -431,6 +461,7 @@ def _run_rlm(
         outputs={"answer": dict},
         lm=lm,
         knowledge=knowledge,
+        knowledge_execution=knowledge_execution,
         max_turns=max_turns,
         timeout=timeout,
         capture_evidence=True,
@@ -509,7 +540,11 @@ def run_live(
     smoke: bool,
     max_cost_usd: float | None = None,
     representation: str = "csv",
+    knowledge_execution: str = "auto",
+    frozen_packages: Path | None = None,
 ) -> dict[str, object]:
+    if not isinstance(knowledge_execution, str) or knowledge_execution not in ("auto", "context_only"):
+        raise ValueError("knowledge_execution must be auto or context_only")
     if max_cost_usd is not None and (not math.isfinite(max_cost_usd) or max_cost_usd <= 1):
         raise ValueError("max_cost_usd must exceed the one-dollar reserve")
     if representation not in REPRESENTATIONS:
@@ -539,6 +574,8 @@ def run_live(
         "actual_sha": actual_sha, "core_freeze": str(artifacts / "core-freeze.json"),
         "runtime_root": str(repo / "fabric_rlm"), "representation": representation,
         "input_binding": "File handles for CSV/Parquet; LakehouseSource handles for Delta",
+        "knowledge_execution": knowledge_execution,
+        "package_origin": "reused_frozen_packages" if frozen_packages is not None else "fresh_development",
         "integration_scope": "real local sources; not a live Fabric service",
         "wall_scope": "LM initialization, task construction and execution; excludes persistence and budget checks",
         "fixture_sha256": fixture_hashes, "max_cost_usd": max_cost_usd,
@@ -569,31 +606,45 @@ def run_live(
     packages: dict[tuple[str, str, str], object | None] = {}
     package_summaries: dict[str, object] = {}
     package_snapshots: dict[tuple[str, str, str], dict[str, str]] = {}
+    frozen_inputs: dict[tuple[str, str, str], dict[str, str]] = {}
     try:
         for variant in variants:
             for domain in ("inventory", "manufacturing", "service"):
                 if max_cost_usd is not None and account_usage() - usage_start >= max_cost_usd - 1:
                     raise RuntimeError("evaluation budget reserve reached during package preparation")
                 sources = _domain_sources(fixtures, domain, variant, representation=representation)
-                learn_started = time.perf_counter()
-                learned = RLM.learn(sources=sources)
-                learn_seconds = time.perf_counter() - learn_started
+                if frozen_packages is not None:
+                    load_started = time.perf_counter()
+                    loaded, origins = _load_frozen_packages(
+                        frozen_packages, domain=domain, variant=variant, sources=sources,
+                    )
+                    learned, enriched = loaded["B"], loaded["C"]
+                    load_seconds = time.perf_counter() - load_started
+                    learn_seconds = enrich_seconds = None
+                    development = []
+                    for arm, snapshot in origins.items():
+                        frozen_inputs[(domain, variant, arm)] = snapshot
+                else:
+                    load_seconds = None
+                    learn_started = time.perf_counter()
+                    learned = RLM.learn(sources=sources)
+                    learn_seconds = time.perf_counter() - learn_started
+                    development = _development_results(
+                        model=model,
+                        domain=domain,
+                        variant=variant,
+                        definitions=definitions,
+                        knowledge=learned,
+                        max_turns=max_turns,
+                        timeout=timeout,
+                        budget=budget,
+                        trace_dir=trace_dir,
+                    )
+                    enrich_started = time.perf_counter()
+                    enriched = RLM.enrich(learned, development) if development else learned
+                    enrich_seconds = time.perf_counter() - enrich_started
                 packages[(domain, variant, "A")] = None
                 packages[(domain, variant, "B")] = learned
-                development = _development_results(
-                    model=model,
-                    domain=domain,
-                    variant=variant,
-                    definitions=definitions,
-                    knowledge=learned,
-                    max_turns=max_turns,
-                    timeout=timeout,
-                    budget=budget,
-                    trace_dir=trace_dir,
-                )
-                enrich_started = time.perf_counter()
-                enriched = RLM.enrich(learned, development) if development else learned
-                enrich_seconds = time.perf_counter() - enrich_started
                 packages[(domain, variant, "C")] = enriched
                 for arm, package in (("B", learned), ("C", enriched)):
                     package_snapshots[(domain, variant, arm)] = snapshot_package(
@@ -606,6 +657,8 @@ def run_live(
                     "development_runs": len(development),
                     "learn_seconds": learn_seconds,
                     "enrich_seconds": enrich_seconds,
+                    "load_seconds": load_seconds,
+                    "package_origin": provenance["package_origin"],
                     "active_enriched_lessons": sum(lesson.status == "active" for lesson in enriched.package.lessons),
                     "development_query_evidence": sum(
                         item.observation_type == "query_execution"
@@ -647,6 +700,8 @@ def run_live(
         knowledge = packages[(domain, variant, arm)]
         if knowledge is not None:
             check_package(knowledge, package_snapshots[(domain, variant, arm)])
+            if (domain, variant, arm) in frozen_inputs:
+                check_package(knowledge, frozen_inputs[(domain, variant, arm)])
         inputs = (
             _domain_sources(fixtures, domain, variant, representation=representation)
             if arm == "A" else None
@@ -664,6 +719,7 @@ def run_live(
                 knowledge=knowledge,
                 max_turns=max_turns,
                 timeout=timeout,
+                knowledge_execution=knowledge_execution,
             )
             answer = normalize_answer(
                 result.outputs.get("answer"),
@@ -701,6 +757,8 @@ def run_live(
         grade = grade_answer(answer, expected)
         if knowledge is not None:
             check_package(knowledge, package_snapshots[(domain, variant, arm)])
+            if (domain, variant, arm) in frozen_inputs:
+                check_package(knowledge, frozen_inputs[(domain, variant, arm)])
         trials.append(
             {
                 **trial,
@@ -708,6 +766,7 @@ def run_live(
                 "cache": False,
                 "max_turns": max_turns,
                 "timeout": timeout,
+                "knowledge_execution": knowledge_execution,
                 "answer": answer,
                 "grade": grade,
                 "metrics": metrics,
@@ -750,6 +809,7 @@ def run_live(
             or hashlib.sha256((fixtures / relative).read_bytes()).hexdigest() != digest
         ],
         "package_snapshots": {"|".join(key): value for key, value in package_snapshots.items()},
+        "frozen_package_inputs": {"|".join(key): value for key, value in frozen_inputs.items()},
         "account_usage_end": account_usage() if max_cost_usd is not None else None,
         "baseline_sha": actual_sha,
         "planned_schedule": schedule,
@@ -836,6 +896,8 @@ def _parser() -> argparse.ArgumentParser:
     live.add_argument("--smoke", action="store_true")
     live.add_argument("--max-cost-usd", type=float)
     live.add_argument("--representation", choices=REPRESENTATIONS, default="csv")
+    live.add_argument("--knowledge-execution", choices=("auto", "context_only"), default="auto")
+    live.add_argument("--frozen-packages", type=Path)
     return parser
 
 
@@ -875,6 +937,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             smoke=args.smoke,
             max_cost_usd=args.max_cost_usd,
             representation=args.representation,
+            knowledge_execution=args.knowledge_execution,
+            frozen_packages=args.frozen_packages,
         )
         return 0 if result["status"] == "complete" else 2
     return 0

@@ -9,6 +9,9 @@ actual evaluation checkout SHA and per-file hashes, not just this core SHA.
 The current branch also contains the opt-in context-only API from
 `a45ebbddb90e04f84daaa1b14dd66b1c3e70e368`; that mode was not present in the
 recorded 81-trial study. Its live effect must be measured separately.
+Package reuse additionally required `7d474de`: the standard store rejected the
+legitimate `TIMESTAMP WITH TIME ZONE` source descriptor. The narrow persistence
+fix preserves the original descriptor, fingerprints and privacy checks.
 
 **Completed results:** the corrected 81-trial smoke at `d0306e9` failed all
 three per-source nonregression gates. See [CURRENT_AUDIT.md](CURRENT_AUDIT.md)
@@ -75,6 +78,46 @@ and written without overwriting existing representations:
 [Arrow Parquet writer](https://arrow.apache.org/docs/python/generated/pyarrow.parquet.write_table.html),
 [delta-rs writer](https://delta-io.github.io/delta-rs/usage/writing/).
 The 250,000-row fixture is retained but excluded from live smoke prompts.
+
+## Paired operation-policy comparison
+
+Compare `auto` and `context_only` with the **same previously frozen B/C
+packages**, not packages independently regenerated between conditions:
+
+```powershell
+# $data is the unchanged fixture directory used by the previous frozen run.
+# $frozenRuns is its batch directory, containing csv.artifacts\packages, etc.
+$results = Join-Path $env:TEMP ('knowledge-policy-' + [guid]::NewGuid())
+python -u -m evaluation.generalization.current_smoke --fixtures $data --output $results --frozen-runs $frozenRuns --knowledge-executions auto context_only --repetitions 3 --max-cost-usd 2
+```
+
+This runs 162 evaluation tasks and no new development tasks: three questions,
+three repetitions, A/B/C, three source representations and two policies.
+Source order is seeded; policy order alternates between source blocks. The
+model, skills, task text, limits, fixture contents and B/C package fingerprints
+are fixed across conditions. A is rerun as a no-package control in each policy.
+Provider caching and alias resolution remain uncontrolled and recorded.
+
+The previous run's B/C snapshots came from development only. This command reads
+those package files, **not its evaluation answers or traces**. It checks all 18
+original package hashes across the batch and validates current source identity
+when loading. Both original snapshots and saved copies are checked during trials;
+a changed/deleted snapshot stops the batch explicitly. No `learn()` or `enrich()`
+call runs in reuse mode. Load time is measured; original learning/enrichment time
+is `null`, not invented as zero cost. Historical development cost must be kept
+separate from the marginal cost of this comparison.
+
+The runner's audit snapshots are package DTOs rather than store envelopes.
+Reuse converts them through the standard bounded, privacy-validating store in a
+temporary directory, then uses the normal source-validation/rebinding API.
+Fingerprints and original snapshot bytes are not rewritten.
+
+Outputs are `csv__auto.json`, `csv__context_only.json`, and equivalent files for
+Parquet / Lakehouse, each with a separate artifact directory and per-question
+gate. Do not pool policies when judging regressions. This isolates optional host
+preplanning; with the recorded packages' zero active C lessons it still cannot
+demonstrate an enriched-lesson benefit. It is not a new-domain holdout or a live
+Fabric integration test.
 
 ## Gate and interpretation
 
