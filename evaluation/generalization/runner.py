@@ -497,6 +497,8 @@ def run_live(
     smoke: bool,
     max_cost_usd: float | None = None,
 ) -> dict[str, object]:
+    if max_cost_usd is not None and max_cost_usd <= 1:
+        raise ValueError("max_cost_usd must exceed the one-dollar reserve")
     artifacts = reserve_artifacts(output)
     if not os.environ.get("OPENROUTER_API_KEY"):
         result = {
@@ -525,6 +527,10 @@ def run_live(
         "account_usage_start": usage_start, "temperature": 1.0,
         "provider_cache": "not controllable; cached tokens recorded",
         "skills": [], "skill_autoloading": False,
+        "harness_sha256": {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in Path(__file__).parent.glob("*.py")
+        },
     }
     _write_json(artifacts / "provenance.json", provenance)
     definitions = json.loads((fixtures / "definitions.json").read_text(encoding="utf-8"))
@@ -548,6 +554,8 @@ def run_live(
     try:
         for variant in variants:
             for domain in ("inventory", "manufacturing", "service"):
+                if max_cost_usd is not None and account_usage() - usage_start >= max_cost_usd - 1:
+                    raise RuntimeError("evaluation budget reserve reached during package preparation")
                 sources = _domain_sources(fixtures, domain, variant)
                 learned = RLM.learn(sources=sources)
                 packages[(domain, variant, "A")] = None
@@ -702,6 +710,11 @@ def run_live(
         "status": "complete" if len(trials) == len(schedule) else "budget_limited",
         "provenance": provenance,
         "core_freeze_mismatches": verify_freeze(repo, frozen),
+        "fixture_changes": [
+            relative for relative, digest in fixture_hashes.items()
+            if not (fixtures / relative).is_file()
+            or hashlib.sha256((fixtures / relative).read_bytes()).hexdigest() != digest
+        ],
         "package_snapshots": {"|".join(key): value for key, value in package_snapshots.items()},
         "account_usage_end": account_usage() if max_cost_usd is not None else None,
         "baseline_sha": BASELINE_SHA,

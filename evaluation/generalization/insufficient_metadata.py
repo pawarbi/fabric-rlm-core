@@ -1,5 +1,12 @@
 """Does the system notice when a required definition is missing?
 
+The live probe uses three counterfactual-witness cases, not arbitrary deletion
+of every question's definitions. Deleting a redundant definition does not
+necessarily make a question ambiguous. Each selected case retains the schema
+and data but admits two different answers under unstated conventions or causes.
+Witnesses stay private to the supervisor. No arbitrary caveat or self-declared
+unsupported claim is counted as an abstention.
+
 The evaluation's definitions document does more than name fields. It carries
 the rules that disambiguate each question, and several of those rules are the
 only thing standing between the model and a hazard deliberately built into the
@@ -38,12 +45,14 @@ Run:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import random
 import sys
 import time
 from pathlib import Path
 from typing import Any, Mapping
+from collections import defaultdict
 
 from .grader import values_match
 from .runner import (
@@ -54,6 +63,9 @@ from .runner import (
     normalize_answer,
     result_metrics,
     _provider_cost,
+    reserve_artifacts,
+    write_trial_trace,
+    _write_json,
 )
 
 SEED = 20260908
@@ -62,6 +74,52 @@ ABSTAIN_STATUSES = frozenset({
     "abstain", "needs_definition", "uncertain", "insufficient_metadata",
     "needs_clarification", "unknown",
 })
+
+
+def ambiguity_cases(fixtures: Path) -> list[dict[str, Any]]:
+    """Construct private witnesses: same visible data, two distinct definitions."""
+    def rows(domain, table):
+        with (fixtures / domain / "descriptive" / f"{table}.csv").open(newline="") as stream:
+            return list(csv.DictReader(stream))
+
+    snapshots = rows("inventory", "inventory_snapshots")
+    latest = max(row["snapshot_date"] for row in snapshots)
+    current = [row for row in snapshots if row["snapshot_date"] == latest]
+    on_hand = sum(int(row["on_hand_units"]) for row in current)
+    net = on_hand - sum(int(row["allocated_units"]) for row in current)
+    production = [row for row in rows("manufacturing", "production")
+                  if row["reporting_complete"].lower() == "true"]
+    complete_keys = {(row["reporting_period"], row["line_id"]) for row in production}
+    defects = defaultdict(int)
+    for row in rows("manufacturing", "defects"):
+        if (row["reporting_period"], row["line_id"]) in complete_keys:
+            defects[row["line_id"]] += int(row["defect_units"])
+    produced = {row["line_id"]: int(row["produced_units"]) for row in production}
+    weighted = sum(defects.values()) / sum(produced.values())
+    unweighted = sum(defects[line] / units for line, units in produced.items()) / len(produced)
+    tickets = rows("service", "tickets")
+    # Root cause is not observed in any source; either latent cause fits all rows.
+    return [
+        {"domain": "inventory", "question_id": "ambiguous_available",
+         "text": "How many units are available at the latest snapshot?",
+         "provided_definitions": ["available units"],
+         "witness": {"definition_a": "Available means on hand minus allocated.",
+                     "definition_b": "Available means physical on-hand stock.",
+                     "answer_a": net, "answer_b": on_hand}},
+        {"domain": "manufacturing", "question_id": "ambiguous_quality_kpi",
+         "text": "What is the plant quality KPI for complete reporting periods?",
+         "provided_definitions": ["weighted defect rate", "line defect rate"],
+         "witness": {"definition_a": "Plant quality KPI is pooled defects divided by production.",
+                     "definition_b": "Plant quality KPI gives equal weight to each line's defect rate.",
+                     "answer_a": weighted, "answer_b": unweighted}},
+        {"domain": "service", "question_id": "ambiguous_root_cause",
+         "text": "What root cause explains the SLA misses?",
+         "provided_definitions": [],
+         "witness": {"definition_a": "Latent cause is understaffing.",
+                     "definition_b": "Latent cause is a notification outage.",
+                     "answer_a": "understaffing", "answer_b": "notification outage",
+                     "observed_ticket_count": len(tickets)}},
+    ]
 
 
 def strip_definitions(definitions: Mapping[str, Any], domain: str,
@@ -138,12 +196,9 @@ def run(fixtures: Path, output: Path, *, model: str, repetitions: int,
     from fabric_rlm import RLM
 
     definitions = json.loads((fixtures / "definitions.json").read_text("utf-8"))
-    questions = json.loads((fixtures / "questions.json").read_text("utf-8"))
-    references = json.loads(
-        (fixtures / "private" / "references.json").read_text("utf-8"))
-
-    cases = [q for q in questions if q.get("expected_behavior") == "answer"
-             and q.get("provided_definitions")]
+    artifacts = reserve_artifacts(output)
+    cases = ambiguity_cases(fixtures)
+    _write_json(artifacts / "private-witnesses.json", cases)
 
     schedule = [(q, rep) for q in cases for rep in range(repetitions)]
     random.Random(SEED).shuffle(schedule)
@@ -157,12 +212,10 @@ def run(fixtures: Path, output: Path, *, model: str, repetitions: int,
         qid = str(question["question_id"])
         reduced = strip_definitions(definitions, domain, variant,
                                     list(question["provided_definitions"]))
-        if not reduced["removed"]:
-            continue
-
         record: dict[str, Any] = {
             "question_id": qid, "domain": domain, "repetition": rep,
             "removed_definitions": reduced["removed"], "model": model,
+            "expected_behavior": "identify missing definition or unobserved cause",
         }
         started = time.perf_counter()
         try:
@@ -187,12 +240,16 @@ def run(fixtures: Path, output: Path, *, model: str, repetitions: int,
             record.update(result_metrics(result, wall_seconds=wall,
                                          provider_cost_usd=_provider_cost(lm)))
             record["classification"] = classify(
-                answer, references[domain][variant].get(qid, {}))
+                answer, {"value": question["witness"]["answer_a"]})
+            record["trace_files"] = write_trial_trace(
+                artifacts / "traces", trace_id=f"{qid}__r{rep}", result=result, lm=lm,
+            )
         except Exception as exc:  # noqa: BLE001
             record["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
             record["classification"] = {"outcome": "error", "abstained": False}
         budget -= 1
         trials.append(record)
+        _write_json(output, {"status": "partial", "trials": trials})
 
     counts: dict[str, int] = {}
     by_domain: dict[str, dict[str, int]] = {}
@@ -203,6 +260,8 @@ def run(fixtures: Path, output: Path, *, model: str, repetitions: int,
         by_domain[t["domain"]][outcome] = by_domain[t["domain"]].get(outcome, 0) + 1
 
     report = {
+        "status": "complete" if len(trials) == len(schedule) else "budget_limited",
+        "probe_version": "counterfactual-witness-v1",
         "model": model, "variant": variant, "repetitions": repetitions,
         "seed": SEED, "trials": trials, "counts": counts,
         "by_domain": by_domain,

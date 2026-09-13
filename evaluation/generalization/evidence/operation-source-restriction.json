@@ -1,0 +1,66 @@
+{
+  "bound_aliases": [
+    "inventory_snapshots",
+    "order_lines",
+    "products",
+    "shipment_events"
+  ],
+  "execution_mode": "registered_operation",
+  "fallback_aliases": [
+    "inventory_snapshots",
+    "order_lines",
+    "products",
+    "shipment_events"
+  ],
+  "fallback_mode": "fallback_no_compatible_operation",
+  "independent_reference": {
+    "ordered": 310,
+    "ratio": 0.8451612903225807,
+    "shipped": 262
+  },
+  "integration_scope": "real local CSV learn/preflight/host execution; scripted planner",
+  "lessons": 0,
+  "observed_restriction": true,
+  "packet": {
+    "audit_status": "passed",
+    "elapsed_seconds": 0.9480312999803573,
+    "operation_fingerprint": "e5c0ac59b8e36d6c25769b44b40833c38d94431f6343add3ef7760798aea3e80",
+    "operation_id": "order_lines.tabular.aggregate.v1",
+    "operation_version": "1",
+    "parameters": {
+      "aggregate": "sum",
+      "filter_column": "",
+      "filter_column_2": "",
+      "filter_value": "",
+      "filter_value_2": "",
+      "groupby": "",
+      "groupby_2": "",
+      "measure": "ordered_units"
+    },
+    "result_fingerprint": "b2961e61c4630789f831482ec0910cd15f440bf98e49d713adf8295a039e2920",
+    "row_count": 1,
+    "rows": [
+      {
+        "value": 310.0
+      }
+    ],
+    "source_fingerprints": {
+      "order_lines": "7babb71f6ddb06d969e7031d4dc78f40dc1984c2ace68bab19d0fc2ee4ecd423"
+    }
+  },
+  "plan": {
+    "operation_id": "order_lines.tabular.aggregate.v1",
+    "parameters": {
+      "aggregate": "sum",
+      "measure": "ordered_units"
+    }
+  },
+  "proposed_fix": {
+    "optional_skill": "Domain metric definitions only; no inventory-specific core branch.",
+    "source_metadata": "Declare join keys, grain, and metric numerator/denominator.",
+    "universal": "Require complete task coverage before one-operation synthesis; otherwise fall back or permit bounded additional operations."
+  },
+  "synthesis_aliases": [
+    "knowledge_result"
+  ]
+}

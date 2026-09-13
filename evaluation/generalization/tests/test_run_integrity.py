@@ -5,6 +5,8 @@ import pytest
 
 from evaluation.generalization import runner
 from evaluation.generalization.insufficient_metadata import classify, extract_answer
+from evaluation.generalization.insufficient_metadata import ambiguity_cases
+from evaluation.generalization.fixtures import generate_fixtures
 
 
 def test_run_artifacts_are_unique_and_refuse_reuse(tmp_path):
@@ -53,3 +55,12 @@ def test_generic_caveat_does_not_count_as_missing_definition_abstention():
         {"value": 123},
     )
     assert grade["outcome"] != "abstained"
+
+
+def test_ambiguity_cases_have_distinct_hidden_counterfactual_answers(tmp_path):
+    generate_fixtures(tmp_path, large_rows=20)
+    cases = ambiguity_cases(tmp_path)
+    assert {case["domain"] for case in cases} == {"inventory", "manufacturing", "service"}
+    for case in cases:
+        assert case["witness"]["answer_a"] != case["witness"]["answer_b"]
+        assert case["witness"]["definition_a"] not in case["text"]
