@@ -23,6 +23,8 @@ class LakehouseDiscoveryError(RuntimeError):
 _HOST_QUERY_TRANSPORT: Callable[..., dict[str, Any]] | None = None
 _MAX_QUERY_ROWS = 10_000
 _MAX_QUERY_CHARS = 100_000
+_COMMENT_MARKERS = ("--", "/*", "*/")
+_QUERY_ERROR_PREFIX = "LakehouseSource.query requires a read-only catalog query"
 _MAX_QUERY_RESULT_BYTES = 5 * 1024 * 1024
 _QUERY_FETCH_BATCH_ROWS = 1
 _QUERY_MEMORY_LIMIT = "256MB"
@@ -435,20 +437,78 @@ def _quote_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _mask_quoted_spans(sql: str) -> str:
+    """``sql`` with the inside of every quoted span replaced by spaces.
+
+    Comment markers are syntax outside a quoted span and ordinary data inside
+    one, so the scan has to know the difference: an owner named
+    ``'Smith--Jones'`` is not a comment. Only the contents are blanked, so the
+    result keeps the original length and offsets.
+
+    Quoting this cannot parse -- an unterminated quote, a backslash escape
+    string, a dollar-quoted string -- fails closed, because scanning a query
+    whose quoting is not understood is worse than refusing it.
+    """
+    masked: list[str] = []
+    index = 0
+    length = len(sql)
+    while index < length:
+        char = sql[index]
+        if char not in ("'", '"'):
+            masked.append(char)
+            index += 1
+            continue
+        quote = char
+        masked.append(quote)
+        index += 1
+        while True:
+            if index >= length:
+                raise _query_error(
+                    "the query has an unterminated string literal "
+                    "or quoted identifier"
+                )
+            if sql[index] != quote:
+                masked.append(" ")
+                index += 1
+                continue
+            if index + 1 < length and sql[index + 1] == quote:
+                masked.append("  ")
+                index += 2
+                continue
+            masked.append(quote)
+            index += 1
+            break
+    return "".join(masked)
+
+
 def _normalize_catalog_query(sql: str) -> str:
     normalized = str(sql).strip()
-    if (
-        not normalized
-        or len(normalized) > _MAX_QUERY_CHARS
-        or any(marker in normalized for marker in ("--", "/*", "*/"))
-        or not re.match(r"^(?:SELECT|WITH)\b", normalized, re.IGNORECASE)
-    ):
-        raise ValueError("LakehouseSource.query requires a read-only catalog query.")
+    if not normalized:
+        raise _query_error("the query is empty")
+    if len(normalized) > _MAX_QUERY_CHARS:
+        raise _query_error(
+            f"the query is {len(normalized)} characters, over the "
+            f"{_MAX_QUERY_CHARS} character limit"
+        )
+    if not re.match(r"^(?:SELECT|WITH)\b", normalized, re.IGNORECASE):
+        raise _query_error("a catalog query must begin with SELECT or WITH")
+    if any(marker in _mask_quoted_spans(normalized) for marker in _COMMENT_MARKERS):
+        raise _query_error(
+            "SQL comment markers are not allowed outside string literals; "
+            "remove the -- or /* */ comment"
+        )
     return normalized
 
 
-def _query_error() -> ValueError:
-    return ValueError("LakehouseSource.query requires a read-only catalog query.")
+def _query_error(reason: str = "") -> ValueError:
+    """The single rejection message, optionally naming what to change.
+
+    The caller is usually a model rewriting its own query, so a rejection that
+    does not say which of several causes fired cannot be acted on.
+    """
+    if reason:
+        return ValueError(f"{_QUERY_ERROR_PREFIX}: {reason}.")
+    return ValueError(f"{_QUERY_ERROR_PREFIX}.")
 
 
 def _validate_query_functions(
@@ -477,26 +537,29 @@ def _validate_query_functions(
                 and not (expression_class == "WINDOW" and builtin_window)
             )
         ):
-            raise _query_error()
+            raise _query_error(
+                f"the function {function_name or '(unnamed)'!s} is not an allowed "
+                "read-only built-in"
+            )
     for item in value.values():
         _validate_query_functions(item, safe_functions)
 
 
 def _validate_query_node(node: Any, allowed_relations: frozenset[str]) -> None:
     if not isinstance(node, dict):
-        raise _query_error()
+        raise _query_error("the query did not parse into a SELECT")
 
     cte_map = node.get("cte_map", {})
     cte_entries = cte_map.get("map", []) if isinstance(cte_map, dict) else None
     if not isinstance(cte_entries, list):
-        raise ValueError("LakehouseSource.query requires a read-only catalog query.")
+        raise _query_error("the WITH clause did not parse")
     cte_names = {
         str(entry.get("key", "")).casefold()
         for entry in cte_entries
         if isinstance(entry, dict) and str(entry.get("key", ""))
     }
     if len(cte_names) != len(cte_entries):
-        raise _query_error()
+        raise _query_error("every CTE in the WITH clause needs a distinct name")
     scoped_relations = allowed_relations | frozenset(cte_names)
 
     for entry in cte_entries:
@@ -518,7 +581,9 @@ def _validate_query_node(node: Any, allowed_relations: frozenset[str]) -> None:
         _validate_query_node(node.get("left"), scoped_relations)
         _validate_query_node(node.get("right"), scoped_relations)
     else:
-        raise _query_error()
+        raise _query_error(
+            f"{node_type or 'this statement'} is not a SELECT or a set operation"
+        )
 
     _validate_expression_subqueries(
         node,
@@ -555,7 +620,7 @@ def _validate_query_relation(
     if relation is None:
         return
     if not isinstance(relation, dict):
-        raise _query_error()
+        raise _query_error("the FROM clause did not parse")
 
     relation_type = str(relation.get("type", ""))
     if relation_type == "EMPTY":
@@ -569,7 +634,11 @@ def _validate_query_relation(
             or relation.get("at_clause") is not None
             or table_name not in allowed_relations
         ):
-            raise _query_error()
+            raise _query_error(
+                f"{table_name or 'that table'} is not one of the names this query "
+                f"may read ({', '.join(sorted(allowed_relations)) or 'none'}); "
+                "catalog-qualified and time-travel references are never allowed"
+            )
         return
     if relation_type == "JOIN":
         _validate_query_relation(relation.get("left"), allowed_relations)
@@ -588,7 +657,10 @@ def _validate_query_relation(
         _validate_query_relation(relation.get("source"), allowed_relations)
         _validate_expression_subqueries(relation, allowed_relations)
         return
-    raise _query_error()
+    raise _query_error(
+        f"the FROM clause uses {relation_type or 'an unsupported relation'}, which "
+        "is not a table, join, subquery or pivot over an authorized source"
+    )
 
 
 def _validate_catalog_query(
@@ -618,14 +690,14 @@ def _validate_catalog_query(
             ).fetchall()
         )
     except Exception as exc:
-        raise _query_error() from exc
+        raise _query_error("the query did not parse") from exc
     if (
         not isinstance(document, dict)
         or document.get("error") is not False
         or not isinstance(document.get("statements"), list)
         or len(document["statements"]) != 1
     ):
-        raise _query_error()
+        raise _query_error("the query must be exactly one parseable statement")
     _validate_query_functions(document, safe_functions)
     statement = document["statements"][0]
     node = statement.get("node") if isinstance(statement, dict) else None
@@ -810,7 +882,9 @@ def execute_lakehouse_query(
             len(statements) != 1
             or str(statements[0].type).rsplit(".", 1)[-1] != "SELECT"
         ):
-            raise ValueError("LakehouseSource.query requires a read-only catalog query.")
+            raise _query_error(
+                "the query must be exactly one SELECT statement"
+            )
 
         kinds = {str(entry.get("kind", "")).lower() for _, entry in selected}
         remote = any("://" in str(entry["path"]) for _, entry in selected)

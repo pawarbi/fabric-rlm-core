@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A value containing `--`, `/*` or `*/` no longer looks like a SQL comment to
+  `LakehouseSource.query`.** The read-only gate scanned the raw query text for
+  comment markers, so an ordinary filter on data that happens to contain them —
+  a customer named `'Smith--Jones'`, a SKU `'XY--01'`, a code `'A/*B'`, a column
+  `"a--b"` — was rejected, and no rephrasing could rescue it: such rows were
+  simply unfilterable. The scan now blanks the inside of string literals and
+  quoted identifiers first, so markers are read as syntax only where they are
+  syntax. Real comments, including the `read_csv_auto/**/(...)` obfuscation, are
+  still rejected, and quoting the scanner does not parse (an unterminated quote,
+  an `E'...'` escape string, a `$$...$$` dollar-quoted string) fails closed.
+- **A rejected catalog query now says which rule it broke.** Every rejection
+  raised one identical message, which gave a caller rewriting its own query
+  nothing to act on. Empty, over-limit, not-a-SELECT, comment markers,
+  unterminated quoting, an unauthorized table (now listing the names the query
+  may read), a disallowed function, a non-SELECT node and a multi-statement
+  query each name their cause. The message prefix is unchanged.
+
 ## 0.6.1 — 2026-09-10 — generalized run protocol and learning substrate
 
 ### Added
