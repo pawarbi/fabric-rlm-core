@@ -292,6 +292,23 @@ run with evidence capture, the package learns from them through
 `RLM.enrich`, the report lists the lessons that appeared, and the enriched
 package is returned as `report.learned_knowledge` for saving.
 
+A lakehouse whose names say nothing is where a Data Agent goes wrong most
+quietly, and the review now works there too. A key spelled `ord_no` or
+`cust_cd` points at no table, so order lines never reached the date on their
+header and nothing could be asked; the review now settles such a join by
+asking the data which table owns the key, and it finds a stale copy of a
+table (the same columns, fewer rows, every key already present in the
+original) and leaves it out of the questions. When the agent answers wrong,
+its run steps carry the query it executed, and
+`fabric_rlm.experimental.query_forensics` compares that query with the
+reference query that produced the right answer. Each difference is a fact
+with the line that closes it: a column added into the measure, a currency
+conversion never applied, a filter never applied, the period dated by the
+wrong column, a stale table read, a lookup never joined. Those lines go into
+the suggested instructions of the data source. On a test lakehouse built to
+be ambiguous, the unconfigured agent reported July revenue 136 percent too
+high, and the single query it ran yielded four lines, one per mistake.
+
 A package can also carry what earlier runs learned about a source. Every turn
 records its source calls as typed telemetry (the grain a semantic-model query
 or a Lakehouse query asked for, the estimated group count, whether it ran, was
