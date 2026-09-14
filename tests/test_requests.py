@@ -70,14 +70,14 @@ def _payments_and_tickets():
     """Two facts: payments carry a region, tickets do not, and only tickets carry a channel."""
     duckdb = pytest.importorskip("duckdb")
     con = duckdb.connect()
-    con.execute("CREATE TABLE payments (payment_id INTEGER, payment_date DATE, amount DOUBLE, region VARCHAR)")
-    con.execute("CREATE TABLE tickets (ticket_id INTEGER, opened_at DATE, channel VARCHAR, hours DOUBLE)")
-    for i, (day, amount, region) in enumerate([("2023-06-15", 100.0, "Europe"), ("2023-06-15", 50.0, "Americas"), ("2024-06-15", 300.0, "Europe"), ("2024-06-15", 60.0, "Americas")]):
-        con.execute("INSERT INTO payments VALUES (?, ?, ?, ?)", [i, day, amount, region])
-    for i, (day, channel, hours) in enumerate([("2023-06-15", "email", 2.0), ("2023-06-15", "phone", 1.0), ("2024-06-15", "email", 5.0), ("2024-06-15", "phone", 1.5)]):
-        con.execute("INSERT INTO tickets VALUES (?, ?, ?, ?)", [i, day, channel, hours])
-    tables = {"payments": ("payment_id", "payment_date", "amount", "region"), "tickets": ("ticket_id", "opened_at", "channel", "hours")}
-    types = {"payments": {"payment_id": "INTEGER", "payment_date": "DATE", "amount": "DOUBLE", "region": "VARCHAR"}, "tickets": {"ticket_id": "INTEGER", "opened_at": "DATE", "channel": "VARCHAR", "hours": "DOUBLE"}}
+    con.execute("CREATE TABLE payments (payment_id INTEGER, payment_date DATE, amount DOUBLE, region VARCHAR, method VARCHAR)")
+    con.execute("CREATE TABLE tickets (ticket_id INTEGER, opened_at DATE, channel VARCHAR, priority VARCHAR, hours DOUBLE)")
+    for i, (day, amount, region, method) in enumerate([("2023-06-15", 100.0, "Europe", "card"), ("2023-06-15", 50.0, "Americas", "wire"), ("2024-06-15", 300.0, "Europe", "card"), ("2024-06-15", 60.0, "Americas", "wire")]):
+        con.execute("INSERT INTO payments VALUES (?, ?, ?, ?, ?)", [i, day, amount, region, method])
+    for i, (day, channel, priority, hours) in enumerate([("2023-06-15", "email", "low", 2.0), ("2023-06-15", "phone", "high", 1.0), ("2024-06-15", "email", "low", 5.0), ("2024-06-15", "phone", "high", 1.5)]):
+        con.execute("INSERT INTO tickets VALUES (?, ?, ?, ?, ?)", [i, day, channel, priority, hours])
+    tables = {"payments": ("payment_id", "payment_date", "amount", "region", "method"), "tickets": ("ticket_id", "opened_at", "channel", "priority", "hours")}
+    types = {"payments": {"payment_id": "INTEGER", "payment_date": "DATE", "amount": "DOUBLE", "region": "VARCHAR", "method": "VARCHAR"}, "tickets": {"ticket_id": "INTEGER", "opened_at": "DATE", "channel": "VARCHAR", "priority": "VARCHAR", "hours": "DOUBLE"}}
     return LakehouseProbe.from_executor(_module._executor(con, tables), schema_from_tables("lh-2", tables, types=types), name="Two facts")
 
 

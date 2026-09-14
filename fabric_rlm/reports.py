@@ -806,7 +806,7 @@ def _reading_after(spec: ReportSpec, result: Sweep) -> tuple[str, ...]:
             swept[m.fact].append(m.measure)
     if not swept:
         return spec.reading
-    kept = [line for line in spec.reading if not line.startswith(("fact:", "measure:"))]
+    kept = [line for line in spec.reading if not line.startswith(("fact:", "measure:")) or "the fact that holds" in line]  # the fact chosen for the value asked for stays explained
     said = "; ".join(f"{fact}: {', '.join(result.words.get(f'{fact}|{m}', m) for m in measures)}" for fact, measures in swept.items())
     kept.insert(1, f"swept: {said}" + (" (the request named none)" if not spec.facts and not spec.measures else ""))
     return tuple(kept)
