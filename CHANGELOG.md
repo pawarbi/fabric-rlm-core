@@ -258,6 +258,29 @@
   and the instructions given, the queries spent and the verification
   statement. Text and marks keep at least WCAG AA contrast; nothing on the
   page relies on colour alone.
+- **Time series arithmetic on every monthly chart** (`fabric_rlm.series`).
+  The monthly charts of the recap, the trend report and the root-cause
+  page run on one time axis and carry a centered moving average (twelve
+  months, three below eighteen months of history), level shifts by binary
+  segmentation, and a pin strip of the change on the same month a year
+  earlier. With two years or more the series is decomposed classically
+  into trend (the centered 12-month average), a seasonal index per
+  calendar month and a residual with a two-sigma band, shown as three
+  small multiples; with three years or more of a season worth naming,
+  level shifts are looked for on the seasonally adjusted series so a peak
+  is not read as a step, and a smooth slope is never called a step (two
+  flat levels must fit better than one line). Each series gets sentences
+  it can support and nothing else: the level shift with its before and
+  after, the trend as a percentage a year, how many of the last twelve
+  months were up on a year earlier, how much of the variation the season
+  explains with the peak and trough months, and the largest departure
+  from trend and season; a flat series says nothing. The recap lists what
+  moved together year over year (a rank correlation over twelve shared
+  months or more, with a one-month lead either way). Every method and
+  its parameters are named in the About block; a trailing month the
+  coverage rule set aside stays out of every fit. The weekly chart of the
+  brief carries its centered average too. `Sweep.stories`,
+  `Sweep.trend_lines` and `Sweep.comovement` expose the same for text.
 - **Guards on what a figure can mean.** A decomposition whose groups hold
   more rows than the fact (a join to a table whose key is not unique) is
   flagged "join multiplies rows", classified as no evidence and never the

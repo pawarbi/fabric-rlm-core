@@ -27,6 +27,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .data_agent_review import _MEASURE_HINT, AgentDataSource, AgentSnapshot, ReviewContext, _measure_columns, build_vocabulary, excluded_terms
+from .series import ChangePoint, _mean, _spearman, _std, change_points
 from .sweep import _ROWS, Comparison, Sweep, SweepFinding, _aggregate_of, _concentration_sentence, _iso_date, _label, _num, _probe_for, _summed_columns, _word, sweep, verify_sweep
 
 __all__ = ["Brief", "ChangePoint", "MetricBrief", "Week", "brief"]
@@ -59,20 +60,6 @@ class Week:
     @property
     def period(self) -> dict[str, Any]:
         return {"start": self.start, "end": self.end, "label": self.label}
-
-
-@dataclass(frozen=True)
-class ChangePoint:
-    """A level shift in the weekly history: the first week of the new level, the average before and after, and how sharp the split is."""
-
-    start: str
-    before: float
-    after: float
-    statistic: float
-
-    @property
-    def pct(self) -> float | None:
-        return (self.after - self.before) / abs(self.before) if self.before else None
 
 
 @dataclass(frozen=True)
@@ -383,17 +370,6 @@ def _last_covered_week(weeks: Sequence[Week], *, back: int = 8) -> int:
     return index
 
 
-def _mean(values: Sequence[float]) -> float:
-    return sum(values) / len(values) if values else 0.0
-
-
-def _std(values: Sequence[float]) -> float:
-    if len(values) < 2:
-        return 0.0
-    mean = _mean(values)
-    return math.sqrt(sum((v - mean) ** 2 for v in values) / (len(values) - 1))
-
-
 def _slope_pct(values: Sequence[float]) -> float | None:
     """The fitted change over the window: where the fitted line ends against where it starts, a decline capped at -100%."""
     n = len(values)
@@ -548,35 +524,8 @@ def _ordinal(n: int) -> str:
 
 
 def _change_points(weeks: Sequence[Week], *, min_size: int = 4, threshold: float = 3.0, limit: int = 2) -> list[ChangePoint]:
-    """Level shifts by binary segmentation: the split that separates the means most, when the separation is sharp against the noise within the segments."""
-    values = [w.value for w in weeks]
-    found: list[ChangePoint] = []
-
-    def split(lo: int, hi: int) -> tuple[int, float] | None:
-        best: tuple[int, float] | None = None
-        for k in range(lo + min_size, hi - min_size + 1):
-            left, right = values[lo:k], values[k:hi]
-            pooled = math.sqrt(((len(left) - 1) * _std(left) ** 2 + (len(right) - 1) * _std(right) ** 2) / max(1, len(left) + len(right) - 2))
-            pooled = max(pooled, 1e-9 * max(1.0, abs(_mean(values))))
-            statistic = abs(_mean(left) - _mean(right)) / (pooled * math.sqrt(1 / len(left) + 1 / len(right)))
-            if best is None or statistic > best[1]:
-                best = (k, statistic)
-        return best
-
-    def search(lo: int, hi: int, depth: int) -> None:
-        if hi - lo < 2 * min_size or depth > 3 or len(found) >= limit:
-            return
-        best = split(lo, hi)
-        if best is None or best[1] < threshold:
-            return
-        k = best[0]
-        found.append(ChangePoint(weeks[k].start, _mean(values[lo:k]), _mean(values[k:hi]), round(best[1], 1)))
-        search(k, hi, depth + 1)  # the most recent shift matters most
-        search(lo, k, depth + 1)
-
-    if len(values) >= 2 * min_size:
-        search(0, len(values), 0)
-    return sorted(found, key=lambda p: p.start, reverse=True)[:limit]
+    """Level shifts in the weekly history, by the series module's binary segmentation."""
+    return change_points(weeks, min_size=min_size, threshold=threshold, limit=limit)
 
 
 def _weekday_pattern(daily: Sequence[tuple[_dt.date, int, float]], target: Week, weeks: Sequence[Week], index: int) -> tuple[dict[int, tuple[float, float]], str]:
@@ -711,38 +660,6 @@ def _thin_weeks(weeks: Sequence[Week]) -> set[str]:
         else:
             break
     return thin
-
-
-def _spearman(xs: Sequence[float], ys: Sequence[float]) -> float | None:
-    """Rank correlation: one enormous week cannot make every pair read r = 1.00."""
-    if len(xs) < 3 or len(xs) != len(ys):
-        return None
-    return _pearson(_ranks(xs), _ranks(ys))
-
-
-def _ranks(values: Sequence[float]) -> list[float]:
-    order = sorted(range(len(values)), key=lambda i: values[i])
-    ranks = [0.0] * len(values)
-    i = 0
-    while i < len(order):
-        j = i
-        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
-            j += 1
-        for k in range(i, j + 1):
-            ranks[order[k]] = (i + j) / 2 + 1  # ties share the average rank
-        i = j + 1
-    return ranks
-
-
-def _pearson(xs: Sequence[float], ys: Sequence[float]) -> float | None:
-    if len(xs) < 3 or len(xs) != len(ys):
-        return None
-    x_mean, y_mean = _mean(xs), _mean(ys)
-    sx = math.sqrt(sum((x - x_mean) ** 2 for x in xs))
-    sy = math.sqrt(sum((y - y_mean) ** 2 for y in ys))
-    if not sx or not sy:
-        return None
-    return sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys)) / (sx * sy)
 
 
 # --------------------------------------------------------------------------- #

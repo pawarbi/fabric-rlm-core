@@ -241,47 +241,136 @@ def _gridlines(parts: list[str], ticks: Sequence[float], y: Any, left: int, righ
 # --------------------------------------------------------------------------- #
 
 
-def _trend_svg(points: Sequence["Point"], title: str, aggregate: str) -> str:
-    """One line per year over the twelve months: the latest year dark, the year before grey, older years light and dashed, each labelled at its end."""
-    by_year: dict[int, dict[int, float]] = {}
-    for p in points:
-        by_year.setdefault(p.year, {})[p.month] = p.value
-    years = sorted(by_year)
-    if not years:
+def _trend_svg(points: Sequence["Point"], title: str, aggregate: str, story: Any = None) -> str:
+    """The months on one axis: the series dark, its centered average grey and dashed, level shifts as dashed lines, and under it the change on the same month a year earlier as pins."""
+    from .series import analyse
+
+    story = story or analyse(points)
+    months = list(story.months)
+    if len(months) < 2:
         return ""
-    width, height, left, right, top, bottom = 640, 240, 60, 46, 42, 34
-    values = [v for year in by_year.values() for v in year.values()]
+    width, left, right, top = 640, 60, 60, 42
+    line_h, gap, pins_h, bottom = 150, 22, 64, 30
+    height = top + line_h + gap + pins_h + bottom
+    values = [m.value for m in months]
     low, high = min(0.0, min(values)), max(values)
     ticks = _nice_ticks(low, high)
     low, high = min(ticks[0], low), max(ticks[-1], high)
     span = high - low or 1.0
 
-    def x(month: int) -> float:
-        return left + (month - 1) * (width - left - right) / 11
+    def x(i: int) -> float:
+        return left + i * (width - left - right) / max(1, len(months) - 1)
 
     def y(value: float) -> float:
-        return top + (high - value) * (height - top - bottom) / span
+        return top + (high - value) * line_h / span
 
-    subtitle = ", ".join(p for p in (_scale_word(values), "monthly average" if aggregate == "avg" else "", f"{years[0]} to {years[-1]}" if len(years) > 1 else str(years[0])) if p)
+    subtitle = ", ".join(p for p in (_scale_word(values), "monthly average" if aggregate == "avg" else "", f"{months[0].label} to {months[-1].label}") if p)
     parts = _open(title, width, height, left=left, subtitle=subtitle)
     _gridlines(parts, ticks, y, left, width - right, _compact)
-    for month in range(1, 13):
-        parts.append(f'<text x="{x(month):.1f}" y="{height - 14}" font-size="11" fill="{_MUTED}" text-anchor="middle">{calendar.month_abbr[month]}</text>')
-    for index, year in enumerate(years):
-        series = by_year[year]
-        age = len(years) - 1 - index
-        color, stroke, dash = (_AC, 2.4, "") if age == 0 else (_PY, 1.9, "") if age == 1 else (_OLD, 1.5, "5 4")
-        dash_attr = f' stroke-dasharray="{dash}"' if dash else ""
-        coordinates = [(x(m), y(series[m])) for m in range(1, 13) if m in series]
-        if len(coordinates) >= 2:
-            path = " ".join(f"{'M' if i == 0 else 'L'}{cx:.1f},{cy:.1f}" for i, (cx, cy) in enumerate(coordinates))
-            parts.append(f'<path d="{path}" fill="none" stroke="{color}" stroke-width="{stroke}" stroke-linejoin="round"{dash_attr}/>')
-        for m in range(1, 13):
-            if m in series:
-                parts.append(f'<circle cx="{x(m):.1f}" cy="{y(series[m]):.1f}" r="{2.8 if age == 0 else 2.2}" fill="{color}"><title>{esc(f"{calendar.month_abbr[m]} {year}: {_full(series[m])}")}</title></circle>')
-        if coordinates:
-            end_x, end_y = coordinates[-1]
-            parts.append(f'<text x="{end_x + 6:.1f}" y="{end_y + 4:.1f}" font-size="11" font-weight="{600 if age == 0 else 400}" fill="{_INK if age == 0 else _MUTED}">{year}</text>')
+    step = max(1, round(len(months) / 6))
+    for i, m in enumerate(months):
+        if i % step == 0 or i == len(months) - 1:
+            parts.append(f'<text x="{x(i):.1f}" y="{top + line_h + 14}" font-size="11" fill="{_MUTED}" text-anchor="middle">{esc(m.label)}</text>')
+    starts = {m.start: i for i, m in enumerate(months)}
+    for shift in story.shifts:
+        if shift.start in starts:
+            px = x(starts[shift.start])
+            parts.append(f'<line x1="{px:.1f}" x2="{px:.1f}" y1="{top}" y2="{top + line_h}" stroke="{_SHIFT}" stroke-dasharray="5 4"><title>{esc(f"level shift: {_full(shift.before)} to {_full(shift.after)} a month")}</title></line>')
+    average = [(i, a) for i, a in enumerate(story.average) if a is not None]
+    if len(average) >= 2:
+        path = " ".join(f"{'M' if j == 0 else 'L'}{x(i):.1f},{y(a):.1f}" for j, (i, a) in enumerate(average))
+        parts.append(f'<path d="{path}" fill="none" stroke="{_PY}" stroke-width="1.8" stroke-dasharray="6 4"><title>{esc(f"centered {story.window}-month average")}</title></path>')
+        last_i, last_a = average[-1]
+        parts.append(f'<text x="{x(last_i) + 6:.1f}" y="{y(last_a) + 4:.1f}" font-size="11" fill="{_MUTED}">{story.window}-mo avg</text>')
+    path = " ".join(f"{'M' if i == 0 else 'L'}{x(i):.1f},{y(v):.1f}" for i, v in enumerate(values))
+    parts.append(f'<path d="{path}" fill="none" stroke="{_AC}" stroke-width="2.2" stroke-linejoin="round"/>')
+    for i, m in enumerate(months):
+        parts.append(f'<circle cx="{x(i):.1f}" cy="{y(m.value):.1f}" r="2.4" fill="{_AC}"><title>{esc(f"{m.label}: {_full(m.value)}")}</title></circle>')
+    parts.append(f'<circle cx="{x(len(months) - 1):.1f}" cy="{y(values[-1]):.1f}" r="5" fill="{_MARK}" stroke="#fff" stroke-width="1.5"><title>{esc(f"{months[-1].label}: {_full(values[-1])}")}</title></circle>')
+    # the pins: the change on the same month a year earlier
+    pins = [(i, v) for i, (_m, v) in enumerate(story.yoy) if v is not None]
+    pin_top = top + line_h + gap + 12
+    zero = pin_top + pins_h / 2
+    parts.append(f'<text x="{left}" y="{pin_top - 2}" font-size="11" fill="{_MUTED}">change on the same month a year earlier</text>')
+    parts.append(f'<line x1="{left}" x2="{width - right}" y1="{zero:.1f}" y2="{zero:.1f}" stroke="{_RULE}"/>')
+    if pins:
+        biggest = max(abs(v) for _i, v in pins) or 1.0
+        for i, v in pins:
+            length = (pins_h / 2 - 8) * min(1.0, abs(v) / biggest)
+            color = _UP if v > 0 else _DOWN if v < 0 else _RULE
+            py = zero - length if v > 0 else zero + length
+            parts.append(f'<line x1="{x(i):.1f}" x2="{x(i):.1f}" y1="{zero:.1f}" y2="{py:.1f}" stroke="{color}" stroke-width="2"/>')
+            parts.append(f'<circle cx="{x(i):.1f}" cy="{py:.1f}" r="3" fill="{color}"><title>{esc(f"{months[i].label}: {v:+.1%} on {months[i].label[:3]} {months[i].year - 1}")}</title></circle>')
+        last_i, last_v = pins[-1]
+        parts.append(f'<text x="{x(last_i) + 7:.1f}" y="{(zero - (pins_h / 2 - 8) * min(1.0, abs(last_v) / biggest) if last_v > 0 else zero + (pins_h / 2 - 8) * min(1.0, abs(last_v) / biggest)) + 4:.1f}" font-size="11" font-weight="600" fill="{_UP_TEXT if last_v > 0 else _DOWN_TEXT}">{last_v:+.0%}</text>')
+    else:
+        parts.append(f'<text x="{left}" y="{zero - 6:.1f}" font-size="11" fill="{_MUTED}">no month has a month a year earlier to compare with</text>')
+    parts.append(f'<text x="{width - right}" y="{height - 6}" font-size="11" fill="{_MUTED}" text-anchor="end">dark: the series; grey dashed: its centered average; violet: a level shift; blue: the latest month</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _decomposition_svg(story: Any, title: str) -> str:
+    """Three small multiples: the trend, the seasonal index by calendar month, and the residual with a two-sigma band."""
+    d = story.decomposition
+    if d is None:
+        return ""
+    months = list(d.months)
+    width, left, right, top, panel_h, gap, bottom = 640, 60, 20, 42, 92, 30, 24
+    height = top + 3 * panel_h + 2 * gap + bottom
+
+    def x(i: int) -> float:
+        return left + i * (width - left - right) / max(1, len(months) - 1)
+
+    parts = _open(title, width, height, left=left, subtitle=f"classical {'multiplicative' if d.multiplicative else 'additive'} decomposition: trend as the centered 12-month average, a seasonal index per calendar month, the rest is residual")
+    # panel 1: trend
+    y0 = top
+    present = [(i, t) for i, t in enumerate(d.trend) if t is not None]
+    if present:
+        lo, hi = min(t for _i, t in present), max(t for _i, t in present)
+        lo, hi = min(0.0, lo), hi or 1.0
+        span = (hi - lo) or 1.0
+        parts.append(f'<text x="{left}" y="{y0 - 4}" font-size="11" fill="{_MUTED}">trend</text>')
+        path = " ".join(f"{'M' if j == 0 else 'L'}{x(i):.1f},{y0 + (hi - t) * panel_h / span:.1f}" for j, (i, t) in enumerate(present))
+        parts.append(f'<path d="{path}" fill="none" stroke="{_AC}" stroke-width="2"/>')
+        parts.append(f'<text x="{left - 6}" y="{y0 + 4}" font-size="11" fill="{_MUTED}" text-anchor="end">{esc(_compact(hi))}</text><text x="{left - 6}" y="{y0 + panel_h + 4}" font-size="11" fill="{_MUTED}" text-anchor="end">{esc(_compact(lo))}</text>')
+        if d.trend_per_year is not None:
+            parts.append(f'<text x="{width - right}" y="{y0 + 12}" font-size="11" font-weight="600" fill="{_INK}" text-anchor="end">{d.trend_per_year:+.0%} a year</text>')
+    # panel 2: the seasonal index
+    y1 = top + panel_h + gap
+    parts.append(f'<text x="{left}" y="{y1 - 4}" font-size="11" fill="{_MUTED}">season (1.0 is an average month)</text>' if d.multiplicative else f'<text x="{left}" y="{y1 - 4}" font-size="11" fill="{_MUTED}">season (0 is an average month)</text>')
+    indexes = [d.seasonal.get(m, 1.0 if d.multiplicative else 0.0) for m in range(1, 13)]
+    baseline = 1.0 if d.multiplicative else 0.0
+    spread = max(abs(v - baseline) for v in indexes) or 0.1
+    slot = (width - left - right) / 12
+    zero_y = y1 + panel_h / 2
+    parts.append(f'<line x1="{left}" x2="{width - right}" y1="{zero_y:.1f}" y2="{zero_y:.1f}" stroke="{_RULE}"/>')
+    for m, v in enumerate(indexes, start=1):
+        cx = left + slot * (m - 1) + slot / 2
+        length = (panel_h / 2 - 12) * abs(v - baseline) / spread
+        up = v >= baseline
+        parts.append(_bar(cx - slot * 0.3, zero_y - length if up else zero_y, slot * 0.6, length, _UP if up else _DOWN, f"{calendar.month_name[m]}: {v:.2f}" if d.multiplicative else f"{calendar.month_name[m]}: {_full(v)}", hatch=not up))
+        parts.append(f'<text x="{cx:.1f}" y="{y1 + panel_h + 12}" font-size="10.5" fill="{_MUTED}" text-anchor="middle">{calendar.month_abbr[m]}</text>')
+    parts.append(f'<text x="{width - right}" y="{y1 + 12}" font-size="11" font-weight="600" fill="{_INK}" text-anchor="end">season explains {d.explained:.0%}</text>')
+    # panel 3: residuals with the band
+    y2 = top + 2 * (panel_h + gap)
+    parts.append(f'<text x="{left}" y="{y2 - 4}" font-size="11" fill="{_MUTED}">residual (what trend and season do not explain)</text>')
+    departures = [(i, d.departure(i)) for i in range(len(months)) if d.departure(i) is not None]
+    if departures:
+        biggest = max(max(abs(v) for _i, v in departures), 2 * d.sigma, 0.01)
+        mid = y2 + panel_h / 2
+        band = (panel_h / 2 - 6) * min(1.0, (2 * d.sigma) / biggest)
+        parts.append(f'<rect x="{left}" y="{mid - band:.1f}" width="{width - left - right}" height="{2 * band:.1f}" fill="#f3f4f6"><title>two standard deviations of the residuals</title></rect>')
+        parts.append(f'<line x1="{left}" x2="{width - right}" y1="{mid:.1f}" y2="{mid:.1f}" stroke="{_RULE}"/>')
+        for i, v in departures:
+            length = (panel_h / 2 - 6) * abs(v) / biggest
+            outside = abs(v) > 2 * d.sigma
+            color = (_UP if v > 0 else _DOWN) if outside else _PY
+            parts.append(_bar(x(i) - 2, mid - length if v > 0 else mid, 4, length, color, f"{months[i].label}: {v:+.1%}", hatch=outside and v < 0, rx=0.5))
+        step = max(1, round(len(months) / 6))
+        for i, m in enumerate(months):
+            if i % step == 0 or i == len(months) - 1:
+                parts.append(f'<text x="{x(i):.1f}" y="{y2 + panel_h + 12}" font-size="10.5" fill="{_MUTED}" text-anchor="middle">{esc(m.label)}</text>')
     parts.append("</svg>")
     return "".join(parts)
 
@@ -655,6 +744,8 @@ def _tables_of(result: "Sweep") -> list[str]:
 
 
 def _trends(result: "Sweep") -> str:
+    """One block per measure: the monthly chart with its average, shifts and year-over-year pins, the sentences the arithmetic supports, and the decomposition when there are two years."""
+    stories = result.stories() if hasattr(result, "stories") else {}
     parts = []
     for key, points in result.series.items():
         if len(points) < 2 or key in result.collapsed:
@@ -662,8 +753,21 @@ def _trends(result: "Sweep") -> str:
         fact, measure = key.split("|", 1)
         aggregate = next((m.aggregate for m in result.ledger if m.fact == fact and m.measure == measure), "sum")
         phrase = result.words.get(key, key).capitalize()
-        parts.append(_trend_svg(points, f"{phrase} by month", aggregate))
-    return f'<div class="grid2">{"".join(parts)}</div>' if parts else ""
+        story = stories.get(key)
+        block = ['<div class="card">', _trend_svg(points, f"{phrase} by month", aggregate, story)]
+        if story is not None and story.sentences:
+            block.append("".join(f'<div class="story">{esc(text)}</div>' for text in story.sentences))
+        if story is not None and story.decomposition is not None:
+            block.append(_decomposition_svg(story, f"{phrase}: trend, season and residual"))
+        block.append("</div>")
+        parts.append("".join(block))
+    return "".join(parts)
+
+
+def _series_methods(result: "Sweep") -> str:
+    stories = result.stories() if hasattr(result, "stories") else {}
+    methods = sorted({story.methods for story in stories.values()}, key=len)
+    return (methods[-1] + "; Spearman rank correlation of year-over-year changes for what moved together (12 shared months or more, r of 0.6 or stronger)") if methods else ""
 
 
 def _driver_block(result: "Sweep", d: "Decomposition", word: str, heading: str, *, comparison_title: str) -> list[str]:
@@ -747,7 +851,12 @@ def _recap_body(result: "Sweep", *, request: str = "", instructions: str = "") -
     trends = _trends(result)
     if trends:
         parts.append("<h2>Trends</h2>")
+        parts.append('<div class="caption">Each measure by month with its centered average, its level shifts and the change on the same month a year earlier; with two years or more, the split into trend, season and residual. Every figure here is arithmetic on the monthly series the source returned.</div>')
         parts.append(trends)
+        together = result.comovement() if hasattr(result, "comovement") else []
+        if together:
+            parts.append("<h2>Across measures</h2>")
+            parts.append("".join(f'<div class="story">{esc(text)}</div>' for text in together))
     trusted = [f for f in result.findings if f.trusted]
     if trusted:
         parts.append("<h2>Driver analysis</h2>")
@@ -765,7 +874,8 @@ def _recap_body(result: "Sweep", *, request: str = "", instructions: str = "") -
         parts.append("<h2>Notes</h2>")
         parts.append("".join(f'<div class="caption">{esc(note)}</div>' for note in result.notes))
     parts.append(_aside_section(result, len(trusted) + 1))
-    parts.append(_about(result, request=request, instructions=instructions, location=getattr(result, "location", ""), tables=_tables_of(result), queries=f"{result.queries} of a budget of {result.budget}{_seconds(result.elapsed)}", statement=result.verification_statement()))
+    methods = _series_methods(result)
+    parts.append(_about(result, request=request, instructions=instructions, location=getattr(result, "location", ""), tables=_tables_of(result), queries=f"{result.queries} of a budget of {result.budget}{_seconds(result.elapsed)}", statement=result.verification_statement(), extra=((("Series methods", methods),) if methods else ())))
     parts.append(f'<div class="foot">{esc(result.verification_statement())} No language model was involved in producing the numbers or the sentences.</div>')
     return parts
 
@@ -813,6 +923,10 @@ def _trend_report(report: Any) -> list[str]:
     if trends:
         parts.append("<h2>Trend by month</h2>")
         parts.append(trends)
+        together = result.comovement() if hasattr(result, "comovement") else []
+        if together:
+            parts.append("<h2>Across measures</h2>")
+            parts.append("".join(f'<div class="story">{esc(text)}</div>' for text in together))
     for key, by_label in report.grouped_series.items():
         fact, measure, column = key.split("|", 2)
         phrase = result.words.get(f"{fact}|{measure}", measure)
@@ -889,7 +1003,8 @@ def render_report(report: Any) -> str:
         parts.append("".join(f'<div class="caption">{esc(note)}</div>' for note in result.notes))
     if spec.kind == "root_cause":
         parts.append(_aside_section(result, len([f for f in result.findings if f.trusted]) + 1))
-    parts.append(_about(result, request=spec.request, instructions=instructions, location=getattr(result, "location", ""), tables=_tables_of(result), queries=f"{report.queries} of a budget of {result.budget}{_seconds(report.elapsed)}", statement=result.verification_statement()))
+    methods = _series_methods(result)
+    parts.append(_about(result, request=spec.request, instructions=instructions, location=getattr(result, "location", ""), tables=_tables_of(result), queries=f"{report.queries} of a budget of {result.budget}{_seconds(report.elapsed)}", statement=result.verification_statement(), extra=((("Series methods", methods),) if methods else ())))
     parts.append(f'<div class="foot">{esc(result.verification_statement())} No language model was involved in producing the numbers or the sentences.</div>')
     parts.append("</div>")
     return "\n".join(parts)
@@ -949,6 +1064,12 @@ def _weekly_svg(metric: Any, title: str) -> str:
         if point.start in starts:
             px = x(starts[point.start])
             parts.append(f'<line x1="{px:.1f}" x2="{px:.1f}" y1="{top}" y2="{height - bottom}" stroke="{_SHIFT}" stroke-dasharray="5 4"><title>{esc(f"level shift: {_full(point.before)} to {_full(point.after)}")}</title></line>')
+    from .series import moving_average
+
+    smoothed = [(i, a) for i, a in enumerate(moving_average(values, 13 if len(values) >= 20 else 5 if len(values) >= 8 else 0)) if a is not None] if len(values) >= 8 else []
+    if len(smoothed) >= 2:
+        average_path = " ".join(f"{'M' if j == 0 else 'L'}{x(i):.1f},{y(a):.1f}" for j, (i, a) in enumerate(smoothed))
+        parts.append(f'<path d="{average_path}" fill="none" stroke="{_PY}" stroke-width="1.6" stroke-dasharray="6 4"><title>centered {13 if len(values) >= 20 else 5}-week average</title></path>')
     path = " ".join(f"{'M' if i == 0 else 'L'}{x(i):.1f},{y(v):.1f}" for i, v in enumerate(values))
     parts.append(f'<path d="{path}" fill="none" stroke="{_AC}" stroke-width="2" stroke-linejoin="round"/>')
     for i, w in enumerate(window):
@@ -957,7 +1078,7 @@ def _weekly_svg(metric: Any, title: str) -> str:
     if expected:
         parts.append(f'<circle cx="{x(last):.1f}" cy="{y(expected):.1f}" r="5.5" fill="none" stroke="{_MUTED}" stroke-width="1.8"><title>{esc(f"expected: {_full(expected)}")}</title></circle>')
     parts.append(f'<circle cx="{x(last):.1f}" cy="{y(values[-1]):.1f}" r="5.5" fill="{_MARK}" stroke="#fff" stroke-width="1.5"><title>{esc(f"this week: {_full(values[-1])}")}</title></circle>')
-    parts.append(f'<text x="{width - right}" y="{height - 6}" font-size="11" fill="{_MUTED}" text-anchor="end">blue: this week; hollow: the expectation; dashed: a level shift</text>')
+    parts.append(f'<text x="{width - right}" y="{height - 6}" font-size="11" fill="{_MUTED}" text-anchor="end">blue: this week; hollow: the expectation; grey dashed: the centered average; violet: a level shift</text>')
     parts.append("</svg>")
     return "".join(parts)
 

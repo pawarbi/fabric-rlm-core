@@ -477,6 +477,36 @@ class Sweep:
             second = f"the {p['n_change']:,} listed groups that moved the same way carry {p['listed_change']:.0%} of the net change, the rest sits in groups not listed or in groups that moved the other way"
         return f"Pareto: {first}; {second}."
 
+    def stories(self) -> dict[str, Any]:
+        """The story of each measure's monthly series (level, shifts, year over year, season), keyed by ``fact|measure``."""
+        from .series import analyse
+
+        out: dict[str, Any] = {}
+        for key, points in self.series.items():
+            if key in self.collapsed or len(points) < 6:
+                continue
+            out[key] = analyse(points, name=self.words.get(key, key))
+        return out
+
+    def comovement(self) -> list[str]:
+        """Which measures moved together year over year across the months swept, and which led by a month."""
+        from .series import comovement
+
+        return comovement({self.words.get(key, key): points for key, points in self.series.items() if key not in self.collapsed and len(points) >= 12})
+
+    def trend_lines(self) -> list[str]:
+        """The series stories as text: one block per measure with a sentence or more, then what moved together."""
+        lines: list[str] = []
+        for key, story in self.stories().items():
+            if story.sentences:
+                lines.append(f"{self.words.get(key, key).capitalize()} by month")
+                lines.extend(f"  {sentence}" for sentence in story.sentences)
+        together = self.comovement()
+        if together:
+            lines.append("Across measures")
+            lines.extend(f"  {text}" for text in together)
+        return lines
+
     def steady(self, limit: int = 3) -> list[Movement]:
         """When nothing moved by the material share, the largest trusted movements anyway, so the reader sees how steady steady is."""
         if self.findings:
@@ -559,8 +589,9 @@ class Sweep:
             head.extend(f"{i}. {t.text}" for i, t in enumerate(takeaways, start=1))
         head.extend(["", self.narrative(), ""])
         body = "\n".join(("- " + line[2:] if line.startswith("  ") else f"- **{line}**") for line in self.lines())
+        trends = "\n".join(("- " + line[2:] if line.startswith("  ") else f"- **{line}**") for line in self.trend_lines())
         notes = "\n".join(f"- {n}" for n in self.notes)
-        return "\n".join(part for part in ("\n".join(head), body, notes) if part)
+        return "\n".join(part for part in ("\n".join(head), body, trends, notes) if part)
 
     def to_html(self) -> str:
         """The dashboard: headline cards, trends, and for every finding a waterfall, a driver scatter, the tables and the queries."""
