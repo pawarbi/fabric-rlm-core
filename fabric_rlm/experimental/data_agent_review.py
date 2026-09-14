@@ -62,6 +62,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from .query_forensics import diverge, instruction_lines, shape_of
 from ..source_model import (
     AgentDataSource,
     AgentSnapshot,
@@ -79,6 +80,8 @@ from ..source_model import (
     _has_month,
     _has_quarter,
     _heuristic_joins,
+    joins_from_data,
+    shadow_tables,
     humanize_column,
     humanize_table,
     _IDENTIFIER,
@@ -1402,7 +1405,7 @@ def _sql_extended(spec: Mapping[str, Any], *, dialect: str) -> str:
 _EXTENDED_KINDS = frozenset({"month_series", "month_trend", "quarter_trend", "drivers", "entity_trend", "entity_value", "share", "top_share", "top_labels", "entity_orders", "having_count", "anti_join", "compare", "best_per_group", "range_value", "two_periods"})
 
 
-def discover_drivers(executor: Any, schema: SourceSchema, snapshot: AgentSnapshot, years: Sequence[int], context: ReviewContext | None = None, *, facts: int = 2) -> dict[str, dict[str, Any]]:
+def discover_drivers(executor: Any, schema: SourceSchema, snapshot: AgentSnapshot, years: Sequence[int], context: ReviewContext | None = None, *, facts: int = 2, data_joins: Mapping[tuple[str, str], tuple[str, str]] | None = None) -> dict[str, dict[str, Any]]:
     """Real names and periods from the data, per fact table, for the driver-based questions.
 
     A handful of small queries per fact: the top names for each role (who,
@@ -1414,6 +1417,8 @@ def discover_drivers(executor: Any, schema: SourceSchema, snapshot: AgentSnapsho
     source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
     instructions = (source.instructions if source else "") + "\n" + snapshot.instructions + ("\n" + context.text if context is not None else "")
     joins = dict(_heuristic_joins(schema))
+    for key, target in (data_joins or {}).items():
+        joins.setdefault(key, target)  # names outrank the data; the data only fills gaps
     joins.update(_joins_from_instructions(instructions, schema))
     excluded = excluded_terms(instructions)
     terms = context.terms if context is not None else ()
@@ -1421,7 +1426,7 @@ def discover_drivers(executor: Any, schema: SourceSchema, snapshot: AgentSnapsho
     if not years:
         return found
     latest = max(years)
-    for table in _scoped_facts(schema, instructions)[:facts]:
+    for table in _scoped_facts(schema, instructions, joins=joins)[:facts]:
         date = _date_join(schema, table, joins)
         measures = _measure_columns(schema, table)
         if not date or not measures:
@@ -1493,6 +1498,7 @@ def discover_hints(
     facts: int = 2,
     attributes: int = 6,
     budget: int = 40,
+    data_joins: Mapping[tuple[str, str], tuple[str, str]] | None = None,
 ) -> list[Finding]:
     """Hints from the data itself, as findings with basis ``"data"``: what neither the agent's author nor the agent would think to state.
 
@@ -1509,12 +1515,14 @@ def discover_hints(
     source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
     instructions = (source.instructions if source else "") + "\n" + snapshot.instructions + ("\n" + context.text if context is not None else "")
     joins = dict(_heuristic_joins(schema))
+    for key, target in (data_joins or {}).items():
+        joins.setdefault(key, target)  # names outrank the data; the data only fills gaps
     joins.update(_joins_from_instructions(instructions, schema))
     excluded = excluded_terms(instructions)
     terms = context.terms if context is not None else ()
     date_tables = {t for t in schema.tables if re.search(r"(date|calendar)", t, re.IGNORECASE)}
     all_facts = _fact_tables(schema)
-    fact_list = _scoped_facts(schema, instructions)[:facts]
+    fact_list = _scoped_facts(schema, instructions, joins=joins)[:facts]
     hints: list[Finding] = []
     seen: set[tuple[str, str, str]] = set()
     spent = 0
@@ -1869,6 +1877,8 @@ def generate_questions(
     limit_per_source: int = 8,
     context: ReviewContext | None = None,
     discovered: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None,
+    data_joins: Mapping[str, Mapping[tuple[str, str], tuple[str, str]]] | None = None,
+    shadow: Mapping[str, Mapping[str, str]] | None = None,
 ) -> tuple[Question, ...]:
     """Questions the sources can answer, phrased as a business user asks them, each with the query that answers it.
 
@@ -1908,11 +1918,15 @@ def generate_questions(
             continue
         instructions = (source.instructions if source else "") + "\n" + snapshot.instructions + ("\n" + context.text if context is not None else "")
         joins = dict(_heuristic_joins(schema))
+        for key, target in ((data_joins or {}).get(schema.source_id) or {}).items():
+            joins.setdefault(key, target)  # names outrank the data; the data only fills gaps
         joins.update(_joins_from_instructions(instructions, schema))
         excluded = excluded_terms(instructions)
         schema_prefix = "dbo" if re.search(r"\bdbo\.", (source.instructions if source else "") + snapshot.instructions) else None
         vocabulary = build_vocabulary(snapshot, schema, context)
-        facts = _scoped_facts(schema, instructions)
+        facts = _scoped_facts(schema, instructions, joins=joins)
+        stale = (shadow or {}).get(schema.source_id) or {}
+        facts = [f for f in facts if f not in stale]  # a stale copy answers nothing its original does not
         per_fact = []
         for table in facts:
             date = _date_join(schema, table, joins)
@@ -2177,12 +2191,14 @@ class SemanticModelExecutor:
         return _rows(frame)
 
 
-def discover_years(executor: LakehouseExecutor, schema: SourceSchema, source: AgentDataSource | None = None, agent_instructions: str = "") -> list[int]:
+def discover_years(executor: LakehouseExecutor, schema: SourceSchema, source: AgentDataSource | None = None, agent_instructions: str = "", data_joins: Mapping[tuple[str, str], tuple[str, str]] | None = None) -> list[int]:
     """The complete calendar years the first in-scope fact table covers."""
     instructions = (source.instructions if source else "") + "\n" + (agent_instructions or "")
     joins = dict(_heuristic_joins(schema))
+    for key, target in (data_joins or {}).items():
+        joins.setdefault(key, target)  # names outrank the data; the data only fills gaps
     joins.update(_joins_from_instructions(instructions, schema))
-    for table in _scoped_facts(schema, instructions):
+    for table in _scoped_facts(schema, instructions, joins=joins):
         date = _date_join(schema, table, joins)
         if not date:
             continue
@@ -2217,7 +2233,7 @@ def explain_no_questions(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema
         instructions = (source.instructions if source else "") + "\n" + snapshot.instructions
         joins = dict(_heuristic_joins(schema))
         joins.update(_joins_from_instructions(instructions, schema))
-        facts = _scoped_facts(schema, instructions)
+        facts = _scoped_facts(schema, instructions, joins=joins)
         if not facts:
             notes.append(f"{label}: no fact table recognised among {len(schema.tables)} tables (none named in the instructions, none fact-shaped)")
             continue
@@ -2839,7 +2855,11 @@ def _fuzzy_failure(question: Question, expected: int) -> Graded:
     return Graded(question.id, "wrong", "fuzzy_match_failed", f"no figure for a value spelled as a user would; the stored value is {exact!r}", 0, expected)
 
 
-def suggest(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema], findings: Sequence[Finding], questions: Sequence[Question], references: Sequence[Reference], graded: Sequence[Graded]) -> Suggestions:
+def suggest(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema], findings: Sequence[Finding], questions: Sequence[Question], references: Sequence[Reference], graded: Sequence[Graded],
+    *,
+    answers: Mapping[str, Any] | None = None,
+    table_rows: Mapping[str, Mapping[str, int]] | None = None,
+) -> Suggestions:
     by_schema = {s.source_id: s for s in schemas}
     ref_by_id = {r.question_id: r for r in references}
     grade_by_id = {g.question_id: g for g in graded}
@@ -2904,6 +2924,28 @@ def suggest(snapshot: AgentSnapshot, schemas: Sequence[SourceSchema], findings: 
             fewshots[source.id] = tuple(shots[: FEWSHOT_SWEET_SPOT[1]])
             if len(shots) > FEWSHOT_SWEET_SPOT[1]:
                 notes.append(f"{len(shots) - FEWSHOT_SWEET_SPOT[1]} further failed question(s) on {source.name or source.id} were left out of the few-shots to stay within the {FEWSHOT_SWEET_SPOT[1]}-example sweet spot; fix these first and re-run.")
+        # The reference query ran and was right, so every way the query the agent ran
+        # differs from it is a fact, and each fact names a line to add.
+        divergences: list[Any] = []
+        for question in questions:
+            answer = (answers or {}).get(question.id)
+            if isinstance(answer, (tuple, list)):
+                answer = answer[0] if answer else None
+            g = grade_by_id.get(question.id)
+            if question.source_id != source.id or not question.reference_query or answer is None or g is None:
+                continue
+            if g.outcome == "correct" or not str(getattr(answer, "query", "") or ""):
+                continue
+            divergences.extend(diverge(
+                shape_of(str(answer.query)),
+                shape_of(question.reference_query),
+                measure_word=str((question.spec or {}).get("measure") or "this measure"),
+                table_rows=(table_rows or {}).get(source.id) or {},
+            ))
+        forensic_lines = instruction_lines(divergences)
+        if forensic_lines:
+            additions.append("## From the queries the agent ran (compared with the reference query)")
+            additions.extend(f"- {line}" for line in forensic_lines)
         datasource_instructions[source.id] = text + ("\n\n" + "\n".join(additions) if additions else "")
         if not source.description.strip() and schema:
             facts = ", ".join(t for t in _fact_tables(schema)[:3]) or ", ".join(list(schema.tables)[:3])
@@ -3573,6 +3615,13 @@ def review_agent(
     findings = diagnose(snapshot, schemas)
     notes: list[str] = []
     excluded_by_source: dict[str, set[str]] = {}
+    data_joins = {}
+    shadow = {}
+    for schema in schemas:
+        executor = executors.get(schema.source_id)
+        if executor is not None and schema.kind != "semantic_model":
+            data_joins[schema.source_id] = joins_from_data(schema, executor)
+            shadow[schema.source_id] = shadow_tables(schema, executor)
     for schema in schemas:
         source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
         instructions = (source.instructions if source else "") + "\n" + snapshot.instructions
@@ -3588,7 +3637,7 @@ def review_agent(
                 source = next((s for s in snapshot.datasources if s.id == schema.source_id), None)
                 label = _source_label(snapshot, schema.source_id)
                 try:
-                    years[schema.source_id] = discover_years(executor, schema, source, snapshot.instructions)
+                    years[schema.source_id] = discover_years(executor, schema, source, snapshot.instructions, data_joins=data_joins.get(schema.source_id))
                     notes.append(f"{label}: complete years {years[schema.source_id] or 'none found'}")
                 except Exception as exc:  # noqa: BLE001 - the reason is the diagnostic
                     years[schema.source_id] = []
@@ -3598,7 +3647,7 @@ def review_agent(
         executor = executors.get(schema.source_id)
         if isinstance(executor, LakehouseExecutor) and years.get(schema.source_id):
             try:
-                discovered[schema.source_id] = discover_drivers(executor, schema, snapshot, years[schema.source_id], context)
+                discovered[schema.source_id] = discover_drivers(executor, schema, snapshot, years[schema.source_id], context, data_joins=data_joins.get(schema.source_id))
             except Exception as exc:  # noqa: BLE001 - the templated set still works without it
                 notes.append(f"{_source_label(snapshot, schema.source_id)}: discovery of names and periods failed: {type(exc).__name__}: {str(exc)[:200]}")
             for table, entry in discovered.get(schema.source_id, {}).items():
@@ -3612,13 +3661,13 @@ def review_agent(
                 continue
             started = time.monotonic()
             try:
-                found_hints = discover_hints(executor, schema, snapshot, years.get(schema.source_id), discovered=discovered.get(schema.source_id), context=context)
+                found_hints = discover_hints(executor, schema, snapshot, years.get(schema.source_id), data_joins=data_joins.get(schema.source_id), discovered=discovered.get(schema.source_id), context=context)
                 data_hints.extend(found_hints)
                 notes.append(f"{_source_label(snapshot, schema.source_id)}: {len(found_hints)} hint(s) from the data in {round(time.monotonic() - started)} s")
             except Exception as exc:  # noqa: BLE001 - hints are a bonus
                 notes.append(f"{_source_label(snapshot, schema.source_id)}: hints from the data failed: {type(exc).__name__}: {str(exc)[:200]}")
     findings = tuple(findings) + tuple(data_hints)
-    questions = generate_questions(snapshot, schemas, years=years, top=top, limit_per_source=limit_per_source, context=context, discovered=discovered)
+    questions = generate_questions(snapshot, schemas, years=years, top=top, limit_per_source=limit_per_source, context=context, discovered=discovered, data_joins=data_joins, shadow=shadow)
     if not questions:
         notes.extend(explain_no_questions(snapshot, schemas, years))
     questions, references = derive_filter_questions(questions, build_references(questions, executors))
@@ -3664,7 +3713,7 @@ def review_agent(
         final = _with_policy(_with_routing(final, question, collected, snapshot), question, collected, excluded_by_source.get(question.source_id, ()))
         source_rules = rules_by_source.get(question.source_id, ())
         graded.append(replace(final, violations=check_rules(source_rules, question, collected, channel_words.get(question.source_id, ()))))
-    suggestions = suggest(snapshot, schemas, findings, questions, references, graded)
+    suggestions = suggest(snapshot, schemas, findings, questions, references, graded, answers=answers)
     return ReviewReport(snapshot, tuple(schemas), findings, questions, references, answers, tuple(graded), suggestions, notes=tuple(notes), context=context, knowledge=summarize_knowledge(knowledge, schemas, snapshot) if knowledge is not None else None, discovered=discovered, rules=tuple(r for rules in rules_by_source.values() for r in rules))
 
 
