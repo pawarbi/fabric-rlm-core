@@ -29,7 +29,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .data_agent_review import AgentDataSource, AgentSnapshot, _is_key, _is_time_column, _measure_columns, _month_name, _tables_named_in, attribute_paths, build_vocabulary, excluded_terms, humanize_column
+from .source_model import AgentDataSource, AgentSnapshot, _is_key, _is_time_column, _measure_columns, _month_name, _tables_named_in, attribute_paths, build_vocabulary, excluded_terms, humanize_column
 from .sweep import Comparison, Movement, Point, Sweep, _aggregate_for, _choose_paths, _points, _probe_for, sweep, verify_sweep
 
 __all__ = ["Report", "ReportSpec", "parse_request", "report"]
@@ -302,7 +302,7 @@ def _grouping_phrases(text: str) -> list[str]:
 
 def _match_groupings(phrases: Sequence[str], schema: Any, table: str, joins: Mapping[tuple[str, str], tuple[str, str]], excluded: Any, terms: Sequence[str]) -> tuple[list[str], list[str]]:
     """Grouping columns for the phrases, in the order asked; the phrases nothing matched."""
-    from .data_agent_review import _paths_by_role
+    from .source_model import _paths_by_role
 
     paths = attribute_paths(schema, table, joins, excluded)
     roles = _paths_by_role(paths, terms)
@@ -332,7 +332,7 @@ def _match_groupings(phrases: Sequence[str], schema: Any, table: str, joins: Map
 
 def parse_request(request: str, probe: Any, *, instructions: str = "", scope: str = "") -> ReportSpec:
     """Read a request against the source: the kind of report, the fact, the measures, the groupings, the periods."""
-    from .data_agent_review import ReviewContext
+    from .source_model import ReviewContext
 
     text = request.strip()
     schema = probe.schema
@@ -476,7 +476,7 @@ def _reading_after(spec: ReportSpec, result: Sweep) -> tuple[str, ...]:
 
 def _trend_by_group(probe: Any, result: Sweep, spec: ReportSpec, *, instructions: str, scope: str, budget: int) -> tuple[dict[str, dict[Any, tuple[Point, ...]]], int, list[str]]:
     """The first measure of the first fact by month for the largest groups of each grouping: one query to pick the groups, one for the series."""
-    from .data_agent_review import ReviewContext
+    from .source_model import ReviewContext
 
     schema = probe.schema
     context = ReviewContext(scope=scope) if scope else None

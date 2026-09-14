@@ -154,7 +154,7 @@ def _short(text: str, limit: int = 16) -> str:
 
 
 def _word(path: Any) -> str:
-    from .data_agent_review import humanize_column
+    from .source_model import humanize_column
 
     return humanize_column(str(path["column"])) if path else "total"
 
@@ -732,7 +732,7 @@ def _about(result: Any, *, request: str, instructions: str, location: str, table
 
 
 def _tables_of(result: "Sweep") -> list[str]:
-    from .data_agent_review import _path_table
+    from .source_model import _path_table
 
     facts: list[str] = []
     dimensions: list[str] = []

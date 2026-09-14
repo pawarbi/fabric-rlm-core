@@ -26,7 +26,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .data_agent_review import _MEASURE_HINT, AgentDataSource, AgentSnapshot, ReviewContext, _measure_columns, build_vocabulary, excluded_terms, humanize_column
+from .source_model import _MEASURE_HINT, AgentDataSource, AgentSnapshot, ReviewContext, _measure_columns, build_vocabulary, excluded_terms, humanize_column
 from .series import ChangePoint, _mean, _spearman, _std, change_points
 from .sweep import _ROWS, Comparison, Sweep, SweepFinding, _aggregate_of, _concentration_sentence, _iso_date, _label, _num, _probe_for, _summed_columns, _word, sweep, verify_sweep
 
@@ -273,7 +273,7 @@ def _metric_specs(metrics: Sequence[Any], probe: Any, instructions: str, scope: 
     """
     from collections import Counter
 
-    from .data_agent_review import humanize_column
+    from .source_model import humanize_column
     from .reports import _GROUPING_CLAUSE, _grouping_phrases, _match_facts, _match_groupings, _match_measures
 
     schema = probe.schema
