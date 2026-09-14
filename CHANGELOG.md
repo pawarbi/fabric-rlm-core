@@ -2,6 +2,192 @@
 
 ## Unreleased
 
+### Added
+
+- **Data Agent review** (`fabric_rlm.data_agent_review`, notebook
+  `examples/notebooks/rlm_data_agent_review.py`). Point it at a Fabric Data
+  Agent and it reads what the agent uses and how it is instructed (sources,
+  agent and data-source instructions, descriptions, few-shots), profiles the
+  same sources through `RLM.learn`, and then: diagnoses the setup against
+  the documented guidance (schema names in agent-level instructions that
+  belong with the source, references to objects the source does not have,
+  definitions that conflict between levels, missing descriptions, length
+  past the truncation limit, few-shot counts, schema size, negative
+  phrasing, routing rules for multi-source agents); generates questions
+  from the schemas and computes each reference by executing a query against
+  the source (SQL for lakehouse tables, a bounded aggregate for a semantic
+  model), so there is ground truth without anyone writing it; asks the
+  agent the same questions through its Responses endpoint (Assistants and
+  MCP askers exist too), keeps the run steps, grades the query it executed
+  where the steps expose it and its prose otherwise,
+  and classifies failures by cause (missing rows, unsorted ranking, a
+  narrower scope than asked, values that match nothing, an abstention where
+  the source answers, inconsistency across repetitions, misrouting between
+  sources); and renders
+  suggestions (agent instructions with schema lines moved out, data-source
+  instructions with structured sections, descriptions, few-shots built from
+  the executed references) into a Markdown report. Applying the suggestions
+  is a separate call against the agent's draft stage. Readers, executors,
+  askers and writers are small protocols with REST implementations for use
+  outside a notebook and SDK implementations for use inside one; the
+  notebook is a Fabric Python notebook on the 3.12 runtime.
+- **Review context and diagnostics.** `ReviewContext` states the agent's
+  scope, priorities, definitions, the reviewer's own questions (a query
+  or an answer as ground truth, graded first) and notes; the questions
+  are scoped and ordered by it, the definitions reach `RLM.learn`, and the
+  RLM second opinion receives it as prompt context. The report explains an
+  empty evaluation (year discovery failures, unrecognised fact tables,
+  missing date joins), names the source after its item, treats only
+  schema-shaped tokens as schema mentions, and picks the order date key
+  over due or ship dates whatever the column order.
+- **HTML report, learned knowledge, deeper analysis.** `ReviewReport.to_html`
+  renders the review as a self-contained page (findings as cards, graded
+  questions with the agent's answer, its query, the reference query and
+  rows, the run steps). The report summarises what `RLM.learn` recorded
+  (profiles, fingerprints, registered operations, lessons, events).
+  `deepen` uses the RLM with a language model to propose questions from the
+  scope, verifies each reference with two blind solves, asks the agent, and
+  explains every question that is not correct with a proposed change.
+  Topics the instructions put out of scope are excluded from generation
+  and a decline on one is `abstained_by_policy`; a year-over-year answer is
+  right by the change or by both totals; few-shot SQL carries the `dbo.`
+  prefix when the agent uses it; answers record whether their query ran.
+- **Natural questions across a skill matrix.** Generated questions read as
+  a business user asks them, with the words the agent's own instructions
+  use for tables, measures and attributes (channel synonyms in quotes,
+  `Use X for units`, `Revenue = SUM(...)`, `territory means ...`,
+  abbreviations such as B2B); the schema phrasing stays on the question for
+  the report. The set now covers aggregation, ranking, change, distinct
+  counts, a literal filter derived from the ranked reference, a KPI from
+  the instructions' own formula, the right measure column for a mapped
+  term, an ambiguous total across channels, a channel abbreviation, and an
+  out-of-scope topic where declining is the right answer; each question
+  carries its skill and the report counts outcomes by skill. Alternates
+  name their cause (`wrong_measure`, `row_count_not_distinct`,
+  `wrong_channel`, `answered_out_of_scope`). The RLM proposer is told to
+  write plain business questions over the same skills.
+- **Driver-based questions from discovered names and periods.**
+  `discover_drivers` runs a few small queries per fact table (top names
+  per role: entity, product, category, place; the month series for the
+  largest drop and rise between consecutive months; order counts per
+  entity for a threshold), and the generator turns them into the
+  questions a user actually asks, each with an executable reference:
+  a monthly and a quarterly trend, why the measure dropped between two
+  months and which products drove it (a decomposition, largest decreases
+  first), how a named entity performs year by year and on a category,
+  the share of a category and of the top 10 entities, a count of entities
+  above an order threshold, entities that bought one year and not the next,
+  a comparison of the two top entities, and the leading category per place
+  (a window function). Grouping columns are reached through several
+  dimension joins (product to subcategory to category). Answers to named
+  questions are graded by the names present; drops by absolute change.
+  The RLM proposer receives the discovered names and the drop period.
+- **Time expressions and instruction compliance.** Questions now also use
+  the periods users write: the same month last year, the month before,
+  last month, the week after Thanksgiving, winter, year to date, the last
+  30 days of data, a quarter. Each has the reading the reference takes
+  and the other readings that are acceptable when the answer states the
+  dates it took (`assumption_not_stated` otherwise). `extract_rules`
+  reads the checkable rules from the instructions (state the period and
+  the channel, rank and trend formats, currency format, the partial-year
+  caveat, no personal data, no direct fact-to-fact join, calendar rather
+  than fiscal year) and `check_rules` marks the answers that break them;
+  the report has an instruction-compliance table and each graded answer
+  carries its violations. Two probes trigger rules on purpose: a ranking
+  for the partial year and a request for customer contact details. The
+  notebook asks 25 questions per source by default, spread round-robin
+  across the skills.
+- **Any lakehouse shape.** The generator works from the shape of the data
+  rather than from one sample's names. A fact table is one with measures
+  and a time axis; the time axis is a date dimension with a year column, a
+  date or timestamp column on the fact, or one on a joined header table
+  (order lines through their order), and every period question renders
+  against whichever it found. Joins follow `<name>Key`, `<name>_id` and
+  `id_<name>` columns to the table that carries them, with or without a
+  schema prefix, and the executor maps `dbo.orders` to a safe alias and
+  back for the agent's SQL. When column names say nothing, the column types
+  the profile recorded decide: a timestamp or date column is a time axis, a
+  numeric column that is not a key is a measure, a text column that is not
+  a key, a time or free text is a grouping column, and the nearest grouping
+  column stands in for the category role so the driver questions still ask
+  what led a change. `SourceSchema.types` carries the types from
+  `schema_from_profile`. An empty evaluation now names the missing time
+  axis. Tested on an Olist-shaped lakehouse (timestamps on the order
+  header, `_id` keys, `dbo.` prefixes) and on one whose names carry no
+  English hint at all.
+- **The agent's selected tables.** Fabric lists a lakehouse datasource's
+  elements as `Schemas` > `dbo` > `Tables` | `Views` > `Table` | `View` >
+  columns; the reader walked the tree but took the `Tables` container for a
+  table and stopped there, so the selection came back unknown and the whole
+  lakehouse was profiled. The walk now passes through the structural
+  containers, names a table by its schema (`dbo/factinternetsales`), never
+  fetches a table's columns or a view, and the notebook scopes the lakehouse
+  to the selection whether it has schemas enabled (`Tables/dbo/<table>`) or
+  not (`Tables/<table>`, which the agent still lists under `dbo`), falling
+  back to every table only when neither layout resolves.
+- **What the RLM learned, made useful.** The report section used to list
+  every registered operation (43 identical rows for a 43-table lakehouse)
+  and fingerprints. It now says how the review uses the package, then shows
+  the agent's selected tables as the RLM sees them (fact or dimension, the
+  time axis and measures the questions rely on, personal-data columns, and
+  whether a registered aggregate operation covers the table), groups the
+  operations by kind, lists the lessons, and, after the deeper analysis,
+  what the package learned from the RLM's own verified runs: `deepen`
+  captures evidence on every solve, enriches the package through
+  `RLM.enrich`, reports the lessons that appeared, and returns the enriched
+  package as `report.learned_knowledge` for saving. `summarize_knowledge`
+  takes the schemas and the snapshot for this.
+- **Hints from the data.** `discover_hints` asks the lakehouse a bounded
+  set of small questions nobody would think to put in the instructions and
+  turns the answers into findings with basis `data`, each with the
+  instruction line it suggests: fact keys with no match in their dimension
+  and dimension keys that repeat (an inner join drops or multiplies rows),
+  values spelled in several cases or with padding (a lakehouse compares
+  case-sensitively, so compare with `lower(trim(...))` or normalise the
+  data), the vocabulary of small attributes (users say "bikes" for the
+  Bikes category), several date columns on a fact, partial years and
+  coverage, negative or missing measures, snowflaked join paths, personal
+  data on joined tables, a measure name shared by several facts. The report
+  shows them under "Hints from the data", the suggested data-source
+  instructions carry them under "From the data (inferred by the review;
+  confirm before applying)", the RLM proposer hears them, and a
+  `fuzzy_value` question asks for the top category spelled as a user would
+  ("bikes"), graded `fuzzy_match_failed` when the agent cannot map it to
+  the stored value. `review_agent(hints=False)` turns it off.
+- **Tested on other data.** Running the blind pipeline (no agent, no
+  instructions) on a SaaS schema (CloudMetrics: companies, industries,
+  invoices, payments, subscriptions, usage logs), a bakery chain
+  (franchises, customers, transactions), a flat retail file with spaces in
+  its column names and an integer date, and ARR tables keyed by a text
+  quarter showed where the rules were still shaped by one sample, and the
+  rules changed: a key is a key by its form (`customerID`, `customer_id`,
+  `Customer ID`, `id_cliente`), never `amount_paid`; joins reach irregular
+  plurals (company to companies) and prefixed dimensions (`sales_customers`
+  for `customerID`) and skip a table's own primary key; a table with one
+  measure, a time axis and a reference to another table is a fact, and so is
+  a flat table whose grouping columns sit on its own rows; a fact's own date
+  outranks a joined table's; grouping columns on the fact itself are used
+  (product, payment method, status), never personal data; identifiers with
+  spaces are quoted; an integer date (20240131) and a text date are read
+  as dates; a period written as text (2024/Q1, 2024-03) is a time axis of
+  its own with year and quarter or month but no day grain; periods and flags
+  are never measures; a column called plainly `name` takes its table's word;
+  what is counted is named after the table's own key (tickets,
+  transactions, invoices); every question the schema supports is generated
+  before the limit is applied, so a source with many facts keeps its trend,
+  driver and period questions. Tests cover each of those shapes end to end.
+
+### Changed
+
+- `LakehouseSource.query` keeps the Delta reader first and, when the reader
+  rejects a table (Spark `void` columns, which no data file carries), reads
+  the table's own data files as its transaction log lists them (the last
+  checkpoint plus later commits). A table whose features need the reader
+  (deletion vectors, column mapping, v2 checkpoints) is never read that way.
+  A catalog column no data file carries comes back as NULL; the rejection
+  and the file list are remembered per table while the log is unchanged.
+  `LakehouseSource.query` accepts a `timeout` (seconds, at most 600) for
+  direct callers; a worker's query keeps the 30-second default.
 ### Fixed
 
 - **A value containing `--`, `/*` or `*/` no longer looks like a SQL comment to
