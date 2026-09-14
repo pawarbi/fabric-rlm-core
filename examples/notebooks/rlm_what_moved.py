@@ -39,6 +39,15 @@
 # - **recap**: `"weekly recap"` or `"what moved"` (every fact with a time axis, four by default)
 # - **top movers**: `"top 10 movers by customer year over year"`
 #
+# Ask in your own words. Beyond the kind, a question can name:
+#
+# - a period: `"what changed in July 2025"` (against June 2025 and July 2024), `"July 2025 vs June 2025"`, `"in 2024"`
+# - a filter on any value the source holds, looked up before it is applied: `"for tiktok"`,
+#   `"where customer state = SP"`, `"for the Night shift"`, `"for desktop and safari"`
+# - a grouping without "by": `"which platform to focus on. whats moving them"`, `"revenue per region"`
+# - a check against the trend: `"what changed in July 2025 for product xyz and was it in line with the trend"`,
+#   `"was August 2025 normal for revenue"`
+#
 # And the **Monday Morning Brief**: last week for the metrics you name, in
 # context (the week before, the same week last year, the recent averages,
 # the seasonal expectation), with level shifts, drivers, the volume and rate
