@@ -30,6 +30,21 @@
   rather than importing numpy, which is an optional dependency, so other array
   libraries behave the same. In the dbo evaluation this affected 4/150 trials,
   every one of them graded wrong despite carrying the right number.
+- **The same conventions reach every path a value takes.** Nanosecond
+  `datetime64` and `timedelta64` values, the precision pandas uses by
+  default, no longer freeze to bare integer counts: they are cast to
+  microseconds first, so `df["day"].to_numpy()[0]` reads as an ISO string
+  and the difference of two such values as fractional days. Dictionary keys
+  follow the same conventions before they become strings, so a
+  `groupby(date)` result keys its entries by ISO dates, and string
+  subclasses such as `np.str_` read as plain strings. Registered-operation
+  packets normalize their cells through the same serializer, durations and
+  bytes included, while keeping their own rule that a non-finite number is
+  an error. Two query-row shapes from `LakehouseSource.query` change on
+  purpose: an INTERVAL cell is fractional days rather than its Python text,
+  and LIST, STRUCT and MAP cells are JSON arrays and objects rather than
+  their Python repr. Native cells skip the serializer, so a result of
+  thousands of rows costs what it did before.
 
 ## 0.6.2 — 2026-09-14 — Data Agent review, what moved and the Monday Morning Brief
 

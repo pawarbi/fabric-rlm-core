@@ -111,6 +111,16 @@ def _as_scalar(value: Any) -> Any:
             return _NOT_SCALAR
     except TypeError:
         return _NOT_SCALAR
+    kind = getattr(getattr(value, "dtype", None), "kind", None)
+    if kind in ("M", "m"):
+        # numpy's ``item()`` returns a bare integer count once the unit is finer
+        # than a microsecond, and nanoseconds are pandas' default, so a date
+        # pulled out of a frame with ``to_numpy()`` would read as an epoch count.
+        # Microseconds are the finest unit ``datetime`` and ``timedelta`` hold.
+        try:
+            value = value.astype("datetime64[us]" if kind == "M" else "timedelta64[us]")
+        except Exception:
+            return _NOT_SCALAR
     item = getattr(value, "item", None)
     if not callable(item):
         return _NOT_SCALAR
@@ -122,6 +132,22 @@ def _as_scalar(value: Any) -> Any:
     if type(unwrapped) is type(value):
         return _NOT_SCALAR
     return unwrapped
+
+
+def _key(key: Any) -> str:
+    """A JSON object key: the same scalar conventions as a value, then a string.
+
+    ``groupby(date)`` results key their entries by ``Timestamp`` and integer
+    ids by ``np.int64``; without this a date key read "2026-07-01 00:00:00"
+    beside values that read "2026-07-01T00:00:00".
+    """
+
+    if isinstance(key, str):
+        return key if type(key) is str else str(key)
+    frozen = freeze(key, max_string_length=None, max_collection_items=None)
+    if frozen is None or isinstance(frozen, (str, int, float, bool)):
+        return str(frozen)
+    return str(key)
 
 
 def freeze(
@@ -164,6 +190,8 @@ def freeze(
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, str):
+        if type(value) is not str:
+            value = str(value)  # np.str_ and other subclasses read as plain strings
         if max_string_length is None or len(value) <= max_string_length:
             return value
         return value[:max_string_length] + f"...<truncated, total {len(value)} chars>"
@@ -220,7 +248,7 @@ def freeze(
         items = list(value.items())
         selected = items if max_collection_items is None else items[:max_collection_items]
         frozen = {
-            str(k): freeze(
+            _key(k): freeze(
                 v,
                 max_string_length=max_string_length,
                 max_collection_items=max_collection_items,

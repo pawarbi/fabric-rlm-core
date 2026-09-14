@@ -775,6 +775,8 @@ def _json_value(value: Any) -> Any:
     to its string form, as this function has always done.
     """
 
+    if value is None or type(value) in (str, int, float, bool):
+        return value  # the common cells skip the serializer; a result of thousands of rows pays nothing for it
     frozen = freeze(value, max_string_length=None, max_collection_items=None)
     if isinstance(frozen, dict) and frozen.get("__serializable__") is False:
         return str(value)
