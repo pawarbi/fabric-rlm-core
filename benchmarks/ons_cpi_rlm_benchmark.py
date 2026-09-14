@@ -14,7 +14,7 @@ ONS website (dataset "MM23") and pass its path with ``--workbook``.
 
 Requires ``OPENROUTER_API_KEY``. Example::
 
-    python examples/ons_cpi_rlm_benchmark.py --workbook mm23.xlsx --task exact
+    python benchmarks/ons_cpi_rlm_benchmark.py --workbook mm23.xlsx --task exact
 """
 
 from __future__ import annotations

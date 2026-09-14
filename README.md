@@ -365,7 +365,7 @@ outcomes only, so the behavioural learner is not yet equally deep across
 source types.
 
 The development notebook
-`examples/notebooks/development/rlm_knowledge_benchmark_matrix.py` runs seeded,
+`benchmarks/notebooks/rlm_knowledge_benchmark_matrix.py` runs seeded,
 cache-disabled cold-versus-learned trials across these paths and records
 correctness, operation selection, audit status, turns, token usage, LM/worker/
 host/wall time, provenance, and drift rejection. `KnowledgeBenchmarkReport`
@@ -536,7 +536,7 @@ honest reading is that scaffolding matters more than model choice, not that one
 model beats another. All three figures are self-reported.
 
 Reproduce it with
-[examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb](examples/notebooks/ssb400_minimax_m3_fabric_repro.ipynb);
+[benchmarks/notebooks/ssb400_minimax_m3_fabric_repro.ipynb](benchmarks/notebooks/ssb400_minimax_m3_fabric_repro.ipynb);
 the run needs an OpenRouter key and costs a few dollars.
 
 ### AIDABench
@@ -1029,10 +1029,16 @@ fabric-rlm trace inspect path/to/trajectory.jsonl  # summarize and diagnose a sa
   `aiohttp.ConnectionTimeoutError`).
 - [docs/lossless-submit-payloads.md](docs/lossless-submit-payloads.md): how final
   payloads avoid namespace-snapshot truncation.
-- [examples/notebooks/](examples/notebooks/): ready-to-import Fabric recipes.
-  Start with `rlm_vs_plain_llm_imf_cpi.ipynb` (the with-and-without comparison)
-  and `rlm_api_tour.ipynb`, then the PDF workflows, the Spark-log root-cause
-  analysis, and the SpreadsheetBench benchmarks.
+- [examples/](examples/): what a user runs. `examples/notebooks/` holds the
+  ready-to-import Fabric recipes: start with `rlm_vs_plain_llm_imf_cpi.ipynb`
+  (the with-and-without comparison) and `rlm_api_tour.ipynb`, then the PDF
+  workflows, the Spark-log root-cause analysis, what moved and the Data Agent
+  review. `examples/simple_math/` is the quickstart task and
+  `examples/semantic_model/` the multi-source example.
+- [benchmarks/](benchmarks/): the benchmark harnesses and the notebooks that
+  reproduce the published SpreadsheetBench and knowledge-learning figures.
+- [docs/replaying-trajectories.md](docs/replaying-trajectories.md): record a
+  run once, replay it with no model call, keep it as a regression test.
 - [CHANGELOG.md](CHANGELOG.md): release history.
 
 ## Develop

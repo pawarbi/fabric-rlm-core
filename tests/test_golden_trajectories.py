@@ -1,6 +1,6 @@
 """Golden-trajectory regression tests.
 
-Each ``.jsonl`` under ``examples/trajectories/`` is a real, frozen recording of
+Each ``.jsonl`` under ``tests/fixtures/trajectories/`` is a real, frozen recording of
 the RLM loop solving a representative task. We replay each one through the
 *current* loop with :func:`replay_trajectory` (zero API calls) and assert the
 recorded outcome reproduces exactly.
@@ -18,7 +18,7 @@ import pytest
 
 from fabric_rlm import RLM, Trajectory, replay_trajectory
 
-TRAJECTORY_DIR = Path(__file__).resolve().parents[1] / "examples" / "trajectories"
+TRAJECTORY_DIR = Path(__file__).resolve().parent / "fixtures" / "trajectories"
 GOLDEN_FILES = sorted(TRAJECTORY_DIR.glob("*.jsonl"))
 
 

@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "examples" / "ons_cpi_rlm_benchmark.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "benchmarks" / "ons_cpi_rlm_benchmark.py"
 
 
 def load_module():

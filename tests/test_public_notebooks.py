@@ -9,11 +9,22 @@ import pytest
 
 
 NOTEBOOK_DIR = Path(__file__).parents[1] / "examples" / "notebooks"
+BENCHMARK_DIR = Path(__file__).parents[1] / "benchmarks" / "notebooks"
+VERIFICATION_DIR = Path(__file__).parent / "release_verification"
 
 
 def _notebooks():
-    for path in sorted(NOTEBOOK_DIR.glob("*.ipynb")):
-        yield path, json.loads(path.read_text(encoding="utf-8"))
+    """Every notebook the repository ships: the recipes, the benchmark reproductions and the release checks."""
+    for directory in (NOTEBOOK_DIR, BENCHMARK_DIR, VERIFICATION_DIR):
+        for path in sorted(directory.glob("*.ipynb")):
+            yield path, json.loads(path.read_text(encoding="utf-8"))
+
+
+def _release_notebooks():
+    """The notebooks a user or a maintainer imports to run the released package: the recipes and the release checks. A development benchmark may install the branch under test."""
+    for directory in (NOTEBOOK_DIR, VERIFICATION_DIR):
+        for path in sorted(directory.glob("*.ipynb")):
+            yield path, json.loads(path.read_text(encoding="utf-8"))
 
 
 def _source(notebook: dict) -> str:
@@ -26,7 +37,7 @@ def _source(notebook: dict) -> str:
 def test_public_notebooks_do_not_install_from_git_branches():
     offenders = [
         path.name
-        for path, notebook in _notebooks()
+        for path, notebook in _release_notebooks()
         if "git+https://github.com/" in _source(notebook)
     ]
 
@@ -37,7 +48,7 @@ def test_public_notebook_installs_pin_the_package_version():
     invalid_pins = []
     pattern = re.compile(r"fabric-rlm(?:\[[^\]]+\])?==([^\s\"']+)")
 
-    for path, notebook in _notebooks():
+    for path, notebook in _release_notebooks():
         install_lines = [
             line
             for line in _source(notebook).splitlines()
@@ -75,7 +86,7 @@ def test_public_notebook_release_metadata_matches_the_package_version():
 )
 def test_benchmark_notebooks_expose_a_limit_for_smoke_runs(notebook_name):
     notebook = json.loads(
-        (NOTEBOOK_DIR / notebook_name).read_text(encoding="utf-8")
+        (BENCHMARK_DIR / notebook_name).read_text(encoding="utf-8")
     )
     source = _source(notebook)
 
@@ -86,7 +97,7 @@ def test_benchmark_notebooks_expose_a_limit_for_smoke_runs(notebook_name):
 def test_ssb_repro_reads_dataset_json_as_utf8():
     notebook = json.loads(
         (
-            NOTEBOOK_DIR / "ssb400_minimax_m3_fabric_repro.ipynb"
+            BENCHMARK_DIR / "ssb400_minimax_m3_fabric_repro.ipynb"
         ).read_text(encoding="utf-8")
     )
 
@@ -105,7 +116,7 @@ def test_ssb_repro_reads_dataset_json_as_utf8():
 )
 def test_release_verification_notebooks_install_the_release(notebook_name):
     notebook = json.loads(
-        (NOTEBOOK_DIR / notebook_name).read_text(encoding="utf-8")
+        (VERIFICATION_DIR / notebook_name).read_text(encoding="utf-8")
     )
     code = "\n".join(
         "".join(cell.get("source", []))
@@ -127,7 +138,7 @@ def test_release_verification_notebooks_fail_the_run_on_failed_checks(
     notebook_name, failure_assertion
 ):
     notebook = json.loads(
-        (NOTEBOOK_DIR / notebook_name).read_text(encoding="utf-8")
+        (VERIFICATION_DIR / notebook_name).read_text(encoding="utf-8")
     )
     final_code_cell = next(
         cell
@@ -141,7 +152,7 @@ def test_release_verification_notebooks_fail_the_run_on_failed_checks(
 def test_delta_verification_notebook_installs_analytics_and_fails_on_gaps():
     notebook = json.loads(
         (
-            NOTEBOOK_DIR / "verify_delta_lakehouse_skill_in_fabric.ipynb"
+            VERIFICATION_DIR / "verify_delta_lakehouse_skill_in_fabric.ipynb"
         ).read_text(encoding="utf-8")
     )
     source = _source(notebook)
@@ -160,7 +171,7 @@ def test_delta_verification_notebook_installs_analytics_and_fails_on_gaps():
 def test_delta_verification_uses_configured_abfss_root_without_attachment():
     notebook = json.loads(
         (
-            NOTEBOOK_DIR / "verify_delta_lakehouse_skill_in_fabric.ipynb"
+            VERIFICATION_DIR / "verify_delta_lakehouse_skill_in_fabric.ipynb"
         ).read_text(encoding="utf-8")
     )
 
@@ -259,7 +270,7 @@ def test_flagship_notebook_replaces_an_invalid_cached_pdf():
 def test_network_verification_uses_the_live_lm_in_check_11():
     notebook = json.loads(
         (
-            NOTEBOOK_DIR / "verify_block_network_fabric.ipynb"
+            VERIFICATION_DIR / "verify_block_network_fabric.ipynb"
         ).read_text(encoding="utf-8")
     )
     source = _source(notebook)
@@ -271,7 +282,7 @@ def test_network_verification_uses_the_live_lm_in_check_11():
 def test_network_verification_reports_live_lm_errors_in_check_11():
     notebook = json.loads(
         (
-            NOTEBOOK_DIR / "verify_block_network_fabric.ipynb"
+            VERIFICATION_DIR / "verify_block_network_fabric.ipynb"
         ).read_text(encoding="utf-8")
     )
     check_11 = next(

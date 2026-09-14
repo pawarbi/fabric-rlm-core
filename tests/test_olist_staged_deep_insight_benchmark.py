@@ -14,7 +14,7 @@ import pytest
 
 MODULE_PATH = (
     Path(__file__).resolve().parents[1]
-    / "examples"
+    / "benchmarks"
     / "olist_staged_deep_insight_benchmark.py"
 )
 CANONICAL_FILES = (

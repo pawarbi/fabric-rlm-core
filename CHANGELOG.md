@@ -434,6 +434,24 @@
 
 ### Changed
 
+- **`examples/` holds only what a user runs.** The benchmark harnesses
+  (the Olist deep-insight benchmark, its staged and manifest-driven forms,
+  the critic and evidence-closure cycles, the action synthesis step, ONS
+  CPI) and the notebooks that reproduce published figures (SpreadsheetBench
+  400, the knowledge benchmark matrix and value run) moved to
+  `benchmarks/`, with a README that names each harness, its data and its
+  test. The frozen golden trajectories moved to
+  `tests/fixtures/trajectories/`, next to the test that replays them. The
+  release verification notebooks moved to `tests/release_verification/`.
+  `examples/` keeps the Fabric notebook recipes, the quickstart task and
+  the semantic model example, and gained a README. The lossless SUBMIT
+  reproduction script was dropped (the behaviour is covered by
+  `tests/test_interpreter.py` and described in
+  `docs/lossless-submit-payloads.md`); the golden-trajectory replay script
+  became `docs/replaying-trajectories.md`. The key and kernel checks on
+  public notebooks now cover every notebook wherever it lives; the
+  pinned-install checks cover the recipes and the release checks, since a
+  development benchmark may install the branch under test.
 - **The Data Agent review is experimental.** It moved to
   `fabric_rlm.experimental.data_agent_review`; `fabric_rlm.data_agent_review`
   stays as a compatibility path that resolves every name, so existing

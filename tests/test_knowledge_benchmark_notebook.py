@@ -4,9 +4,8 @@ from pathlib import Path
 
 NOTEBOOK = (
     Path(__file__).parents[1]
-    / "examples"
+    / "benchmarks"
     / "notebooks"
-    / "development"
     / "rlm_knowledge_benchmark_matrix.py"
 )
 
