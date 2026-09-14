@@ -30,7 +30,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .source_model import _NUMERIC_TYPE, _TEXT_TYPE, AgentDataSource, AgentSnapshot, _is_key, _is_time_column, _measure_columns, _month_name, _path_table, _tables_named_in, attribute_paths, build_vocabulary, excluded_terms, humanize_column
-from .sweep import _GROUPING_HINT, Comparison, Movement, Point, Sweep, _aggregate_for, _choose_paths, _points, _probe_for, sweep, verify_sweep
+from .sweep import _GROUPING_HINT, Comparison, Movement, Point, Sweep, _aggregate_for, _choose_paths, _filters_for, _points, _probe_for, sweep, verify_sweep
 
 __all__ = ["Report", "ReportSpec", "parse_request", "report"]
 
@@ -541,7 +541,7 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
                 exact = [r for r in rows if str(r.get("label")).casefold() == text_value.casefold()]
                 if exact:
                     label = exact[0]["label"]
-                    filters.append((path, label))
+                    filters.append((dict(path, fact=table), label))
                     taken.add(str(path["column"]))
                     lines.append(f"only: {humanize_column(str(path['column']))} = {label} ({int(exact[0].get('n') or 0):,} {noun})")
                     found = True
@@ -556,11 +556,11 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
                 word = humanize_column(str(path["column"]))
                 labels = [r["label"] for r in rows]
                 if len(labels) == 1:
-                    filters.append((path, labels[0]))
+                    filters.append((dict(path, fact=table), labels[0]))
                     taken.add(str(path["column"]))
                     lines.append(f"only: {word} = {labels[0]} (matched '{text_value}'; {int(rows[0].get('n') or 0):,} {noun})")
                 elif len(labels) <= 5:
-                    filters.append((path, tuple(labels)))
+                    filters.append((dict(path, fact=table), tuple(labels)))
                     taken.add(str(path["column"]))
                     lines.append(f"only: {word} is one of {', '.join(str(v) for v in labels)} (matched '{text_value}')")
                 else:
@@ -674,7 +674,25 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
         residue = re.sub(r"\s+", " ", residue)
         for _ in range(3):  # an introducer left with nothing after it ("in", once the period is blanked) is dropped, so the next clause keeps its own introducer
             residue = re.sub(r"\b(?:where|for|with|in|on|at|of|about|especially|particularly|only|just|regarding)\s+(?=(?:where|for|with|in|on|at|of|about|especially|particularly|only|just|regarding|by|per|which|and|vs\.?|versus|against)\b|[,.;?]|$)", "", residue, flags=re.IGNORECASE)
-        filters, filter_lines, lookups = _match_filters(residue, probe=probe, dialect=probe.dialect(joins), schema=schema, table=table, joins=joins, excluded=excluded, terms=terms, vocabulary=vocabulary, consumed=consumed)
+        dialect = probe.dialect(joins)
+        tried: list[str] = [table] if (facts and not derived) else list(dict.fromkeys([table, *default_facts[:4]]))
+        filter_lines: list[str] = []
+        for candidate_table in tried:
+            found, lines_here, spent_here = _match_filters(residue, probe=probe, dialect=dialect, schema=schema, table=candidate_table, joins=joins, excluded=excluded, terms=terms, vocabulary=vocabulary, consumed=set(consumed))
+            lookups += spent_here
+            if found or candidate_table == tried[-1]:
+                filters, filter_lines = found, lines_here
+                if found and candidate_table != table:
+                    table = candidate_table
+                    if kind != "recap":
+                        facts = [candidate_table]
+                        reading = [line for line in reading if not line.startswith(("fact:", "measure:"))]
+                        reading.insert(1, f"fact: {candidate_table} ({vocabulary.table(candidate_table)}) (the fact that holds the value asked for)")
+                        measures = _match_measures(without_groupings, schema, candidate_table, vocabulary)[0][:1]
+                        if measures:
+                            reading.insert(2, "measure: " + ", ".join(f"{m} ({vocabulary.measure(m.strip('[]'))})" for m in measures))
+                break
+        consumed |= {w for line in filter_lines for w in _tokens(line)}  # a value that failed is said once, as a filter, not again as an ignored word
         reading.extend(filter_lines)
     if check:
         reading.append("check: " + (f"{_month_name(period)} against the trend and season of each measure" if period is not None and period.get("month") else "the latest complete month against the trend and season of each measure"))
@@ -814,18 +832,19 @@ def _trend_by_group(probe: Any, result: Sweep, spec: ReportSpec, *, instructions
     if axis is None:
         return grouped, spent, notes
     fact = {"table": fact_name, "date": axis, "measure": measure, "aggregate": _aggregate_for(measure)}
+    narrowing = _filters_for(schema, fact_name, joins, excluded_terms(text), list(spec.filters)) or []
     paths = _choose_paths(schema, fact_name, joins, excluded_terms(text), context.terms if context is not None else (), list(spec.groupings) if spec.groupings else 3)
     years = list(result.years)[-2:] if len(result.years) >= 2 else list(result.years)
     for path in paths[:4]:
         if spent + 2 > budget:
             notes.append(f"the budget left no room for the series by {humanize_column(str(path['column']))}")
             break
-        top_rows = probe.run(dialect.top_groups(fact, path, years, 6, list(spec.filters)))
+        top_rows = probe.run(dialect.top_groups(fact, path, years, 6, narrowing))
         spent += 1
         values = [row.get("label") for row in top_rows]
         if not values:
             continue
-        rows = dialect.months(probe.run(dialect.grouped_series(fact, path, years, values, list(spec.filters))))
+        rows = dialect.months(probe.run(dialect.grouped_series(fact, path, years, values, narrowing)))
         spent += 1
         by_label: dict[Any, list[Mapping[str, Any]]] = {}
         for row in rows:

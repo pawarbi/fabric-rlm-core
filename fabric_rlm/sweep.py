@@ -334,14 +334,7 @@ class Sweep:
 
     def filter_phrase(self) -> str:
         """The rows the sweep was narrowed to, in words: "channel is tiktok", "product name is one of A, B"."""
-        parts = []
-        for path, value in self.filters:
-            members = _filter_values(value)
-            if members is not None:
-                parts.append(f"{_word(path)} is one of {', '.join(_label(v) for v in members)}")
-            else:
-                parts.append(f"{_word(path)} is {_label(value)}")
-        return " and ".join(parts)
+        return _filter_phrase(self.filters)
 
     def phrase(self, movement: Movement) -> str:
         return self.words.get(f"{movement.fact}|{movement.measure}", f"{movement.fact} {movement.measure}")
@@ -719,6 +712,39 @@ _Filters = Sequence[tuple[Mapping[str, Any], Any]]  # (grouping path, value) pai
 def _filter_values(value: Any) -> list[Any] | None:
     """The members of a filter value that names several groups; None for a single value."""
     return list(value) if isinstance(value, (list, tuple, set, frozenset)) else None
+
+
+def _filter_phrase(filters: _Filters) -> str:
+    """Filters in words: "channel is tiktok", "product name is one of A, B"."""
+    parts = []
+    for path, value in filters:
+        members = _filter_values(value)
+        parts.append(f"{_word(path)} is one of {', '.join(_label(v) for v in members)}" if members is not None else f"{_word(path)} is {_label(value)}")
+    return " and ".join(parts)
+
+
+def _filters_for(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]], excluded: Any, filters: _Filters) -> list[tuple[Mapping[str, Any], Any]] | None:
+    """The request's filters as one fact can carry them: the same column reached from this fact, or a local column of the same name; None when it cannot carry one of them.
+
+    A filter path is resolved against the fact the question was read for (``path["fact"]``); another fact in the same sweep reaches the
+    column its own way (sessions and purchases both carry a channel), or not at all (events have none), in which case it is left out.
+    """
+    if not filters:
+        return []
+    paths = attribute_paths(schema, table, joins, excluded)
+    out: list[tuple[Mapping[str, Any], Any]] = []
+    for path, value in filters:
+        origin = str(path.get("fact") or table)
+        endpoint = (_path_table(path, origin), str(path["column"]))
+        match = next((p for p in paths if (_path_table(p, table), str(p["column"])) == endpoint), None)
+        if match is None and origin == table:
+            match = path
+        if match is None and str(path["column"]) in schema.tables.get(table, ()):
+            match = {"hops": [], "column": str(path["column"]), "alias": str(path["column"])}
+        if match is None:
+            return None
+        out.append((match, value))
+    return out
 
 
 def _like_pattern(value: str) -> str:
@@ -1428,9 +1454,13 @@ def sweep(
             if not axis or not candidates:
                 notes.append(f"{table}: no time axis or no measure, not swept")
                 continue
+            fact_filters = _filters_for(schema, table, joins, excluded, filters)
+            if fact_filters is None:
+                notes.append(f"{vocabulary.table(table)}: no column reachable from it carries {_filter_phrase(filters)}, so it is left out of this report")
+                continue
             words[table] = vocabulary.table(table)
             base = {"table": table, "date": axis, "measure": candidates[0], "aggregate": _aggregate_of(candidates[0], summed, schema.tables[table])}
-            months = dialect.months(run(dialect.series(base, candidates, filters)))
+            months = dialect.months(run(dialect.series(base, candidates, fact_filters)))
             fact_years = [int(y) for y in years] if years else _complete_years(months)
             if not years_used:
                 years_used = list(fact_years)
@@ -1442,15 +1472,15 @@ def sweep(
             if skipped:
                 notes.append(f"{table}: {skipped}")
             try:
-                rows = run(dialect.max_date(base, filters))
+                rows = run(dialect.max_date(base, fact_filters))
                 max_date = _iso_date(rows[0].get("value")) if rows and rows[0].get("value") is not None else None
             except _Budget:
                 raise
             except Exception:  # noqa: BLE001 - only the incomplete-month flag needs it
                 max_date = None
             chosen = _choose_paths(schema, table, joins, excluded, terms, paths)
-            if filters:
-                chosen = [p for p in chosen if not any(_same_path(p, narrowed, table) for narrowed, _v in filters)]  # a grouping the request fixed has one group left
+            if fact_filters:
+                chosen = [p for p in chosen if not any(_same_path(p, narrowed, table) for narrowed, _v in fact_filters)]  # a grouping the request fixed has one group left
             wanted = measures if isinstance(measures, int) else len(candidates)
             measured: list[tuple[str, list[Movement]]] = []
             for index, measure in enumerate(candidates):
@@ -1460,7 +1490,7 @@ def sweep(
                 key = f"{table}|{measure}"
                 words[key] = vocabulary.table(table) if measure == _ROWS else _channel_measure(vocabulary.table(table), vocabulary.measure(measure.strip("[]")))
                 series[key] = _points(months, index, fact["aggregate"], fact_years)
-                run_totals = [_movement(run, dialect, fact, comparison, filters) for comparison in wanted_comparisons]
+                run_totals = [_movement(run, dialect, fact, comparison, fact_filters) for comparison in wanted_comparisons]
                 run_totals = [replace(t, flags=_flags(t, t.comparison, max_date, months, noun=vocabulary.table(table))) for t in run_totals]
                 ledger.extend(run_totals)
                 twin = next((m for m, other in measured if _same_figures(other, run_totals)), None)
@@ -1471,7 +1501,7 @@ def sweep(
                     continue
                 measured.append((measure, run_totals))
                 twins_seen.append((key, run_totals))
-                totals.extend((t, fact, chosen, t.flags) for t in run_totals)
+                totals.extend((t, dict(fact, filters=tuple(fact_filters)), chosen, t.flags) for t in run_totals)
     except _Budget:
         exhausted = True
         notes.append(f"the budget of {budget} queries was spent before every movement was measured; nothing was decomposed")
@@ -1485,7 +1515,7 @@ def sweep(
         drill: list[Decomposition] = []
         try:
             for path in chosen:
-                decompositions.append(_decompose(run, dialect, ledger, total, fact, path, (), top, filters=filters))
+                decompositions.append(_decompose(run, dialect, ledger, total, fact, path, (), top, filters=fact.get("filters", ())))
             decompositions.sort(key=lambda d: (-_rank(d), _placeholder_lead(d), -d.explained))  # a real leader beats a placeholder at the same rank
             best = decompositions[0] if decompositions else None
             if depth >= 2 and best is not None and best.concentration in {"single", "concentrated"} and best.groups:
@@ -1493,7 +1523,7 @@ def sweep(
                 for path in chosen:
                     if _same_path(path, best.path, fact["table"]):
                         continue
-                    drill.append(_decompose(run, dialect, ledger, leader, fact, path, ((best.path, leader.group),), top, filters=filters))
+                    drill.append(_decompose(run, dialect, ledger, leader, fact, path, ((best.path, leader.group),), top, filters=fact.get("filters", ())))
                     if len(drill) >= 3:
                         break
         except _Budget:

@@ -5,9 +5,12 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from fabric_rlm.reports import parse_request, report
 from fabric_rlm.series import Month, SeriesStory, analyse, expected_value, period_check
-from fabric_rlm.sweep import Point, SemanticModelProbe
+from fabric_rlm.source_model import schema_from_tables
+from fabric_rlm.sweep import LakehouseProbe, Point, SemanticModelProbe
 
 _sweep_tests = importlib.util.spec_from_file_location("test_sweep", Path(__file__).with_name("test_sweep.py"))
 _module = importlib.util.module_from_spec(_sweep_tests)
@@ -61,6 +64,33 @@ def test_a_bare_value_is_looked_up_in_the_groupings_and_a_partial_or_unknown_one
     assert [(p["column"], v) for p, v in after_a_period.filters] == [("sector", "Technology")] and after_a_period.period == {"year": 2024, "month": 6}
     kept_measure = parse_request("was amount in June 2024 normal for Europe", probe)  # the check strips only its own words
     assert kept_measure.check and kept_measure.measures == ("amount",) and [(p["column"], v) for p, v in kept_measure.filters] == [("region", "Europe")]
+
+
+def _payments_and_tickets():
+    """Two facts: payments carry a region, tickets do not, and only tickets carry a channel."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("CREATE TABLE payments (payment_id INTEGER, payment_date DATE, amount DOUBLE, region VARCHAR)")
+    con.execute("CREATE TABLE tickets (ticket_id INTEGER, opened_at DATE, channel VARCHAR, hours DOUBLE)")
+    for i, (day, amount, region) in enumerate([("2023-06-15", 100.0, "Europe"), ("2023-06-15", 50.0, "Americas"), ("2024-06-15", 300.0, "Europe"), ("2024-06-15", 60.0, "Americas")]):
+        con.execute("INSERT INTO payments VALUES (?, ?, ?, ?)", [i, day, amount, region])
+    for i, (day, channel, hours) in enumerate([("2023-06-15", "email", 2.0), ("2023-06-15", "phone", 1.0), ("2024-06-15", "email", 5.0), ("2024-06-15", "phone", 1.5)]):
+        con.execute("INSERT INTO tickets VALUES (?, ?, ?, ?)", [i, day, channel, hours])
+    tables = {"payments": ("payment_id", "payment_date", "amount", "region"), "tickets": ("ticket_id", "opened_at", "channel", "hours")}
+    types = {"payments": {"payment_id": "INTEGER", "payment_date": "DATE", "amount": "DOUBLE", "region": "VARCHAR"}, "tickets": {"ticket_id": "INTEGER", "opened_at": "DATE", "channel": "VARCHAR", "hours": "DOUBLE"}}
+    return LakehouseProbe.from_executor(_module._executor(con, tables), schema_from_tables("lh-2", tables, types=types), name="Two facts")
+
+
+def test_a_filter_is_carried_by_the_facts_that_can_carry_it_and_looked_for_in_every_fact():
+    probe = _payments_and_tickets()
+    europe = report(probe, "what moved for Europe", years=[2023, 2024], budget=100)
+    assert [(p["column"], v) for p, v in europe.spec.filters] == [("region", "Europe")]
+    assert {m.fact for m in europe.sweep.ledger} == {"payments"} and europe.sweep.findings[0].movement.after_value == 300.0
+    assert any(note.startswith("tickets: no column reachable from it carries region is Europe") for note in europe.sweep.notes)
+    phone = report(probe, "what changed in June 2024 for phone", years=[2023, 2024], budget=100)  # the value lives in the second fact
+    assert [(p["column"], v) for p, v in phone.spec.filters] == [("channel", "phone")] and phone.spec.facts == ("tickets",)
+    assert any("the fact that holds the value asked for" in line for line in phone.spec.reading)
+    assert {m.fact for m in phone.sweep.ledger} == {"tickets"} and phone.sweep.findings[0].movement.after_value == 1.5
 
 
 def test_a_period_asked_about_the_trend_is_root_cause_with_a_check():
