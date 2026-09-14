@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.6.2 — 2026-09-14 — Data Agent review, what moved and the Monday Morning Brief
 
 ### Added
