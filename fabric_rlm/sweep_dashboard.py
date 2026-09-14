@@ -316,19 +316,20 @@ def _decomposition_svg(story: Any, title: str) -> str:
     if d is None:
         return ""
     months = list(d.months)
-    width, left, right, top, panel_h, gap, bottom = 640, 60, 20, 42, 92, 30, 24
+    width, left, right, top, panel_h, gap, bottom = 640, 60, 20, 60, 92, 34, 24
     height = top + 3 * panel_h + 2 * gap + bottom
 
     def x(i: int) -> float:
         return left + i * (width - left - right) / max(1, len(months) - 1)
 
-    parts = _open(title, width, height, left=left, subtitle=f"classical {'multiplicative' if d.multiplicative else 'additive'} decomposition: trend as the centered 12-month average, a seasonal index per calendar month, the rest is residual")
-    # panel 1: trend
+    parts = _open(title, width, height, left=left, subtitle=f"{'multiplicative' if d.multiplicative else 'additive'}: trend is the centered 12-month average, season an index per calendar month, residual the rest")
+    # panel 1: trend, on a tight range so its shape shows
     y0 = top
     present = [(i, t) for i, t in enumerate(d.trend) if t is not None]
     if present:
         lo, hi = min(t for _i, t in present), max(t for _i, t in present)
-        lo, hi = min(0.0, lo), hi or 1.0
+        pad = (hi - lo) * 0.15 or abs(hi) * 0.05 or 1.0
+        lo, hi = lo - pad, hi + pad
         span = (hi - lo) or 1.0
         parts.append(f'<text x="{left}" y="{y0 - 4}" font-size="11" fill="{_MUTED}">trend</text>')
         path = " ".join(f"{'M' if j == 0 else 'L'}{x(i):.1f},{y0 + (hi - t) * panel_h / span:.1f}" for j, (i, t) in enumerate(present))
