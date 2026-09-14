@@ -458,7 +458,7 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
     """
     axis = dialect.axis(table)
     if axis is None:
-        return [], [], 0
+        return [], [], 0, set()
     fact = {"table": table, "date": axis, "measure": "rows", "aggregate": "count"}
     noun = vocabulary.table(table)
     paths = list(attribute_paths(schema, table, joins, excluded))
@@ -577,7 +577,7 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
                 consumed.update(set(_tokens(clause)) | set(_tokens(match.group(1))))
     if refused and not filters:
         lines.append(f"the source refused {len(refused)} value lookup{'s' if len(refused) != 1 else ''} ({refused[0]}); not filtered")
-    return filters, lines, spent
+    return filters, lines, spent, consumed
 
 
 def _ignored_words(text: str, consumed: set[str]) -> list[str]:
@@ -682,11 +682,12 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
         filter_lines: list[str] = []
         first_lines: list[str] = []
         for candidate_table in tried:
-            found, lines_here, spent_here = _match_filters(residue, probe=probe, dialect=dialect, schema=schema, table=candidate_table, joins=joins, excluded=excluded, terms=terms, vocabulary=vocabulary, consumed=set(consumed))
+            found, lines_here, spent_here, used_here = _match_filters(residue, probe=probe, dialect=dialect, schema=schema, table=candidate_table, joins=joins, excluded=excluded, terms=terms, vocabulary=vocabulary, consumed=set(consumed))
             lookups += spent_here
             first_lines = first_lines or lines_here
             if found or candidate_table == tried[-1]:
                 filters, filter_lines = found, (lines_here if found else first_lines)
+                consumed |= used_here  # the words of a clause that resolved, or that was explained, are not ignored words
                 if found and candidate_table != table:
                     table = candidate_table
                     if kind != "recap":
@@ -698,6 +699,7 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
                             reading.insert(2, "measure: " + ", ".join(f"{m} ({vocabulary.measure(m.strip('[]'))})" for m in measures))
                 break
         consumed |= {w for line in filter_lines for w in _tokens(line)}  # a value that failed is said once, as a filter, not again as an ignored word
+        consumed |= {w for t in schema.tables for w in _tokens(humanize_column(t.rsplit(".", 1)[-1]))} & text_tokens  # a table named in passing ("boleto payments") is a table, not an ignored word
         reading.extend(filter_lines)
     if check and period is not None and not period.get("month"):
         reading.append(f"check: {_month_name(period)} is a whole year, which is not read against the season; name a month to check it")
