@@ -42,7 +42,7 @@
 
 # CELL ********************
 
-%pip install -q "fabric-rlm==0.6.2" "fabric-data-agent-sdk==0.1.28a0"
+%pip install -q "fabric-rlm==0.6.3" "fabric-data-agent-sdk==0.1.28a0"
 
 # METADATA ********************
 
