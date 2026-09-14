@@ -475,12 +475,15 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
     spent = 0
     taken: set[str] = set()
 
+    refused: list[str] = []
+
     def lookup(path: Mapping[str, Any], value: str) -> list[dict[str, Any]]:
         nonlocal spent
         spent += 1
         try:
             return [r for r in probe.run(dialect.lookup(fact, path, value)) if r.get("label") is not None]
-        except Exception:  # noqa: BLE001 - a grouping the source cannot search is simply not a match
+        except Exception as exc:  # noqa: BLE001 - a grouping the source cannot search is not a match, but the refusal is said, never hidden
+            refused.append(f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]}")
             return []
 
     for match in _FILTER_CLAUSE.finditer(residue):
@@ -569,6 +572,8 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
                 else:
                     lines.append(f"nothing reachable from {noun} is called '{value}'; not filtered")
                 consumed.update(set(_tokens(clause)) | set(_tokens(match.group(1))))
+    if refused and not filters:
+        lines.append(f"the source refused {len(refused)} value lookup{'s' if len(refused) != 1 else ''} ({refused[0]}); not filtered")
     return filters, lines, spent
 
 
