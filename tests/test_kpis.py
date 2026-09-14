@@ -50,7 +50,7 @@ def test_a_thin_tail_moves_the_briefed_week_back_and_says_so():
     result = brief(_shop(), ["revenue"], instructions="Revenue = SUM(amount).", budget=30)
     assert result.week is not None and result.week.start == "2024-12-09"
     assert any("7 against a typical 35" in note and "say week=2024-12-23" in note for note in result.notes), result.notes
-    assert "The last 2 weeks hold far fewer rows" in result.to_markdown() or "the last 2 weeks hold far fewer rows" in result.to_markdown()
+    assert "the last 2 weeks hold far fewer sales" in result.to_markdown()
 
 
 def test_kpi_phrases_are_read_by_kind():

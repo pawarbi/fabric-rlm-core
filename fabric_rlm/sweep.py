@@ -507,6 +507,12 @@ class Sweep:
             lines.extend(f"  {text}" for text in together)
         return lines
 
+    def noun(self, fact: str) -> str:
+        """The word for a fact's rows: sessions, order items, sales."""
+        from .data_agent_review import humanize_column
+
+        return self.words.get(fact) or humanize_column(fact.rsplit(".", 1)[-1])
+
     def steady(self, limit: int = 3) -> list[Movement]:
         """When nothing moved by the material share, the largest trusted movements anyway, so the reader sees how steady steady is."""
         if self.findings:
@@ -549,7 +555,7 @@ class Sweep:
             elif best.concentration == "broad":
                 text += f", spread broadly across {_word(best.path)} groups"
         if any(flag.startswith("volume:") for flag in m.flags):
-            text += "; the row count moved as much as the value, so this is volume, not a change in rate"
+            text += f"; {'more' if m.delta > 0 else 'fewer'} {self.noun(m.fact)} at about the same value each, not a change in what each is worth"
         small = next((flag for flag in m.flags if flag.startswith("small base:")), None)
         if small:
             text += f"; on a small base ({small.split(': ', 1)[1]})"
@@ -1354,6 +1360,7 @@ def sweep(
             if not axis or not candidates:
                 notes.append(f"{table}: no time axis or no measure, not swept")
                 continue
+            words[table] = vocabulary.table(table)
             base = {"table": table, "date": axis, "measure": candidates[0], "aggregate": _aggregate_of(candidates[0], summed, schema.tables[table])}
             months = dialect.months(run(dialect.series(base, candidates)))
             fact_years = [int(y) for y in years] if years else _complete_years(months)
@@ -1363,7 +1370,7 @@ def sweep(
             if not wanted_comparisons:
                 notes.append(f"{table}: no comparison the time axis supports for {fact_years}")
                 continue
-            skipped = _skipped_tail(months, wanted_comparisons)
+            skipped = _skipped_tail(months, wanted_comparisons, vocabulary.table(table))
             if skipped:
                 notes.append(f"{table}: {skipped}")
             try:
@@ -1384,7 +1391,7 @@ def sweep(
                 words[key] = vocabulary.table(table) if measure == _ROWS else _channel_measure(vocabulary.table(table), vocabulary.measure(measure.strip("[]")))
                 series[key] = _points(months, index, fact["aggregate"], fact_years)
                 run_totals = [_movement(run, dialect, fact, comparison, ()) for comparison in wanted_comparisons]
-                run_totals = [replace(t, flags=_flags(t, t.comparison, max_date, months)) for t in run_totals]
+                run_totals = [replace(t, flags=_flags(t, t.comparison, max_date, months, noun=vocabulary.table(table))) for t in run_totals]
                 ledger.extend(run_totals)
                 twin = next((m for m, other in measured if _same_figures(other, run_totals)), None)
                 twin_key = f"{table}|{twin}" if twin is not None else next((k for k, other in twins_seen if _twin_figures(other, run_totals)), None)
@@ -1552,7 +1559,7 @@ def _comparisons(months: Sequence[Mapping[str, Any]], years: Sequence[int]) -> l
     return comparisons
 
 
-def _skipped_tail(months: Sequence[Mapping[str, Any]], comparisons: Sequence[Comparison]) -> str | None:
+def _skipped_tail(months: Sequence[Mapping[str, Any]], comparisons: Sequence[Comparison], noun: str = "rows") -> str | None:
     """Says when the month comparison stops short of the latest month because the trailing months look still to arrive."""
     counts = {(int(r["year"]), int(r["month"])): int(r.get("n") or 0) for r in months if r.get("year") is not None and r.get("month") is not None and int(r.get("n") or 0) > 0}
     month = next((c for c in comparisons if c.kind == "month" and "month" in c.after), None)
@@ -1564,8 +1571,8 @@ def _skipped_tail(months: Sequence[Mapping[str, Any]], comparisons: Sequence[Com
         return None
     earlier = sorted(counts[m] for m in sorted(counts) if m <= after)[-6:]
     typical = sorted(earlier)[len(earlier) // 2] if earlier else 0
-    names = ", ".join(f"{_month_name({'year': m[0], 'month': m[1]})} ({counts[m]:,} rows)" for m in skipped)
-    return f"{names} hold{'s' if len(skipped) == 1 else ''} far fewer rows than a typical month ({typical:,}), so the month comparison stops at {_month_name({'year': after[0], 'month': after[1]})}; pass comparisons=[Comparison('month', ...)] to compare a later month anyway"
+    names = ", ".join(f"{_month_name({'year': m[0], 'month': m[1]})} ({counts[m]:,} {noun})" for m in skipped)
+    return f"{names} hold{'s' if len(skipped) == 1 else ''} far fewer {noun} than a typical month ({typical:,}), so the month comparison stops at {_month_name({'year': after[0], 'month': after[1]})}; pass comparisons=[Comparison('month', ...)] to compare a later month anyway"
 
 
 def _twin_figures(a: Sequence[Movement], b: Sequence[Movement]) -> bool:
@@ -1701,7 +1708,7 @@ def _rank(d: Decomposition) -> int:
     return {"single": 4, "concentrated": 3, "offsetting": 2, "broad": 1, "proportional": 0, "fragmented": -1, "none": -1}.get(d.concentration, 0)
 
 
-def _flags(total: Movement, comparison: Comparison, max_date: str | None, months: Sequence[Mapping[str, Any]] = ()) -> tuple[str, ...]:
+def _flags(total: Movement, comparison: Comparison, max_date: str | None, months: Sequence[Mapping[str, Any]] = (), noun: str = "rows") -> tuple[str, ...]:
     """What a reader must see before the number: an incomplete period (by the data's end or by its row coverage), volume rather than rate, a small base.
 
     Flags start with ``incomplete:``, ``coverage:``, ``volume:`` or ``small base:`` so
@@ -1714,7 +1721,7 @@ def _flags(total: Movement, comparison: Comparison, max_date: str | None, months
             flags.append(thin)
     else:
         for period in (comparison.after, comparison.before):
-            coverage = _coverage_flag(period, months)
+            coverage = _coverage_flag(period, months, noun)
             if coverage:
                 flags.append(coverage)
     if max_date and comparison.after.get("month") is not None and not any(f.startswith("coverage:") for f in flags):
@@ -1726,13 +1733,13 @@ def _flags(total: Movement, comparison: Comparison, max_date: str | None, months
             flags.append(f"incomplete: the data ends on {max_date}, so {_month_name(comparison.after)} is incomplete")
     pct, rows_pct = total.pct, total.rows_pct
     if total.aggregate == "sum" and pct is not None and rows_pct is not None and rows_pct * pct > 0 and abs(rows_pct) >= 0.5 * abs(pct):
-        flags.append(f"volume: row counts moved {rows_pct:+.0%} against {pct:+.0%} in value, so this is volume or coverage rather than a change in rate")
+        flags.append(f"volume: {noun} moved {rows_pct:+.0%} in number and {pct:+.0%} in value, so this is {'more' if pct > 0 else 'fewer'} {noun} at about the same value each, not a change in what each is worth")
     if total.before_rows and total.before_rows < 30:
-        flags.append(f"small base: {total.before_rows} rows before, {total.after_rows} after")
+        flags.append(f"small base: only {total.before_rows} {noun} before and {total.after_rows} after")
     return tuple(flags)
 
 
-def _coverage_flag(period: Mapping[str, Any], months: Sequence[Mapping[str, Any]]) -> str | None:
+def _coverage_flag(period: Mapping[str, Any], months: Sequence[Mapping[str, Any]], noun: str = "rows") -> str | None:
     """A month with fewer than half the rows of a typical month before it is not a complete period, whatever date the data runs to."""
     if not months or period.get("start") or period.get("month") is None:
         return None
@@ -1744,7 +1751,7 @@ def _coverage_flag(period: Mapping[str, Any], months: Sequence[Mapping[str, Any]
     counts = sorted(n for _y, _m, n in earlier)
     typical = counts[len(counts) // 2]
     if typical and rows < 0.5 * typical:
-        return f"coverage: {_month_name(period)} holds {rows:,} rows against a typical {typical:,} a month, so it looks incomplete and the movement is coverage, not business"
+        return f"coverage: {_month_name(period)} holds {rows:,} {noun} against a typical {typical:,} a month, so it looks incomplete and the movement is coverage, not business"
     return None
 
 

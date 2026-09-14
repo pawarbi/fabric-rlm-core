@@ -324,7 +324,7 @@ def test_the_sweep_measures_every_movement_the_axis_supports_and_recomputes_the_
     december = next(f for f in result.findings if f.movement.comparison.kind == "same_month_prior_year" and f.movement.measure == "SalesAmount")
     assert december.movement.comparison.label == "December 2012 to December 2013" and (december.movement.before_value, december.movement.after_value) == (4200.0, 200.0)
     assert round(december.movement.pct, 3) == -0.952 and december.movement.before_rows == 3 and december.movement.after_rows == 1
-    assert any("row counts moved -67%" in flag for flag in december.flags) and any("small base" in flag for flag in december.flags)
+    assert any("moved -67% in number" in flag for flag in december.flags) and any("small base" in flag for flag in december.flags)
     by_reseller = next(d for d in december.decompositions if d.path["column"] == "ResellerName")
     assert by_reseller.concentration == "proportional" and [g.group for g in by_reseller.groups[:2]] == ["Bike World", "Trail Co"]
     assert round(by_reseller.share_of_change(by_reseller.groups[0]), 2) == 0.75 and round(by_reseller.share_of_base(by_reseller.groups[0]), 2) == 0.71
@@ -508,8 +508,8 @@ def test_the_recap_leads_with_grounded_takeaways_and_sets_incomplete_periods_asi
     result = what_moved(probe, years=[2023, 2024], budget=100)
     takeaways = result.takeaways()
     assert [t.text for t in takeaways] == [
-        "Payments amount rose 100% 2023 to 2024, 300 to 600, led by Technology (100% of the change on 33% of the base); on a small base (4 rows before, 4 after).",
-        "Payments satisfaction score fell 25% on average 2023 to 2024, 4 to 3; on a small base (4 rows before, 4 after).",
+        "Payments amount rose 100% 2023 to 2024, 300 to 600, led by Technology (100% of the change on 33% of the base); on a small base (only 4 payments before and 4 after).",
+        "Payments satisfaction score fell 25% on average 2023 to 2024, 4 to 3; on a small base (only 4 payments before and 4 after).",
     ]
     assert all(t.trusted for t in takeaways) and takeaways[0].anchor and takeaways[0].finding is not None
     aside = result.set_aside()
@@ -553,14 +553,14 @@ def test_a_thin_trailing_month_is_skipped_by_default_and_fails_the_coverage_chec
     result = what_moved(_thin_december(), budget=50)
     total = next(m for m in result.ledger if m.path is None)
     assert total.comparison.label == "October 2024 to November 2024" and (total.before_value, total.after_value) == (6200.0, 6000.0) and total.trusted
-    assert any("December 2024 (4 rows)" in note and "stops at November 2024" in note for note in result.notes), result.notes
+    assert any("December 2024 (4 sales)" in note and "stops at November 2024" in note for note in result.notes), result.notes
     # asked for outright, the thin month is compared, and the coverage check sets the movement aside: the data runs to the 27th, so the end-date rule alone would pass it
     result = what_moved(_thin_december(), budget=50, comparisons=[Comparison("month", {"year": 2024, "month": 11}, {"year": 2024, "month": 12})])
     total = next(m for m in result.ledger if m.path is None)
     assert total.comparison.label == "November 2024 to December 2024" and (total.before_value, total.after_value) == (6000.0, 400.0)
-    assert total.trusted is False and total.flags[0] == "coverage: December 2024 holds 4 rows against a typical 62 a month, so it looks incomplete and the movement is coverage, not business"
+    assert total.trusted is False and total.flags[0] == "coverage: December 2024 holds 4 sales against a typical 62 a month, so it looks incomplete and the movement is coverage, not business"
     assert not any(flag.startswith("incomplete:") for flag in total.flags)  # the end-date rule would have passed: the 27th is late in the month
-    assert result.takeaways() == [] and len(result.set_aside()) == 1 and "but December 2024 holds 4 rows against a typical 62 a month" in result.set_aside()[0].text
+    assert result.takeaways() == [] and len(result.set_aside()) == 1 and "but December 2024 holds 4 sales against a typical 62 a month" in result.set_aside()[0].text
     assert result.findings and result.findings[0].trusted is False
     html = result.to_html()
     assert "incomplete period" in html and "Set aside, not read as business change" in html and "Not read as business change." in html
@@ -593,7 +593,7 @@ def test_a_real_leader_beats_a_placeholder_and_a_placeholder_is_named_for_what_i
     year = next(f for f in result.findings if f.movement.comparison.kind == "year")
     assert [d.path["column"] for d in year.decompositions] == ["channel", "business_type"]  # the same split, the real names first
     assert year.best.groups[0].group == "Internet" and year.decompositions[1].groups[0].group == "[Not Applicable]"
-    assert result.takeaways()[0].text == "Orders quantity rose 127% 2023 to 2024, 2,640 to 7,200, led by Internet (95% of the change on 9% of the base); the row count moved as much as the value, so this is volume, not a change in rate." or "led by Internet (95% of the change on 9% of the base)" in result.takeaways()[0].text
+    assert result.takeaways()[0].text == "Orders quantity rose 127% 2023 to 2024, 2,640 to 7,200, led by Internet (95% of the change on 9% of the base); more orders at about the same value each, not a change in what each is worth." or "led by Internet (95% of the change on 9% of the base)" in result.takeaways()[0].text
     assert "sits with Internet (channel)" in result.narrative() and "[Not Applicable]" not in result.narrative()
 
 

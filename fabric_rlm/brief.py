@@ -26,7 +26,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .data_agent_review import _MEASURE_HINT, AgentDataSource, AgentSnapshot, ReviewContext, _measure_columns, build_vocabulary, excluded_terms
+from .data_agent_review import _MEASURE_HINT, AgentDataSource, AgentSnapshot, ReviewContext, _measure_columns, build_vocabulary, excluded_terms, humanize_column
 from .series import ChangePoint, _mean, _spearman, _std, change_points
 from .sweep import _ROWS, Comparison, Sweep, SweepFinding, _aggregate_of, _concentration_sentence, _iso_date, _label, _num, _probe_for, _summed_columns, _word, sweep, verify_sweep
 
@@ -388,7 +388,7 @@ def _slope_pct(values: Sequence[float]) -> float | None:
     return max(-1.0, (end - start) / start)
 
 
-def _context(weeks: Sequence[Week], index: int, aggregate: str) -> dict[str, Any]:
+def _context(weeks: Sequence[Week], index: int, aggregate: str, noun: str = "rows") -> dict[str, Any]:
     """This week against the week before, the same week a year earlier, the recent averages, the seasonal expectation and the record."""
     target = weeks[index]
     values = [w.value for w in weeks]
@@ -397,7 +397,7 @@ def _context(weeks: Sequence[Week], index: int, aggregate: str) -> dict[str, Any
     history = weeks[max(0, index - 51) : index + 1]
     present = sum(1 for w in history if w.rows)
     sparse = len(history) >= 8 and present < 0.6 * len(history)
-    c["sparse"] = f"rows in only {present} of the last {len(history)} weeks" if sparse else None
+    c["sparse"] = f"data in only {present} of the last {len(history)} weeks" if sparse else None
     previous = weeks[index - 1] if index >= 1 else None
     c["previous"] = previous.value if previous else None
     c["previous_empty"] = bool(previous is not None and not previous.rows)
@@ -433,7 +433,7 @@ def _context(weeks: Sequence[Week], index: int, aggregate: str) -> dict[str, Any
     else:
         c["z"] = None
     if sparse:
-        c["verdict"] = f"the data has {c['sparse']}, so a weekly comparison says little about it; a monthly grain would fit it better"
+        c["verdict"] = f"{c['sparse']}, so a weekly comparison says little about it; a monthly grain would fit it better"
     elif len(residuals) < 8 or c["z"] is None:
         c["verdict"] = "not enough history to say whether this is unusual"
     elif math.isinf(c["z"]):
@@ -451,7 +451,7 @@ def _context(weeks: Sequence[Week], index: int, aggregate: str) -> dict[str, Any
     if recent_rows and len(recent_rows) >= 4:
         typical_rows = recent_rows[len(recent_rows) // 2]
         if target.rows < 0.5 * typical_rows:
-            c["coverage_note"] = f"this week holds {target.rows:,} rows against a typical {typical_rows:,} a week, so the data may be incomplete; read the movement as coverage until it fills"
+            c["coverage_note"] = f"this week holds {target.rows:,} {noun} against a typical {typical_rows:,} a week, so the data may be incomplete; read the movement as coverage until it fills"
     # the record
     earlier = values[:index]
     if earlier:
@@ -591,7 +591,7 @@ def _period_words(period: Mapping[str, Any]) -> str:
     return str(period.get("label") or (f"the week of {_week_label(period['start'])[8:]}" if period.get("start") else period))
 
 
-def _explanations(name: str, finding: SweepFinding | None, mix: Mapping[str, float]) -> list[str]:
+def _explanations(name: str, finding: SweepFinding | None, mix: Mapping[str, float], noun: str = "rows") -> list[str]:
     lines: list[str] = []
     if finding is None:
         return lines
@@ -608,9 +608,8 @@ def _explanations(name: str, finding: SweepFinding | None, mix: Mapping[str, flo
             against = "the week before" if m.comparison.kind == "week" else "the same week last year" if m.comparison.kind == "same_week_prior_year" else _period_words(m.comparison.before)
             lines.append(f"Had {_label(leader.group)} held at {against}, {name} would have moved {held:+.1%} instead of {m.pct:+.1%}.")
     if mix:
-        rows_word = "rows"
         lines.append(
-            f"Volume explains {mix['volume']:.0%} of the move ({m.before_rows:,} to {m.after_rows:,} {rows_word}) and the value per row {mix['rate']:.0%} ({_num(mix['rate_before'])} to {_num(mix['rate_after'])})"
+            f"More or fewer {noun} explain {mix['volume']:.0%} of the move ({m.before_rows:,} to {m.after_rows:,} {noun}); the value of each explains {mix['rate']:.0%} ({_num(mix['rate_before'])} to {_num(mix['rate_after'])} each)"
             + (f"; the rest is their interaction ({mix['interaction']:.0%})." if abs(mix["interaction"]) >= 0.05 else ".")
         )
     return lines
@@ -776,7 +775,7 @@ def brief(
                 typical = sorted(w.rows for w in weeks[max(0, index - 12) : index + 1] if w.rows)
                 behind = len(weeks) - 1 - index
                 notes.append(
-                    f"the last {f'{behind} weeks hold' if behind > 1 else 'week holds'} far fewer rows than the weeks before {'them' if behind > 1 else 'it'} ({weeks[-1].rows:,} against a typical {typical[len(typical) // 2]:,}), "
+                    f"the last {f'{behind} weeks hold' if behind > 1 else 'week holds'} far fewer {humanize_column(fact_name.rsplit('.', 1)[-1])} than the weeks before {'them' if behind > 1 else 'it'} ({weeks[-1].rows:,} against a typical {typical[len(typical) // 2]:,}), "
                     f"which usually means the data has not fully arrived, so the brief covers the {weeks[index].label}; say week={weeks[-1].start} to brief the latest week anyway"
                 )
         if index < 0:
@@ -791,7 +790,8 @@ def brief(
         metric_notes = [spec["note"]] if spec.get("note") else []
         if through is not None and max_day < through and target.start == wanted_monday.isoformat():
             metric_notes.append(f"its data ends on {_day_label(max_day.isoformat())}, {(through - max_day).days} day(s) before the end of the week")
-        ctx = _context(weeks, index, aggregate)
+        noun = humanize_column(fact_name.rsplit(".", 1)[-1])  # sessions, order items, sales: the word for a row of this fact
+        ctx = _context(weeks, index, aggregate, noun)
         points = _change_points(weeks[: index + 1]) if not ctx.get("sparse") else []  # a level shift needs a series that has rows in most weeks
         shares, pattern = _weekday_pattern(daily, target, weeks, index)
         comparisons: list[Comparison] = []
@@ -806,7 +806,7 @@ def brief(
             metric_notes.extend(n for n in swept.notes if "budget" in n)
         finding = _metric_finding(swept, ctx)
         mix = _mix(finding)
-        explanations = _explanations(spec["name"], finding, mix)
+        explanations = _explanations(spec["name"], finding, mix, noun)
         headline = _headline(spec["name"], target, ctx, aggregate)
         briefs.append(MetricBrief(spec["name"], fact_name, measure, tuple(spec["groupings"]), aggregate, tuple(weeks), target, ctx, tuple(points), shares, pattern, swept, mix, tuple(explanations), headline, tuple(n for n in metric_notes if n)))
     entities: list[Any] = []

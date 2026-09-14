@@ -71,7 +71,7 @@ def test_the_brief_puts_last_week_in_context_and_explains_it():
     assert finding.best.concentration == "single" and finding.best.groups[0].group == "North"
     assert revenue.mix["rate"] == pytest.approx(1.0) and revenue.mix["volume"] == pytest.approx(0.0)
     assert any(text.startswith("Had North held at the week before, sales revenue would have moved +0.0% instead of +22.5%.") for text in revenue.explanations)
-    assert any("Volume explains 0% of the move" in text and "the value per row 100%" in text for text in revenue.explanations)
+    assert any("More or fewer sales explain 0% of the move" in text and "the value of each explains 100%" in text for text in revenue.explanations)
     assert revenue.prior_year_finding is not None and revenue.prior_year_finding.movement.before_value == 8000.0
     assert revenue.headline.startswith("Sales revenue came in at 12,740 for the week of 23 Dec 2024: +22.5% on the week before, +59.2% on the same week last year, +22.5% against the 13-week average.")
     orders = result.metrics[1]
@@ -104,9 +104,9 @@ def test_a_brief_over_a_semantic_model_writes_daily_dax_and_copes_with_little_hi
     metric = result.metrics[0]
     # sales on the 1st and the 15th leave most weeks empty: the week before is a real zero, and the series is too sparse for a weekly verdict
     assert metric.context["value"] == 210.0 and metric.context["previous"] == 0.0 and metric.context["wow_pct"] is None and metric.context["previous_empty"]
-    assert metric.context["verdict"].startswith("the data has rows in only 5 of the last 52 weeks") and metric.context["z"] is None and metric.change_points == ()
+    assert metric.context["verdict"].startswith("data in only 5 of the last 52 weeks") and metric.context["z"] is None and metric.change_points == ()
     assert "after a week before with no rows" in metric.headline and "13-week average" not in metric.headline
-    assert result.watch == ("Sales amount: rows in only 5 of the last 52 weeks, so its week-to-week movements are not read as signal.",)
+    assert result.watch == ("Sales amount: data in only 5 of the last 52 weeks, so its week-to-week movements are not read as signal.",)
     assert result.narrative().startswith("In the week of 9 Dec 2013, no metric has a week before with rows to compare with.")
     assert any(q.startswith("EVALUATE SELECTCOLUMNS(SUMMARIZECOLUMNS('Date'[Date], \"n\", COUNTROWS('Sales')") for q in model.queries)
     assert metric.finding is not None and "DATE(2013,12,9)" in metric.finding.movement.query and metric.finding.best.path["column"] == "Color"

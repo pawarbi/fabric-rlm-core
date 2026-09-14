@@ -257,7 +257,14 @@
   was generated, the source and its location, the tables used, the request
   and the instructions given, the queries spent and the verification
   statement. Text and marks keep at least WCAG AA contrast; nothing on the
-  page relies on colour alone.
+  page relies on colour alone. Each takeaway links to its card by number
+  ("see card 5"). Caveats speak of the fact's own rows in the source's
+  words rather than of row counts: "sessions moved +40% in number and +28%
+  in value, so this is more sessions at about the same value each, not a
+  change in what each is worth", "only 4 payments before and 4 after",
+  "December 2024 holds 4 sales against a typical 62 a month"; the brief's
+  volume and rate split reads "more or fewer sales explain 86% of the
+  move; the value of each explains 23%".
 - **Time series arithmetic on every monthly chart** (`fabric_rlm.series`).
   The monthly charts of the recap, the trend report and the root-cause
   page run on one time axis and carry a centered moving average (twelve

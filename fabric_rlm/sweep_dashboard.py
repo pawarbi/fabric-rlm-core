@@ -674,9 +674,11 @@ def _takeaways(result: "Sweep") -> str:
     parts = []
     if takeaways:
         parts.append(f"<h2>{'Three things to know' if len(takeaways) >= 3 else 'To know'}</h2>")
+        trusted = [f for f in result.findings if f.trusted]
         items = []
         for t in takeaways:
-            link = f' <a href="#{t.anchor}" style="text-decoration:none;font-size:12.5px">detail</a>' if t.anchor else ""
+            number = trusted.index(t.finding) + 1 if t.finding in trusted else None  # the card in the driver analysis this sentence rests on
+            link = f' <a href="#{t.anchor}" style="text-decoration:none;font-size:12.5px">see card {number}</a>' if t.anchor and number else f' <a href="#{t.anchor}" style="text-decoration:none;font-size:12.5px">detail</a>' if t.anchor else ""
             items.append(f"<li>{esc(t.text)}{link}</li>")
         parts.append(f'<ol style="margin:0 0 8px 20px;padding:0;font-size:15px;line-height:1.55">{"".join(items)}</ol>')
     parts.append(f'<div class="card" style="padding:10px 16px"><div class="caption" style="margin:0 0 4px">The picture</div><div>{esc(result.narrative())}</div></div>')
