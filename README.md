@@ -186,7 +186,16 @@ closed rather than entering registered execution.
 
 ### Reviewing a Fabric Data Agent
 
-`fabric_rlm.data_agent_review` turns the same machinery on a Data Agent: read
+The review is experimental. It lives under `fabric_rlm.experimental` because
+its questions, grading and suggestions are still being refined against real
+agents. The sweep, the brief, the reports and the KPIs do not depend on it;
+what they share with it, the modelling of a source (schemas, the tables an
+agent selected, keys and time columns, measure columns, joins, attribute
+paths, vocabulary), is `fabric_rlm.source_model`. The old import path
+`fabric_rlm.data_agent_review` keeps working and resolves every name to its
+new home.
+
+`fabric_rlm.experimental.data_agent_review` turns the same machinery on a Data Agent: read
 its sources, instructions, descriptions and few-shots; profile the sources
 with `RLM.learn`; check the setup against the documented guidance (schema
 names belong in data-source instructions, references must exist, definitions

@@ -37,7 +37,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .data_agent_review import (
+from .source_model import (
     AgentDataSource,
     AgentSnapshot,
     LakehouseExecutor,
@@ -510,7 +510,7 @@ class Sweep:
 
     def noun(self, fact: str) -> str:
         """The word for a fact's rows: sessions, order items, sales."""
-        from .data_agent_review import humanize_column
+        from .source_model import humanize_column
 
         return self.words.get(fact) or humanize_column(fact.rsplit(".", 1)[-1])
 

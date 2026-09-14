@@ -389,6 +389,18 @@
 
 ### Changed
 
+- **The Data Agent review is experimental.** It moved to
+  `fabric_rlm.experimental.data_agent_review`; `fabric_rlm.data_agent_review`
+  stays as a compatibility path that resolves every name, so existing
+  notebooks and imports keep working. The modelling of a source that the
+  review shared with the sweep, the brief, the reports and the KPIs (schemas,
+  the tables an agent selected, the instructions that name tables and exclude
+  topics, keys and time columns, measure columns, date joins and period
+  expressions, attribute paths, vocabulary, the SQL helpers and the lakehouse
+  executor) is now `fabric_rlm.source_model`, and those tools import only
+  that; a test imports them with the review blocked. Nothing changed in what
+  the tools compute: the pages and Markdown of six local data sets are
+  identical before and after, apart from timestamps and seconds.
 - `LakehouseSource.query` keeps the Delta reader first and, when the reader
   rejects a table (Spark `void` columns, which no data file carries), reads
   the table's own data files as its transaction log lists them (the last

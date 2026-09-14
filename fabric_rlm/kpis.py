@@ -27,7 +27,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .data_agent_review import _ORDER_ID_HINT, _TIME_COLUMN, _Joins, _is_key, _measure_columns, _q, _sql_literal, _time_join, attribute_paths, humanize_column
+from .source_model import _ORDER_ID_HINT, _TIME_COLUMN, _Joins, _is_key, _measure_columns, _q, _sql_literal, _time_join, attribute_paths, humanize_column
 from .sweep import _dax_ref, _label
 
 __all__ = ["Entity", "KpiSpec", "discover_entities", "parse_kpi"]
@@ -587,7 +587,7 @@ def find_path(schema: Any, table: str, joins: Mapping[tuple[str, str], tuple[str
 
 def literal_for(schema: Any, table: str, path: Mapping[str, Any], value: str) -> Any:
     """A filter value typed like its column when the column is numeric, else the text as given."""
-    from .data_agent_review import _NUMERIC_TYPE, _path_table
+    from .source_model import _NUMERIC_TYPE, _path_table
 
     column_type = schema.column_type(_path_table(path, table), str(path["column"]))
     if _NUMERIC_TYPE.search(column_type):

@@ -102,6 +102,7 @@ DEEP_QUESTIONS = 4             # RLM-proposed questions with verified references
 
 from fabric.dataagent.client import FabricDataAgentManagement
 
+# the review lives in fabric_rlm.experimental.data_agent_review; this path resolves the same names on every release
 from fabric_rlm.data_agent_review import SdkAgentReader
 
 management = FabricDataAgentManagement(AGENT_NAME, WORKSPACE_NAME) if WORKSPACE_NAME else FabricDataAgentManagement(AGENT_NAME)
