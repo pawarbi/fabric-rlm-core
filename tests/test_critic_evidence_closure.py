@@ -6,7 +6,7 @@ from pathlib import Path
 
 MODULE_PATH = (
     Path(__file__).resolve().parents[1]
-    / "examples"
+    / "benchmarks"
     / "critic_evidence_closure.py"
 )
 
