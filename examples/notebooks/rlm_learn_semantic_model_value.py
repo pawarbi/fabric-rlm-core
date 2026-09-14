@@ -31,7 +31,7 @@
 
 # CELL ********************
 
-%pip install -q --upgrade "git+https://github.com/pawarbi/fabric-rlm-core.git@feature/knowledge-package-rebinding-integrity"
+%pip install -q "fabric-rlm==0.6.2"
 
 # METADATA ********************
 
