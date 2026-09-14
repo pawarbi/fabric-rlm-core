@@ -245,10 +245,10 @@ def _mentions_excluded(name: str, excluded: Collection[str]) -> bool:
     return any(term and term in lowered for term in excluded)
 
 
-def _scoped_facts(schema: SourceSchema, instructions: str, *, broad: bool = False) -> list[str]:
+def _scoped_facts(schema: SourceSchema, instructions: str, *, broad: bool = False, joins: Mapping[tuple[str, str], tuple[str, str]] | None = None) -> list[str]:
     """Fact tables in the agent's declared scope first; all of them when it names none; never an out-of-scope one."""
     excluded = excluded_terms(instructions)
-    facts = [t for t in _fact_tables(schema, broad=broad) if not _mentions_excluded(t, excluded)]
+    facts = [t for t in _fact_tables(schema, broad=broad, joins=joins) if not _mentions_excluded(t, excluded)]
     named = _tables_named_in(instructions, schema)
     in_scope = [t for t in named if t in facts]
     return in_scope or facts
@@ -258,10 +258,12 @@ def _scoped_facts(schema: SourceSchema, instructions: str, *, broad: bool = Fals
 # Columns: keys, time, measures, dates, joins and period expressions
 # --------------------------------------------------------------------------- #
 
-_MEASURE_HINT = re.compile(r"(amount|qty|quantity|units|revenue|sales|cost|price|margin|total|profit|value|hours|minutes|count|arr|mrr|usd|eur|gbp|calls|duration|balance|fee|charge|spend|volume|score|rating)", re.IGNORECASE)
+_MEASURE_HINT = re.compile(r"(amount|amt|qty|quantity|units|revenue|sales|cost|price|margin|total|profit|value|hours|minutes|count|arr|mrr|usd|eur|gbp|calls|duration|balance|fee|charge|spend|volume|score|rating)", re.IGNORECASE)
 
 
 _KEY_FORMS = re.compile(r"(?:^|[_ ])(?:[Ii][Dd]|[Kk][Ee][Yy])$|[a-z0-9](?:Id|ID|Key|KEY)$")
+# ord_no, cust_cd, item_nbr, plant_code: the spellings an ERP export uses for the same thing
+_KEY_SUFFIX = re.compile(r"(?:^|[_ ])(?:no|nbr|num|cd|code|ref)$", re.IGNORECASE)
 _KEY_STOPWORDS = frozenset({"paid", "unpaid", "prepaid", "valid", "invalid", "grid", "void", "avoid", "rapid", "solid", "liquid", "fluid", "acid", "hybrid", "said", "laid", "mid", "bid", "kid", "lid", "rid", "amid", "turkey", "monkey", "hockey", "jockey", "donkey", "whiskey", "journey", "period", "bandwidth"})
 _DATE_KEY = re.compile(r"date(key)?$", re.IGNORECASE)
 _YEAR_COLUMN = re.compile(r"^(calendar)?year$", re.IGNORECASE)
@@ -285,6 +287,135 @@ def _joins_from_instructions(text: str, schema: SourceSchema) -> dict[tuple[str,
     return joins
 
 
+def joins_from_data(
+    schema: SourceSchema,
+    executor: Any,
+    *,
+    tables: Sequence[str] | None = None,
+    limit: int = 60,
+) -> dict[tuple[str, str], tuple[str, str]]:
+    """Join paths that no name reveals, settled by asking the data which table owns the key.
+
+    ``_heuristic_joins`` needs a column whose name points at a table: ``customer_id`` to
+    ``customers``. An export that calls the same thing ``ord_no`` points nowhere, and the
+    order lines then have no way to reach the date on their header, so nothing can be
+    asked about them at all.
+
+    The data answers it. A key-shaped column that several tables share identifies a row
+    in exactly one of them; that table is the parent and the others reference it. One
+    ``COUNT(*)`` and ``COUNT(DISTINCT ...)`` per candidate settles it, and a column that
+    is unique in none of them, or in several, is left alone rather than guessed at.
+    """
+
+    names = list(tables if tables is not None else schema.tables)
+    shared: dict[str, list[str]] = {}
+    for table in names:
+        for column in schema.tables.get(table, ()):
+            if _is_key(column) and column.casefold() not in {"id", "key"} and not _DATE_KEY.search(column):
+                shared.setdefault(column, []).append(table)
+    joins: dict[tuple[str, str], tuple[str, str]] = {}
+    # A key a name already points at its table is settled; the data is not asked to
+    # overrule it. A small table can be unique by coincidence, and a dimension can hold a
+    # duplicate, so uniqueness alone would pick the wrong parent where names were right.
+    resolved = set(_heuristic_joins(schema))
+    spent = 0
+    for column, holders in sorted(shared.items()):
+        if len(holders) < 2:
+            continue
+        if any((table, column) in resolved for table in holders):
+            continue
+        unique: list[tuple[str, int]] = []
+        for table in holders:
+            if spent >= limit:
+                return joins
+            spent += 1
+            try:
+                rows = _rows(executor.run({"sql": f"SELECT COUNT(*) AS n, COUNT(DISTINCT {_q(column)}) AS d FROM {table}"}))
+            except Exception:  # noqa: BLE001 - a table that will not answer is not a parent
+                continue
+            if not rows:
+                continue
+            total, distinct = int(rows[0].get("n") or 0), int(rows[0].get("d") or 0)
+            if total and total == distinct:
+                unique.append((table, total))
+        # A table that carries measures is a fact, and a fact is never the parent of another
+        # table key: two facts that share ProductKey both point at a product dimension, and
+        # one of them being unique by chance must not make it the parent of the other.
+        unique = [(t, n) for t, n in unique if not _measure_columns(schema, t)]
+        if len(unique) != 1:
+            continue  # unique everywhere or nowhere: the data does not say which is the parent
+        parent, _size = unique[0]
+        for table in holders:
+            if table != parent:
+                joins[(table, column)] = (parent, column)
+    return joins
+
+
+def shadow_tables(
+    schema: SourceSchema,
+    executor: Any,
+    *,
+    tables: Sequence[str] | None = None,
+    limit: int = 40,
+) -> dict[str, str]:
+    """Tables that are a stale copy of another one, as ``copy -> original``.
+
+    A migration leaves ``sls_dtl_v2`` beside ``sls_dtl``; a Data Agent offered both
+    answers from whichever it reaches first, and half its answers are then quietly
+    computed on a subset. Names cannot settle which is authoritative, and neither can a
+    reference query, so the data does: the same columns, fewer rows, and every key
+    already present in the other one.
+
+    Only a strict subset counts. Two tables that merely resemble each other, or that
+    each hold rows the other lacks, are left alone rather than guessed at.
+    """
+
+    names = list(tables if tables is not None else schema.tables)
+    by_signature: dict[tuple[str, ...], list[str]] = {}
+    for table in names:
+        signature = tuple(sorted(c.casefold() for c in schema.tables.get(table, ())))
+        if signature:
+            by_signature.setdefault(signature, []).append(table)
+
+    shadows: dict[str, str] = {}
+    spent = 0
+    for signature, group in sorted(by_signature.items()):
+        if len(group) < 2:
+            continue
+        key = next((c for c in schema.tables[group[0]] if _is_key(c)), "")
+        if not key:
+            continue
+        counts: dict[str, int] = {}
+        for table in group:
+            if spent >= limit:
+                return shadows
+            spent += 1
+            try:
+                rows = _rows(executor.run({"sql": f"SELECT COUNT(*) AS n FROM {table}"}))
+            except Exception:  # noqa: BLE001 - a table that will not answer is not judged
+                continue
+            if rows:
+                counts[table] = int(rows[0].get("n") or 0)
+        if len(counts) < 2:
+            continue
+        ranked = sorted(counts, key=lambda t: counts[t], reverse=True)
+        original = ranked[0]
+        for candidate in ranked[1:]:
+            if counts[candidate] >= counts[original] or spent >= limit:
+                continue
+            spent += 1
+            try:
+                rows = _rows(executor.run({"sql": (
+                    f"SELECT COUNT(*) AS n FROM {candidate} c WHERE NOT EXISTS "
+                    f"(SELECT 1 FROM {original} o WHERE o.{_q(key)} = c.{_q(key)})"
+                )}))
+            except Exception:  # noqa: BLE001
+                continue
+            if rows and int(rows[0].get("n") or 0) == 0:
+                shadows[candidate] = original
+    return shadows
+
+
 def _heuristic_joins(schema: SourceSchema) -> dict[tuple[str, str], tuple[str, str]]:
     """``<Name>Key``, ``<name>_id`` or ``id_<name>`` in a table to the table that carries the same column.
 
@@ -301,7 +432,7 @@ def _heuristic_joins(schema: SourceSchema) -> dict[tuple[str, str], tuple[str, s
             lowered = column.casefold()
             if lowered in {"datekey", "id", "key"} or not _is_key(column):
                 continue
-            stem = re.sub(r"^id_|[_ ]?(?:id|key)$", "", lowered)
+            stem = re.sub(r"^id_|[_ ]?(?:id|key|no|nbr|num|cd|code|ref)$", "", lowered)
             if not stem:
                 continue
             plural_forms = [stem, f"{stem}s", f"{stem}es"] + ([stem[:-1] + "ies"] if stem.endswith("y") else [])
@@ -326,9 +457,12 @@ def _heuristic_joins(schema: SourceSchema) -> dict[tuple[str, str], tuple[str, s
     return joins
 
 
-def _fact_tables(schema: SourceSchema, *, broad: bool = False) -> list[str]:
+def _fact_tables(schema: SourceSchema, *, broad: bool = False, joins: Mapping[tuple[str, str], tuple[str, str]] | None = None) -> list[str]:
+    """Fact tables. ``joins`` carries paths the caller discovered (see :func:`joins_from_data`);
+    without it only the paths a column name reveals are known, and order lines whose key is
+    called ``ord_no`` never reach the date on their header."""
     facts = []
-    joins = _heuristic_joins(schema)
+    joins = dict(joins) if joins is not None else _heuristic_joins(schema)
     referenced = _referenced_tables(schema, joins)
     for table, columns in schema.tables.items():
         if re.match(r"^(?:[a-z0-9_]+\.)?dim[_a-z]", table, re.IGNORECASE) or re.search(r"(?:^|[._])(?:date|dates|calendar|time|dim_date)$", table, re.IGNORECASE):
@@ -362,7 +496,7 @@ def _measure_columns(schema: SourceSchema, table: str, *, broad: bool = False) -
     ``broad`` adds every numeric non-key column the profile types allow (Good, Scrap, Down, Planned on a production log):
     what the driver tools sweep, where a column that is never asked about costs nothing.
     """
-    preferred = ("salesamount", "revenue", "amount", "sales", "price", "total", "net", "gross", "totalproductcost", "orderquantity", "quantity", "qty", "units", "value")
+    preferred = ("salesamount", "revenue", "amount", "amt", "sales", "price", "total", "net", "gross", "totalproductcost", "orderquantity", "quantity", "qty", "units", "value")
     secondary = re.compile(r"(freight|tax|discount|shipping|fee|handling|cost)", re.IGNORECASE)
     def usable(c: str) -> bool:
         return (
@@ -424,7 +558,7 @@ def _is_key(column: str) -> bool:
     lowered = name.casefold()
     if lowered in _KEY_STOPWORDS or lowered.rsplit("_", 1)[-1] in _KEY_STOPWORDS:
         return False
-    if _ID_PREFIX.match(name) or _KEY_FORMS.search(name):
+    if _ID_PREFIX.match(name) or _KEY_FORMS.search(name) or _KEY_SUFFIX.search(name):
         return True
     return bool(re.fullmatch(r"[a-z]{3,}(?:id|key)", lowered)) and name == lowered
 
