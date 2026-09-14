@@ -13,7 +13,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXAMPLE = ROOT / "examples" / "olist_deep_insight_critic.py"
+EXAMPLE = ROOT / "benchmarks" / "olist_deep_insight_critic.py"
 TAXONOMY = (
     "obviousness",
     "cross_domain_depth",

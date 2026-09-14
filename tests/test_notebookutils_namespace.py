@@ -9,6 +9,7 @@ def test_deprecated_notebook_utility_namespace_is_absent() -> None:
     roots = (
         repository / "fabric_rlm",
         repository / "examples",
+        repository / "benchmarks",
         repository / "tests",
         repository / ".github",
     )

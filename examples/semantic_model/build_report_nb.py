@@ -62,7 +62,7 @@ print("arm:", ARM)
 
 CELL_INSTALL = (
     "%pip install -q reportlab pypdf openpyxl "
-    "git+https://github.com/pawarbi/fabric-rlm-core.git@feat/semantic-model-input\n"
+    "fabric-rlm[analytics]==0.6.2\n"
 )
 
 # --- fixtures -------------------------------------------------------------

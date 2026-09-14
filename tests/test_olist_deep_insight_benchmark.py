@@ -9,7 +9,7 @@ import pytest
 
 
 MODULE_PATH = (
-    Path(__file__).resolve().parents[1] / "examples" / "olist_deep_insight_benchmark.py"
+    Path(__file__).resolve().parents[1] / "benchmarks" / "olist_deep_insight_benchmark.py"
 )
 CANONICAL_FILES = (
     "customers.csv",

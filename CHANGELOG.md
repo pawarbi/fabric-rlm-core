@@ -31,6 +31,479 @@
   libraries behave the same. In the dbo evaluation this affected 4/150 trials,
   every one of them graded wrong despite carrying the right number.
 
+## 0.6.2 — 2026-09-14 — Data Agent review, what moved and the Monday Morning Brief
+
+### Added
+
+- **Questions in plain words drive the report.** `fabric_rlm.reports.report`
+  reads a question the way it is asked: a filter on any value the source
+  holds ("for tiktok", "where customer state = SP", "for the Night shift",
+  "for desktop and safari"), looked up in the source before it is applied
+  and pushed into every query, the verification included; groupings named
+  with "per", "across", "for each" or "which" as well as "by"; a question
+  with no trigger word but a period, a "which" or a "focus" read as root
+  cause analysis; and "was it in line with the trend" read as a check, not
+  as a request for the trend page: each measure gets a sentence on how far
+  the named month (or the latest complete month) sat from what the trend
+  and season implied and whether that is within the usual spread. The page
+  and the Markdown list how the question was read, the filter with its row
+  count, and the words of the request that named nothing; a value that
+  matched nothing or too many things says so rather than silently widening
+  the report. A text column named in a question is a grouping, never a
+  measure (it used to become SUM(column) and fail the query); a grouping
+  phrase matches the column's own words and abbreviations ("product
+  category name", "customer" for custName); a table named in full is the
+  fact even when the default facts left it out. `sweep` takes `filters`
+  and the DAX and SQL dialects narrow the series, the top groups, the
+  grouped series and the latest date to them.
+- **Data Agent review** (`fabric_rlm.data_agent_review`, notebook
+  `examples/notebooks/rlm_data_agent_review.py`). Point it at a Fabric Data
+  Agent and it reads what the agent uses and how it is instructed (sources,
+  agent and data-source instructions, descriptions, few-shots), profiles the
+  same sources through `RLM.learn`, and then: diagnoses the setup against
+  the documented guidance (schema names in agent-level instructions that
+  belong with the source, references to objects the source does not have,
+  definitions that conflict between levels, missing descriptions, length
+  past the truncation limit, few-shot counts, schema size, negative
+  phrasing, routing rules for multi-source agents); generates questions
+  from the schemas and computes each reference by executing a query against
+  the source (SQL for lakehouse tables, a bounded aggregate for a semantic
+  model), so there is ground truth without anyone writing it; asks the
+  agent the same questions through its Responses endpoint (Assistants and
+  MCP askers exist too), keeps the run steps, grades the query it executed
+  where the steps expose it and its prose otherwise,
+  and classifies failures by cause (missing rows, unsorted ranking, a
+  narrower scope than asked, values that match nothing, an abstention where
+  the source answers, inconsistency across repetitions, misrouting between
+  sources); and renders
+  suggestions (agent instructions with schema lines moved out, data-source
+  instructions with structured sections, descriptions, few-shots built from
+  the executed references) into a Markdown report. Applying the suggestions
+  is a separate call against the agent's draft stage. Readers, executors,
+  askers and writers are small protocols with REST implementations for use
+  outside a notebook and SDK implementations for use inside one; the
+  notebook is a Fabric Python notebook on the 3.12 runtime.
+- **Review context and diagnostics.** `ReviewContext` states the agent's
+  scope, priorities, definitions, the reviewer's own questions (a query
+  or an answer as ground truth, graded first) and notes; the questions
+  are scoped and ordered by it, the definitions reach `RLM.learn`, and the
+  RLM second opinion receives it as prompt context. The report explains an
+  empty evaluation (year discovery failures, unrecognised fact tables,
+  missing date joins), names the source after its item, treats only
+  schema-shaped tokens as schema mentions, and picks the order date key
+  over due or ship dates whatever the column order.
+- **HTML report, learned knowledge, deeper analysis.** `ReviewReport.to_html`
+  renders the review as a self-contained page (findings as cards, graded
+  questions with the agent's answer, its query, the reference query and
+  rows, the run steps). The report summarises what `RLM.learn` recorded
+  (profiles, fingerprints, registered operations, lessons, events).
+  `deepen` uses the RLM with a language model to propose questions from the
+  scope, verifies each reference with two blind solves, asks the agent, and
+  explains every question that is not correct with a proposed change.
+  Topics the instructions put out of scope are excluded from generation
+  and a decline on one is `abstained_by_policy`; a year-over-year answer is
+  right by the change or by both totals; few-shot SQL carries the `dbo.`
+  prefix when the agent uses it; answers record whether their query ran.
+- **Natural questions across a skill matrix.** Generated questions read as
+  a business user asks them, with the words the agent's own instructions
+  use for tables, measures and attributes (channel synonyms in quotes,
+  `Use X for units`, `Revenue = SUM(...)`, `territory means ...`,
+  abbreviations such as B2B); the schema phrasing stays on the question for
+  the report. The set now covers aggregation, ranking, change, distinct
+  counts, a literal filter derived from the ranked reference, a KPI from
+  the instructions' own formula, the right measure column for a mapped
+  term, an ambiguous total across channels, a channel abbreviation, and an
+  out-of-scope topic where declining is the right answer; each question
+  carries its skill and the report counts outcomes by skill. Alternates
+  name their cause (`wrong_measure`, `row_count_not_distinct`,
+  `wrong_channel`, `answered_out_of_scope`). The RLM proposer is told to
+  write plain business questions over the same skills.
+- **Driver-based questions from discovered names and periods.**
+  `discover_drivers` runs a few small queries per fact table (top names
+  per role: entity, product, category, place; the month series for the
+  largest drop and rise between consecutive months; order counts per
+  entity for a threshold), and the generator turns them into the
+  questions a user actually asks, each with an executable reference:
+  a monthly and a quarterly trend, why the measure dropped between two
+  months and which products drove it (a decomposition, largest decreases
+  first), how a named entity performs year by year and on a category,
+  the share of a category and of the top 10 entities, a count of entities
+  above an order threshold, entities that bought one year and not the next,
+  a comparison of the two top entities, and the leading category per place
+  (a window function). Grouping columns are reached through several
+  dimension joins (product to subcategory to category). Answers to named
+  questions are graded by the names present; drops by absolute change.
+  The RLM proposer receives the discovered names and the drop period.
+- **Time expressions and instruction compliance.** Questions now also use
+  the periods users write: the same month last year, the month before,
+  last month, the week after Thanksgiving, winter, year to date, the last
+  30 days of data, a quarter. Each has the reading the reference takes
+  and the other readings that are acceptable when the answer states the
+  dates it took (`assumption_not_stated` otherwise). `extract_rules`
+  reads the checkable rules from the instructions (state the period and
+  the channel, rank and trend formats, currency format, the partial-year
+  caveat, no personal data, no direct fact-to-fact join, calendar rather
+  than fiscal year) and `check_rules` marks the answers that break them;
+  the report has an instruction-compliance table and each graded answer
+  carries its violations. Two probes trigger rules on purpose: a ranking
+  for the partial year and a request for customer contact details. The
+  notebook asks 25 questions per source by default, spread round-robin
+  across the skills.
+- **Any lakehouse shape.** The generator works from the shape of the data
+  rather than from one sample's names. A fact table is one with measures
+  and a time axis; the time axis is a date dimension with a year column, a
+  date or timestamp column on the fact, or one on a joined header table
+  (order lines through their order), and every period question renders
+  against whichever it found. Joins follow `<name>Key`, `<name>_id` and
+  `id_<name>` columns to the table that carries them, with or without a
+  schema prefix, and the executor maps `dbo.orders` to a safe alias and
+  back for the agent's SQL. When column names say nothing, the column types
+  the profile recorded decide: a timestamp or date column is a time axis, a
+  numeric column that is not a key is a measure, a text column that is not
+  a key, a time or free text is a grouping column, and the nearest grouping
+  column stands in for the category role so the driver questions still ask
+  what led a change. `SourceSchema.types` carries the types from
+  `schema_from_profile`. An empty evaluation now names the missing time
+  axis. Tested on an Olist-shaped lakehouse (timestamps on the order
+  header, `_id` keys, `dbo.` prefixes) and on one whose names carry no
+  English hint at all.
+- **The agent's selected tables.** Fabric lists a lakehouse datasource's
+  elements as `Schemas` > `dbo` > `Tables` | `Views` > `Table` | `View` >
+  columns; the reader walked the tree but took the `Tables` container for a
+  table and stopped there, so the selection came back unknown and the whole
+  lakehouse was profiled. The walk now passes through the structural
+  containers, names a table by its schema (`dbo/factinternetsales`), never
+  fetches a table's columns or a view, and the notebook scopes the lakehouse
+  to the selection whether it has schemas enabled (`Tables/dbo/<table>`) or
+  not (`Tables/<table>`, which the agent still lists under `dbo`), falling
+  back to every table only when neither layout resolves.
+- **What the RLM learned, made useful.** The report section used to list
+  every registered operation (43 identical rows for a 43-table lakehouse)
+  and fingerprints. It now says how the review uses the package, then shows
+  the agent's selected tables as the RLM sees them (fact or dimension, the
+  time axis and measures the questions rely on, personal-data columns, and
+  whether a registered aggregate operation covers the table), groups the
+  operations by kind, lists the lessons, and, after the deeper analysis,
+  what the package learned from the RLM's own verified runs: `deepen`
+  captures evidence on every solve, enriches the package through
+  `RLM.enrich`, reports the lessons that appeared, and returns the enriched
+  package as `report.learned_knowledge` for saving. `summarize_knowledge`
+  takes the schemas and the snapshot for this.
+- **Hints from the data.** `discover_hints` asks the lakehouse a bounded
+  set of small questions nobody would think to put in the instructions and
+  turns the answers into findings with basis `data`, each with the
+  instruction line it suggests: fact keys with no match in their dimension
+  and dimension keys that repeat (an inner join drops or multiplies rows),
+  values spelled in several cases or with padding (a lakehouse compares
+  case-sensitively, so compare with `lower(trim(...))` or normalise the
+  data), the vocabulary of small attributes (users say "bikes" for the
+  Bikes category), several date columns on a fact, partial years and
+  coverage, negative or missing measures, snowflaked join paths, personal
+  data on joined tables, a measure name shared by several facts. The report
+  shows them under "Hints from the data", the suggested data-source
+  instructions carry them under "From the data (inferred by the review;
+  confirm before applying)", the RLM proposer hears them, and a
+  `fuzzy_value` question asks for the top category spelled as a user would
+  ("bikes"), graded `fuzzy_match_failed` when the agent cannot map it to
+  the stored value. `review_agent(hints=False)` turns it off.
+- **Tested on other data.** Running the blind pipeline (no agent, no
+  instructions) on a SaaS schema (CloudMetrics: companies, industries,
+  invoices, payments, subscriptions, usage logs), a bakery chain
+  (franchises, customers, transactions), a flat retail file with spaces in
+  its column names and an integer date, and ARR tables keyed by a text
+  quarter showed where the rules were still shaped by one sample, and the
+  rules changed: a key is a key by its form (`customerID`, `customer_id`,
+  `Customer ID`, `id_cliente`), never `amount_paid`; joins reach irregular
+  plurals (company to companies) and prefixed dimensions (`sales_customers`
+  for `customerID`) and skip a table's own primary key; a table with one
+  measure, a time axis and a reference to another table is a fact, and so is
+  a flat table whose grouping columns sit on its own rows; a fact's own date
+  outranks a joined table's; grouping columns on the fact itself are used
+  (product, payment method, status), never personal data; identifiers with
+  spaces are quoted; an integer date (20240131) and a text date are read
+  as dates; a period written as text (2024/Q1, 2024-03) is a time axis of
+  its own with year and quarter or month but no day grain; periods and flags
+  are never measures; a column called plainly `name` takes its table's word;
+  what is counted is named after the table's own key (tickets,
+  transactions, invoices); every question the schema supports is generated
+  before the limit is applied, so a source with many facts keeps its trend,
+  driver and period questions. Tests cover each of those shapes end to end.
+- **What moved: a sweep and reports over a source** (`fabric_rlm.sweep`,
+  `fabric_rlm.reports`). `what_moved(source)` takes a `LakehouseSource` or
+  a `SemanticModel` directly and measures, with the source's own engine
+  (DuckDB SQL over OneLake; DAX through the model's relationships), how
+  every measure of every fact moved between the periods the time axis
+  supports: the latest month against the month before, the same month a
+  year earlier, the latest complete year against the previous one. Material
+  movements are decomposed by every grouping the joins or relationships
+  reach and classified (one group carries it, a few do, groups moved in
+  proportion to their size so the grouping explains nothing, groups moved
+  both ways), and the leading group is drilled one level further. The
+  sweep runs in two phases so the budget goes where it matters (every total
+  first, then the material ones largest relative change first), collapses
+  measures that move identically, averages scores and rates instead of
+  summing them, and flags volume-driven changes, small bases and an
+  incomplete last month. Every figure carries the query that produced it
+  and an independent per-period query that recomputes it; `verify_sweep`
+  runs those, grouped so a decomposition costs two queries to check.
+  `report(source, request)` reads a request in plain words against the
+  source's vocabulary (its tables, measures, grouping columns and the
+  instructions' words for them) into a `ReportSpec` and builds one of four
+  reports: trend (by month, and by the largest groups of each grouping
+  asked for), root cause (one movement decomposed by the groupings asked
+  for and drilled), recap (the full sweep) and top movers (the groups that
+  rose and fell most); the page states how the request was read.
+  `Sweep.to_html()` and `Report.to_html()` render a self-contained
+  dashboard with headline cards, trend lines, a waterfall of drivers, a
+  driver scatter (share of base against share of change), the tables and
+  the queries behind every figure; `save(path)` writes it as a page. The
+  page leads with the answer: up to three takeaways, one sentence each with
+  the figure, the comparison, the driver and the caveat, linked to their
+  detail, then a short paragraph with the picture, then the supporting
+  detail. Every compared period passes a completeness check first: a month
+  with fewer than half the rows of a typical month before it, or a year
+  with fewer than half the other's months of data, is flagged as coverage
+  rather than business change, set aside from the takeaways and shown last
+  in the driver analysis, whatever date the data runs to. One verification
+  statement, built from the same counts as the header badge, says how many
+  figures were recomputed, how many were not, and what those carry.
+  Notebook: `examples/notebooks/rlm_what_moved.ipynb`. Measures no longer
+  include order numbers, codes or text columns. The month compared is the
+  latest one with at least half the rows of a typical earlier month; a
+  trailing stub is skipped and named in a note, and an explicit
+  `Comparison` compares it anyway. `SUM(column)` in the instructions makes
+  that column a sum whatever its name suggests, so a `price` line item
+  defined as revenue is summed, not averaged. Every grouping tried is
+  listed under a movement (`Also by ...`), and numeric length, weight and
+  size columns are never groupings. A table with no amount (cases, tickets,
+  sessions, events) is measured by its row count, decomposed and recomputed
+  like any measure; every numeric non-key column is a measure for the
+  driver tools (Good, Scrap and Down on a production log, not only the
+  columns named like amounts), a unit price beside an amount is averaged,
+  and every fact with a time axis is swept, four by default. A root-cause
+  request takes the fact carrying the measure it names. A grouping with
+  hundreds of values where no group carries 2% of the change reads as
+  fragmented; logins, aliases, first and last names, prose columns and
+  numeric lengths or weights are never groupings; two paths that share a
+  word are told apart by their table; two measures that agree within 1% in
+  every comparison, on any fact, are one figure; and when nothing moved by
+  5% or more the largest movements are listed as steady, so a page is never
+  empty.
+- **Pages in IBCS notation, with a Pareto view.** The dashboard follows
+  the International Business Communication Standards (version 2): the
+  title states the message, the current period is dark and the period
+  compared with is grey, a rise is green and a fall is red in a pair
+  colour-blind readers can tell apart (with the sign and a hatch as a
+  second cue), time runs left to right, categories are horizontal bars,
+  every chart of one measure on a page shares its scale, and the unit sits
+  in the chart title. Each driver analysis shows the bridge (the change
+  each group contributed between the two periods), an IBCS variance chart
+  (every group before and after, its absolute change and its relative
+  change as a pin), the driver scatter, and, for a grouping with twelve or
+  more members, a Pareto view: how few groups carry 80% of the base and
+  80% of the change, as a sentence and as cumulative curves
+  (`Sweep.pareto`, `Sweep.pareto_sentence`, also in the text output).
+  Movements on incomplete periods are collapsed at the bottom of the page
+  under "Set aside, not read as business change", where a reader can open
+  them; an "About this page" block, also collapsed, records when the page
+  was generated, the source and its location, the tables used, the request
+  and the instructions given, the queries spent and the verification
+  statement. Text and marks keep at least WCAG AA contrast; nothing on the
+  page relies on colour alone. Each takeaway links to its card by number
+  ("see card 5"). Caveats speak of the fact's own rows in the source's
+  words rather than of row counts: "sessions moved +40% in number and +28%
+  in value, so this is more sessions at about the same value each, not a
+  change in what each is worth", "only 4 payments before and 4 after",
+  "December 2024 holds 4 sales against a typical 62 a month"; the brief's
+  volume and rate split reads "more or fewer sales explain 86% of the
+  move; the value of each explains 23%". The line under the title says
+  what a reader needs before the numbers: the periods compared, the span
+  of data behind them, the periods set aside as incomplete, the facts
+  covered, and the rule for a movement to count ("5% or more on a complete
+  period"); the brief's says the week, what it is read against and the
+  history behind it. The source kind, the figure count, the queries and
+  the seconds now live in "About this page".
+- **Time series arithmetic on every monthly chart** (`fabric_rlm.series`).
+  The monthly charts of the recap, the trend report and the root-cause
+  page run on one time axis and carry a centered moving average (twelve
+  months, three below eighteen months of history), level shifts by binary
+  segmentation, and a pin strip of the change on the same month a year
+  earlier. With two years or more the series is decomposed classically
+  into trend (the centered 12-month average), a seasonal index per
+  calendar month and a residual with a two-sigma band, shown as three
+  small multiples; with three years or more of a season worth naming,
+  level shifts are looked for on the seasonally adjusted series so a peak
+  is not read as a step, and a smooth slope is never called a step (two
+  flat levels must fit better than one line). Each series gets sentences
+  it can support and nothing else: the level shift with its before and
+  after, the trend as a percentage a year, how many of the last twelve
+  months were up on a year earlier, how much of the variation the season
+  explains with the peak and trough months, and the largest departure
+  from trend and season; a flat series says nothing. The recap lists what
+  moved together year over year (a rank correlation over twelve shared
+  months or more, with a one-month lead either way). Every method and
+  its parameters are named in the About block; a trailing month the
+  coverage rule set aside stays out of every fit. The weekly chart of the
+  brief carries its centered average too. `Sweep.stories`,
+  `Sweep.trend_lines` and `Sweep.comovement` expose the same for text.
+- **Guards on what a figure can mean.** A decomposition whose groups hold
+  more rows than the fact (a join to a table whose key is not unique) is
+  flagged "join multiplies rows", classified as no evidence and never the
+  driver; rows the join drops (a key with no match in the grouping's
+  table) are kept as a group of their own, "(no match in products)", so
+  every split adds up to its total and the remainder is not recomputed as
+  if the source had produced it. The Pareto view reads against the
+  parent's totals, so a grouping the query cut at its 500 largest movers
+  says so and the curve ends in the unlisted rest instead of pretending
+  the 500 are everything. A timestamp column that carries a time zone is
+  read in UTC, so a day does not move with the session's time zone. A
+  model query returning more than 200,000 rows is refused with a clear
+  message, and the concentration KPI over a model groups by week inside
+  DAX (falling back to one row per day and group when a model will not),
+  so a fine grouping no longer returns days times groups.
+
+### Changed
+
+- **`examples/` holds only what a user runs.** The benchmark harnesses
+  (the Olist deep-insight benchmark, its staged and manifest-driven forms,
+  the critic and evidence-closure cycles, the action synthesis step, ONS
+  CPI) and the notebooks that reproduce published figures (SpreadsheetBench
+  400, the knowledge benchmark matrix and value run) moved to
+  `benchmarks/`, with a README that names each harness, its data and its
+  test. The frozen golden trajectories moved to
+  `tests/fixtures/trajectories/`, next to the test that replays them. The
+  release verification notebooks moved to `tests/release_verification/`.
+  `examples/` keeps the Fabric notebook recipes, the quickstart task and
+  the semantic model example, and gained a README. The lossless SUBMIT
+  reproduction script was dropped (the behaviour is covered by
+  `tests/test_interpreter.py` and described in
+  `docs/lossless-submit-payloads.md`); the golden-trajectory replay script
+  became `docs/replaying-trajectories.md`. The key and kernel checks on
+  public notebooks now cover every notebook wherever it lives; the
+  pinned-install checks cover the recipes and the release checks, since a
+  development benchmark may install the branch under test.
+- **The Data Agent review is experimental.** It moved to
+  `fabric_rlm.experimental.data_agent_review`; `fabric_rlm.data_agent_review`
+  stays as a compatibility path that resolves every name, so existing
+  notebooks and imports keep working. The modelling of a source that the
+  review shared with the sweep, the brief, the reports and the KPIs (schemas,
+  the tables an agent selected, the instructions that name tables and exclude
+  topics, keys and time columns, measure columns, date joins and period
+  expressions, attribute paths, vocabulary, the SQL helpers and the lakehouse
+  executor) is now `fabric_rlm.source_model`, and those tools import only
+  that; a test imports them with the review blocked. Nothing changed in what
+  the tools compute: the pages and Markdown of six local data sets are
+  identical before and after, apart from timestamps and seconds.
+- `LakehouseSource.query` keeps the Delta reader first and, when the reader
+  rejects a table (Spark `void` columns, which no data file carries), reads
+  the table's own data files as its transaction log lists them (the last
+  checkpoint plus later commits). A table whose features need the reader
+  (deletion vectors, column mapping, v2 checkpoints) is never read that way.
+  A catalog column no data file carries comes back as NULL; the rejection
+  and the file list are remembered per table while the log is unchanged.
+  `LakehouseSource.query` accepts a `timeout` (seconds, at most 600) for
+  direct callers; a worker's query keeps the 30-second default.
+
+### Fixed
+
+- **A question about a month before the last two years is checked
+  against its series.** The monthly series kept for the page and for the
+  trend check started at the second to last complete year, so "was scrap
+  in July 2026 in line with the trend" on data that runs to 2028 answered
+  "the monthly series does not cover July 2026". The series now reaches
+  back to the earliest year the comparison names (July 2025 here) and
+  runs on to the end of the data, and the check sentence comes out.
+- **A word of the check phrase can still name a column.** "was scrap in
+  July 2026 in line with the trend for c1 line" read "line" as part of
+  "in line with" and dropped it from the filter clause, so the bare "c1"
+  landed on the first grouping that held it, the asset "Gas Turbine C1",
+  rather than the line. The words of the check phrase are set aside only
+  after the filters are read, and a filler word that exactly names a
+  column reachable from the fact ("line" for line_name) counts as that
+  column, so the page says "only: line = Line C1 - Turbine Assembly
+  (matched 'c1')".
+- **The note about the months after the compared one says what is
+  true.** When a question named a month with data after it, every later
+  month was listed as holding "far fewer rows than a typical month", 78
+  against 81. A month that was asked for now gets "the data runs on to
+  December 2028; the month comparison stops at July 2026 as asked", and
+  only a month holding under half a typical month's rows is called
+  incomplete, a typical month being the median of the six months up to
+  the compared one (it used to be the median of the six largest counts).
+- The concentration KPI over a semantic model ("top 3 share of sales
+  amount by product") read wrongly: the window was a `CALCULATE` filter on
+  the date column inside the measure, which overrides the row's own date,
+  so every day of the model carried the whole window's total and the share
+  came out the same for every week. The window is now a filter on the rows
+  (`FILTER(ALL(date), ...)` inside `SUMMARIZECOLUMNS`), checked against
+  the live AdventureWorks model (the week and day shapes agree with a
+  direct total of the window), and the series refuses a result whose rows
+  fall outside the window asked for, so a wrong query shape fails loudly
+  rather than producing a flat share. The lakehouse SQL for the same KPI
+  was right all along.
+- **Monday Morning Brief** (`fabric_rlm.brief`, or `report(source, "monday
+  morning brief: revenue by region, orders")`). Name the metrics to track
+  and the brief takes the latest complete Monday-to-Sunday week the source
+  holds (or the week you name), measures each metric for it with the
+  source's engine at day grain, and puts it in context: the week before, the
+  same week a year earlier, the averages of the last four and thirteen
+  weeks, the seasonal expectation (the recent level scaled by how that week
+  of the year ran against its own level in prior years) and the rank against
+  the record. It finds level shifts in the weekly history (binary
+  segmentation on the means), calls a week unusual when it sits far from
+  the expectation in units of the recent residuals, decomposes the
+  week-over-week move by the groupings named and drills the leading group,
+  splits the move into volume and value per row, states the counterfactual
+  for the leading group, reads the day-of-week pattern against the twelve
+  weeks before, notes which metrics moved together and which led by a week,
+  and keeps a watch list. The page is a newsletter: one look, the watch
+  list, one section per metric with the weekly chart (the week, the
+  expectation and the level shifts marked), the context table, the drivers,
+  the pattern, and the queries. What it says about causes is what the
+  history supports and it says so. The week briefed is the latest with
+  real coverage: a trailing week with under half the rows of a typical
+  recent week is read as data still arriving, skipped, and named in a note
+  with the `week=` override. Weeks with no rows count as zero rather than
+  disappearing, so a filtered series that stops early reads zero for the
+  briefed week; a series with rows in under 60% of its weeks is called
+  sparse and gets neither a verdict, a level shift nor a trend, since the
+  weekly grain is wrong for it. Co-movement is a rank correlation over
+  week-over-week changes with near-empty base weeks and the thin tail left
+  out, and only the strongest pairs are listed. The fitted trend is the end
+  of the fitted line against its start, a decline capped at -100%. A metric
+  named after its table counts rows (`cases by priority`, `number of
+  tickets`); words that name no measure on any fact are declined with the
+  measures listed, never replaced by a default; a metric whose data reaches
+  into the briefed week but stops short of its Sunday (no weekend shift, a
+  feed a day behind) is measured for it with the shortfall said next to the
+  number; two metrics on one measure are told apart by their grouping; and
+  a flat week reads as flat.
+- **KPIs from structure** (`fabric_rlm.kpis`, through `brief(source,
+  metrics, kpis=[...])`). Nothing assumes customers or sales: an entity is
+  any key on the fact that refers to something with repeat activity over
+  time, ranked by cardinality, repeat rate across months and a name that
+  reads like an entity, and the choice is printed with its reasons and its
+  rivals (`entity=` overrides it). From the entity the lifecycle counts
+  follow for any domain, in one SQL query for a lakehouse or one DAX query
+  per week for a model: active, new (first activity in the week), retained,
+  resurrected (back after a gap) and churned (active in the window before,
+  not now), drawn as growth accounting. Ratios divide two measures or a
+  measure by rows per week (``"average order value = sales amount / order
+  quantity"``); crossings report the week one series overtook another or a
+  level, with filters in plain words (``"order quantity where channel =
+  Internet vs order quantity where channel = Reseller"``); concentration
+  tracks the share the top groups hold and who entered the top. Every KPI
+  gets the same context, level shifts, verdict and watch list as a metric,
+  and its definition is printed next to its number. Entities are looked
+  for on every table with a time axis and a key, measures or not (an orders
+  table is where customers appear), and a name that matches nothing is
+  declined with the candidates listed rather than substituted. An id that
+  never recurs across months is said, in the definition, to be an event
+  rather than a lasting entity. A fact column that joins a dimension is an
+  entity key whether or not it is called an id (a customer name joining the
+  customers table is the customer); a ratio named like a rate prints as a
+  percentage; the denominator of a ratio is looked for on the numerator's
+  fact first, so `scrap / qty` stays on the production log.
 - **A value containing `--`, `/*` or `*/` no longer looks like a SQL comment to
   `LakehouseSource.query`.** The read-only gate scanned the raw query text for
   comment markers, so an ordinary filter on data that happens to contain them —
