@@ -176,6 +176,216 @@
   transactions, invoices); every question the schema supports is generated
   before the limit is applied, so a source with many facts keeps its trend,
   driver and period questions. Tests cover each of those shapes end to end.
+- **What moved: a sweep and reports over a source** (`fabric_rlm.sweep`,
+  `fabric_rlm.reports`). `what_moved(source)` takes a `LakehouseSource` or
+  a `SemanticModel` directly and measures, with the source's own engine
+  (DuckDB SQL over OneLake; DAX through the model's relationships), how
+  every measure of every fact moved between the periods the time axis
+  supports: the latest month against the month before, the same month a
+  year earlier, the latest complete year against the previous one. Material
+  movements are decomposed by every grouping the joins or relationships
+  reach and classified (one group carries it, a few do, groups moved in
+  proportion to their size so the grouping explains nothing, groups moved
+  both ways), and the leading group is drilled one level further. The
+  sweep runs in two phases so the budget goes where it matters (every total
+  first, then the material ones largest relative change first), collapses
+  measures that move identically, averages scores and rates instead of
+  summing them, and flags volume-driven changes, small bases and an
+  incomplete last month. Every figure carries the query that produced it
+  and an independent per-period query that recomputes it; `verify_sweep`
+  runs those, grouped so a decomposition costs two queries to check.
+  `report(source, request)` reads a request in plain words against the
+  source's vocabulary (its tables, measures, grouping columns and the
+  instructions' words for them) into a `ReportSpec` and builds one of four
+  reports: trend (by month, and by the largest groups of each grouping
+  asked for), root cause (one movement decomposed by the groupings asked
+  for and drilled), recap (the full sweep) and top movers (the groups that
+  rose and fell most); the page states how the request was read.
+  `Sweep.to_html()` and `Report.to_html()` render a self-contained
+  dashboard with headline cards, trend lines, a waterfall of drivers, a
+  driver scatter (share of base against share of change), the tables and
+  the queries behind every figure; `save(path)` writes it as a page. The
+  page leads with the answer: up to three takeaways, one sentence each with
+  the figure, the comparison, the driver and the caveat, linked to their
+  detail, then a short paragraph with the picture, then the supporting
+  detail. Every compared period passes a completeness check first: a month
+  with fewer than half the rows of a typical month before it, or a year
+  with fewer than half the other's months of data, is flagged as coverage
+  rather than business change, set aside from the takeaways and shown last
+  in the driver analysis, whatever date the data runs to. One verification
+  statement, built from the same counts as the header badge, says how many
+  figures were recomputed, how many were not, and what those carry.
+  Notebook: `examples/notebooks/rlm_what_moved.ipynb`. Measures no longer
+  include order numbers, codes or text columns. The month compared is the
+  latest one with at least half the rows of a typical earlier month; a
+  trailing stub is skipped and named in a note, and an explicit
+  `Comparison` compares it anyway. `SUM(column)` in the instructions makes
+  that column a sum whatever its name suggests, so a `price` line item
+  defined as revenue is summed, not averaged. Every grouping tried is
+  listed under a movement (`Also by ...`), and numeric length, weight and
+  size columns are never groupings. A table with no amount (cases, tickets,
+  sessions, events) is measured by its row count, decomposed and recomputed
+  like any measure; every numeric non-key column is a measure for the
+  driver tools (Good, Scrap and Down on a production log, not only the
+  columns named like amounts), a unit price beside an amount is averaged,
+  and every fact with a time axis is swept, four by default. A root-cause
+  request takes the fact carrying the measure it names. A grouping with
+  hundreds of values where no group carries 2% of the change reads as
+  fragmented; logins, aliases, first and last names, prose columns and
+  numeric lengths or weights are never groupings; two paths that share a
+  word are told apart by their table; two measures that agree within 1% in
+  every comparison, on any fact, are one figure; and when nothing moved by
+  5% or more the largest movements are listed as steady, so a page is never
+  empty.
+- **Pages in IBCS notation, with a Pareto view.** The dashboard follows
+  the International Business Communication Standards (version 2): the
+  title states the message, the current period is dark and the period
+  compared with is grey, a rise is green and a fall is red in a pair
+  colour-blind readers can tell apart (with the sign and a hatch as a
+  second cue), time runs left to right, categories are horizontal bars,
+  every chart of one measure on a page shares its scale, and the unit sits
+  in the chart title. Each driver analysis shows the bridge (the change
+  each group contributed between the two periods), an IBCS variance chart
+  (every group before and after, its absolute change and its relative
+  change as a pin), the driver scatter, and, for a grouping with twelve or
+  more members, a Pareto view: how few groups carry 80% of the base and
+  80% of the change, as a sentence and as cumulative curves
+  (`Sweep.pareto`, `Sweep.pareto_sentence`, also in the text output).
+  Movements on incomplete periods are collapsed at the bottom of the page
+  under "Set aside, not read as business change", where a reader can open
+  them; an "About this page" block, also collapsed, records when the page
+  was generated, the source and its location, the tables used, the request
+  and the instructions given, the queries spent and the verification
+  statement. Text and marks keep at least WCAG AA contrast; nothing on the
+  page relies on colour alone. Each takeaway links to its card by number
+  ("see card 5"). Caveats speak of the fact's own rows in the source's
+  words rather than of row counts: "sessions moved +40% in number and +28%
+  in value, so this is more sessions at about the same value each, not a
+  change in what each is worth", "only 4 payments before and 4 after",
+  "December 2024 holds 4 sales against a typical 62 a month"; the brief's
+  volume and rate split reads "more or fewer sales explain 86% of the
+  move; the value of each explains 23%". The line under the title says
+  what a reader needs before the numbers: the periods compared, the span
+  of data behind them, the periods set aside as incomplete, the facts
+  covered, and the rule for a movement to count ("5% or more on a complete
+  period"); the brief's says the week, what it is read against and the
+  history behind it. The source kind, the figure count, the queries and
+  the seconds now live in "About this page".
+- **Time series arithmetic on every monthly chart** (`fabric_rlm.series`).
+  The monthly charts of the recap, the trend report and the root-cause
+  page run on one time axis and carry a centered moving average (twelve
+  months, three below eighteen months of history), level shifts by binary
+  segmentation, and a pin strip of the change on the same month a year
+  earlier. With two years or more the series is decomposed classically
+  into trend (the centered 12-month average), a seasonal index per
+  calendar month and a residual with a two-sigma band, shown as three
+  small multiples; with three years or more of a season worth naming,
+  level shifts are looked for on the seasonally adjusted series so a peak
+  is not read as a step, and a smooth slope is never called a step (two
+  flat levels must fit better than one line). Each series gets sentences
+  it can support and nothing else: the level shift with its before and
+  after, the trend as a percentage a year, how many of the last twelve
+  months were up on a year earlier, how much of the variation the season
+  explains with the peak and trough months, and the largest departure
+  from trend and season; a flat series says nothing. The recap lists what
+  moved together year over year (a rank correlation over twelve shared
+  months or more, with a one-month lead either way). Every method and
+  its parameters are named in the About block; a trailing month the
+  coverage rule set aside stays out of every fit. The weekly chart of the
+  brief carries its centered average too. `Sweep.stories`,
+  `Sweep.trend_lines` and `Sweep.comovement` expose the same for text.
+- **Guards on what a figure can mean.** A decomposition whose groups hold
+  more rows than the fact (a join to a table whose key is not unique) is
+  flagged "join multiplies rows", classified as no evidence and never the
+  driver; rows the join drops (a key with no match in the grouping's
+  table) are kept as a group of their own, "(no match in products)", so
+  every split adds up to its total and the remainder is not recomputed as
+  if the source had produced it. The Pareto view reads against the
+  parent's totals, so a grouping the query cut at its 500 largest movers
+  says so and the curve ends in the unlisted rest instead of pretending
+  the 500 are everything. A timestamp column that carries a time zone is
+  read in UTC, so a day does not move with the session's time zone. A
+  model query returning more than 200,000 rows is refused with a clear
+  message, and the concentration KPI over a model groups by week inside
+  DAX (falling back to one row per day and group when a model will not),
+  so a fine grouping no longer returns days times groups.
+
+### Fixed
+
+- The concentration KPI over a semantic model ("top 3 share of sales
+  amount by product") read wrongly: the window was a `CALCULATE` filter on
+  the date column inside the measure, which overrides the row's own date,
+  so every day of the model carried the whole window's total and the share
+  came out the same for every week. The window is now a filter on the rows
+  (`FILTER(ALL(date), ...)` inside `SUMMARIZECOLUMNS`), checked against
+  the live AdventureWorks model (the week and day shapes agree with a
+  direct total of the window), and the series refuses a result whose rows
+  fall outside the window asked for, so a wrong query shape fails loudly
+  rather than producing a flat share. The lakehouse SQL for the same KPI
+  was right all along.
+- **Monday Morning Brief** (`fabric_rlm.brief`, or `report(source, "monday
+  morning brief: revenue by region, orders")`). Name the metrics to track
+  and the brief takes the latest complete Monday-to-Sunday week the source
+  holds (or the week you name), measures each metric for it with the
+  source's engine at day grain, and puts it in context: the week before, the
+  same week a year earlier, the averages of the last four and thirteen
+  weeks, the seasonal expectation (the recent level scaled by how that week
+  of the year ran against its own level in prior years) and the rank against
+  the record. It finds level shifts in the weekly history (binary
+  segmentation on the means), calls a week unusual when it sits far from
+  the expectation in units of the recent residuals, decomposes the
+  week-over-week move by the groupings named and drills the leading group,
+  splits the move into volume and value per row, states the counterfactual
+  for the leading group, reads the day-of-week pattern against the twelve
+  weeks before, notes which metrics moved together and which led by a week,
+  and keeps a watch list. The page is a newsletter: one look, the watch
+  list, one section per metric with the weekly chart (the week, the
+  expectation and the level shifts marked), the context table, the drivers,
+  the pattern, and the queries. What it says about causes is what the
+  history supports and it says so. The week briefed is the latest with
+  real coverage: a trailing week with under half the rows of a typical
+  recent week is read as data still arriving, skipped, and named in a note
+  with the `week=` override. Weeks with no rows count as zero rather than
+  disappearing, so a filtered series that stops early reads zero for the
+  briefed week; a series with rows in under 60% of its weeks is called
+  sparse and gets neither a verdict, a level shift nor a trend, since the
+  weekly grain is wrong for it. Co-movement is a rank correlation over
+  week-over-week changes with near-empty base weeks and the thin tail left
+  out, and only the strongest pairs are listed. The fitted trend is the end
+  of the fitted line against its start, a decline capped at -100%. A metric
+  named after its table counts rows (`cases by priority`, `number of
+  tickets`); words that name no measure on any fact are declined with the
+  measures listed, never replaced by a default; a metric whose data reaches
+  into the briefed week but stops short of its Sunday (no weekend shift, a
+  feed a day behind) is measured for it with the shortfall said next to the
+  number; two metrics on one measure are told apart by their grouping; and
+  a flat week reads as flat.
+- **KPIs from structure** (`fabric_rlm.kpis`, through `brief(source,
+  metrics, kpis=[...])`). Nothing assumes customers or sales: an entity is
+  any key on the fact that refers to something with repeat activity over
+  time, ranked by cardinality, repeat rate across months and a name that
+  reads like an entity, and the choice is printed with its reasons and its
+  rivals (`entity=` overrides it). From the entity the lifecycle counts
+  follow for any domain, in one SQL query for a lakehouse or one DAX query
+  per week for a model: active, new (first activity in the week), retained,
+  resurrected (back after a gap) and churned (active in the window before,
+  not now), drawn as growth accounting. Ratios divide two measures or a
+  measure by rows per week (``"average order value = sales amount / order
+  quantity"``); crossings report the week one series overtook another or a
+  level, with filters in plain words (``"order quantity where channel =
+  Internet vs order quantity where channel = Reseller"``); concentration
+  tracks the share the top groups hold and who entered the top. Every KPI
+  gets the same context, level shifts, verdict and watch list as a metric,
+  and its definition is printed next to its number. Entities are looked
+  for on every table with a time axis and a key, measures or not (an orders
+  table is where customers appear), and a name that matches nothing is
+  declined with the candidates listed rather than substituted. An id that
+  never recurs across months is said, in the definition, to be an event
+  rather than a lasting entity. A fact column that joins a dimension is an
+  entity key whether or not it is called an id (a customer name joining the
+  customers table is the customer); a ratio named like a rate prints as a
+  percentage; the denominator of a ratio is looked for on the numerator's
+  fact first, so `scrap / qty` stays on the production log.
 
 ### Changed
 
