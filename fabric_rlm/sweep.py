@@ -328,6 +328,7 @@ class Sweep:
     collapsed: tuple[str, ...] = ()  # "fact|measure" keys measured but not decomposed because they move like another measure
     location: str = ""  # where the source lives: a OneLake or file root, a workspace and dataset
     instructions: str = ""  # the instructions the sweep was given
+    threshold: float = 0.05  # the relative change a movement needs to count as material
 
     def phrase(self, movement: Movement) -> str:
         return self.words.get(f"{movement.fact}|{movement.measure}", f"{movement.fact} {movement.measure}")
@@ -1436,7 +1437,7 @@ def sweep(
             drill.sort(key=lambda d: (-_rank(d), _placeholder_lead(d), -d.explained))
             findings.append(SweepFinding(total, tuple(decompositions), tuple(drill), flags))
     findings.sort(key=lambda f: (not f.trusted, any(flag.startswith("volume:") for flag in f.flags), -(_rank(f.best) if f.best else -1), -abs(f.movement.pct or 0)))
-    return Sweep(probe.name, probe.kind, tuple(findings), tuple(ledger), spent, budget, tuple(years_used), tuple(notes), words, series, collapsed=tuple(collapsed), location=str(getattr(probe, "location", "") or ""), instructions=text)
+    return Sweep(probe.name, probe.kind, tuple(findings), tuple(ledger), spent, budget, tuple(years_used), tuple(notes), words, series, collapsed=tuple(collapsed), location=str(getattr(probe, "location", "") or ""), instructions=text, threshold=min_pct)
 
 
 def _wanted_comparisons(months: Sequence[Mapping[str, Any]], years: Sequence[int], comparisons: Sequence[Any] | None) -> list[Comparison]:

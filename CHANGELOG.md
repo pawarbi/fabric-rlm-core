@@ -264,7 +264,13 @@
   change in what each is worth", "only 4 payments before and 4 after",
   "December 2024 holds 4 sales against a typical 62 a month"; the brief's
   volume and rate split reads "more or fewer sales explain 86% of the
-  move; the value of each explains 23%".
+  move; the value of each explains 23%". The line under the title says
+  what a reader needs before the numbers: the periods compared, the span
+  of data behind them, the periods set aside as incomplete, the facts
+  covered, and the rule for a movement to count ("5% or more on a complete
+  period"); the brief's says the week, what it is read against and the
+  history behind it. The source kind, the figure count, the queries and
+  the seconds now live in "About this page".
 - **Time series arithmetic on every monthly chart** (`fabric_rlm.series`).
   The monthly charts of the recap, the trend report and the root-cause
   page run on one time axis and carry a centered moving average (twelve

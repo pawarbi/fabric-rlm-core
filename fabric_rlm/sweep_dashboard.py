@@ -721,7 +721,7 @@ def _about(result: Any, *, request: str, instructions: str, location: str, table
         ("Source", f"{result.source} ({kind})" + (f", {location}" if location else "")),
         ("Tables used", ", ".join(tables) if tables else "none"),
         ("Request", request or "none given; the defaults were used"),
-        ("Queries", queries),
+        ("Queries and figures", queries),
         ("Verification", statement),
         ("Made with", f"fabric-rlm {__version__}, deterministic rules over the source's own query engine; no language model wrote a number or a sentence"),
     ]
@@ -834,11 +834,9 @@ def _finding(result: "Sweep", finding: "SweepFinding", index: int, *, others_as_
 
 def render(result: "Sweep") -> str:
     """The dashboard as an HTML fragment with its own styles, ready for ``displayHTML``."""
-    kind = "semantic model" if result.kind == "semantic_model" else result.kind
-    years = f"{result.years[0]} to {result.years[-1]}" if result.years else "the data's years"
     parts = [f"<style>{_STYLE}</style>", '<div class="wm">']
     parts.append(f"<h1>What moved in {esc(result.source)}</h1>")
-    parts.append(f'<div class="sub">{esc(kind)}, {esc(years)}: {len(result.findings)} material movement(s) from {len(result.ledger)} figures measured by the source in {result.queries} of {result.budget} queries{esc(_seconds(result.elapsed))}. {_badge(result)}</div>')
+    parts.append(f'<div class="sub">{esc(_subtitle_sweep(result, threshold=getattr(result, "threshold", 0.05)))} {_badge(result)}</div>')
     parts.extend(_recap_body(result, request="what moved", instructions=getattr(result, "instructions", "")))
     parts.append("</div>")
     return "\n".join(parts)
@@ -878,7 +876,7 @@ def _recap_body(result: "Sweep", *, request: str = "", instructions: str = "") -
         parts.append("".join(f'<div class="caption">{esc(note)}</div>' for note in result.notes))
     parts.append(_aside_section(result, len(trusted) + 1))
     methods = _series_methods(result)
-    parts.append(_about(result, request=request, instructions=instructions, location=getattr(result, "location", ""), tables=_tables_of(result), queries=f"{result.queries} of a budget of {result.budget}{_seconds(result.elapsed)}", statement=result.verification_statement(), extra=((("Series methods", methods),) if methods else ())))
+    parts.append(_about(result, request=request, instructions=instructions, location=getattr(result, "location", ""), tables=_tables_of(result), queries=f"{len(result.ledger):,} figures measured by the source in {result.queries} of a budget of {result.budget} queries{_seconds(result.elapsed)}", statement=result.verification_statement(), extra=((("Series methods", methods),) if methods else ())))
     parts.append(f'<div class="foot">{esc(result.verification_statement())} No language model was involved in producing the numbers or the sentences.</div>')
     return parts
 
@@ -895,6 +893,52 @@ def _page(title: str, body: str) -> str:
 # --------------------------------------------------------------------------- #
 # Reports of one kind
 # --------------------------------------------------------------------------- #
+
+
+def _join(items: Sequence[str]) -> str:
+    items = list(items)
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1] if items else ""
+
+
+def _span_words(result: "Sweep") -> str:
+    months = sorted({(p.year, p.month) for points in result.series.values() for p in points})
+    if not months:
+        return ""
+    (y0, m0), (y1, m1) = months[0], months[-1]
+    return f"Data from {calendar.month_name[m0]} {y0} to {calendar.month_name[m1]} {y1}"
+
+
+def _subtitle_sweep(result: "Sweep", *, threshold: float | None) -> str:
+    """The periods compared, the span of data behind them, what was set aside, the facts covered, and the rule for a movement to count."""
+    from .sweep import _period_label
+
+    totals = [m for m in result.ledger if m.path is None]
+    labels = list(dict.fromkeys(m.comparison.label for m in totals))
+    facts = list(dict.fromkeys(result.words.get(m.fact, m.fact) for m in totals))
+    aside = list(dict.fromkeys(_period_label(m.comparison.after) for m in totals if not m.trusted))
+    sentences = []
+    if labels:
+        sentences.append(f"Compares {_join(labels)}.")
+    span = _span_words(result)
+    if span:
+        sentences.append(span + (f"; {_join(aside)} set aside as incomplete" if aside else "") + ".")
+    if facts:
+        sentences.append(f"Covers {_join(facts)}.")
+    if threshold:
+        sentences.append(f"A movement counts when it is {threshold:.0%} or more on a complete period.")
+    return " ".join(sentences)
+
+
+def _subtitle_brief(brief: Any) -> str:
+    starts = sorted(w.start for m in brief.metrics for w in m.weeks)
+    sentences = [f"The week of {brief.week_label}, against the week before, the same week a year earlier, and the level and season of the weeks before it."]
+    if starts and brief.week is not None:
+        first = _dt.date.fromisoformat(starts[0])
+        last = _dt.date.fromisoformat(brief.week.start) + _dt.timedelta(days=6)
+        sentences.append(f"History from {first.day} {calendar.month_name[first.month]} {first.year} to {last.day} {calendar.month_name[last.month]} {last.year}.")
+    count = len(brief.metrics)
+    sentences.append(f"{count} metric{'s' if count != 1 else ''}, each with its definition below.")
+    return " ".join(sentences)
 
 
 def _badge(result: "Sweep") -> str:
@@ -971,10 +1015,9 @@ def _top_movers_report(report: Any) -> list[str]:
 def render_report(report: Any) -> str:
     """A report of one kind as an HTML fragment with its own styles."""
     spec, result = report.spec, report.sweep
-    kind = "semantic model" if result.kind == "semantic_model" else result.kind
     parts = [f"<style>{_STYLE}</style>", '<div class="wm">']
     parts.append(f"<h1>{esc(spec.title.capitalize())}: {esc(result.source)}</h1>")
-    parts.append(f'<div class="sub">{esc(kind)}, {esc(f"{result.years[0]} to {result.years[-1]}" if result.years else "")}: {len(result.ledger)} figures measured by the source in {report.queries} of {result.budget} queries{esc(_seconds(report.elapsed))}. {_badge(result)}</div>')
+    parts.append(f'<div class="sub">{esc(_subtitle_sweep(result, threshold=getattr(result, "threshold", 0.05) if spec.kind == "recap" else None))} {_badge(result)}</div>')
     parts.append(_reading(spec))
     instructions = getattr(result, "instructions", "")
     if spec.kind == "trend":
@@ -1007,7 +1050,7 @@ def render_report(report: Any) -> str:
     if spec.kind == "root_cause":
         parts.append(_aside_section(result, len([f for f in result.findings if f.trusted]) + 1))
     methods = _series_methods(result)
-    parts.append(_about(result, request=spec.request, instructions=instructions, location=getattr(result, "location", ""), tables=_tables_of(result), queries=f"{report.queries} of a budget of {result.budget}{_seconds(report.elapsed)}", statement=result.verification_statement(), extra=((("Series methods", methods),) if methods else ())))
+    parts.append(_about(result, request=spec.request, instructions=instructions, location=getattr(result, "location", ""), tables=_tables_of(result), queries=f"{len(result.ledger):,} figures measured by the source in {report.queries} of a budget of {result.budget} queries{_seconds(report.elapsed)}", statement=result.verification_statement(), extra=((("Series methods", methods),) if methods else ())))
     parts.append(f'<div class="foot">{esc(result.verification_statement())} No language model was involved in producing the numbers or the sentences.</div>')
     parts.append("</div>")
     return "\n".join(parts)
@@ -1288,7 +1331,6 @@ _RATE_NAME = re.compile(r"(rate|share|pct|percent|ratio|yield|margin)", re.IGNOR
 
 def render_brief(brief: Any) -> str:
     """The brief as an HTML fragment with its own styles: one look, the watch list, every metric, what moves together."""
-    kind = "semantic model" if brief.kind == "semantic_model" else brief.kind
     parts = [f"<style>{_STYLE}</style>", '<div class="wm">']
     parts.append(f"<h1>{esc(brief.title)}</h1>")
     badge = (
@@ -1296,7 +1338,7 @@ def render_brief(brief: Any) -> str:
         if brief.verified and brief.recomputed
         else '<span class="badge muted">nothing to recompute</span>' if brief.verified else '<span class="badge muted">not recomputed</span>'
     )
-    parts.append(f'<div class="sub">Week of {esc(brief.week_label)}. {esc(kind)}, {len(brief.metrics)} metric(s), {brief.queries} of {brief.budget} queries{esc(_seconds(brief.elapsed))}. {badge}</div>')
+    parts.append(f'<div class="sub">{esc(_subtitle_brief(brief))} {badge}</div>')
     narrative = brief.narrative()
     if narrative:
         parts.append(f'<div class="card" style="padding:10px 16px"><div class="caption" style="margin:0 0 4px">The week in short</div><div style="font-size:15px">{esc(narrative)}</div></div>')
@@ -1340,7 +1382,8 @@ def render_brief(brief: Any) -> str:
             for table in _tables_of(metric.sweep):
                 if table not in tables:
                     tables.append(table)
-    parts.append(_about(brief, request=getattr(brief, "request", ""), instructions=getattr(brief, "instructions", ""), location=getattr(brief, "location", ""), tables=tables, queries=f"{brief.queries} of a budget of {brief.budget}{_seconds(brief.elapsed)}", statement=brief.verification_statement(), extra=(("Week", brief.week_label),)))
+    figures = sum(len(m.sweep.ledger) for m in brief.metrics if m.sweep is not None)
+    parts.append(_about(brief, request=getattr(brief, "request", ""), instructions=getattr(brief, "instructions", ""), location=getattr(brief, "location", ""), tables=tables, queries=f"{figures:,} figures measured by the source in {brief.queries} of a budget of {brief.budget} queries{_seconds(brief.elapsed)}", statement=brief.verification_statement(), extra=(("Week", brief.week_label),)))
     parts.append(f'<div class="foot">{esc(brief.verification_statement())} The seasonal expectation, level shifts, patterns and associations are computed from the source\'s own weekly history. No language model wrote a number or a sentence.</div>')
     parts.append("</div>")
     return "\n".join(parts)

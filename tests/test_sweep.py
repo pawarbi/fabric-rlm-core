@@ -438,7 +438,7 @@ def test_the_sweep_writes_dax_for_a_semantic_model_and_every_figure_recomputes()
     assert any(g.group is None for d in december.decompositions for g in d.groups) or True  # a blank colour is a group like any other
     assert "Sales amount rose 136.9% 2012 to 2013 (650 to 1,540)." in result.to_markdown()  # "sales" + "sales amount" reads as one phrase
     html = result.to_html()
-    assert "semantic model, 2012 to 2013" in html and "<svg" in html and "EVALUATE ROW" in html
+    assert "Compares " in html and "Data from " in html and "December 2013" in html and "(semantic model)" in html and "<svg" in html and "EVALUATE ROW" in html
 
 
 # --------------------------------------------------------------------------- #
