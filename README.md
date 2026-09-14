@@ -220,14 +220,22 @@ format, the partial-year caveat, no personal data, the join and calendar
 rules), and compute each reference by executing a query against the source.
 What moved in the data is a separate tool over the source itself:
 `fabric_rlm.reports.report` takes a lakehouse or a semantic model and a
-request in plain words ("trend of revenue by product category", "why did
+question in plain words ("trend of revenue by product category", "why did
 reseller sales fall in December 2013 by territory", "top movers by customer
-year over year", "weekly recap"), reads it against the source's own
-vocabulary, measures every figure with the source's engine (SQL over
-OneLake, DAX for a model), recomputes each reported figure with an
-independent query, and renders a dashboard with trend, waterfall and driver
-scatter charts (`examples/notebooks/rlm_what_moved.ipynb`). No model
-touches the numbers. `fabric_rlm.brief.brief(source, ["revenue by region",
+year over year", "weekly recap", "what changed in July 2025 for product xyz
+and was it in line with the trend"), reads it against the source's own
+vocabulary (the kind of report; the measure; the groupings after "by",
+"per" or "which"; the periods; a filter on any value the source holds,
+looked up before it is applied and pushed into every query: "for tiktok",
+"where customer state = SP", "for the Night shift"; and a check of the
+named month against the trend and season of each measure when the question
+asks whether it was in line), measures every figure with the source's
+engine (SQL over OneLake, DAX for a model), recomputes each reported figure
+with an independent query, and renders a dashboard with trend, waterfall
+and driver scatter charts (`examples/notebooks/rlm_what_moved.ipynb`). The
+page lists how the question was read, the filter with its row count, and
+the words that named nothing; a value that matches nothing or too many
+things is said, not silently widened. No model touches the numbers. `fabric_rlm.brief.brief(source, ["revenue by region",
 "orders"])` is the Monday Morning Brief: last week for the metrics you name,
 against the week before, the same week last year, the recent averages and
 the seasonal expectation, with level shifts, the drivers of the move, the

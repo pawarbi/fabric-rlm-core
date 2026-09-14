@@ -924,6 +924,9 @@ def _subtitle_sweep(result: "Sweep", *, threshold: float | None) -> str:
         sentences.append(span + (f"; {_join(aside)} set aside as incomplete" if aside else "") + ".")
     if facts:
         sentences.append(f"Covers {_join(facts)}.")
+    phrase = result.filter_phrase() if getattr(result, "filters", ()) and hasattr(result, "filter_phrase") else ""
+    if phrase:
+        sentences.append(f"Only rows where {phrase}.")
     if threshold:
         sentences.append(f"A movement counts when it is {threshold:.0%} or more on a complete period.")
     return " ".join(sentences)
@@ -1019,6 +1022,10 @@ def render_report(report: Any) -> str:
     parts.append(f"<h1>{esc(spec.title.capitalize())}: {esc(result.source)}</h1>")
     parts.append(f'<div class="sub">{esc(_subtitle_sweep(result, threshold=getattr(result, "threshold", 0.05) if spec.kind == "recap" else None))} {_badge(result)}</div>')
     parts.append(_reading(spec))
+    checks = list(getattr(report, "checks", ()))
+    if checks:
+        parts.append("<h2>Against the trend and season</h2>")
+        parts.append('<div class="card">' + "".join(f'<div class="story">{esc(text)}</div>' for text in checks) + "</div>")
     instructions = getattr(result, "instructions", "")
     if spec.kind == "trend":
         parts.extend(_trend_report(report))

@@ -29,7 +29,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .source_model import AgentDataSource, AgentSnapshot, _is_key, _is_time_column, _measure_columns, _month_name, _tables_named_in, attribute_paths, build_vocabulary, excluded_terms, humanize_column
+from .source_model import _NUMERIC_TYPE, _TEXT_TYPE, AgentDataSource, AgentSnapshot, _is_key, _is_time_column, _measure_columns, _month_name, _path_table, _tables_named_in, attribute_paths, build_vocabulary, excluded_terms, humanize_column
 from .sweep import Comparison, Movement, Point, Sweep, _aggregate_for, _choose_paths, _points, _probe_for, sweep, verify_sweep
 
 __all__ = ["Report", "ReportSpec", "parse_request", "report"]
@@ -42,6 +42,34 @@ _KINDS = {
     "recap": re.compile(r"\b(recap|review|summary|summari[sz]e|what moved|overview|weekly|monthly business|wbr|mbr|highlights)\b", re.IGNORECASE),
 }
 _KIND_NAMES = {"brief": "Monday Morning Brief", "root_cause": "root cause analysis", "top_movers": "top movers", "trend": "trend analysis", "recap": "recap of what moved"}
+_FOCUS = re.compile(r"\b(which|focus|moving|driving|behind|contribut\w*|responsible)\b", re.IGNORECASE)
+# a question about whether a period was in line with the trend or the season: read as a check, not as a request for a trend page
+_TREND_CHECK = re.compile(
+    r"\b(?:in\s?line with|against|versus|vs\.?|compared? (?:to|with)|consistent with|expected (?:from|by|given)|explained by|match(?:es|ing)?|follow(?:s|ing)?|part of|fit(?:s|ting)?|normal for|typical for)\b[^.?;]{0,30}?\b(?:trend|trends|season\w*|pattern|history|usual|normal|expectation|expected)\b"
+    r"|\b(?:is|was|were|are)\b[^.?;]{0,40}?\b(?:in line|normal|expected|usual|typical|unusual|abnormal|an? (?:anomaly|outlier)|out of line|seasonal)\b(?:\s+with\b[^.?;]{0,30}?\b(?:trend|trends|season\w*|pattern|history|usual|normal|expectation|expected)\b)?"
+    r"|\b(?:anything|something|nothing)\s+(?:unusual|abnormal|odd|strange)\b|\banomal\w*\b|\boutliers?\b",
+    re.IGNORECASE,
+)
+_YOY_WORDS = re.compile(r"\b(year over year|yoy|y/y|prior year|last year|previous year|a year (ago|earlier))\b", re.IGNORECASE)
+_MOM_WORDS = re.compile(r"\b(month over month|mom|m/m|previous month|prior month|last month|latest month|month before)\b", re.IGNORECASE)
+_ANNUAL_WORDS = re.compile(r"\b(annual|yearly|full year|by year)\b", re.IGNORECASE)
+# words a request is made of that name nothing in a source: not reported as ignored
+_FUNCTION_WORDS = frozenset("""
+a an the of in on at to for from by with and or but if then than as is are was were be been being it its this that these those there here
+what whats which who whom whose why how when where did do does done has have had having will would should could can may might must shall
+me my we our us you your they them their i please show tell give get see look find want need like know help report analysis analyse analyze
+explain summarize summarise summary recap review overview highlights focus moving moved move moves movement movements changed change changes
+changing happened happen happening going went rise rose risen rising fall fell fallen falling drop dropped dropping increase increased increasing
+decrease decreased decreasing grow grew grown growth growing decline declined declining up down over under time period periods month months year
+years week weeks quarter quarters day days daily weekly monthly yearly annual latest last previous prior recent recently now current currently
+today yesterday ago earlier later same versus vs against compared compare comparison trend trends trending line inline normal expected unusual
+seasonal season seasonality pattern history usual typical anomaly anomalies outlier outliers top bottom biggest largest smallest most least more
+less fewer much many all any some every each per across between within into out about around especially particularly only just also too very
+really overall business performance performing doing numbers figures results drivers driver driving drove cause caused causes reason reasons
+behind contributed contributing responsible big small high low higher lower best worst good bad well badly key main major minor new old first
+second third one ones thing things something anything nothing no not yes so rather still yet again back off let lets make made take took put set
+based basis kind sort regarding since during date dates level levels number numbers rate share total totals amount value values data table fact
+""".split())
 _MONTHS = {name.casefold(): index for index, name in enumerate(calendar.month_name) if name}
 _MONTHS.update({name.casefold(): index for index, name in enumerate(calendar.month_abbr) if name})
 _PERIOD = re.compile(r"\b(?:(" + "|".join(sorted(_MONTHS, key=len, reverse=True)) + r")\.?\s+)?((?:19|20)\d{2})\b", re.IGNORECASE)
@@ -110,6 +138,9 @@ class ReportSpec:
     reading: tuple[str, ...] = ()  # how the request was read, printed on the page
     unmatched: tuple[str, ...] = ()  # parts of the request nothing in the source matched
     metrics: tuple[str, ...] = ()  # the metrics a brief tracks, in plain words
+    filters: tuple[tuple[Mapping[str, Any], Any], ...] = ()  # (grouping path, value) pairs every query is narrowed to; a value may be a tuple of members
+    check: bool = False  # read the named period (or the latest month) against the trend and season of each measure
+    lookups: int = 0  # queries spent resolving filter values against the source
 
     @property
     def title(self) -> str:
@@ -125,6 +156,7 @@ class Report:
     grouped_series: Mapping[str, Mapping[Any, tuple[Point, ...]]] = field(default_factory=dict)  # "fact|measure|column" -> label -> monthly points
     queries: int = 0
     elapsed: float = 0.0
+    checks: tuple[str, ...] = ()  # the named period against the trend and season, one sentence per measure
 
     @property
     def source(self) -> str:
@@ -147,6 +179,10 @@ class Report:
     def to_markdown(self) -> str:
         head = [f"# {self.spec.title.capitalize()}: {self.sweep.source}", ""]
         head.extend(f"- {line}" for line in self.spec.reading)
+        if self.checks:
+            head.append("")
+            head.append("Against the trend and season:")
+            head.extend(f"- {line}" for line in self.checks)
         head.append("")
         return "\n".join(head) + self.sweep.to_markdown()
 
@@ -176,7 +212,7 @@ def _kind(text: str, has_period: bool) -> str:
     for kind in ("brief", "root_cause", "top_movers", "trend", "recap"):
         if _KINDS[kind].search(text):
             return kind
-    return "root_cause" if has_period else "recap"
+    return "root_cause" if has_period or _FOCUS.search(text) else "recap"
 
 
 def _periods(text: str) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
@@ -204,11 +240,11 @@ def _periods(text: str) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | N
 def _comparison_kinds(text: str, period: Mapping[str, Any] | None) -> tuple[str, ...]:
     lowered = text.casefold()
     kinds: list[str] = []
-    if re.search(r"\b(year over year|yoy|y/y|prior year|last year|previous year|a year (ago|earlier))\b", lowered):
+    if _YOY_WORDS.search(lowered):
         kinds.append("same_month_prior_year" if (period and period.get("month")) or re.search(r"\bmonth\b", lowered) else "year")
-    if re.search(r"\b(month over month|mom|m/m|previous month|prior month|last month|latest month|month before)\b", lowered):
+    if _MOM_WORDS.search(lowered):
         kinds.append("month")
-    if re.search(r"\b(annual|yearly|full year|by year)\b", lowered) and "year" not in kinds:
+    if _ANNUAL_WORDS.search(lowered) and "year" not in kinds:
         kinds.append("year")
     return tuple(dict.fromkeys(kinds))
 
@@ -242,7 +278,21 @@ def _match_facts(text: str, probe: Any, vocabulary: Any, instructions: str) -> l
         if overlap:
             scored.append((-overlap, index, table))
     scored.sort()
-    return [t for _s, _i, t in scored] if scored else []
+    if scored:
+        return [t for _s, _i, t in scored]
+    # a table named in full that the default facts left out ("support tickets") is the fact, if it has a time axis
+    text_words = " ".join(_tokens(text))
+    dialect = None
+    for table in schema.tables:
+        if table in facts:
+            continue
+        spelled = " ".join(_tokens(humanize_column(table.rsplit(".", 1)[-1])))
+        if not spelled or f" {spelled} " not in f" {text_words} ":
+            continue
+        dialect = dialect or probe.dialect(probe.joins(instructions))
+        if dialect.axis(table) is not None:
+            return [table]
+    return []
 
 
 def _match_measures(text: str, schema: Any, table: str, vocabulary: Any) -> tuple[list[str], list[str]]:
@@ -258,7 +308,8 @@ def _match_measures(text: str, schema: Any, table: str, vocabulary: Any) -> tupl
     for column in schema.tables[table]:
         # a column named outright is the measure, whether or not its name says it is one (orders, sessions, headcount)
         spelled = " ".join(_tokens(humanize_column(column)))
-        if column not in candidates and spelled and f" {spelled} " in lowered_text and not _is_key(column) and not _is_time_column(schema, table, column):
+        column_type = schema.column_type(table, column)
+        if column not in candidates and spelled and f" {spelled} " in lowered_text and not _is_key(column) and not _is_time_column(schema, table, column) and not _TEXT_TYPE.search(column_type) and "bool" not in column_type:
             scored.append((-100, -1, column))
             matched_words.append(spelled)
     for index, column in enumerate(candidates):
@@ -286,10 +337,17 @@ def _match_measures(text: str, schema: Any, table: str, vocabulary: Any) -> tupl
 _GROUPING_CLAUSE = re.compile(r"\bby\s+(.+?)(?=\b(?:in|for|vs\.?|versus|against|compared|over|during|from|since|last|this|per|top|between)\b|[,.;?]|$)", re.IGNORECASE)
 
 
-def _grouping_phrases(text: str) -> list[str]:
-    """The words after ``by``: ``by product and territory`` gives product, territory."""
+_BROAD_GROUPING_CLAUSE = re.compile(
+    r"\b(?:by|per|across|for each|for every|which|broken down by|split by|grouped by)\s+(.+?)"
+    r"(?=\b(?:in|for|vs\.?|versus|against|compared|over|during|from|since|last|this|per|top|between|to|should|is|are|was|were|did|do|does|has|have|had|will|would|can|could|where|with|and (?:what|why|how|which|was|is|were|are|did))\b|[,.;?]|$)",
+    re.IGNORECASE,
+)
+
+
+def _grouping_phrases(text: str, *, broad: bool = False) -> list[str]:
+    """The words after ``by``: ``by product and territory`` gives product, territory. ``broad`` also reads per, across, for each and which."""
     phrases: list[str] = []
-    for match in _GROUPING_CLAUSE.finditer(text):
+    for match in (_BROAD_GROUPING_CLAUSE if broad else _GROUPING_CLAUSE).finditer(text):
         chunk = match.group(1)
         if re.fullmatch(r"\s*(month|year|week|quarter|day)s?\s*", chunk, re.IGNORECASE):
             continue  # "by month" is a trend, not a grouping
@@ -298,6 +356,18 @@ def _grouping_phrases(text: str) -> list[str]:
             if words and words not in {"month", "year", "week", "quarter"}:
                 phrases.append(words)
     return phrases
+
+
+def _same_word(a: str, b: str) -> bool:
+    """The same word, or one an abbreviation of the other with at least four letters in common (cust, customer)."""
+    return a == b or (min(len(a), len(b)) >= 4 and (a.startswith(b) or b.startswith(a)))
+
+
+def _word_overlap(words: Sequence[str], path: Mapping[str, Any]) -> int:
+    """How many words of a phrase the column carries, in its humanized name or in its own name."""
+    column = str(path["column"])
+    own = set(_tokens(humanize_column(column))) | set(_tokens(column))
+    return sum(1 for w in words if any(_same_word(w, o) for o in own))
 
 
 def _match_groupings(phrases: Sequence[str], schema: Any, table: str, joins: Mapping[tuple[str, str], tuple[str, str]], excluded: Any, terms: Sequence[str]) -> tuple[list[str], list[str]]:
@@ -312,7 +382,7 @@ def _match_groupings(phrases: Sequence[str], schema: Any, table: str, joins: Map
         words = _tokens(phrase)
         match = next((p for p in paths if str(p["column"]).casefold() == phrase.replace(" ", "").casefold() or humanize_column(str(p["column"])).casefold() == phrase), None)
         if match is None:
-            scored = sorted(((len(set(_tokens(humanize_column(str(p["column"])))) & set(words)), -len(p.get("hops") or ()), str(p["column"])) for p in paths), reverse=True)
+            scored = sorted(((_word_overlap(words, p), -len(p.get("hops") or ()), str(p["column"])) for p in paths), reverse=True)
             if scored and scored[0][0] > 0:
                 match = next(p for p in paths if str(p["column"]) == scored[0][2])
         if match is None:
@@ -330,8 +400,172 @@ def _match_groupings(phrases: Sequence[str], schema: Any, table: str, joins: Map
     return chosen, unmatched
 
 
+_HARD_INTRO = frozenset({"where", "for", "with", "only", "just", "especially", "particularly", "regarding"})
+_FILTER_CLAUSE = re.compile(
+    r"\b(where|for|with|in|on|at|of|about|especially|particularly|only|just|regarding)\s+(.+?)"
+    r"(?=\b(?:by|per|across|for each|for every|which|where|with|in|for|on|at|vs\.?|versus|against|compared|over|during|from|since|last|this|top|between|was|is|were|are|did|do|does|has|have|had|will|would|can|could|should)\b|[,.;?]|$)",
+    re.IGNORECASE,
+)
+_CONDITION = re.compile(r"\s*(?:=|==|\bis\b|\bequals\b|:)\s*")
+_EDGE_WORDS = frozenset({"the", "a", "an", "and", "or", "of", "to", "that", "those", "these", "this"})
+
+
+def _words_in(pattern: re.Pattern[str], text: str) -> set[str]:
+    return set(_tokens(" ".join(m.group(0) for m in pattern.finditer(text))))
+
+
+def _trim_clause(clause: str) -> str:
+    words = clause.strip().strip("\'\"").split()
+    while words and words[0].casefold() in _EDGE_WORDS:
+        words.pop(0)
+    while words and words[-1].casefold() in _EDGE_WORDS:
+        words.pop()
+    return " ".join(words)
+
+
+def _exact_path(paths: Sequence[Mapping[str, Any]], words: str) -> Mapping[str, Any] | None:
+    wanted = words.casefold()
+    return next((p for p in paths if str(p["column"]).casefold() == wanted.replace(" ", "") or humanize_column(str(p["column"])).casefold() == wanted or str(p["column"]).casefold().replace("_", " ") == wanted), None)
+
+
+def _path_named(paths: Sequence[Mapping[str, Any]], column: str) -> Mapping[str, Any] | None:
+    return next((p for p in paths if str(p["column"]) == column), None)
+
+
+def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table: str, joins: Mapping[tuple[str, str], tuple[str, str]], excluded: Any, terms: Sequence[str], vocabulary: Any, consumed: set[str]) -> tuple[list[tuple[Mapping[str, Any], Any]], list[str], int]:
+    """The filters a request asks for, resolved against the source: (path, value) pairs, the reading lines, the lookup queries spent.
+
+    A clause after where, for, with, only or especially names a column and a value ("channel = tiktok", "customer state SP",
+    "the Night shift") or a value alone ("tiktok", "Ski Resort"); a clause after in, on, at, of or about counts only when it
+    resolves. Every value is looked up in the source: an exact match filters on the stored spelling, one partial match on that
+    value, up to five partial matches on all of them, and more than five or none leaves the report unfiltered and says so.
+    """
+    axis = dialect.axis(table)
+    if axis is None:
+        return [], [], 0
+    fact = {"table": table, "date": axis, "measure": "rows", "aggregate": "count"}
+    noun = vocabulary.table(table)
+    paths = list(attribute_paths(schema, table, joins, excluded))
+    candidates = _choose_paths(schema, table, joins, excluded, terms, 12)
+    fact_words = set(_tokens(noun)) | set(_tokens(humanize_column(table.rsplit(".", 1)[-1])))
+    table_words = {w for t in schema.tables for w in _tokens(humanize_column(t.rsplit(".", 1)[-1]))} | {w for t in schema.tables for w in _tokens(vocabulary.table(t))}
+    filters: list[tuple[Mapping[str, Any], Any]] = []
+    lines: list[str] = []
+    spent = 0
+    taken: set[str] = set()
+
+    def numeric(path: Mapping[str, Any]) -> bool:
+        return bool(_NUMERIC_TYPE.search(schema.column_type(_path_table(path, table), str(path["column"]))))
+
+    def lookup(path: Mapping[str, Any], value: str) -> list[dict[str, Any]]:
+        nonlocal spent
+        spent += 1
+        try:
+            return [r for r in probe.run(dialect.lookup(fact, path, value)) if r.get("label") is not None]
+        except Exception:  # noqa: BLE001 - a grouping the source cannot search is simply not a match
+            return []
+
+    for match in _FILTER_CLAUSE.finditer(residue):
+        hard = match.group(1).casefold() in _HARD_INTRO
+        for raw in re.split(r"\s+and\s+|,", match.group(2), flags=re.IGNORECASE):
+            clause = _trim_clause(raw)
+            if not clause:
+                continue
+            parts = _CONDITION.split(clause, maxsplit=1)
+            column_words: str | None = None
+            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                column_words, value = parts[0].strip(), parts[1].strip().strip("\'\"")
+            else:
+                kept = [w for w in clause.split() if w.casefold() not in fact_words and w.casefold() not in table_words and w.casefold() not in consumed and w.casefold() not in _FUNCTION_WORDS and w.casefold() not in _GENERIC]
+                if not kept:
+                    continue  # the clause named the fact, a measure or a period: not a filter
+                value = " ".join(kept)
+            splits: list[tuple[Mapping[str, Any], str]] = []
+            if column_words is not None:
+                matched, _unmatched = _match_groupings([column_words.casefold()], schema, table, joins, excluded, terms)
+                path = _path_named(paths, matched[0]) if matched else None
+                if path is None:
+                    lines.append(f"no grouping in the source matched '{column_words}'; '{value}' was not applied")
+                    consumed.update(_tokens(clause))
+                    continue
+                splits.append((path, value))
+            else:
+                words = value.split()
+                named: list[tuple[int, Mapping[str, Any], str]] = []
+                loose: list[tuple[int, Mapping[str, Any], str]] = []
+                for k in range(1, len(words)):
+                    for column_text, rest in ((" ".join(words[:k]), " ".join(words[k:])), (" ".join(words[-k:]), " ".join(words[:-k]))):
+                        path = _exact_path(paths, column_text)
+                        if path is not None:
+                            named.append((k, path, rest))
+                            continue
+                        matched, _unmatched = _match_groupings([column_text.casefold()], schema, table, joins, excluded, terms)
+                        path = _path_named(paths, matched[0]) if matched else None
+                        if path is not None:
+                            loose.append((k, path, rest))
+                splits.extend((path, rest) for _k, path, rest in sorted(named, key=lambda item: -item[0]))
+                splits.extend((path, rest) for _k, path, rest in sorted(loose, key=lambda item: item[0]))
+                splits.extend((path, value) for path in candidates)
+            seen: set[tuple[str, str]] = set()
+            best: tuple[Mapping[str, Any], list[dict[str, Any]], str] | None = None
+            found = False
+            for path, text_value in splits:
+                key = (str(path["column"]), text_value.casefold())
+                if key in seen or not text_value or str(path["column"]) in taken:
+                    continue
+                seen.add(key)
+                if numeric(path) and not re.fullmatch(r"-?\d+(\.\d+)?", text_value):
+                    continue
+                rows = lookup(path, text_value)
+                exact = [r for r in rows if str(r.get("label")).casefold() == text_value.casefold()]
+                if exact:
+                    label = exact[0]["label"]
+                    filters.append((path, label))
+                    taken.add(str(path["column"]))
+                    lines.append(f"only: {humanize_column(str(path['column']))} = {label} ({int(exact[0].get('n') or 0):,} {noun})")
+                    found = True
+                    break
+                if rows and (best is None or len(rows) < len(best[1])):
+                    best = (path, rows, text_value)
+            if found:
+                consumed.update(set(_tokens(clause)) | set(_tokens(match.group(1))))
+                continue
+            if best is not None:
+                path, rows, text_value = best
+                word = humanize_column(str(path["column"]))
+                labels = [r["label"] for r in rows]
+                if len(labels) == 1:
+                    filters.append((path, labels[0]))
+                    taken.add(str(path["column"]))
+                    lines.append(f"only: {word} = {labels[0]} (matched '{text_value}'; {int(rows[0].get('n') or 0):,} {noun})")
+                elif len(labels) <= 5:
+                    filters.append((path, tuple(labels)))
+                    taken.add(str(path["column"]))
+                    lines.append(f"only: {word} is one of {', '.join(str(v) for v in labels)} (matched '{text_value}')")
+                else:
+                    lines.append(f"'{text_value}' matches {len(labels)} or more different {word} values; say which one; not filtered")
+                consumed.update(set(_tokens(clause)) | set(_tokens(match.group(1))))
+            elif hard:
+                if column_words is not None:
+                    lines.append(f"no {humanize_column(str(splits[0][0]['column']))} like '{value}' in the source; not filtered")
+                else:
+                    lines.append(f"nothing reachable from {noun} is called '{value}'; not filtered")
+                consumed.update(set(_tokens(clause)) | set(_tokens(match.group(1))))
+    return filters, lines, spent
+
+
+def _ignored_words(text: str, consumed: set[str]) -> list[str]:
+    """Request words that named nothing: not a kind, a period, a fact, a measure, a grouping, a filter, or a function word."""
+    out: list[str] = []
+    for token in dict.fromkeys(_tokens(text)):
+        if token in consumed or token in _FUNCTION_WORDS or token in _GENERIC or token in _MONTHS or token.isdigit() or len(token) < 2:
+            continue
+        out.append(token)
+    return out
+
+
 def parse_request(request: str, probe: Any, *, instructions: str = "", scope: str = "") -> ReportSpec:
-    """Read a request against the source: the kind of report, the fact, the measures, the groupings, the periods."""
+    """Read a request against the source: the kind of report, the fact, the measures, the groupings, the periods, the filters, and what was not understood."""
     from .source_model import ReviewContext
 
     text = request.strip()
@@ -340,8 +574,18 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
     snapshot = AgentSnapshot(agent_id="report", name=probe.name, instructions=instructions, datasources=(AgentDataSource(id=schema.source_id, kind=schema.kind, name=probe.name),))
     vocabulary = build_vocabulary(snapshot, schema, context)
     joined_text = "\n".join(p for p in (instructions, context.text if context is not None else "") if p)
+    text_tokens = set(_tokens(text))
+    consumed: set[str] = _words_in(_PERIOD, text) | _words_in(_AGAINST, text) | _words_in(_YOY_WORDS, text) | _words_in(_MOM_WORDS, text) | _words_in(_ANNUAL_WORDS, text)
     period, against = _periods(text)
-    kind = _kind(text, period is not None)
+    check = bool(_TREND_CHECK.search(text))
+    kind_text = text
+    if check:
+        consumed |= _words_in(_TREND_CHECK, text)
+        kind_text = _TREND_CHECK.sub(" ", text)  # "was it in line with the trend" asks for a check, not for the trend page
+    kind = _kind(kind_text, period is not None)
+    for pattern in _KINDS.values():
+        consumed |= _words_in(pattern, kind_text)
+    consumed |= _words_in(_FOCUS, kind_text)
     reading = [f"report: {_KIND_NAMES[kind]}"]
     if kind == "brief":
         from .brief import brief_request
@@ -349,9 +593,9 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
         metrics = brief_request(text)
         reading.append("metrics: " + ", ".join(metrics) if metrics else "metrics: the first fact's main measures (the request named none)")
         return ReportSpec(kind, request=text, reading=tuple(reading), metrics=tuple(metrics))
-    facts = _match_facts(text, probe, vocabulary, joined_text)
+    facts = _match_facts(kind_text, probe, vocabulary, joined_text)
     default_facts = list(probe.facts(joined_text))
-    without_groupings = _GROUPING_CLAUSE.sub(" ", text)  # "by product" names a grouping, not the product cost
+    without_groupings = _BROAD_GROUPING_CLAUSE.sub(" ", kind_text)  # "by product" names a grouping, not the product cost
     derived = False
     if not facts and default_facts and kind in {"root_cause", "trend", "top_movers"}:
         # the fact is the one whose measure the request names: "why did down rise" is the production log, not the first fact
@@ -362,26 +606,34 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
     elif default_facts:
         facts = default_facts[:1] if kind in {"root_cause", "trend", "top_movers"} else []
         reading.append(("fact: " + ", ".join(f"{t} ({vocabulary.table(t)})" for t in (facts or default_facts[:2]))) + " (the request named none)")
+    for fact_name in facts:
+        consumed |= (set(_tokens(vocabulary.table(fact_name))) | set(_tokens(humanize_column(fact_name.rsplit(".", 1)[-1])))) & text_tokens
     table = facts[0] if facts else (default_facts[0] if default_facts else None)
     measures: list[str] = []
     if table is not None:
-        measures, _words = _match_measures(without_groupings, schema, table, vocabulary)
+        measures, measure_words = _match_measures(without_groupings, schema, table, vocabulary)
         if kind != "recap":
             measures = measures[:1] if measures else []
         if measures:
             reading.append("measure: " + ", ".join(f"{m} ({vocabulary.measure(m.strip('[]'))})" for m in measures))
+            consumed |= set(_tokens(" ".join(measure_words)))
+            for m in measures:
+                consumed |= set(_tokens(humanize_column(m.strip("[]")))) & text_tokens
         else:
             reading.append(f"measure: {', '.join(_measure_columns(schema, table, broad=True)[:2]) or 'none found'} (the request named none)")
     groupings: list[str] = []
     unmatched: list[str] = []
-    phrases = _grouping_phrases(text)
+    phrases = _grouping_phrases(kind_text, broad=True)
+    joins = probe.joins(joined_text) if table is not None else {}
+    excluded = excluded_terms(joined_text)
+    terms = context.terms if context is not None else ()
     if table is not None and phrases:
-        joins = probe.joins(joined_text)
-        groupings, unmatched = _match_groupings(phrases, schema, table, joins, excluded_terms(joined_text), context.terms if context is not None else ())
+        groupings, unmatched = _match_groupings(phrases, schema, table, joins, excluded, terms)
         if groupings:
             reading.append("by: " + ", ".join(humanize_column(g) for g in groupings))
         for phrase in unmatched:
             reading.append(f"no grouping in the source matched '{phrase}'")
+        consumed |= _words_in(_BROAD_GROUPING_CLAUSE, kind_text)
     comparisons = _comparison_kinds(text, period)
     if period is not None:
         explicit = _explicit_comparisons(period, against)
@@ -392,7 +644,45 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
     top = int(top_match.group(1)) if top_match else 5
     if top_match:
         reading.append(f"top {top}")
-    return ReportSpec(kind, tuple(facts), tuple(measures), tuple(groupings), period, against, comparisons, top, text, tuple(reading), tuple(unmatched))
+        consumed |= set(_tokens(top_match.group(0)))
+    filters: list[tuple[Mapping[str, Any], Any]] = []
+    lookups = 0
+    if table is not None:
+        residue = _PERIOD.sub(" ", kind_text)
+        residue = _BROAD_GROUPING_CLAUSE.sub(" ", residue)
+        residue = re.sub(r"\btop\s+\d{1,3}\b", " ", residue, flags=re.IGNORECASE)
+        filters, filter_lines, lookups = _match_filters(residue, probe=probe, dialect=probe.dialect(joins), schema=schema, table=table, joins=joins, excluded=excluded, terms=terms, vocabulary=vocabulary, consumed=consumed)
+        reading.extend(filter_lines)
+    if check:
+        reading.append("check: " + (f"{_month_name(period)} against the trend and season of each measure" if period is not None and period.get("month") else "the latest complete month against the trend and season of each measure"))
+    ignored = _ignored_words(text, consumed)
+    if ignored:
+        reading.append(f"ignored: {', '.join(ignored)} (nothing in the source matched)")
+    return ReportSpec(kind, tuple(facts), tuple(measures), tuple(groupings), period, against, comparisons, top, text, tuple(reading), tuple(unmatched), filters=tuple(filters), check=check, lookups=lookups)
+
+
+def _period_checks(result: Sweep, spec: ReportSpec) -> list[str]:
+    """One sentence per measure: the named month (or the latest complete month) against the trend and season of its own series."""
+    from .series import analyse, period_check
+
+    out: list[str] = []
+    for key, points in result.series.items():
+        if key in result.collapsed or len(points) < 6:
+            continue
+        name = result.words.get(key, key)
+        story = analyse(points, name=name)
+        if not story.months:
+            continue
+        if spec.period is not None and spec.period.get("month"):
+            year, month = int(spec.period["year"]), int(spec.period["month"])
+        elif spec.period is not None:
+            out.append(f"{name[0].upper() + name[1:]}: a whole year is not read against the season; name a month to check it.")
+            continue
+        else:
+            year, month = story.months[-1].year, story.months[-1].month
+        sentence = period_check(story, year, month, name=name)
+        out.append(sentence or f"{name[0].upper() + name[1:]}: the monthly series does not cover {calendar.month_name[month]} {year}.")
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -436,7 +726,7 @@ def report(
     facts: int | Sequence[str] = list(spec.facts) if spec.facts else (4 if spec.kind == "recap" else 2)  # a recap covers the source; four facts fit a budget of 60 to 80
     measures: int | Sequence[str] = list(spec.measures) if spec.measures else 2
     paths: int | Sequence[str] = list(spec.groupings) if spec.groupings else 8
-    common = dict(instructions=instructions, scope=scope, facts=facts, measures=measures, paths=paths, comparisons=comparisons, budget=budget, top=spec.top)
+    common = dict(instructions=instructions, scope=scope, facts=facts, measures=measures, paths=paths, comparisons=comparisons, budget=budget, top=spec.top, filters=list(spec.filters))
     if spec.kind == "root_cause":
         result = sweep(probe, years, min_pct=0.0, depth=2, **common)
     elif spec.kind == "top_movers":
@@ -446,7 +736,7 @@ def report(
     else:
         result = sweep(probe, years, min_pct=0.05, depth=2, **common)
     grouped: dict[str, dict[Any, tuple[Point, ...]]] = {}
-    queries = result.queries
+    queries = result.queries + spec.lookups
     if spec.kind == "trend" and result.years:
         grouped, extra, notes = _trend_by_group(probe, result, spec, instructions=instructions, scope=scope, budget=max(0, budget - result.queries))
         queries += extra
@@ -457,7 +747,8 @@ def report(
     result = replace(result, elapsed=round(time.monotonic() - started, 1))
     if not spec.facts or not spec.measures:
         spec = replace(spec, reading=_reading_after(spec, result))  # the request named no fact or measure: say what was actually swept, not what was guessed
-    return Report(spec, result, grouped, queries, result.elapsed)
+    checks = _period_checks(result, spec) if spec.check else []
+    return Report(spec, result, grouped, queries, result.elapsed, checks=tuple(checks))
 
 
 def _reading_after(spec: ReportSpec, result: Sweep) -> tuple[str, ...]:
@@ -500,12 +791,12 @@ def _trend_by_group(probe: Any, result: Sweep, spec: ReportSpec, *, instructions
         if spent + 2 > budget:
             notes.append(f"the budget left no room for the series by {humanize_column(str(path['column']))}")
             break
-        top_rows = probe.run(dialect.top_groups(fact, path, years, 6))
+        top_rows = probe.run(dialect.top_groups(fact, path, years, 6, list(spec.filters)))
         spent += 1
         values = [row.get("label") for row in top_rows]
         if not values:
             continue
-        rows = dialect.months(probe.run(dialect.grouped_series(fact, path, years, values)))
+        rows = dialect.months(probe.run(dialect.grouped_series(fact, path, years, values, list(spec.filters))))
         spent += 1
         by_label: dict[Any, list[Mapping[str, Any]]] = {}
         for row in rows:

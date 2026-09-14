@@ -369,6 +369,68 @@ def analyse(points: Sequence[Any], *, name: str = "the series") -> SeriesStory:
     return SeriesStory(tuple(months), window, tuple(average), tuple(shifts), tuple(yearly), decomposition, trend_per_year, tuple(sentences), adjusted)
 
 
+def expected_value(story: SeriesStory, year: int, month: int) -> tuple[float, str, float] | None:
+    """What the trend, and with two years or more the season, implied for one month: (expected, the basis in words, the usual spread as a share).
+
+    Inside the decomposition the expected value is the trend times the seasonal index (or their sum when additive).
+    The centered average has no value for the last six months, so there the trend is extended from its last known
+    month at the fitted rate. Without a decomposition the expected value comes from the fitted line through the
+    moving average, and the spread from how far months usually sit from that average.
+    """
+    index = next((i for i, m in enumerate(story.months) if m.year == year and m.month == month), None)
+    if index is None:
+        return None
+    d = story.decomposition
+    if d is not None:
+        trend = d.trend[index]
+        basis = "trend and season"
+        if trend is None:
+            known = [(i, t) for i, t in enumerate(d.trend) if t is not None]
+            if not known:
+                return None
+            k, anchor_value = known[-1] if index > known[-1][0] else known[0]
+            per_month = (d.trend_per_year or 0.0) / 12
+            trend = anchor_value * (1 + per_month) ** (index - k) if d.multiplicative else anchor_value + per_month * abs(anchor_value) * (index - k)
+            basis = f"trend (extended from {story.months[k].label}) and season"
+        season = d.seasonal.get(month, 1.0 if d.multiplicative else 0.0)
+        expected = trend * season if d.multiplicative else trend + season
+        return expected, basis, 2 * d.sigma
+    present = [(i, a) for i, a in enumerate(story.average) if a is not None]
+    if len(present) < 6:
+        return None
+    ys = [a for _i, a in present]
+    slope = _slope(ys) or 0.0
+    centre = sum(i for i, _a in present) / len(present)
+    expected = _mean(ys) + slope * (index - centre)
+    ratios = [m.value / a - 1 for m, a in zip(story.months, story.average) if a]
+    return expected, "trend line", 2 * _std(ratios) if len(ratios) >= 3 else 0.0
+
+
+def period_check(story: SeriesStory, year: int, month: int, *, name: str = "the series") -> str | None:
+    """One sentence on whether a month was in line with the trend and season, with the figures behind it; None when the series does not cover the month."""
+    found = expected_value(story, year, month)
+    if found is None:
+        return None
+    expected, basis, spread = found
+    spread = max(spread, 0.02) if spread else spread  # nothing sits exactly on its trend; under two percent is not a departure
+    actual = next(m.value for m in story.months if m.year == year and m.month == month)
+    label = f"{calendar.month_name[month]} {year}"
+    cap = name[0].upper() + name[1:] if name else "The series"
+    if not expected:
+        return f"{cap}: the {basis} implied nothing for {label}."
+    gap = actual / expected - 1
+    if spread:
+        verdict = ("within" if abs(gap) <= spread else "outside") + f" the usual spread of ±{spread:.0%}"
+    else:
+        verdict = "too few months to say whether that is usual"
+    direction = "above" if gap > 0 else "below"
+    sentence = f"{cap} came in at {_num(actual)} for {label}, {abs(gap):.0%} {direction} what the {basis} implied ({_num(expected)}): {verdict}."
+    yearly = next((v for m, v in story.yoy if m.year == year and m.month == month), None)
+    if yearly is not None and story.trend_per_year is not None:
+        sentence += f" Against the same month a year earlier it is {yearly:+.0%}; the trend runs {story.trend_per_year:+.0%} a year."
+    return sentence
+
+
 def _swing(d: Decomposition) -> float:
     """How far the season swings around an average month, as a share of the level."""
     if not d.seasonal:

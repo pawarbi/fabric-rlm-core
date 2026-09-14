@@ -4,6 +4,27 @@
 
 ### Added
 
+- **Questions in plain words drive the report.** `fabric_rlm.reports.report`
+  reads a question the way it is asked: a filter on any value the source
+  holds ("for tiktok", "where customer state = SP", "for the Night shift",
+  "for desktop and safari"), looked up in the source before it is applied
+  and pushed into every query, the verification included; groupings named
+  with "per", "across", "for each" or "which" as well as "by"; a question
+  with no trigger word but a period, a "which" or a "focus" read as root
+  cause analysis; and "was it in line with the trend" read as a check, not
+  as a request for the trend page: each measure gets a sentence on how far
+  the named month (or the latest complete month) sat from what the trend
+  and season implied and whether that is within the usual spread. The page
+  and the Markdown list how the question was read, the filter with its row
+  count, and the words of the request that named nothing; a value that
+  matched nothing or too many things says so rather than silently widening
+  the report. A text column named in a question is a grouping, never a
+  measure (it used to become SUM(column) and fail the query); a grouping
+  phrase matches the column's own words and abbreviations ("product
+  category name", "customer" for custName); a table named in full is the
+  fact even when the default facts left it out. `sweep` takes `filters`
+  and the DAX and SQL dialects narrow the series, the top groups, the
+  grouped series and the latest date to them.
 - **Data Agent review** (`fabric_rlm.data_agent_review`, notebook
   `examples/notebooks/rlm_data_agent_review.py`). Point it at a Fabric Data
   Agent and it reads what the agent uses and how it is instructed (sources,
