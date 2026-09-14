@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+
+from .serializers import freeze
 import json
 import math
 import os
@@ -267,11 +269,14 @@ def _scalar(value: object, field_name: str) -> object:
         if not math.isfinite(normalized):
             raise ValueError(f"operation result {field_name} must be finite")
         return normalized
-    if isinstance(value, (date, datetime)):
-        return value.isoformat()
-    item = getattr(value, "item", None)
-    if callable(item):
-        return _scalar(item(), field_name)
+    # The serializer's conventions (dates ISO, durations fractional days, bytes
+    # hex, array scalars unwrapped) so a packet cell means what a payload value
+    # means; the finiteness rules above stay the packet's own.
+    frozen = freeze(value, max_string_length=None, max_collection_items=None)
+    if frozen is None or type(frozen) in {str, bool, int}:
+        return frozen
+    if isinstance(frozen, float):
+        return _scalar(frozen, field_name)
     raise ValueError(f"operation result {field_name} must be a scalar value")
 
 
