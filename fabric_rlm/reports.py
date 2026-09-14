@@ -498,6 +498,7 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
                 column_words, value = parts[0].strip(), parts[1].strip().strip("\'\"")
             else:
                 kept = [w for w in clause.split() if w.casefold() not in fact_words and w.casefold() not in table_words and w.casefold() not in consumed and w.casefold() not in _FUNCTION_WORDS and w.casefold() not in _GENERIC]
+                consumed.update(w.casefold() for w in clause.split() if w.casefold() in table_words)
                 if not kept:
                     continue  # the clause named the fact, a measure or a period: not a filter
                 value = " ".join(kept)
@@ -529,7 +530,7 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
                 splits.extend((path, value) for path in candidates)
             seen: set[tuple[str, str]] = set()
             best: tuple[Mapping[str, Any], list[dict[str, Any]], str] | None = None
-            found = False
+            exact_hits: list[tuple[int, Mapping[str, Any], Any]] = []
             for path, text_value in splits:
                 key = (str(path["column"]), text_value.casefold())
                 if key in seen or not text_value or str(path["column"]) in taken or len(seen) >= 20:
@@ -540,15 +541,17 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
                 rows = lookup(path, text_value)
                 exact = [r for r in rows if str(r.get("label")).casefold() == text_value.casefold()]
                 if exact:
-                    label = exact[0]["label"]
-                    filters.append((dict(path, fact=table), label))
-                    taken.add(str(path["column"]))
-                    lines.append(f"only: {humanize_column(str(path['column']))} = {label} ({int(exact[0].get('n') or 0):,} {noun})")
-                    found = True
-                    break
+                    exact_hits.append((int(exact[0].get("n") or 0), path, exact[0]["label"]))
+                    if column_words is not None or len(exact_hits) >= 3:
+                        break  # a named column is settled; a bare value stops after a few groupings hold it
+                    continue
                 if rows and (best is None or len(rows) < len(best[1])):
                     best = (path, rows, text_value)
-            if found:
+            if exact_hits:
+                count, path, label = max(exact_hits, key=lambda hit: hit[0])
+                filters.append((dict(path, fact=table), label))
+                taken.add(str(path["column"]))
+                lines.append(f"only: {humanize_column(str(path['column']))} = {label} ({count:,} {noun})")
                 consumed.update(set(_tokens(clause)) | set(_tokens(match.group(1))))
                 continue
             if best is not None:
@@ -677,11 +680,13 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
         dialect = probe.dialect(joins)
         tried: list[str] = [table] if (facts and not derived) else list(dict.fromkeys([table, *default_facts[:4]]))
         filter_lines: list[str] = []
+        first_lines: list[str] = []
         for candidate_table in tried:
             found, lines_here, spent_here = _match_filters(residue, probe=probe, dialect=dialect, schema=schema, table=candidate_table, joins=joins, excluded=excluded, terms=terms, vocabulary=vocabulary, consumed=set(consumed))
             lookups += spent_here
+            first_lines = first_lines or lines_here
             if found or candidate_table == tried[-1]:
-                filters, filter_lines = found, lines_here
+                filters, filter_lines = found, (lines_here if found else first_lines)
                 if found and candidate_table != table:
                     table = candidate_table
                     if kind != "recap":
@@ -694,8 +699,10 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
                 break
         consumed |= {w for line in filter_lines for w in _tokens(line)}  # a value that failed is said once, as a filter, not again as an ignored word
         reading.extend(filter_lines)
-    if check:
-        reading.append("check: " + (f"{_month_name(period)} against the trend and season of each measure" if period is not None and period.get("month") else "the latest complete month against the trend and season of each measure"))
+    if check and period is not None and not period.get("month"):
+        reading.append(f"check: {_month_name(period)} is a whole year, which is not read against the season; name a month to check it")
+    elif check:
+        reading.append("check: " + (f"{_month_name(period)} against the trend and season of each measure" if period is not None else "the latest complete month against the trend and season of each measure"))
     ignored = _ignored_words(text, consumed)
     if ignored:
         reading.append(f"ignored: {', '.join(ignored)} (nothing in the source matched)")

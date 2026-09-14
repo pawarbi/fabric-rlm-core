@@ -768,6 +768,14 @@ class _Sql:
         time_join = _time_join(fact["date"])
         return f"FROM {fact['table']} f" + (f" {time_join}" if time_join else "") + "".join(" " + c for c in joins.clauses)
 
+    def _joins(self, fact: Mapping[str, Any]) -> _Joins:
+        """Joins for grouping paths; a path that starts with the time join's own hop reuses the alias ``d`` rather than joining that table again."""
+        joins = _Joins()
+        dt = fact["date"]
+        if dt.get("date_table"):
+            joins.seed(((str(dt["column"]), str(dt["date_table"]), str(dt["date_key"])),), "d")
+        return joins
+
     def _expr(self, fact: Mapping[str, Any]) -> str:
         if fact["aggregate"] == "count" or fact["measure"] == _ROWS:
             return "COUNT(*)"
@@ -809,7 +817,7 @@ class _Sql:
     def daily(self, fact: Mapping[str, Any], measures: Sequence[str], filters: _Filters = ()) -> str:
         """Rows and the sum of every measure by day over the whole fact, narrowed to the groups in ``filters``."""
         day = self.day(fact)
-        joins = _Joins()
+        joins = self._joins(fact)
         conditions = [self._filter(joins, p, v) for p, v in filters]
         values = ", ".join(f"{self._sum_of(m)} AS v{i}" for i, m in enumerate(measures))
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -840,7 +848,7 @@ class _Sql:
         values = ", ".join(f"{self._sum_of(m)} AS v{i}" for i, m in enumerate(measures))
         keys = f"{year}" + (f", {month}" if month else "")
         if filters:
-            joins = _Joins()
+            joins = self._joins(fact)
             conditions = [self._filter(joins, p, v) for p, v in filters]
             return f"SELECT {year} AS year, {month or 'NULL'} AS month, COUNT(*) AS n, {values} {self._from(fact, joins)} WHERE {' AND '.join(conditions)} GROUP BY {keys} ORDER BY {keys}"
         join = _time_join(dt)
@@ -851,7 +859,7 @@ class _Sql:
 
     def top_groups(self, fact: Mapping[str, Any], path: Mapping[str, Any], years: Sequence[int], limit: int, filters: _Filters = ()) -> str:
         """The largest groups of a path by the measure over the compared years."""
-        joins = _Joins()
+        joins = self._joins(fact)
         label = joins.ref(path)
         where = " AND ".join([self._span(fact, years), *(self._filter(joins, p, v) for p, v in filters)])
         return f"SELECT {label} AS label, {self._expr(fact)} AS value {self._from(fact, joins)} WHERE {where} GROUP BY {label} ORDER BY ABS(value) DESC NULLS LAST LIMIT {limit}"
@@ -859,7 +867,7 @@ class _Sql:
     def grouped_series(self, fact: Mapping[str, Any], path: Mapping[str, Any], years: Sequence[int], values: Sequence[Any], filters: _Filters = ()) -> str:
         """The measure by year, month and group, for the listed groups."""
         dt = fact["date"]
-        joins = _Joins()
+        joins = self._joins(fact)
         label = joins.ref(path)
         year, month = _year_expr(dt, "duckdb"), _month_expr(dt, "duckdb")
         keys = f"{year}, {month}, {label}" if month else f"{year}, {label}"
@@ -869,31 +877,31 @@ class _Sql:
     def max_date(self, fact: Mapping[str, Any], filters: _Filters = ()) -> str:
         if not filters:
             return _max_date_sql(fact)
-        joins = _Joins()
+        joins = self._joins(fact)
         conditions = [self._filter(joins, p, v) for p, v in filters]
         return f"SELECT MAX({_time_column(fact['date'])}) AS value {self._from(fact, joins)} WHERE {' AND '.join(conditions)}"
 
     def lookup(self, fact: Mapping[str, Any], path: Mapping[str, Any], value: str, limit: int = 25) -> str:
         """The distinct values of a grouping that contain the text, case-insensitive, with their row counts; an exact match sorts first."""
-        joins = _Joins()
+        joins = self._joins(fact)
         ref = joins.ref(path)
         text = f"lower(CAST({ref} AS VARCHAR))"
         return f"SELECT {ref} AS label, COUNT(*) AS n {self._from(fact, joins)} WHERE {text} LIKE {_sql_literal(_like_pattern(value))} GROUP BY {ref} ORDER BY ({text} = {_sql_literal(value.casefold())}) DESC, n DESC LIMIT {limit}"
 
     def movement(self, fact: Mapping[str, Any], comparison: Comparison, filters: _Filters) -> str:
-        joins = _Joins()
+        joins = self._joins(fact)
         conditions = [self._filter(joins, p, v) for p, v in filters]
         before, after, either = self._both(fact, comparison)
         where = " AND ".join([either, *conditions])
         return f"SELECT {self._case(fact, after)} AS after_value, {self._case(fact, before)} AS before_value, SUM(CASE WHEN {after} THEN 1 ELSE 0 END) AS after_rows, SUM(CASE WHEN {before} THEN 1 ELSE 0 END) AS before_rows {self._from(fact, joins)} WHERE {where}"
 
     def total(self, fact: Mapping[str, Any], period: Mapping[str, Any], filters: _Filters) -> str:
-        joins = _Joins()
+        joins = self._joins(fact)
         conditions = [self._filter(joins, p, v) for p, v in filters]
         return f"SELECT {self._expr(fact)} AS value {self._from(fact, joins)} WHERE " + " AND ".join([f"({self._period(fact, period)})", *conditions])
 
     def grouped(self, fact: Mapping[str, Any], comparison: Comparison, path: Mapping[str, Any], filters: _Filters) -> str:
-        joins = _Joins()
+        joins = self._joins(fact)
         conditions = [self._filter(joins, p, v) for p, v in filters]
         label = joins.ref(path)
         before, after, either = self._both(fact, comparison)
@@ -905,7 +913,7 @@ class _Sql:
         )
 
     def groups(self, fact: Mapping[str, Any], period: Mapping[str, Any], path: Mapping[str, Any], filters: _Filters, values: Sequence[Any]) -> str:
-        joins = _Joins()
+        joins = self._joins(fact)
         conditions = [self._filter(joins, p, v) for p, v in filters]
         label = joins.ref(path)
         return f"SELECT {label} AS label, {self._expr(fact)} AS value {self._from(fact, joins)} WHERE " + " AND ".join([f"({self._period(fact, period)})", *conditions, self._members(label, values)]) + f" GROUP BY {label}"
@@ -1449,59 +1457,64 @@ def sweep(
     exhausted = False
     try:
         for table in fact_names:
-            axis = dialect.axis(table)
-            candidates = _measure_candidates(schema, table, measures)
-            if not axis or not candidates:
-                notes.append(f"{table}: no time axis or no measure, not swept")
-                continue
-            fact_filters = _filters_for(schema, table, joins, excluded, filters)
-            if fact_filters is None:
-                notes.append(f"{vocabulary.table(table)}: no column reachable from it carries {_filter_phrase(filters)}, so it is left out of this report")
-                continue
-            words[table] = vocabulary.table(table)
-            base = {"table": table, "date": axis, "measure": candidates[0], "aggregate": _aggregate_of(candidates[0], summed, schema.tables[table])}
-            months = dialect.months(run(dialect.series(base, candidates, fact_filters)))
-            fact_years = [int(y) for y in years] if years else _complete_years(months)
-            if not years_used:
-                years_used = list(fact_years)
-            wanted_comparisons = _wanted_comparisons(months, fact_years, comparisons)
-            if not wanted_comparisons:
-                notes.append(f"{table}: no comparison the time axis supports for {fact_years}")
-                continue
-            skipped = _skipped_tail(months, wanted_comparisons, vocabulary.table(table))
-            if skipped:
-                notes.append(f"{table}: {skipped}")
             try:
-                rows = run(dialect.max_date(base, fact_filters))
-                max_date = _iso_date(rows[0].get("value")) if rows and rows[0].get("value") is not None else None
+                axis = dialect.axis(table)
+                candidates = _measure_candidates(schema, table, measures)
+                if not axis or not candidates:
+                    notes.append(f"{table}: no time axis or no measure, not swept")
+                    continue
+                fact_filters = _filters_for(schema, table, joins, excluded, filters)
+                if fact_filters is None:
+                    notes.append(f"{vocabulary.table(table)}: no column reachable from it carries {_filter_phrase(filters)}, so it is left out of this report")
+                    continue
+                words[table] = vocabulary.table(table)
+                base = {"table": table, "date": axis, "measure": candidates[0], "aggregate": _aggregate_of(candidates[0], summed, schema.tables[table])}
+                months = dialect.months(run(dialect.series(base, candidates, fact_filters)))
+                fact_years = [int(y) for y in years] if years else _complete_years(months)
+                if not years_used:
+                    years_used = list(fact_years)
+                wanted_comparisons = _wanted_comparisons(months, fact_years, comparisons)
+                if not wanted_comparisons:
+                    notes.append(f"{table}: no comparison the time axis supports for {fact_years}")
+                    continue
+                skipped = _skipped_tail(months, wanted_comparisons, vocabulary.table(table))
+                if skipped:
+                    notes.append(f"{table}: {skipped}")
+                try:
+                    rows = run(dialect.max_date(base, fact_filters))
+                    max_date = _iso_date(rows[0].get("value")) if rows and rows[0].get("value") is not None else None
+                except _Budget:
+                    raise
+                except Exception:  # noqa: BLE001 - only the incomplete-month flag needs it
+                    max_date = None
+                chosen = _choose_paths(schema, table, joins, excluded, terms, paths)
+                if fact_filters:
+                    chosen = [p for p in chosen if not any(_same_path(p, narrowed, table) for narrowed, _v in fact_filters)]  # a grouping the request fixed has one group left
+                wanted = measures if isinstance(measures, int) else len(candidates)
+                measured: list[tuple[str, list[Movement]]] = []
+                for index, measure in enumerate(candidates):
+                    if len(measured) >= wanted:
+                        break
+                    fact = {"table": table, "date": axis, "measure": measure, "aggregate": _aggregate_of(measure, summed, schema.tables[table])}
+                    key = f"{table}|{measure}"
+                    words[key] = vocabulary.table(table) if measure == _ROWS else _channel_measure(vocabulary.table(table), vocabulary.measure(measure.strip("[]")))
+                    series[key] = _points(months, index, fact["aggregate"], fact_years)
+                    run_totals = [_movement(run, dialect, fact, comparison, fact_filters) for comparison in wanted_comparisons]
+                    run_totals = [replace(t, flags=_flags(t, t.comparison, max_date, months, noun=vocabulary.table(table))) for t in run_totals]
+                    ledger.extend(run_totals)
+                    twin = next((m for m, other in measured if _same_figures(other, run_totals)), None)
+                    twin_key = f"{table}|{twin}" if twin is not None else next((k for k, other in twins_seen if _twin_figures(other, run_totals)), None)
+                    if twin_key is not None:
+                        collapsed.append(key)
+                        notes.append(f"{words[key]} moves within 1% of {words[twin_key]} in every comparison, so it was not decomposed separately")
+                        continue
+                    measured.append((measure, run_totals))
+                    twins_seen.append((key, run_totals))
+                    totals.extend((t, dict(fact, filters=tuple(fact_filters)), chosen, t.flags) for t in run_totals)
             except _Budget:
                 raise
-            except Exception:  # noqa: BLE001 - only the incomplete-month flag needs it
-                max_date = None
-            chosen = _choose_paths(schema, table, joins, excluded, terms, paths)
-            if fact_filters:
-                chosen = [p for p in chosen if not any(_same_path(p, narrowed, table) for narrowed, _v in fact_filters)]  # a grouping the request fixed has one group left
-            wanted = measures if isinstance(measures, int) else len(candidates)
-            measured: list[tuple[str, list[Movement]]] = []
-            for index, measure in enumerate(candidates):
-                if len(measured) >= wanted:
-                    break
-                fact = {"table": table, "date": axis, "measure": measure, "aggregate": _aggregate_of(measure, summed, schema.tables[table])}
-                key = f"{table}|{measure}"
-                words[key] = vocabulary.table(table) if measure == _ROWS else _channel_measure(vocabulary.table(table), vocabulary.measure(measure.strip("[]")))
-                series[key] = _points(months, index, fact["aggregate"], fact_years)
-                run_totals = [_movement(run, dialect, fact, comparison, fact_filters) for comparison in wanted_comparisons]
-                run_totals = [replace(t, flags=_flags(t, t.comparison, max_date, months, noun=vocabulary.table(table))) for t in run_totals]
-                ledger.extend(run_totals)
-                twin = next((m for m, other in measured if _same_figures(other, run_totals)), None)
-                twin_key = f"{table}|{twin}" if twin is not None else next((k for k, other in twins_seen if _twin_figures(other, run_totals)), None)
-                if twin_key is not None:
-                    collapsed.append(key)
-                    notes.append(f"{words[key]} moves within 1% of {words[twin_key]} in every comparison, so it was not decomposed separately")
-                    continue
-                measured.append((measure, run_totals))
-                twins_seen.append((key, run_totals))
-                totals.extend((t, dict(fact, filters=tuple(fact_filters)), chosen, t.flags) for t in run_totals)
+            except Exception as exc:  # noqa: BLE001 - one fact the source cannot query is left out, and said; the others are still swept
+                notes.append(f"{vocabulary.table(table)}: the source could not run a query for it ({type(exc).__name__}: {str(exc).splitlines()[0][:120]}), so it is left out")
     except _Budget:
         exhausted = True
         notes.append(f"the budget of {budget} queries was spent before every movement was measured; nothing was decomposed")
@@ -1531,6 +1544,9 @@ def sweep(
             left = len(material) - index - (1 if decompositions else 0)
             if left > 0:
                 notes.append(f"the budget of {budget} queries was spent before the sweep finished; {left} material movement(s) were measured but not decomposed")
+        except Exception as exc:  # noqa: BLE001 - a split the source cannot compute is said; what was computed stays
+            name = words.get(f"{fact['table']}|{fact['measure']}", str(fact["measure"]))
+            notes.append(f"{name} {total.comparison.label}: a split could not be computed ({type(exc).__name__}: {str(exc).splitlines()[0][:120]})")
         if decompositions:
             decompositions.sort(key=lambda d: (-_rank(d), _placeholder_lead(d), -d.explained))  # a real leader beats a placeholder at the same rank
             drill.sort(key=lambda d: (-_rank(d), _placeholder_lead(d), -d.explained))

@@ -864,6 +864,10 @@ class _Joins:
         self.clauses: list[str] = []
         self._alias: dict[tuple[tuple[str, str, str], ...], str] = {}
 
+    def seed(self, chain: tuple[tuple[str, str, str], ...], alias: str) -> None:
+        """Name a hop chain the FROM clause already joins (the time join as ``d``), so a path through it reuses that alias."""
+        self._alias[chain] = alias
+
     def ref(self, attr: Mapping[str, Any]) -> str:
         previous = "f"
         chain: tuple[tuple[str, str, str], ...] = ()
