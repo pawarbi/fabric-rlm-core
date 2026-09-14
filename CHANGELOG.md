@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.2 — 2026-09-14 — Data Agent review, what moved and the Monday Morning Brief
 
 ### Added
 
@@ -331,6 +331,48 @@
   DAX (falling back to one row per day and group when a model will not),
   so a fine grouping no longer returns days times groups.
 
+### Changed
+
+- **`examples/` holds only what a user runs.** The benchmark harnesses
+  (the Olist deep-insight benchmark, its staged and manifest-driven forms,
+  the critic and evidence-closure cycles, the action synthesis step, ONS
+  CPI) and the notebooks that reproduce published figures (SpreadsheetBench
+  400, the knowledge benchmark matrix and value run) moved to
+  `benchmarks/`, with a README that names each harness, its data and its
+  test. The frozen golden trajectories moved to
+  `tests/fixtures/trajectories/`, next to the test that replays them. The
+  release verification notebooks moved to `tests/release_verification/`.
+  `examples/` keeps the Fabric notebook recipes, the quickstart task and
+  the semantic model example, and gained a README. The lossless SUBMIT
+  reproduction script was dropped (the behaviour is covered by
+  `tests/test_interpreter.py` and described in
+  `docs/lossless-submit-payloads.md`); the golden-trajectory replay script
+  became `docs/replaying-trajectories.md`. The key and kernel checks on
+  public notebooks now cover every notebook wherever it lives; the
+  pinned-install checks cover the recipes and the release checks, since a
+  development benchmark may install the branch under test.
+- **The Data Agent review is experimental.** It moved to
+  `fabric_rlm.experimental.data_agent_review`; `fabric_rlm.data_agent_review`
+  stays as a compatibility path that resolves every name, so existing
+  notebooks and imports keep working. The modelling of a source that the
+  review shared with the sweep, the brief, the reports and the KPIs (schemas,
+  the tables an agent selected, the instructions that name tables and exclude
+  topics, keys and time columns, measure columns, date joins and period
+  expressions, attribute paths, vocabulary, the SQL helpers and the lakehouse
+  executor) is now `fabric_rlm.source_model`, and those tools import only
+  that; a test imports them with the review blocked. Nothing changed in what
+  the tools compute: the pages and Markdown of six local data sets are
+  identical before and after, apart from timestamps and seconds.
+- `LakehouseSource.query` keeps the Delta reader first and, when the reader
+  rejects a table (Spark `void` columns, which no data file carries), reads
+  the table's own data files as its transaction log lists them (the last
+  checkpoint plus later commits). A table whose features need the reader
+  (deletion vectors, column mapping, v2 checkpoints) is never read that way.
+  A catalog column no data file carries comes back as NULL; the rejection
+  and the file list are remembered per table while the log is unchanged.
+  `LakehouseSource.query` accepts a `timeout` (seconds, at most 600) for
+  direct callers; a worker's query keeps the 30-second default.
+
 ### Fixed
 
 - **A question about a month before the last two years is checked
@@ -431,50 +473,6 @@
   customers table is the customer); a ratio named like a rate prints as a
   percentage; the denominator of a ratio is looked for on the numerator's
   fact first, so `scrap / qty` stays on the production log.
-
-### Changed
-
-- **`examples/` holds only what a user runs.** The benchmark harnesses
-  (the Olist deep-insight benchmark, its staged and manifest-driven forms,
-  the critic and evidence-closure cycles, the action synthesis step, ONS
-  CPI) and the notebooks that reproduce published figures (SpreadsheetBench
-  400, the knowledge benchmark matrix and value run) moved to
-  `benchmarks/`, with a README that names each harness, its data and its
-  test. The frozen golden trajectories moved to
-  `tests/fixtures/trajectories/`, next to the test that replays them. The
-  release verification notebooks moved to `tests/release_verification/`.
-  `examples/` keeps the Fabric notebook recipes, the quickstart task and
-  the semantic model example, and gained a README. The lossless SUBMIT
-  reproduction script was dropped (the behaviour is covered by
-  `tests/test_interpreter.py` and described in
-  `docs/lossless-submit-payloads.md`); the golden-trajectory replay script
-  became `docs/replaying-trajectories.md`. The key and kernel checks on
-  public notebooks now cover every notebook wherever it lives; the
-  pinned-install checks cover the recipes and the release checks, since a
-  development benchmark may install the branch under test.
-- **The Data Agent review is experimental.** It moved to
-  `fabric_rlm.experimental.data_agent_review`; `fabric_rlm.data_agent_review`
-  stays as a compatibility path that resolves every name, so existing
-  notebooks and imports keep working. The modelling of a source that the
-  review shared with the sweep, the brief, the reports and the KPIs (schemas,
-  the tables an agent selected, the instructions that name tables and exclude
-  topics, keys and time columns, measure columns, date joins and period
-  expressions, attribute paths, vocabulary, the SQL helpers and the lakehouse
-  executor) is now `fabric_rlm.source_model`, and those tools import only
-  that; a test imports them with the review blocked. Nothing changed in what
-  the tools compute: the pages and Markdown of six local data sets are
-  identical before and after, apart from timestamps and seconds.
-- `LakehouseSource.query` keeps the Delta reader first and, when the reader
-  rejects a table (Spark `void` columns, which no data file carries), reads
-  the table's own data files as its transaction log lists them (the last
-  checkpoint plus later commits). A table whose features need the reader
-  (deletion vectors, column mapping, v2 checkpoints) is never read that way.
-  A catalog column no data file carries comes back as NULL; the rejection
-  and the file list are remembered per table while the log is unchanged.
-  `LakehouseSource.query` accepts a `timeout` (seconds, at most 600) for
-  direct callers; a worker's query keeps the 30-second default.
-### Fixed
-
 - **A value containing `--`, `/*` or `*/` no longer looks like a SQL comment to
   `LakehouseSource.query`.** The read-only gate scanned the raw query text for
   comment markers, so an ordinary filter on data that happens to contain them —
