@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.6.3 — 2026-09-14 — scalar answers serialize the same way on every path
 
 ### Fixed
