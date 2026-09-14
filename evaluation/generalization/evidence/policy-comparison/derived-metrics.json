@@ -1,0 +1,1158 @@
+{
+  "gates": {
+    "csv__auto": [
+      {
+        "arm": "B",
+        "question_id": "service_first_response_sla_rate",
+        "reasons": [
+          "value_identity_correct",
+          "completion"
+        ],
+        "variant": "descriptive"
+      }
+    ],
+    "csv__context_only": [
+      {
+        "arm": "B",
+        "question_id": "inventory_available_units",
+        "reasons": [
+          "completion"
+        ],
+        "variant": "descriptive"
+      }
+    ],
+    "lakehouse__auto": [],
+    "lakehouse__context_only": [
+      {
+        "arm": "B",
+        "question_id": "inventory_available_units",
+        "reasons": [
+          "answer_correct",
+          "value_identity_correct",
+          "completion"
+        ],
+        "variant": "descriptive"
+      }
+    ],
+    "parquet__auto": [
+      {
+        "arm": "B",
+        "question_id": "inventory_available_units",
+        "reasons": [
+          "answer_correct",
+          "value_identity_correct",
+          "completion"
+        ],
+        "variant": "descriptive"
+      },
+      {
+        "arm": "B",
+        "question_id": "manufacturing_complete_units",
+        "reasons": [
+          "answer_correct"
+        ],
+        "variant": "descriptive"
+      },
+      {
+        "arm": "C",
+        "question_id": "manufacturing_complete_units",
+        "reasons": [
+          "answer_correct"
+        ],
+        "variant": "descriptive"
+      }
+    ],
+    "parquet__context_only": [
+      {
+        "arm": "B",
+        "question_id": "manufacturing_complete_units",
+        "reasons": [
+          "value_identity_correct",
+          "completion"
+        ],
+        "variant": "descriptive"
+      }
+    ]
+  },
+  "packages": {
+    "csv__auto": {
+      "inventory:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "manufacturing:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "service:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      }
+    },
+    "csv__context_only": {
+      "inventory:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "manufacturing:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "service:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      }
+    },
+    "lakehouse__auto": {
+      "inventory:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "manufacturing:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "service:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      }
+    },
+    "lakehouse__context_only": {
+      "inventory:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "manufacturing:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "service:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      }
+    },
+    "parquet__auto": {
+      "inventory:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "manufacturing:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "service:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      }
+    },
+    "parquet__context_only": {
+      "inventory:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "manufacturing:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      },
+      "service:descriptive": {
+        "active_lessons": 0,
+        "new_development_runs": 0
+      }
+    }
+  },
+  "pooled": {
+    "auto|A": {
+      "answer_correct": 7,
+      "cached_tokens": {
+        "known_trials": 27,
+        "sum": 311040
+      },
+      "completion_tokens": {
+        "known_trials": 27,
+        "sum": 46255
+      },
+      "failed_source_calls": {
+        "known_trials": 27,
+        "sum": 11
+      },
+      "incomplete_tasks": 11,
+      "knowledge_modes": {
+        "None": 27
+      },
+      "operation_selection_lm_calls": {
+        "known_trials": 27,
+        "sum": 0
+      },
+      "prompt_tokens": {
+        "known_trials": 27,
+        "sum": 416684
+      },
+      "provider_cost_usd": 0.14589590400000002,
+      "serialization_marker_trials": 0,
+      "source_calls": {
+        "known_trials": 27,
+        "sum": 13
+      },
+      "trials": 27,
+      "value_identity_correct": 14,
+      "verification_outcomes": {
+        "not_verified": 10,
+        "verified": 17
+      },
+      "wall_median_seconds": 21.35112899998785,
+      "wall_seconds": 652.252893900004,
+      "wrong_value_or_identity": 2
+    },
+    "auto|B": {
+      "answer_correct": 4,
+      "cached_tokens": {
+        "known_trials": 27,
+        "sum": 261760
+      },
+      "completion_tokens": {
+        "known_trials": 27,
+        "sum": 31903
+      },
+      "failed_source_calls": {
+        "known_trials": 27,
+        "sum": 12
+      },
+      "incomplete_tasks": 11,
+      "knowledge_modes": {
+        "fallback_operation_plan_rejected": 11,
+        "registered_operation": 16
+      },
+      "operation_selection_lm_calls": {
+        "known_trials": 27,
+        "sum": 27
+      },
+      "prompt_tokens": {
+        "known_trials": 27,
+        "sum": 364403
+      },
+      "provider_cost_usd": 0.11709521999999999,
+      "serialization_marker_trials": 2,
+      "source_calls": {
+        "known_trials": 27,
+        "sum": 31
+      },
+      "trials": 27,
+      "value_identity_correct": 17,
+      "verification_outcomes": {
+        "not_verified": 8,
+        "verified": 19
+      },
+      "wall_median_seconds": 14.730599000002258,
+      "wall_seconds": 485.0182353000564,
+      "wrong_value_or_identity": 1
+    },
+    "auto|BC": {
+      "answer_correct": 10,
+      "cached_tokens": {
+        "known_trials": 54,
+        "sum": 550400
+      },
+      "completion_tokens": {
+        "known_trials": 54,
+        "sum": 70119
+      },
+      "failed_source_calls": {
+        "known_trials": 54,
+        "sum": 28
+      },
+      "incomplete_tasks": 19,
+      "knowledge_modes": {
+        "fallback_operation_plan_rejected": 24,
+        "registered_operation": 30
+      },
+      "operation_selection_lm_calls": {
+        "known_trials": 54,
+        "sum": 54
+      },
+      "prompt_tokens": {
+        "known_trials": 54,
+        "sum": 751314
+      },
+      "provider_cost_usd": 0.24512004000000004,
+      "serialization_marker_trials": 2,
+      "source_calls": {
+        "known_trials": 54,
+        "sum": 70
+      },
+      "trials": 54,
+      "value_identity_correct": 36,
+      "verification_outcomes": {
+        "not_verified": 16,
+        "verified": 38
+      },
+      "wall_median_seconds": 15.084558449991164,
+      "wall_seconds": 1037.6614708001434,
+      "wrong_value_or_identity": 1
+    },
+    "auto|C": {
+      "answer_correct": 6,
+      "cached_tokens": {
+        "known_trials": 27,
+        "sum": 288640
+      },
+      "completion_tokens": {
+        "known_trials": 27,
+        "sum": 38216
+      },
+      "failed_source_calls": {
+        "known_trials": 27,
+        "sum": 16
+      },
+      "incomplete_tasks": 8,
+      "knowledge_modes": {
+        "fallback_operation_plan_rejected": 13,
+        "registered_operation": 14
+      },
+      "operation_selection_lm_calls": {
+        "known_trials": 27,
+        "sum": 27
+      },
+      "prompt_tokens": {
+        "known_trials": 27,
+        "sum": 386911
+      },
+      "provider_cost_usd": 0.12802482,
+      "serialization_marker_trials": 0,
+      "source_calls": {
+        "known_trials": 27,
+        "sum": 39
+      },
+      "trials": 27,
+      "value_identity_correct": 19,
+      "verification_outcomes": {
+        "not_verified": 8,
+        "verified": 19
+      },
+      "wall_median_seconds": 15.128805699991062,
+      "wall_seconds": 552.643235500087,
+      "wrong_value_or_identity": 0
+    },
+    "context_only|A": {
+      "answer_correct": 7,
+      "cached_tokens": {
+        "known_trials": 27,
+        "sum": 351360
+      },
+      "completion_tokens": {
+        "known_trials": 27,
+        "sum": 51047
+      },
+      "failed_source_calls": {
+        "known_trials": 27,
+        "sum": 11
+      },
+      "incomplete_tasks": 11,
+      "knowledge_modes": {
+        "None": 27
+      },
+      "operation_selection_lm_calls": {
+        "known_trials": 27,
+        "sum": 0
+      },
+      "prompt_tokens": {
+        "known_trials": 27,
+        "sum": 434494
+      },
+      "provider_cost_usd": 0.148564152,
+      "serialization_marker_trials": 1,
+      "source_calls": {
+        "known_trials": 27,
+        "sum": 25
+      },
+      "trials": 27,
+      "value_identity_correct": 16,
+      "verification_outcomes": {
+        "not_verified": 8,
+        "verified": 19
+      },
+      "wall_median_seconds": 18.355564800003776,
+      "wall_seconds": 654.6267672000395,
+      "wrong_value_or_identity": 1
+    },
+    "context_only|B": {
+      "answer_correct": 7,
+      "cached_tokens": {
+        "known_trials": 27,
+        "sum": 266880
+      },
+      "completion_tokens": {
+        "known_trials": 27,
+        "sum": 42346
+      },
+      "failed_source_calls": {
+        "known_trials": 27,
+        "sum": 6
+      },
+      "incomplete_tasks": 11,
+      "knowledge_modes": {
+        "context_only": 27
+      },
+      "operation_selection_lm_calls": {
+        "known_trials": 27,
+        "sum": 0
+      },
+      "prompt_tokens": {
+        "known_trials": 27,
+        "sum": 346345
+      },
+      "provider_cost_usd": 0.124965324,
+      "serialization_marker_trials": 2,
+      "source_calls": {
+        "known_trials": 27,
+        "sum": 17
+      },
+      "trials": 27,
+      "value_identity_correct": 16,
+      "verification_outcomes": {
+        "not_verified": 8,
+        "verified": 19
+      },
+      "wall_median_seconds": 18.75376689998666,
+      "wall_seconds": 662.6559779999661,
+      "wrong_value_or_identity": 2
+    },
+    "context_only|BC": {
+      "answer_correct": 18,
+      "cached_tokens": {
+        "known_trials": 54,
+        "sum": 585728
+      },
+      "completion_tokens": {
+        "known_trials": 54,
+        "sum": 84443
+      },
+      "failed_source_calls": {
+        "known_trials": 54,
+        "sum": 15
+      },
+      "incomplete_tasks": 15,
+      "knowledge_modes": {
+        "context_only": 54
+      },
+      "operation_selection_lm_calls": {
+        "known_trials": 54,
+        "sum": 0
+      },
+      "prompt_tokens": {
+        "known_trials": 54,
+        "sum": 733759
+      },
+      "provider_cost_usd": 0.25036506,
+      "serialization_marker_trials": 2,
+      "source_calls": {
+        "known_trials": 54,
+        "sum": 39
+      },
+      "trials": 54,
+      "value_identity_correct": 36,
+      "verification_outcomes": {
+        "not_verified": 12,
+        "verified": 42
+      },
+      "wall_median_seconds": 19.09764300000097,
+      "wall_seconds": 1304.9903618999524,
+      "wrong_value_or_identity": 5
+    },
+    "context_only|C": {
+      "answer_correct": 11,
+      "cached_tokens": {
+        "known_trials": 27,
+        "sum": 318848
+      },
+      "completion_tokens": {
+        "known_trials": 27,
+        "sum": 42097
+      },
+      "failed_source_calls": {
+        "known_trials": 27,
+        "sum": 9
+      },
+      "incomplete_tasks": 4,
+      "knowledge_modes": {
+        "context_only": 27
+      },
+      "operation_selection_lm_calls": {
+        "known_trials": 27,
+        "sum": 0
+      },
+      "prompt_tokens": {
+        "known_trials": 27,
+        "sum": 387414
+      },
+      "provider_cost_usd": 0.125399736,
+      "serialization_marker_trials": 0,
+      "source_calls": {
+        "known_trials": 27,
+        "sum": 22
+      },
+      "trials": 27,
+      "value_identity_correct": 20,
+      "verification_outcomes": {
+        "not_verified": 4,
+        "verified": 23
+      },
+      "wall_median_seconds": 19.115965000004508,
+      "wall_seconds": 642.3343838999863,
+      "wrong_value_or_identity": 3
+    }
+  },
+  "questions": {
+    "csv__auto|inventory_available_units|descriptive": {
+      "A": {
+        "answer_correct": 3,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 3,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 3,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "csv__auto|manufacturing_complete_units|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 1
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "csv__auto|service_first_response_sla_rate|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 0,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "csv__context_only|inventory_available_units|descriptive": {
+      "A": {
+        "answer_correct": 3,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 3,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 3,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "csv__context_only|manufacturing_complete_units|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 2,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 1
+      },
+      "C": {
+        "answer_correct": 1,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 1
+      }
+    },
+    "csv__context_only|service_first_response_sla_rate|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 1
+      }
+    },
+    "lakehouse__auto|inventory_available_units|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 1,
+        "incomplete_tasks": 2,
+        "value_identity_correct": 1,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "lakehouse__auto|manufacturing_complete_units|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 0,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "lakehouse__auto|service_first_response_sla_rate|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "lakehouse__context_only|inventory_available_units|descriptive": {
+      "A": {
+        "answer_correct": 2,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 3,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "lakehouse__context_only|manufacturing_complete_units|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 2,
+        "value_identity_correct": 1,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 0,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 1,
+        "wrong_value_or_identity": 1
+      }
+    },
+    "lakehouse__context_only|service_first_response_sla_rate|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 0,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "parquet__auto|inventory_available_units|descriptive": {
+      "A": {
+        "answer_correct": 3,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 3,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 3,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "parquet__auto|manufacturing_complete_units|descriptive": {
+      "A": {
+        "answer_correct": 1,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 1
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "parquet__auto|service_first_response_sla_rate|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 1
+      },
+      "C": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "parquet__context_only|inventory_available_units|descriptive": {
+      "A": {
+        "answer_correct": 2,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 2,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 3,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "parquet__context_only|manufacturing_complete_units|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 0
+      },
+      "C": {
+        "answer_correct": 1,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      }
+    },
+    "parquet__context_only|service_first_response_sla_rate|descriptive": {
+      "A": {
+        "answer_correct": 0,
+        "incomplete_tasks": 1,
+        "value_identity_correct": 1,
+        "wrong_value_or_identity": 1
+      },
+      "B": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 2,
+        "wrong_value_or_identity": 1
+      },
+      "C": {
+        "answer_correct": 0,
+        "incomplete_tasks": 0,
+        "value_identity_correct": 3,
+        "wrong_value_or_identity": 0
+      }
+    }
+  },
+  "wrong_values": [
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "33.33% of tickets met their first-response SLA."
+          }
+        ],
+        "entity_ids": null,
+        "grain": "ticket",
+        "period": "all available data",
+        "status": "success",
+        "units": "fraction",
+        "value": 0.3333333333333333
+      },
+      "arm": "B",
+      "expected": {
+        "expected_status": "answered",
+        "grain": "ticket",
+        "period": "2026-03-01 through 2026-03-03",
+        "units": "ratio",
+        "value": 0.6666666666666666
+      },
+      "question": "service_first_response_sla_rate",
+      "repetition": 0,
+      "run": "parquet__auto"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Sum of produced_units over complete reporting periods (reporting_complete=True) with matching defects (same line_id and reporting_period)"
+          }
+        ],
+        "entity_ids": {
+          "line_id": [
+            "LN-A",
+            "LN-B"
+          ],
+          "product_id": [
+            "SKU-1",
+            "SKU-2"
+          ]
+        },
+        "grain": "line_id, product_id, reporting_period",
+        "period": "multiple reporting_periods",
+        "status": "success",
+        "units": "units",
+        "value": 3600
+      },
+      "arm": "A",
+      "expected": {
+        "expected_status": "answered",
+        "grain": "complete production periods",
+        "period": "2026-01",
+        "units": "units",
+        "value": 1800
+      },
+      "question": "manufacturing_complete_units",
+      "repetition": 1,
+      "run": "parquet__auto"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Approximately 66.7% of tickets met their first-response SLA."
+          },
+          {
+            "supported": true,
+            "text": "The calculation is based on 2 tickets meeting SLA out of a total of 3 tickets."
+          }
+        ],
+        "entity_id": null,
+        "grain": "ticket",
+        "period": null,
+        "status": "success",
+        "units": "ratio",
+        "value": 0.6667
+      },
+      "arm": "A",
+      "expected": {
+        "expected_status": "answered",
+        "grain": "ticket",
+        "period": "2026-03-01 through 2026-03-03",
+        "units": "ratio",
+        "value": 0.6666666666666666
+      },
+      "question": "service_first_response_sla_rate",
+      "repetition": 0,
+      "run": "parquet__context_only"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "0 out of 3 tickets met their first-response SLA, which is a share of 0.000."
+          }
+        ],
+        "entity_id": null,
+        "grain": "tickets",
+        "period": "2026-03-01 to 2026-03-02",
+        "status": "success",
+        "units": "fraction",
+        "value": 0.0
+      },
+      "arm": "B",
+      "expected": {
+        "expected_status": "answered",
+        "grain": "ticket",
+        "period": "2026-03-01 through 2026-03-03",
+        "units": "ratio",
+        "value": 0.6666666666666666
+      },
+      "question": "service_first_response_sla_rate",
+      "repetition": 1,
+      "run": "parquet__context_only"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Summed produced units from production where reporting_complete is true and matching defects exist (joined on line_id and reporting_period)."
+          }
+        ],
+        "entity_ids": [
+          "line_id",
+          "product_id"
+        ],
+        "grain": [
+          "line_id",
+          "product_id",
+          "reporting_period"
+        ],
+        "period": "complete reporting periods only",
+        "status": "success",
+        "units": "units",
+        "value": 52882
+      },
+      "arm": "C",
+      "expected": {
+        "expected_status": "answered",
+        "grain": "complete production periods",
+        "period": "2026-01",
+        "units": "units",
+        "value": 1800
+      },
+      "question": "manufacturing_complete_units",
+      "repetition": 1,
+      "run": "lakehouse__context_only"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Total units produced in complete reporting periods with matching defects on line_id and reporting_period."
+          }
+        ],
+        "entity_ids": null,
+        "grain": [
+          "line_id",
+          "reporting_period"
+        ],
+        "period": "complete reporting periods with matching defects",
+        "status": "success",
+        "units": "units",
+        "value": 3600
+      },
+      "arm": "A",
+      "expected": {
+        "expected_status": "answered",
+        "grain": "complete production periods",
+        "period": "2026-01",
+        "units": "units",
+        "value": 1800
+      },
+      "question": "manufacturing_complete_units",
+      "repetition": 0,
+      "run": "csv__auto"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Total produced units in complete reporting periods with matching defects is 3600."
+          }
+        ],
+        "entity_ids": {
+          "line_id": [
+            "LN-A",
+            "LN-B"
+          ],
+          "product_id": [
+            "SKU-1",
+            "SKU-2"
+          ]
+        },
+        "grain": "line_id, reporting_period, product_id",
+        "period": [
+          "2026-01"
+        ],
+        "status": "ok",
+        "units": "units",
+        "value": 3600
+      },
+      "arm": "C",
+      "expected": {
+        "expected_status": "answered",
+        "grain": "complete production periods",
+        "period": "2026-01",
+        "units": "units",
+        "value": 1800
+      },
+      "question": "manufacturing_complete_units",
+      "repetition": 0,
+      "run": "csv__context_only"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "Total produced units in complete reporting periods with matching defects."
+          }
+        ],
+        "entity_ids": {
+          "line_id": [
+            "LN-A",
+            "LN-B"
+          ],
+          "product_id": [
+            "SKU-1",
+            "SKU-2"
+          ]
+        },
+        "grain": "line_id, product_id, reporting_period",
+        "period": "filtered to complete reporting periods with matching defects",
+        "status": "success",
+        "units": "units",
+        "value": 3600
+      },
+      "arm": "B",
+      "expected": {
+        "expected_status": "answered",
+        "grain": "complete production periods",
+        "period": "2026-01",
+        "units": "units",
+        "value": 1800
+      },
+      "question": "manufacturing_complete_units",
+      "repetition": 2,
+      "run": "csv__context_only"
+    },
+    {
+      "answer": {
+        "claims": [
+          {
+            "supported": true,
+            "text": "0.00% of tickets met their first-response SLA."
+          }
+        ],
+        "entity_ids": [
+          "T-001",
+          "T-002",
+          "T-003"
+        ],
+        "grain": "ticket",
+        "period": "all available data",
+        "status": "success",
+        "units": "ratio",
+        "value": 0.0
+      },
+      "arm": "C",
+      "expected": {
+        "expected_status": "answered",
+        "grain": "ticket",
+        "period": "2026-03-01 through 2026-03-03",
+        "units": "ratio",
+        "value": 0.6666666666666666
+      },
+      "question": "service_first_response_sla_rate",
+      "repetition": 2,
+      "run": "csv__context_only"
+    }
+  ]
+}

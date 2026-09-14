@@ -81,6 +81,11 @@ The 250,000-row fixture is retained but excluded from live smoke prompts.
 
 ## Paired operation-policy comparison
 
+The completed 162-task study is recorded in
+[POLICY_COMPARISON.md](POLICY_COMPARISON.md), with raw evidence under
+`evidence\policy-comparison`. Context-only eliminated selector calls but did not
+pass the combined nonregression gate or establish an efficiency/enrichment win.
+
 Compare `auto` and `context_only` with the **same previously frozen B/C
 packages**, not packages independently regenerated between conditions:
 

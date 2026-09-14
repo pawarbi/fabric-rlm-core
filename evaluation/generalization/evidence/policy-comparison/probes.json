@@ -1,0 +1,996 @@
+{
+  "history_records_with_later_assistant_messages": 107,
+  "history_scope": "Saved LM.history messages can include later assistant turns because the list is mutable. Compare only the reconstructed initial system/user prefix here; this is not an immutable HTTP request capture.",
+  "literal_provenance": {
+    "assigned_literal": [],
+    "direct_literal": [
+      "The value 52882 was typed into SUBMIT but never appeared in executed output: compute it in code and print it before submitting, or leave it out and say it is unsupported."
+    ]
+  },
+  "reconstructed_initial_prefix_comparisons": {
+    "A_policy_control": [
+      {
+        "left_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "same": true,
+        "source": "csv"
+      }
+    ],
+    "B_C": [
+      {
+        "left_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "60d722adda4c295d708df42561086cb85064fe473c3da6afcf1a278779f8ac69",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "60d722adda4c295d708df42561086cb85064fe473c3da6afcf1a278779f8ac69",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "0efe276e696fe956bc6a9c333d1b9ffc5e6bc363f7dd4527f2ad6e880e06bf81",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "0efe276e696fe956bc6a9c333d1b9ffc5e6bc363f7dd4527f2ad6e880e06bf81",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "51fe12241b83597b29f1391645242e69b69b1bc769a3e22a5321142a928cbc53",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "51fe12241b83597b29f1391645242e69b69b1bc769a3e22a5321142a928cbc53",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "60d722adda4c295d708df42561086cb85064fe473c3da6afcf1a278779f8ac69",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "60d722adda4c295d708df42561086cb85064fe473c3da6afcf1a278779f8ac69",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "0efe276e696fe956bc6a9c333d1b9ffc5e6bc363f7dd4527f2ad6e880e06bf81",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "0efe276e696fe956bc6a9c333d1b9ffc5e6bc363f7dd4527f2ad6e880e06bf81",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "51fe12241b83597b29f1391645242e69b69b1bc769a3e22a5321142a928cbc53",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "51fe12241b83597b29f1391645242e69b69b1bc769a3e22a5321142a928cbc53",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "60d722adda4c295d708df42561086cb85064fe473c3da6afcf1a278779f8ac69",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "60d722adda4c295d708df42561086cb85064fe473c3da6afcf1a278779f8ac69",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "51fe12241b83597b29f1391645242e69b69b1bc769a3e22a5321142a928cbc53",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "51fe12241b83597b29f1391645242e69b69b1bc769a3e22a5321142a928cbc53",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "0efe276e696fe956bc6a9c333d1b9ffc5e6bc363f7dd4527f2ad6e880e06bf81",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "0efe276e696fe956bc6a9c333d1b9ffc5e6bc363f7dd4527f2ad6e880e06bf81",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "policy": "auto",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "e26a7c6fdd5561b72047d1fcc2eecb7df594f56a61e1ad266b232266ebb1932c",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "policy": "auto",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "ccd2fc8cbbbdfbdebf4ba4002fc529d601932e6939f83bb9b489bc3434902963",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "policy": "auto",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "4e21b69e7cc8e020cb2f5e952a1ac288966433836a0d2b4f4034c6ff62b405ac",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "same": true,
+        "source": "csv"
+      }
+    ],
+    "context_A_B": [
+      {
+        "left_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "4227c409b34bb85a3d5ef67604ef563e623ac9e6249bd167f710ea9cdfddf0ba",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "768e8295eaed9f10f6214c6690b5ed5798b20d7bdd69bd6f584ea9c871e5b3e2",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "955c17cdcf10c6f6a8d56ca0028788810e179a57c5e4dedfb0b4394438c53551",
+        "same": true,
+        "source": "parquet"
+      },
+      {
+        "left_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "78bd79ad60874a498480c004d7f333401ce97bd1ca367d5702e228a763c959c0",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "76036d4f0e3817c38fa73002ac8291e060b7d98511a3e8aee6d2610341b969b1",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "9d2a698ff5db6f751c1efd584c85d0485c5a8242f66726b6c746ae8757006f09",
+        "same": true,
+        "source": "lakehouse"
+      },
+      {
+        "left_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 0,
+        "right_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 0,
+        "right_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 0,
+        "right_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 1,
+        "right_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 1,
+        "right_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 1,
+        "right_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "policy": "context_only",
+        "question": "manufacturing_complete_units",
+        "repetition": 2,
+        "right_sha256": "00d06415bb58fc945f5cd51c3259e623422dd918a70e50abb0ef27eec3f7e5ae",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "policy": "context_only",
+        "question": "inventory_available_units",
+        "repetition": 2,
+        "right_sha256": "64eac926e1ef920ba7d764a7c8ddd602e5b5c97eb3b6e4e3e9221a66fe3591f2",
+        "same": true,
+        "source": "csv"
+      },
+      {
+        "left_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "policy": "context_only",
+        "question": "service_first_response_sla_rate",
+        "repetition": 2,
+        "right_sha256": "b35f71b5a9771419f761dbcfca816591957b82ba2d57c272268699c96a3f4497",
+        "same": true,
+        "source": "csv"
+      }
+    ]
+  },
+  "requested_models": {
+    "openrouter/openai/gpt-4.1-mini": 850
+  },
+  "response_models": {
+    "openai/gpt-4.1-mini": 850
+  }
+}

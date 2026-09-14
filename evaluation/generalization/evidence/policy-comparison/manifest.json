@@ -1,0 +1,1587 @@
+{
+  "account_delta_usd": 0.7885924199999996,
+  "archive": {
+    "bytes": 3007823,
+    "members": {
+      "batch.json": {
+        "bytes": 5926,
+        "sha256": "c6978813ee0e3971491199eeb46ddb646368979f772573c11601f4a230012ba3"
+      },
+      "csv__auto.artifacts/core-freeze.json": {
+        "bytes": 8339,
+        "sha256": "c721f94fce28df6999dcaecfa5c67a491420561a043ef3aae54a623c3b9d34ed"
+      },
+      "csv__auto.artifacts/packages/inventory__descriptive__B.json": {
+        "bytes": 15031,
+        "sha256": "7ac882a6e571b0f131de8a46200d29c172533a7ebfb89a33ee8954fbf46cfeb0"
+      },
+      "csv__auto.artifacts/packages/inventory__descriptive__C.json": {
+        "bytes": 20814,
+        "sha256": "26bfcbac108acb50caf089d1898a85fbe891ed2540569d033b3985ee0d026cb8"
+      },
+      "csv__auto.artifacts/packages/manufacturing__descriptive__B.json": {
+        "bytes": 7383,
+        "sha256": "14103f4704861d4055981c84ecfd4051207f1f4d0350eff39d3bf12d4fc6303e"
+      },
+      "csv__auto.artifacts/packages/manufacturing__descriptive__C.json": {
+        "bytes": 13063,
+        "sha256": "6f5b6abb5a4c047ad848cc7c6f7477258ca04d519aba6324d9da269b681a9657"
+      },
+      "csv__auto.artifacts/packages/service__descriptive__B.json": {
+        "bytes": 10697,
+        "sha256": "507fc7a8ce654c5848423a89f8f64bc95fcd40da45a110bb0a4844021d22dfea"
+      },
+      "csv__auto.artifacts/packages/service__descriptive__C.json": {
+        "bytes": 14937,
+        "sha256": "4cea5c8e2a128f99782486e9baf64e444199f5a675721739c23f2e9f4b435de5"
+      },
+      "csv__auto.artifacts/provenance.json": {
+        "bytes": 21348,
+        "sha256": "b7034a8e78d4b86d1919be08aeacd68d66f40fa9127b3c3a00285386c1acfa9d"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+        "bytes": 53424,
+        "sha256": "89dc7df6ea4c79082ec7061574192f79a5154daddf1aa296bd96afb0a1d818bd"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 15145,
+        "sha256": "7d6eebf32450aa3121d58177cb0b85871fa2293986878074428066b502a6c519"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+        "bytes": 37273,
+        "sha256": "ce491438d200beb155ff6cb559f2f025e942ac469f0a7959408bdf7def3391b7"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 14009,
+        "sha256": "fcaaf9790eba2aff4dc0c5d357d444f34fb4e62ff797e17588ed5af3169c2928"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+        "bytes": 95907,
+        "sha256": "d188814ae80f0c7a2c43ee745c6abd438f6d350983537e7bfaa16884d09c7561"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 20588,
+        "sha256": "565a5e45f0ef774f54eb68de52406096ea7006994bafa5958e558b3ea804f98b"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r1__A.provider.json": {
+        "bytes": 56691,
+        "sha256": "47f823c0f71b2162e4d1cd5451178d75f0830861b17e56cb2ffaa6d0bf720adc"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 15996,
+        "sha256": "2cad5d3517503dbcd33eeaeca239b32436aa9d5eddab8ec28b4c3376fece2bac"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r1__B.provider.json": {
+        "bytes": 102764,
+        "sha256": "90a4c0b148f9d5b0db632e9f699e17801a3a0f3e4ea6da3b19f68b2300a56b34"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 22322,
+        "sha256": "cad74888a2ad2e1466d1ef0199a782c3c030cbc23813d22c6bf8eba6c7ec6f7f"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r1__C.provider.json": {
+        "bytes": 105137,
+        "sha256": "ecd8cbb3a42be8276557278ccb621ce78b90431e50ef24835704dbeb64d4ab71"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 26935,
+        "sha256": "33c029a7753c59d26ee9055ee165f9c4eedbcb899036acafa484fa331b7425e4"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r2__A.provider.json": {
+        "bytes": 68472,
+        "sha256": "ca528d26dd3ce3e1fc64b6edc9337db5864fea2256fecf466982826c2fc71f31"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 17267,
+        "sha256": "5e70e52b748825ac202d6d146ece3c87a00a699696b4b4238f40e5e0224bfda2"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r2__B.provider.json": {
+        "bytes": 92416,
+        "sha256": "51257e2b77e1d0d510ba6f32d1bcb742ab7c44973605aab8b57007659aebddc6"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 26013,
+        "sha256": "b6b04616d93faad0b5e8236ed785a2e31ccc7d97064d27d92d48a3da2d3b52fa"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r2__C.provider.json": {
+        "bytes": 52519,
+        "sha256": "92ae79d70e2940815f7536fdc0b7febfaffe4e6e7d25e1405e394da0ab6b70f6"
+      },
+      "csv__auto.artifacts/traces/inventory_available_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 17400,
+        "sha256": "0f1ee14169d57fe0c0668cc2d01b9a8ec741a011ddd883a5a8b54c80d61c7eef"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+        "bytes": 115767,
+        "sha256": "17b962a6581af1e6986e9d3e9af770e3852f4930a383eb42cfa5d293889a4642"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 21594,
+        "sha256": "abeea9b2b6769f976ddac5050b13f21f16ffca493d26c4672737fb54d210a5c1"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+        "bytes": 29908,
+        "sha256": "a13a82d9cd9b64e2a66dca00eb09915564b162d5a6798a3b70795cb0b384b90f"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 9428,
+        "sha256": "73ccf381aea948397a6286b680f001996be8d5b93fc8f31acaa024f25eaacaba"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+        "bytes": 49584,
+        "sha256": "ec2071dab142bca8d4e412b2094489398cab2f7e767138ccec1897ad2f404425"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 15520,
+        "sha256": "e4011f9469c9071b1f649a6bafb4c3dfa240209024daaf38522f861442973dd5"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.provider.json": {
+        "bytes": 118683,
+        "sha256": "f2797dc67ad4abd6cbe5f2ec9dacbd3d0a03a25d54cbe9b502004ff7e8d144d9"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 23841,
+        "sha256": "ad413b6c4b6752ec097a4d8a1ab82e0a1df4db546041b87b2e5022f7a6fcf93c"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.provider.json": {
+        "bytes": 31000,
+        "sha256": "bacee18ea35328d40e626f22350a4dc1761bb4b51dc43b74417361750438ebdc"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 10344,
+        "sha256": "f4e22a48038845fc1acdda648544bdc9ecb046bfd4970ff9c4f72acf3ba615bf"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.provider.json": {
+        "bytes": 31850,
+        "sha256": "96ddead0f8b7625b0a579a323e934cdd82599eafdfd64ac89bbf2d853a1c5a87"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 10942,
+        "sha256": "7613a784b9a75163cbed1c64c6191e057719496c60fb53c7bc4500c84612e5b7"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.provider.json": {
+        "bytes": 124656,
+        "sha256": "4ce72a867b2f814de163eba54c56ce3bf25bc2275da6774b967035e7334e432c"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 24401,
+        "sha256": "521163d6f0117ea804ffb586a533b3c027c4bab5081137dfbc9493b6cf47dbbc"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.provider.json": {
+        "bytes": 46582,
+        "sha256": "5266bac9bfc45c8fea937d6d214a2e3f520303593fb38cf99be0968c4921fcc3"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 13613,
+        "sha256": "debc83e233070eb9571c06402d9233afd9b922155c33b8cefd98cb31fa398dc4"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.provider.json": {
+        "bytes": 43448,
+        "sha256": "e5f204cc5193a2d431937d3d96c04525f2812dc70334f6d37e591722a4c7efef"
+      },
+      "csv__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 13152,
+        "sha256": "baf2a16272e87f79c63e275ef26295814cc065038a9db935818ecd25f3b611cd"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+        "bytes": 94629,
+        "sha256": "502429212eac1d17b1818ddaa550df35213a4fac69537cc96038e66cd1096e18"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 22119,
+        "sha256": "495518300bfd258b16b0caaf37b01e9ac60ecd07b234b36d7b46eaeafe8f0bd5"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+        "bytes": 155962,
+        "sha256": "fad06d8f72305fbcb2b7eb4c9a0dee94bdbbdd9e1830355eb392159c2d13c65b"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 28755,
+        "sha256": "cc225a5a5d0c5e0473f0554bcb655ee881a202f0af4607c7bd1eb15904ddb6c2"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+        "bytes": 235977,
+        "sha256": "3bdd434346684d98c4acf6ad1d7697c5468a314bcb299c3570923b9e97cda247"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 51414,
+        "sha256": "0b9e1eb996b88377b49e58152aae2ef9e1f3d2406e718bdeabf963bb024c59b6"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.provider.json": {
+        "bytes": 220741,
+        "sha256": "ac59e6d9bb3ce26e42797ee42147b7686dab922fbfb29fab5db21e358c88d347"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 49080,
+        "sha256": "f8a5cb8686dd4b0a4a70bb05544b97418d4a31fdafdbfd9e94144e0f3eccfddd"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.provider.json": {
+        "bytes": 141486,
+        "sha256": "16a9340087e0c88a2e55122b9798fe1f8ec0e0fa835f2be206d4708a755870c8"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 34780,
+        "sha256": "af400850c81057a832c46fe18a89ce74139e670d1504dc92734006da9c3166de"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.provider.json": {
+        "bytes": 121664,
+        "sha256": "3240002465788b968e011a12cefd99670e512b111bd51adf15c2bb8c6ad24e86"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 29444,
+        "sha256": "71a69cd3c74cda33cf3a5cff97e84eeff1be9dd4318e54f395a62e69224b7346"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.provider.json": {
+        "bytes": 152108,
+        "sha256": "29344609447eadb568492bffe40299296cce7447412945cf6c01e0b118a44dce"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 32247,
+        "sha256": "bf6b52d71384550ff92ddbe9e78ddc168533628fe0823857507e30d7d3ee642b"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.provider.json": {
+        "bytes": 126700,
+        "sha256": "56fb47967222f53e9a2650d78c2e4245cfca810935e8e68d1cae8b4b54fd1b13"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 32400,
+        "sha256": "f4394b1ae11a807595523e1a100df40d71231cbd545142d1c185c09f95864669"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.provider.json": {
+        "bytes": 189229,
+        "sha256": "ac785dea0fc5c58fc5d293cc5fb8ac74c3fb5c53bca711b5c5ae127ad966bb0d"
+      },
+      "csv__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 36298,
+        "sha256": "4c93bacd1e1c15b267f8996f481db642ac26825b8fb96b9ec232ec52934866fa"
+      },
+      "csv__auto.json": {
+        "bytes": 154007,
+        "sha256": "552f260ec24a79985429fb58f10654e8be64a612dfdafe0eda8f73b2e81d0532"
+      },
+      "csv__context_only.artifacts/core-freeze.json": {
+        "bytes": 8339,
+        "sha256": "c721f94fce28df6999dcaecfa5c67a491420561a043ef3aae54a623c3b9d34ed"
+      },
+      "csv__context_only.artifacts/packages/inventory__descriptive__B.json": {
+        "bytes": 15031,
+        "sha256": "7ac882a6e571b0f131de8a46200d29c172533a7ebfb89a33ee8954fbf46cfeb0"
+      },
+      "csv__context_only.artifacts/packages/inventory__descriptive__C.json": {
+        "bytes": 20814,
+        "sha256": "26bfcbac108acb50caf089d1898a85fbe891ed2540569d033b3985ee0d026cb8"
+      },
+      "csv__context_only.artifacts/packages/manufacturing__descriptive__B.json": {
+        "bytes": 7383,
+        "sha256": "14103f4704861d4055981c84ecfd4051207f1f4d0350eff39d3bf12d4fc6303e"
+      },
+      "csv__context_only.artifacts/packages/manufacturing__descriptive__C.json": {
+        "bytes": 13063,
+        "sha256": "6f5b6abb5a4c047ad848cc7c6f7477258ca04d519aba6324d9da269b681a9657"
+      },
+      "csv__context_only.artifacts/packages/service__descriptive__B.json": {
+        "bytes": 10697,
+        "sha256": "507fc7a8ce654c5848423a89f8f64bc95fcd40da45a110bb0a4844021d22dfea"
+      },
+      "csv__context_only.artifacts/packages/service__descriptive__C.json": {
+        "bytes": 14937,
+        "sha256": "4cea5c8e2a128f99782486e9baf64e444199f5a675721739c23f2e9f4b435de5"
+      },
+      "csv__context_only.artifacts/provenance.json": {
+        "bytes": 21371,
+        "sha256": "cda00795c7d2058d738162182b7344c379e6ffad115215f9e49cae955a95676f"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+        "bytes": 90483,
+        "sha256": "7981ca0e82054590559c487bcb5cdb84cad522271f755d80d7787132b5536736"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 20787,
+        "sha256": "fafd69cd0fda86c3a5c8b030373eedfcdd1732b951b99c03f1a521f7f6528161"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+        "bytes": 60494,
+        "sha256": "1eebfa5b60ed7dee2862736d3eb800d9c1672ba647f47be2b0209f2ec0636322"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 18982,
+        "sha256": "786bbf0305ff9946bf88f2eb1d7c58a7dfcef1c931997737b5588afec823c283"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+        "bytes": 91145,
+        "sha256": "cc8383e0baf261cae86bfa535552e8d46c85f993458cdfade6a729274577ad9e"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 21570,
+        "sha256": "48724c48f12b0f42f0768374396c792dc5d94239e3c562a5cb673819bfd9d177"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r1__A.provider.json": {
+        "bytes": 73014,
+        "sha256": "7d1d738641c693321ccb6c325198ec6dacbc7cdb51b0a302445d57d26e42e7e7"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 18259,
+        "sha256": "9f63f7e510c5cdaab00e2c2e86dc82a15f0f2d238e3a29de1031b70ea4709e22"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r1__B.provider.json": {
+        "bytes": 74798,
+        "sha256": "975c9aded18217c4ed9a0405f7988f8730ce18b9b22bc34506bdce839ce2cdf6"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 19395,
+        "sha256": "c64cf112df1512d4209f65a900bcedfc38ecd1aacd219a2544c132b02df3f8a1"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r1__C.provider.json": {
+        "bytes": 97700,
+        "sha256": "be7c6c2077d275e2334138551413ecaf8e77cfbb0c013d50eba96e0836fc72a0"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 22734,
+        "sha256": "42c4978daafe3173c1c5a60fa2e5a4f9c482138052548e340c03aff7e6769f6b"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r2__A.provider.json": {
+        "bytes": 72267,
+        "sha256": "b04f93c436fbceff6fb020334b3c4f6763864fe08d0f10c03235468e1425530b"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 18982,
+        "sha256": "af70722c86473fe04552e9f29038d74cd450ec538b094f1f9acb235be83747d1"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r2__B.provider.json": {
+        "bytes": 73691,
+        "sha256": "47ca928f2050b73cf3d79c554a01770f0e63f00146f439e425584a6f659253e6"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 19044,
+        "sha256": "55835268c2f217d974b2692a8387eae488ae85c90bde55b5b559eec6cdd580e6"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r2__C.provider.json": {
+        "bytes": 71994,
+        "sha256": "bda39d786ae0d87ad7a6815dda11d69cad4dd3737430e57c1d344d5188b6c29e"
+      },
+      "csv__context_only.artifacts/traces/inventory_available_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 18722,
+        "sha256": "dfb5417042981a7829e1a32f8dff096f7731e8c510380806de5766a0fb56ea39"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+        "bytes": 76251,
+        "sha256": "37b7a4136ccaf08798559f453858676cc4580aa4e683b3ad0a438a92d0cb9b03"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 16140,
+        "sha256": "0b77b0d7d23142e6d7d8d6680611b419b013d1afc010fbeec4dad23ab0fedf25"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+        "bytes": 87278,
+        "sha256": "d5130cb6b29ecf5cd089a2fd03d7586d3a640b8fe5a597e67c48b7e44d73f97c"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 18263,
+        "sha256": "57bd0da1492095a38598cc681c4f9b90028e2853248b4dd0c358641de7c65c66"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+        "bytes": 111160,
+        "sha256": "692de9c30a2079cfe7bfa0db8d7a9c51769ed434c30a83ed50fed86a3c6d90b0"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 22048,
+        "sha256": "96574c30a50caf1592a3f6817cd3ca050a7bc0a5f1b268149726cbfe8298fe52"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.provider.json": {
+        "bytes": 121157,
+        "sha256": "bfbf407aaaff99745fc3afd5a782d64f54db85aa6165bd6cf0005734362c1a45"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 21929,
+        "sha256": "ae62e28f1b09d378c178fda5f033edbdbd74ad82d36ee3d7e1582aade87da2ad"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.provider.json": {
+        "bytes": 127160,
+        "sha256": "e102e4766bf110face11f4b9096265e2ad890f3fa0a55c4063b4c38616e7cd61"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 31424,
+        "sha256": "916a917cac53533d888ee6d116b89fb69d024ff73aaa327ff69df5084be48fc6"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.provider.json": {
+        "bytes": 59982,
+        "sha256": "d6c16fddadde57d7fc07195f3964b002510b97e438c715a6e5ff98c1211ea191"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 11664,
+        "sha256": "e99961a15ef5cb18f3e503843ee8830f733bbbc688a9c400c8bfa8a7ece4475c"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.provider.json": {
+        "bytes": 76527,
+        "sha256": "8ee8af1ff67a9d367a0d4339b764cfa89815e6661f99960eb489f549bfe6983b"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 16184,
+        "sha256": "2b534db1d2ad1089bab7207a28f8190b1dc052c1dbb95ea6da990383f52204d8"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.provider.json": {
+        "bytes": 13635,
+        "sha256": "1f4943fe4971d3900d02087cbb7a9c2843d955ad3965064060e9b0da4cef47ca"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 9934,
+        "sha256": "2e210b45480ed1e19478ce1d8ebd4e260276c0fec521a93e0c644d1d53880153"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.provider.json": {
+        "bytes": 88119,
+        "sha256": "8d62cd980f9e95a9cb8f407a0272dc2c684d946854d0ca5ab814d9f78c282e51"
+      },
+      "csv__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 19964,
+        "sha256": "7103ac2f12fe77f96ee9238dfbfcbf08f655489a9436ccb68a3c4ce1958fd41d"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+        "bytes": 56242,
+        "sha256": "f45530459e719fce52c33a486f4a06cfb8c3032e2ff8058b1ef03e278b3160ad"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 22076,
+        "sha256": "9722fc042bcb37004506dad40e830bd595505d0185f2f759a62c59fcde6792b6"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+        "bytes": 145804,
+        "sha256": "4576ed1636af1706ad71c6de729c34b88642b1655cd29d84ebb7eb853a58d17b"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 39794,
+        "sha256": "e1a4cb842ac428ae4d2871669e52401c88048310432e216b0423b1913a6b2d2b"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+        "bytes": 104412,
+        "sha256": "238d589936530126b81c0c716521853db4949c6e61be9ee33cfea3689cc0943a"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 29552,
+        "sha256": "4837270ba1a53b67cf8b1cbbc7a60224d39c32a4c73b2aafa76f187ceb339347"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.provider.json": {
+        "bytes": 185068,
+        "sha256": "3bf2904496ddb2dede8f604080e8005e85cebb450de25ceea49548075998cf8c"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 39681,
+        "sha256": "c339050dfdf15dd7e11d6e067551c50fa9f921b00755f166e393f701711cb65a"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.provider.json": {
+        "bytes": 76441,
+        "sha256": "7581d38189c1ed002fb7224fea96ef980d1659680692b6c62d5c2e518234f3a5"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 20694,
+        "sha256": "3a51e300599e43be7751143de06e32f20e3fe91b45af28a719ce955380df138a"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.provider.json": {
+        "bytes": 133294,
+        "sha256": "eb3600a8751e5c0652dd60bdd60d4aec93af9a24e283a586f032f0231dd64586"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 28884,
+        "sha256": "fe129b73238dedda6bc9a716b51f80fa082116db41928f771f067ff7a2d2b2be"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.provider.json": {
+        "bytes": 161762,
+        "sha256": "3b074b65dc9eb83f3becda8a375d730c3440d4d2796559fe3dad3c81d222fc4d"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 36864,
+        "sha256": "b3d6bf3690e3cd37a97d89c1449b3d76a579ff0d45c9e2cbbf323539011e26bb"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.provider.json": {
+        "bytes": 135734,
+        "sha256": "b96ad0682479f2617a4d09a2d57a0b5e89e8fd9ad511f39c9863b22967c16834"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 30576,
+        "sha256": "1ec443a0c946c6e8bcb92fd1db220a828cf8e1f10cb08734fa397f5916e34ba3"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.provider.json": {
+        "bytes": 50340,
+        "sha256": "f29d6fdaf7932295f0cd65e7f57e1bd43fd08bccff009e73fbe6f7258c66b22d"
+      },
+      "csv__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 10766,
+        "sha256": "182feec9fdb5852690d67f540312e604a69f7d714fa66db4d6528de770830d60"
+      },
+      "csv__context_only.json": {
+        "bytes": 159824,
+        "sha256": "2a515e6c30040d4f274e03d8b381e8e65babc21c757ecbcd2ca0978211e054e8"
+      },
+      "lakehouse__auto.artifacts/core-freeze.json": {
+        "bytes": 8339,
+        "sha256": "c721f94fce28df6999dcaecfa5c67a491420561a043ef3aae54a623c3b9d34ed"
+      },
+      "lakehouse__auto.artifacts/packages/inventory__descriptive__B.json": {
+        "bytes": 16409,
+        "sha256": "b15e1535519f434b9cad1616dab49a2e5ebe7218678f9d396f608a94c4f2a33f"
+      },
+      "lakehouse__auto.artifacts/packages/inventory__descriptive__C.json": {
+        "bytes": 24168,
+        "sha256": "7753ad29917684394ea9a09121065a33f87e9998f666022a11707073ad01a1ad"
+      },
+      "lakehouse__auto.artifacts/packages/manufacturing__descriptive__B.json": {
+        "bytes": 8040,
+        "sha256": "e954b707560663d4bdd44ee300303c2747563ac2336ecef707a6da1bfeba69a3"
+      },
+      "lakehouse__auto.artifacts/packages/manufacturing__descriptive__C.json": {
+        "bytes": 18545,
+        "sha256": "0700ab6c1b5cf638204b1be8dab0ac388a8fab35ac6fec49801aed5eda699a55"
+      },
+      "lakehouse__auto.artifacts/packages/service__descriptive__B.json": {
+        "bytes": 11731,
+        "sha256": "22ee621fc2fc5b4e31b5d34af42754f6db9b1996b95cdf68be2d3b6249f0d5e3"
+      },
+      "lakehouse__auto.artifacts/packages/service__descriptive__C.json": {
+        "bytes": 19076,
+        "sha256": "6f26c84151bd02ee8bfcc173bbcf9f9d3e40d225cfed179e1f6ff76e9ac76892"
+      },
+      "lakehouse__auto.artifacts/provenance.json": {
+        "bytes": 21367,
+        "sha256": "a4311fa507708b94908c62ae4be0dd4130d25ceb69058c210ed95032997bf025"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+        "bytes": 112153,
+        "sha256": "60e2b9f39f744c0e6def05328d7638cb256199c39bf08aff419b08a6fd102ac0"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 28956,
+        "sha256": "f0a36d7d3af1d5103f1bd12aaee4b475a74566bcb4a4c9a52ebdcd55fdaae152"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+        "bytes": 123300,
+        "sha256": "a389f47c691e54c212ee9ccb70fe94eae1159170c18edabb23dc6a6e3c26b0e7"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 38526,
+        "sha256": "caa4b8802905c2c880a2cd27636d969dbcc6832213b11c6b3508ec43f5553f77"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+        "bytes": 124256,
+        "sha256": "444fb6e14e9bc9414cd6f4863d2833dd0ebb6383994c8e37f356755806bfc265"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 33501,
+        "sha256": "fde95514b408efea0dca3a8c0d9bc66693c48f2d1b3866ca53f8c5d580c1c613"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r1__A.provider.json": {
+        "bytes": 123908,
+        "sha256": "132b39790d75b24c58274ca7e3c8b0ad6c1d9ad3dfd69a31ca8ea93bba7bd332"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 31529,
+        "sha256": "2386995f03db46ad93aa8bd73bfab87328f387f7fbd3d79a66655f6382047003"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r1__B.provider.json": {
+        "bytes": 109128,
+        "sha256": "17dfb6484243148bdeca8b62dd8cc5f855c8cb049be7349db781633c756f79bb"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 31177,
+        "sha256": "a7ec8eb0f374fcc6f9b3135760300bdc4af52e15f45e20284a685aa7ece88326"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r1__C.provider.json": {
+        "bytes": 132603,
+        "sha256": "25ba48fa5cb6a3df7a28a5edd46b381a1d277083354cbc8d8a3621b548f819fd"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 40296,
+        "sha256": "afadbb786a4cfdb75e7828abc098d6569fbb6059bbe08762d9ee5e934d7d50ff"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r2__A.provider.json": {
+        "bytes": 114800,
+        "sha256": "c6f32edfa86580224ed499de1af766adeca44a11635c8760d34046f54460d29a"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 31981,
+        "sha256": "d7922cc40d282021c2389e1a6592f084eaf711effed8a9693336838b99415bea"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r2__B.provider.json": {
+        "bytes": 140210,
+        "sha256": "cd4cc3f55585d4c70c50a8988d38043187e8b02f0d32906ef615f6a51233b385"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 39845,
+        "sha256": "70f8ed4d3fac5e7bafd5e763a18c8b3e409fbb625177bb0113af05beff864aa9"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r2__C.provider.json": {
+        "bytes": 133404,
+        "sha256": "c1ef63a93998084abe62830db844a02a6b6433c6d5cc20b913e96b68e2f92c85"
+      },
+      "lakehouse__auto.artifacts/traces/inventory_available_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 38758,
+        "sha256": "4200347c9eb18010e50e8195f6c80e1d9c33d38287e44fc03cdd209a8fe77f36"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+        "bytes": 276234,
+        "sha256": "4ffcc6715aa41c70f585b958b401b0ca77abd273225fb1c8d7473552ded99332"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 65427,
+        "sha256": "d11e765e4744f10c09413863407b57bf4b24b8b6d5c436f78fd0ec2d8215b24b"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+        "bytes": 32998,
+        "sha256": "56fea8e34c5b13aac9578d27f793d0655e3954d785060894f61d86287dd3d856"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 12025,
+        "sha256": "128e72dbbc284d2186d4e9b8add5b560779bda223b5b85559433991cb655bec2"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+        "bytes": 31366,
+        "sha256": "fa6a8f058f8aa93af70165b39875148b434fa0fa621d7598b52c7fbf4d46b1fd"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 11090,
+        "sha256": "8ffbf777dfc63591b1bfa3231931b87ff3dd54ff76d279c4a2493cb553d3ffbc"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.provider.json": {
+        "bytes": 146409,
+        "sha256": "2fe102fa639c6f9031f7bc2688e198001b40f84dd2bb70d9e0e456b0561c5525"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 28100,
+        "sha256": "46fbc3b8dcecefe33cfe23dfb34ddbe3780a68419643da4046e113ea6a3fd9be"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.provider.json": {
+        "bytes": 99765,
+        "sha256": "0530321e292e24b30c35291e3adaa7933d86650842d436a8918b497f65fbdc2b"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 24970,
+        "sha256": "0a04b6a7c813636794ce4881c40b3532630d49c0351015f0e88e5f7a7110308e"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.provider.json": {
+        "bytes": 46139,
+        "sha256": "f2dd5ca2e8052a5b72486c439dc1e211ed6007941f287002a259bf4a0b6a82bc"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 14319,
+        "sha256": "641979fe22d04d6404fa4bd9911dce68a9b993ad42b1d93a1505150134c16cd9"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.provider.json": {
+        "bytes": 215202,
+        "sha256": "718c82b93b442b73ee614c053e7b7f4815a2b8bd6518dc0debcd642a137fbcdb"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 52164,
+        "sha256": "b0aea52757bdd89418acbe962066d687595c404276a54ec53da43bc55c09c16f"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.provider.json": {
+        "bytes": 62946,
+        "sha256": "325815f3406c4659e65935f5c818580b52d7e196958fe0451d35984be7bed09e"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 19217,
+        "sha256": "17944ff5981d896d1105d31a45c43752a7c4f34ca14505d70de64c78fbe1f75f"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.provider.json": {
+        "bytes": 245122,
+        "sha256": "e3ede44697f93d04023370144cab16f80e75b69c90bb1e91e37a5885041b8aab"
+      },
+      "lakehouse__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 69605,
+        "sha256": "b71b92d0a74bdd044bac8da222942ca83a19c632b98ecb1c176a20eeb15cbcb3"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+        "bytes": 226477,
+        "sha256": "1ed2a66cf11550467141710b62c11d9efa38aef5bdd0dcae8e8018ab787eb639"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 59221,
+        "sha256": "55f8a4de82361a8a5de0810bb22cb4d25fc58a0828540cc70556ec36bea9a778"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+        "bytes": 247631,
+        "sha256": "ad83f556883f3b2cc90298806606d89ac2b2a94dd57022bbe53b32d6504fabae"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 60897,
+        "sha256": "ee9ec3815e0fc269c9ceadf680b6869b1233a2512082ae4fff2a55f79c796209"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+        "bytes": 230551,
+        "sha256": "c542e612a2ee57a69845f0721d549464c9d82095491c8a715a1c10215cf84ff6"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 65409,
+        "sha256": "d5aceed907de2f1c42cace6e64a1592ce16f15a1f14cdf5955cdc721f1540327"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.provider.json": {
+        "bytes": 195886,
+        "sha256": "7aefdffafed4fab1e3491ce9c6d9eeb5b0f5332129b97c42214d5da851e5a280"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 40026,
+        "sha256": "0dd6046d929efb8ebdb28efe4ed21b8244008b14914f016bd1544f493f8ef719"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.provider.json": {
+        "bytes": 201205,
+        "sha256": "67b15519e72bcf6e763ab71be715c3845c6fb25e13a2f46245f0b813c56c15c0"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 46701,
+        "sha256": "b379f40efc16343f96b2575e051669198cd6fc00a949464982b003cd4636d768"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.provider.json": {
+        "bytes": 264363,
+        "sha256": "747d3b304e2e1e238a294ec82c9b5919c9cd1e1a33e759dbc2796f7145c6b391"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 74855,
+        "sha256": "56787524b716249ef8d5d7693175b626ef75d7ed96749592d2df525ffe1fa53b"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.provider.json": {
+        "bytes": 214334,
+        "sha256": "fda8f0061c68eb99ca72876bbcf3cddc512a25b1fd287ee0946f549a9d689007"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 44366,
+        "sha256": "c4c92b556e5f4474a5a88d51628eb13c6b9ca8dca9189407ca1629432bf4754e"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.provider.json": {
+        "bytes": 332990,
+        "sha256": "2b9aa26e54380942e0cf2cbd1521d3e81197162f77b70fb21900215539eae5e9"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 53975,
+        "sha256": "b3a8e6fd13e6b019129289baf81e530adc1111c3062018d29caf95b3f6d1a3d9"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.provider.json": {
+        "bytes": 257949,
+        "sha256": "e1af5e5d1a8e285b1236b06825be9c1fd567cb817d0d6cec75338b3ca01ab241"
+      },
+      "lakehouse__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 47833,
+        "sha256": "c9f789248bcc7b98124221b78f3f7cad3a7a1a39c7ecfe2e88efe3652984b01a"
+      },
+      "lakehouse__auto.json": {
+        "bytes": 134401,
+        "sha256": "2f396b542b64f5d7a51749e10d6a0e9997b130d0f6c6a586f734bcc234c87c65"
+      },
+      "lakehouse__context_only.artifacts/core-freeze.json": {
+        "bytes": 8339,
+        "sha256": "c721f94fce28df6999dcaecfa5c67a491420561a043ef3aae54a623c3b9d34ed"
+      },
+      "lakehouse__context_only.artifacts/packages/inventory__descriptive__B.json": {
+        "bytes": 16409,
+        "sha256": "b15e1535519f434b9cad1616dab49a2e5ebe7218678f9d396f608a94c4f2a33f"
+      },
+      "lakehouse__context_only.artifacts/packages/inventory__descriptive__C.json": {
+        "bytes": 24168,
+        "sha256": "7753ad29917684394ea9a09121065a33f87e9998f666022a11707073ad01a1ad"
+      },
+      "lakehouse__context_only.artifacts/packages/manufacturing__descriptive__B.json": {
+        "bytes": 8040,
+        "sha256": "e954b707560663d4bdd44ee300303c2747563ac2336ecef707a6da1bfeba69a3"
+      },
+      "lakehouse__context_only.artifacts/packages/manufacturing__descriptive__C.json": {
+        "bytes": 18545,
+        "sha256": "0700ab6c1b5cf638204b1be8dab0ac388a8fab35ac6fec49801aed5eda699a55"
+      },
+      "lakehouse__context_only.artifacts/packages/service__descriptive__B.json": {
+        "bytes": 11731,
+        "sha256": "22ee621fc2fc5b4e31b5d34af42754f6db9b1996b95cdf68be2d3b6249f0d5e3"
+      },
+      "lakehouse__context_only.artifacts/packages/service__descriptive__C.json": {
+        "bytes": 19076,
+        "sha256": "6f26c84151bd02ee8bfcc173bbcf9f9d3e40d225cfed179e1f6ff76e9ac76892"
+      },
+      "lakehouse__context_only.artifacts/provenance.json": {
+        "bytes": 21383,
+        "sha256": "186d540588658c28ff14c6ce739671a39588efaba900619d4eae19186a63171a"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+        "bytes": 96871,
+        "sha256": "979c3cf4d909a81126f4c508ee8af99b5c430308cbf8329587dc6e9fafd199ee"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 30818,
+        "sha256": "646d47c4f7552922eafc9764d686976edf971bea4587e9557671ed2277f74950"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+        "bytes": 94135,
+        "sha256": "7287945ed184df00d551d9d132764c0546e095cd5da4e7956a0a4472bf7de9e5"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 28796,
+        "sha256": "2950cbf49d96787a0d8d34620c9799ed7b6d5802200b591778cf6791bbd7c08e"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+        "bytes": 101096,
+        "sha256": "577851a749bfde6a01602305830e2e594e997477dcef003b326147666bb70569"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 33496,
+        "sha256": "808160c12739b19b1d2747e027c708b4aa17ce659543f668b7e13e0d4c855e65"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r1__A.provider.json": {
+        "bytes": 108479,
+        "sha256": "4ffad18b48b8208c22783fcb1f05224748a3220a449def3b63314bdcca6d9333"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 36246,
+        "sha256": "625b3cd6a13d02a79c9f89b6547d9e9a51e4975499f4b48cf813474f1f07c2d9"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r1__B.provider.json": {
+        "bytes": 112314,
+        "sha256": "3408e6f3d4dcb9de0c36d974f74be38727c267d5b7538cc8ac1a6baf43382bda"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 33648,
+        "sha256": "eb1f9136cf291992f6177d0d4822b90440c0a3e9564fa618e651f741f4f466f8"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r1__C.provider.json": {
+        "bytes": 101086,
+        "sha256": "7a681facb02654efbd53ab9d0ae103ae760523920ae979527ccc31d9f67835dd"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 33670,
+        "sha256": "78d4f09179fb12e8edbe53d756e88789f1bc552bbd7d686ef7a7425110b6f5c6"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r2__A.provider.json": {
+        "bytes": 123721,
+        "sha256": "550f09cd3b7688fddc590c6478e718abb9a82d2266ccc90262f24b8c587672ee"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 34615,
+        "sha256": "2b88792aecae0d9de6d22c0361562c7bdbfe621b5581d03333c48d6611e45429"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r2__B.provider.json": {
+        "bytes": 124825,
+        "sha256": "d7588061609f05c6b6a5b782583855cf899fdc0e9ec970c2b9fd1c6524fe74b3"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 34726,
+        "sha256": "4c19055e69273aade760a358f7af05d9e4ad8c1fbd399fb0f36dff1214c8a007"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r2__C.provider.json": {
+        "bytes": 108611,
+        "sha256": "5e675dcd6f97350e55a2c4e12c0f48f36640d14ed0b3bbaa2c74e55d82a8d0e7"
+      },
+      "lakehouse__context_only.artifacts/traces/inventory_available_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 35798,
+        "sha256": "0848dd6fb70d3f9877561dc3eb393b9a43f80fd26f8afd7e12a3bd17040a03ef"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+        "bytes": 180163,
+        "sha256": "7558877e077fdf2fccfaf67bf9a9a1f09289b2f194978d43a22f9b112b26c38e"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 44065,
+        "sha256": "c2d2a2b1013dc41db33abf41e9f874a491c003b731ada035fd444b2697962d64"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+        "bytes": 185029,
+        "sha256": "2367c2a759b0254f31b541d43e0692c9dceec9a7d1fbe7b89e189bbc21c43cb5"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 35540,
+        "sha256": "c5edfeb3a451c73b4f44db0c283588dfd25af926cf9d3e95ab59c8e8a226df72"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+        "bytes": 130972,
+        "sha256": "fc539c0ac736b36f044f476b774e66a36d0f233b81bca01df0c7ffd8642acabb"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 36044,
+        "sha256": "93ffd1a8b8f899a9aa4e876ae8b2e10c973423705f28a034a9dff2071df39e98"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.provider.json": {
+        "bytes": 260645,
+        "sha256": "a797a3c2874dbaea58b090bc9f2e614146b4afd757289da6a0adf143d83a3e84"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 74682,
+        "sha256": "42bfff77e522c31d64974720fd676df27ee0ff6bceef8fec4e1e2fe2b6823049"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.provider.json": {
+        "bytes": 200842,
+        "sha256": "3be3af387f7f1b884327ea8e415f9bcd768abcc8505d7eaee3e3efef43632036"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 50953,
+        "sha256": "19f93da28762dfb426fb06cd111a569562eff0902809cedc7452b4a80aeee544"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.provider.json": {
+        "bytes": 195563,
+        "sha256": "1aaac808e2b27504ed8f85f1048d5a27397cb5babf6d96c3a7bcb1be84a16a23"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 51926,
+        "sha256": "df316ecf7f9ba9b4b9feba56f2e147e7f1edfdbd44a2d112075292dc35b2c9cf"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.provider.json": {
+        "bytes": 240903,
+        "sha256": "caa1b802e8bf2cb56973499b403a1313a44ec4b994a97bd772c7043b56e10b51"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 63962,
+        "sha256": "1649a5bfed411a2f8d64f748246041416421b434f8954837b6470b24579eecb4"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.provider.json": {
+        "bytes": 148528,
+        "sha256": "c2faa0e8322cd8288b96f83f38e7620a8a8ebf9b7f2c323d994c115632405ed3"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 54229,
+        "sha256": "50dc01cadab6a4ea61100054707153990313d60a460ff52bf2bc0861899e5f1d"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.provider.json": {
+        "bytes": 191532,
+        "sha256": "167a6e14795c9a7eb3523a5966d623ac9c1194f88872f12f6953c88f6b95cfb2"
+      },
+      "lakehouse__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 51322,
+        "sha256": "14cb0e07a3abbbc3516a5ce66c087435e781691c7261f4b907b64f3f20979c52"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+        "bytes": 305204,
+        "sha256": "eca9a83287d668da783e3d98e802939b5efd58d81176bf006826d683136df7be"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 80254,
+        "sha256": "f731c0124d9e75231605be3f142a98c7d04dc251e07550e77687410b0dc4a884"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+        "bytes": 82733,
+        "sha256": "007fa6fda1545f805a66f8562e3ae3b9e08723dc937ea2a89c00a9495f68c247"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 16077,
+        "sha256": "c17c401fc7534dafdec6b8f53362a48f32c613b741d3eb9aa902fe18b1b9ddc1"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+        "bytes": 248624,
+        "sha256": "30d1bea8e3d20aba2f8b3fc90972d89ee079a05a121e15819d82dc0081c59423"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 68099,
+        "sha256": "81c840895b4864f0a9f7b55e93c7e3deac31f44ab04c70373a9964c51dd21f94"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.provider.json": {
+        "bytes": 276962,
+        "sha256": "3ad11c35918fe125e231b3f9ca466818735373cedd3a8b3a020c736d955c26fa"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 71717,
+        "sha256": "a47ef66c67222f80e0aadfa5436ef23387659f0f58c524db51a4e9fbae28c2bf"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.provider.json": {
+        "bytes": 188011,
+        "sha256": "7c10b7fa6d591cb7f80865093604247ef26ecd850202f246fa5dd3c8afb97af2"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 43955,
+        "sha256": "5a28eadc0f76215d003ad02ec4441a97f10559f5220fa0d23c6a1bedfcc30784"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.provider.json": {
+        "bytes": 204904,
+        "sha256": "f08d989234cc12de8653015cbcaeba94644935f7454974a61b34561e95d777c6"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 53533,
+        "sha256": "11b28a462a45e614e08354e7b4781bffaae58a4e00040bf1e13835d9406a36c1"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.provider.json": {
+        "bytes": 234436,
+        "sha256": "be6db7190ae3521dd91b12ad7d67390e52d066409edfcfe0191a883aa625db62"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 44852,
+        "sha256": "ca93a52c076f0b21c567da166661f1b6490997897deaa93270d68f6da890f12c"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.provider.json": {
+        "bytes": 236840,
+        "sha256": "2fa51c04d6636ee531f9f2341538f71df95ad11a0f1eb0f54fa27dd7ee9a5617"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 61273,
+        "sha256": "d3f736dcaa32a432e11bbb09598fd83dda4ddfcc8b074aa6ceffbc2e84fd6389"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.provider.json": {
+        "bytes": 181253,
+        "sha256": "eb2519def74d9a17ea4122c6ea761ae5e929d1bb4e3fc5dcbdf386453dedf7d5"
+      },
+      "lakehouse__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 36006,
+        "sha256": "bff2659179099c93bfbe07526661d2d7d57d94557be9c1e1c14034ae87f1bde7"
+      },
+      "lakehouse__context_only.json": {
+        "bytes": 137336,
+        "sha256": "9094d99cd4d915e974579ada469c53ac7cbb93d35c8541cd3df338cb196cb3de"
+      },
+      "parquet__auto.artifacts/core-freeze.json": {
+        "bytes": 8339,
+        "sha256": "c721f94fce28df6999dcaecfa5c67a491420561a043ef3aae54a623c3b9d34ed"
+      },
+      "parquet__auto.artifacts/packages/inventory__descriptive__B.json": {
+        "bytes": 15744,
+        "sha256": "2ed01ca57a59a09a250d15fd56fa58829d09d36ec63cee70043e7b70264979b4"
+      },
+      "parquet__auto.artifacts/packages/inventory__descriptive__C.json": {
+        "bytes": 21487,
+        "sha256": "e84cd8d0b100c1596d0772c3dfe1b6b7417ba2f11325a2b952b5f01ae242a934"
+      },
+      "parquet__auto.artifacts/packages/manufacturing__descriptive__B.json": {
+        "bytes": 7706,
+        "sha256": "f01b1ba65d15dbfc0b06f6a74ef3ac2d96da134e4c7731c1bd7519e72cdaff86"
+      },
+      "parquet__auto.artifacts/packages/manufacturing__descriptive__C.json": {
+        "bytes": 13386,
+        "sha256": "1e3c6ae5e5ccc3ded2b89d6f206a817bd8fc606903966c49a6fb733cf2c837f2"
+      },
+      "parquet__auto.artifacts/packages/service__descriptive__B.json": {
+        "bytes": 11173,
+        "sha256": "50eb290d8dcf17c20b364b91e113878ccbfb333defe631271b3ad93b9d1d9409"
+      },
+      "parquet__auto.artifacts/packages/service__descriptive__C.json": {
+        "bytes": 15367,
+        "sha256": "5270157750d4f1a718f4ecec4de6114dfb7357a451f3f8d5551215a5ca74e667"
+      },
+      "parquet__auto.artifacts/provenance.json": {
+        "bytes": 21348,
+        "sha256": "5a1eb9678259faad018961c4e93f9371b106017327d952fde7089d59259f7573"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+        "bytes": 72199,
+        "sha256": "568df9381a3a3d6d583fcfa2d614c20ecb60e53231af326bf42b88caf42563f9"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 17808,
+        "sha256": "6ced9db2845ca3bd1d6ec3b12abf74b0fae0db1796b0647d9bef0e71095e60da"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+        "bytes": 100286,
+        "sha256": "76cd6762aa732a51e450f1d0284b585c17547ef1623bc3b7cf023c43e88f9b61"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 25732,
+        "sha256": "120effaa56e0573442d8c0234578e79b72ddc0f1747f60915502c9d345ae183e"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+        "bytes": 35708,
+        "sha256": "5fafc2065613b06328b4f9c6326204f243d91a8cd3954b60563099f3531adf31"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 12582,
+        "sha256": "d46ac13213cb712b2b9255e00c6a2454f2a86ed83656679fc7f8aa3aa21160de"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r1__A.provider.json": {
+        "bytes": 58622,
+        "sha256": "09c2cd62afb672961a4899db37643af7c608eba1ee580c8eba5cb1ac1c8a9573"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 15726,
+        "sha256": "feb3993062879db32453bf96c41007a57e9884091e06208e540d80c34a832559"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r1__B.provider.json": {
+        "bytes": 74191,
+        "sha256": "2c458be1055a73d65bd4a46f1c727beacd8a452131a85c3c5b25a2761f39c5fc"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 22286,
+        "sha256": "307dbbcbc434fa81dd92860627abcb9953ba1ab86674dd096d8ea8a4798a03f8"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r1__C.provider.json": {
+        "bytes": 67327,
+        "sha256": "aca299fc1d7b6580a997ace1169100e8304eba8a90cb6c218972817e18236ed6"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 20521,
+        "sha256": "fb63b82e682925f6b9162e0ad61b89bfeb062959b9d31adfe09ad07298b1c566"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r2__A.provider.json": {
+        "bytes": 78488,
+        "sha256": "c309b1283d1a56e1bff00d046930ffc828dd541d468245188c305acf21d31e0b"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 15039,
+        "sha256": "43e54692baad002a41ea61df7a5400ae7f3fe492733f3ce4315e70bdabb12208"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r2__B.provider.json": {
+        "bytes": 98932,
+        "sha256": "795e6c8284ee177c0487c0b015ce08613bc75bada2760c3214e3fe2659785655"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 25367,
+        "sha256": "a6d9e3db141d73cc29be55365e03734bffd8e4f9cd8626a026f2427b79ea6330"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r2__C.provider.json": {
+        "bytes": 83817,
+        "sha256": "0caac505980b1d5232e8bb025404fced11566c6276f0d98eabe28f3f6f0cae5e"
+      },
+      "parquet__auto.artifacts/traces/inventory_available_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 19878,
+        "sha256": "3cc8eba6b2c4fc90e8aea7444fd866ed1e1d9ff1160c7be686b623bd548e556c"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+        "bytes": 57739,
+        "sha256": "7f06b5ed25f3d48068d230ce3178c3aefb91c54549fd6aedb39251da5820b093"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 17287,
+        "sha256": "c330b3a8af76f6c7a7f1050e9b4d69339037181c4d045b14d1e01943a7779db2"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+        "bytes": 29535,
+        "sha256": "4d5e94c2393afdaa29ef539a8cd238d9b82c3edeb3a3c462f5d5f73cc4b58680"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 8744,
+        "sha256": "4189dc8bcf3e2596b0237aa8c30fe4895a3f510aebb9f1614ea638272628ed7a"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+        "bytes": 29435,
+        "sha256": "8f3fe7acbb6945001a229d63ee8271454f0efbc783cd0fc69ebd54fc0d29e96b"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 8926,
+        "sha256": "69a296d4d6234901dcd215ba21880b15614a6070e1f6c625ea98cb284c38dccd"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.provider.json": {
+        "bytes": 52482,
+        "sha256": "d33d0fc70bd8425fd9ef49787dcec4adce28a379d33706207fe33d31f1e08660"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 16798,
+        "sha256": "21cfc553f7886f34fe62455a7a5926389911207038df7a506c50225b9f75ce75"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.provider.json": {
+        "bytes": 29558,
+        "sha256": "9d6084c22ad936979e3aeb81e1599a6f5193843d83bf0e1d262891c832bc898f"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 8842,
+        "sha256": "8caa7fba2069337b176402b3e936810043338f5fa135f8d1fb2b37397c51224c"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.provider.json": {
+        "bytes": 42622,
+        "sha256": "9dcf4c7dede7f7bf8f3004e7ede857f4d74aef6b578bf21f7453ef68ccfd2c6d"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 10898,
+        "sha256": "56bf3e873e62ca53abda68bb3e7a87cc0b5cfe4b68f2854e354ee5441d9e67f9"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.provider.json": {
+        "bytes": 100843,
+        "sha256": "916014d3f5a65afdfe92bdce9989a42d80a1ee7a5af078b8dbfe8cbac604462f"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 23433,
+        "sha256": "678a18bdfd3fc9d3a7ae97b1867048126d2e52749dbfe62bd844ad59d2e27ca0"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.provider.json": {
+        "bytes": 60525,
+        "sha256": "ed2ce941b26d1ec1cc6a09793226fb3dee2a391ce8a6ea6b4a50fa9148eace6d"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 15951,
+        "sha256": "9f9c866ae100b519add4d46bc5004945181c8b1d08ba43bb9abba22bcb6cf7c6"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.provider.json": {
+        "bytes": 29762,
+        "sha256": "1beaf5ec661925c19820ab8766986bbb1eb4d5f4dc770f6dd7d904ce551ea140"
+      },
+      "parquet__auto.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 9045,
+        "sha256": "973198cbb8c2576cbeb9525793eb4696facab7df53a8f5432388f50f473cecf1"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+        "bytes": 131877,
+        "sha256": "8122106e50ea6d40c9e368d297c74d235664a8c13d98f324cebcf9f27f204d4c"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 41058,
+        "sha256": "b1540a93b170e29e99ed4d6d5d1582371a3f9a676e72251c57a248b7b26d1e16"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+        "bytes": 125670,
+        "sha256": "7c567e738c77c9060ddfd39ddc585437f5cf14888e111783a0f8862416d7c85e"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 41318,
+        "sha256": "61302c9bcc7db186629d0825e34a4e01737d4009e092bebd07a7adbfd9e5e1f6"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+        "bytes": 124218,
+        "sha256": "c898538aa79ad5308192ce5c6d962c1fca7052f76ee015f6da45211bc03640d3"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 41789,
+        "sha256": "84634a6f03fec3783dfdf4778c11120f70ca80a5e1c8ab7bc6439635910abfef"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.provider.json": {
+        "bytes": 173068,
+        "sha256": "2c3b71322f2d2b2b9f27c962caf88a24faab6a426801467c486d08bb6bd3339e"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 41063,
+        "sha256": "47b6a9ae86dce7b3685b5a582fefa32fc1544c216f4fb8858461c7e1b3e2b115"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.provider.json": {
+        "bytes": 119587,
+        "sha256": "dd44d914ab492697558c647b28f76575f5649ffd95f56653d2f154d56c3dd090"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 34120,
+        "sha256": "2bced0c8b965a6fcdc8ee0daf4a008d70d1674897b3a263d7089b1666001b56b"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.provider.json": {
+        "bytes": 93622,
+        "sha256": "f134ac4292ac2fb41964f9363e5a49bd3ebe11e9e5f10005ce6a9bc55e867e5f"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 34580,
+        "sha256": "d5f835fe746b0e68792a09111b7618ec93b438567f8ef5fe56950d25dacf8447"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.provider.json": {
+        "bytes": 62718,
+        "sha256": "a354bd656518ef4b0bdbc76b54d5b6df12ed6742a59ef41fb9256ea23675a3ff"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 24278,
+        "sha256": "359a51f1aa7ad7a935ae95a8b2769f349c1e40cc0677befebc172c20e0c1d149"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.provider.json": {
+        "bytes": 103405,
+        "sha256": "9dfac26bf9cd13bba3c28be9a80c90fe768c447045367d36e0514acb793227b9"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 23308,
+        "sha256": "b6e536cd7d98ffdc63f80d707f196e1dfb341565500d91435b1bba050020af8d"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.provider.json": {
+        "bytes": 117627,
+        "sha256": "67d057b962389338ef70a1a38d480e2db8e5dd6a734404bd7967abd8fec9e6ca"
+      },
+      "parquet__auto.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 24101,
+        "sha256": "dff23b453325478d3ac1b6b82029d0920b43eb9e72ca7ed0349de5482b889716"
+      },
+      "parquet__auto.json": {
+        "bytes": 159275,
+        "sha256": "01c4933d726a6c0d5f010135ba4d928cc3d7f11a762a6e992f6521a5e2a56611"
+      },
+      "parquet__context_only.artifacts/core-freeze.json": {
+        "bytes": 8339,
+        "sha256": "c721f94fce28df6999dcaecfa5c67a491420561a043ef3aae54a623c3b9d34ed"
+      },
+      "parquet__context_only.artifacts/packages/inventory__descriptive__B.json": {
+        "bytes": 15744,
+        "sha256": "2ed01ca57a59a09a250d15fd56fa58829d09d36ec63cee70043e7b70264979b4"
+      },
+      "parquet__context_only.artifacts/packages/inventory__descriptive__C.json": {
+        "bytes": 21487,
+        "sha256": "e84cd8d0b100c1596d0772c3dfe1b6b7417ba2f11325a2b952b5f01ae242a934"
+      },
+      "parquet__context_only.artifacts/packages/manufacturing__descriptive__B.json": {
+        "bytes": 7706,
+        "sha256": "f01b1ba65d15dbfc0b06f6a74ef3ac2d96da134e4c7731c1bd7519e72cdaff86"
+      },
+      "parquet__context_only.artifacts/packages/manufacturing__descriptive__C.json": {
+        "bytes": 13386,
+        "sha256": "1e3c6ae5e5ccc3ded2b89d6f206a817bd8fc606903966c49a6fb733cf2c837f2"
+      },
+      "parquet__context_only.artifacts/packages/service__descriptive__B.json": {
+        "bytes": 11173,
+        "sha256": "50eb290d8dcf17c20b364b91e113878ccbfb333defe631271b3ad93b9d1d9409"
+      },
+      "parquet__context_only.artifacts/packages/service__descriptive__C.json": {
+        "bytes": 15367,
+        "sha256": "5270157750d4f1a718f4ecec4de6114dfb7357a451f3f8d5551215a5ca74e667"
+      },
+      "parquet__context_only.artifacts/provenance.json": {
+        "bytes": 21379,
+        "sha256": "c62ed88f2ea8ecb26e785a70aa3e3d18e579066a074c321d18668017b23d4284"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r0__A.provider.json": {
+        "bytes": 42270,
+        "sha256": "a55b69b6dbd01ff25be97634b642b076ec7620f804bd99890b4a75ac6eee22f0"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 13733,
+        "sha256": "c2500b14a97a1f9eccb82b5efb34357ff8be7aa6049fb6a93d6d6d7df714076e"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r0__B.provider.json": {
+        "bytes": 75708,
+        "sha256": "913d182a05ba95b5a3f0149e13318c6d727f4c6b15071b24683491d061103ad3"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 20659,
+        "sha256": "d08e76cdda7f640a8392721a39a5756e58111f67f11c95627a4b6468546ab80e"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r0__C.provider.json": {
+        "bytes": 57900,
+        "sha256": "0807974dfd1183382e6c896652adb276530572b912fd2eee6b1af71bdb0dc58e"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 18049,
+        "sha256": "6b416f127aab933b173d6a9f6d309992c3dfc130614f9d338d9e3aa2ed00ad79"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r1__A.provider.json": {
+        "bytes": 70458,
+        "sha256": "937fc0ba6021c095aa34a5331356af845f457d8acce5d7cc11d59842e7a3a1f4"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 18580,
+        "sha256": "5bbb602c54a4570402bffa7b47b5d7b5a7d5989dcf9afeaa370131f89686d50d"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r1__B.provider.json": {
+        "bytes": 59117,
+        "sha256": "8cde8c4d0e774bb4a8a85e0b8cf05cc5c34e49ed3ca79ee1e2a0ed691e017dba"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 17867,
+        "sha256": "6122f7a8e42ef1474b2663c10d372bac2673c692c17d23b3e0ea3fb2d4a74685"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r1__C.provider.json": {
+        "bytes": 57462,
+        "sha256": "8d4f02ea73c5f92d36fcfb1b0dff73fbae8af706c020ea01bf09fdf224d544a0"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 17383,
+        "sha256": "a23017b494ec7c8e24052c9fd91659be769180515c520b604ddb542ad97975d0"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r2__A.provider.json": {
+        "bytes": 70480,
+        "sha256": "f075cf51379294038a5400920f3966fe2f1364b381c2cf83139d1e0a1a23285e"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 17995,
+        "sha256": "2a2b7a43d206ec5c7b48e5c517ff4b39c682f9e14150bc2a1164b0e61d8e63d1"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r2__B.provider.json": {
+        "bytes": 68097,
+        "sha256": "6a66dea20559ee186a604c375991ffbccd3075387e2bcd973a357c1fb8e362ca"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 17745,
+        "sha256": "b35e404df6948b47c53e74864e8584f6f17e59c41515910d4e1a0cee2d47186d"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r2__C.provider.json": {
+        "bytes": 91641,
+        "sha256": "07663b87b5fb890933de5dbe110ffdbc2dc618b89a1d31ad34c16909ac80777d"
+      },
+      "parquet__context_only.artifacts/traces/inventory_available_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 22249,
+        "sha256": "4dbb8162ff7941333f5ddd6e270528a3f7bf5f3b67c47201209b9c6d1694ef75"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.provider.json": {
+        "bytes": 59194,
+        "sha256": "714917e212754d6fd9c04c32e01542e26822042d9b6d41d46478bb0fc3ee9e84"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 20208,
+        "sha256": "6c3d2aeae6e6c5a577cd42cf2844a45ed071101eed81be0a2a609074c7b160a1"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.provider.json": {
+        "bytes": 41834,
+        "sha256": "bd34c4d0c7c07338c7baec9dcbe49b270745065575171aaa0bbe4bb86b99131f"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 14485,
+        "sha256": "c2e5dd71649187d4c6938589f86eaa37a3e794a1f7ac0449c686f2806cd0ed87"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.provider.json": {
+        "bytes": 38681,
+        "sha256": "7bb0d3c7ac281ed821f5a2c11b383913b3fcd6fba9bf16cba6cd695c29d78691"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 13946,
+        "sha256": "23c5f59966f04cba758787a63c51545f4374d2504095fc05a478146c2a7d1c52"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.provider.json": {
+        "bytes": 103346,
+        "sha256": "4a0aba399e8bc9801d9b8dfccf173bce93a361089039a5e45d7d3255cabd670a"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 25816,
+        "sha256": "10a02f7bb0c5eb9f5760917433505ae4ba1cd6d02edbf256552bb4ef9be2e068"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.provider.json": {
+        "bytes": 87525,
+        "sha256": "c1073086f5642aa68a78463196e59da903316e5a98ebe0ac8aa8dca11e8c9d5f"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 24011,
+        "sha256": "07a3bfb470dc9a8d2057f18aff5b8dc4d1670ee676e808a77345a1602dd19da6"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.provider.json": {
+        "bytes": 72141,
+        "sha256": "0f36f5e249aa15f08e84fedd36d756c1d6e8e2f78e36ccaca280f556e6f38723"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 20874,
+        "sha256": "41c049f59efd0f2deebe7ba7631ea5cd0bbc6361f7cfd62a64290a45e66d0a47"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.provider.json": {
+        "bytes": 39862,
+        "sha256": "92ae221e26693d37debcd8b4dfe0f5d8d2d28249b00b5530d8d26b8b3c3d6797"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 13382,
+        "sha256": "51b2a750cec6680c861707ee33829bb0a6dff687bd233a884ae7c2c783d961be"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.provider.json": {
+        "bytes": 71914,
+        "sha256": "b36acb597f91fab1d86a7d818377ddf1e6a0f79cc6c3a6f7055e608ff57a87c1"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 20855,
+        "sha256": "8bce5543673ed9e7604039f7c1c91427c8253a579e098be4a41b6ddf90330092"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.provider.json": {
+        "bytes": 41842,
+        "sha256": "6e388fee1b73e745191b51b9ed4ec4f223bb419d450862b3d52dadad9b6f78bb"
+      },
+      "parquet__context_only.artifacts/traces/manufacturing_complete_units__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 14937,
+        "sha256": "9a6d6cb2a156a4f1063d98f64e866047d4dfb61fa007018530d7ae04dcadad3b"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.provider.json": {
+        "bytes": 103992,
+        "sha256": "2337136d9186be9c632a17140c5f779e6c7ac01c78c07bf94b13bc582c0ba232"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__A.trajectory.jsonl": {
+        "bytes": 23936,
+        "sha256": "c08e6c130553b1a050b0e709ec8aa612d88346b6175cf032a8b012c4ad2cf7cf"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.provider.json": {
+        "bytes": 122673,
+        "sha256": "6d28c02df779908e19276bc4780f8b49a9fa3f0a8e9443242ea8010d627ac2cd"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__B.trajectory.jsonl": {
+        "bytes": 31912,
+        "sha256": "5c2cde3da2a5f02fc8a208ce8fe27e51a6da0dcd35d8222e8f1b692a0e968ef6"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.provider.json": {
+        "bytes": 163511,
+        "sha256": "3009374c213f7b18f45bbdd198d67cbf1e93a44e54d274074929479c7da4d17d"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r0__C.trajectory.jsonl": {
+        "bytes": 33841,
+        "sha256": "3edcd5bd659a834dd4f0c77c3e0a3199a1d240c06cdc99d375ec4db94270a816"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.provider.json": {
+        "bytes": 274252,
+        "sha256": "c1ad98b9f1ff9213df63c91a833629ffa91b01bfb8f4dc81f469aa6cd97ad907"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__A.trajectory.jsonl": {
+        "bytes": 50341,
+        "sha256": "a07974d4a98701c76a733b7fb1bcb5660cae9918dc2ca58ae5aab1027b364034"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.provider.json": {
+        "bytes": 81424,
+        "sha256": "3ecba42757f671ea9a9ce54864e9ee3789a0cb5ce6fbf742aa793e4deb94d7db"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__B.trajectory.jsonl": {
+        "bytes": 19941,
+        "sha256": "31446260a64e8a686dbfc79bcaf7214d71488f4554ed22d9a4c08980fc61a505"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.provider.json": {
+        "bytes": 141618,
+        "sha256": "90ee09b15fdeba0d6a5e7b4890625a75dab3c0b904aa6fad7130c3bd29d6f8ea"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r1__C.trajectory.jsonl": {
+        "bytes": 31733,
+        "sha256": "991fc4359e0bb0ae5fb2bc89f362c41e4513328e4ad29af4a9335e4711a1ece3"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.provider.json": {
+        "bytes": 134919,
+        "sha256": "882d9066a4a9f9bfa86f081ad5e9812ba0847bb23d7dc97abcfcf5f50190850d"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__A.trajectory.jsonl": {
+        "bytes": 29207,
+        "sha256": "153206a2fd0db7a26210ed531f0a9946fe29d4dcdb6f39a907c7908a05046fe4"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.provider.json": {
+        "bytes": 47439,
+        "sha256": "451cbb2177b9df8f5147b24bedb1ec583809ef77b7f567a13a2e3ed0d6f81424"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__B.trajectory.jsonl": {
+        "bytes": 11656,
+        "sha256": "cbe9ea95c5d48b2959ba62afcb463f29a89b0cba6941f49ffa1c3ad677bf695a"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.provider.json": {
+        "bytes": 150136,
+        "sha256": "889257e677b1ca8e2f3102bcac95666868619571fe64e4756d1249fd4cb6a805"
+      },
+      "parquet__context_only.artifacts/traces/service_first_response_sla_rate__descriptive__r2__C.trajectory.jsonl": {
+        "bytes": 34627,
+        "sha256": "4aa45581e3a31cbcbe2b91347978d74ebcb527be8ca578ff03f7ddecd2912227"
+      },
+      "parquet__context_only.json": {
+        "bytes": 159969,
+        "sha256": "917c58509ad046c20b82d6388dad0ca249a4cc21bf785fc293d1824a8df81fe3"
+      }
+    },
+    "path": "policy-2814d10-raw.zip",
+    "sha256": "4e10b2eef50c320fd024136b691711961928ebb70f1a90f1bd844ed91d073be7"
+  },
+  "artifacts": {
+    "analysis.json": {
+      "bytes": 706332,
+      "sha256": "bc5ebd791573c71f1a1bb0158ba41bac49345591270df1a91ca6d67b4b31048a"
+    },
+    "audit-facts.json": {
+      "bytes": 2832,
+      "sha256": "26d18baa435835841e7403c86306b544b266a4681bf9b02369034e07cb5b27dc"
+    },
+    "derived-metrics.json": {
+      "bytes": 30704,
+      "sha256": "3f3f88c6b61477d933b54ca8b1b5efee11ca70cff5bdf3cabc335a994312284c"
+    },
+    "failure-cases.json": {
+      "bytes": 355888,
+      "sha256": "e813199f0a58d40bf4ad39f47b255abd41faba0e400b4779b8274ae812e32df0"
+    },
+    "offline-final-tests.xml": {
+      "bytes": 463863,
+      "sha256": "686c558320c679a0811d04e39b3b46483c691ab9730168e0ac9aa5b073b24c6a"
+    },
+    "offline-initial-failure.xml": {
+      "bytes": 464841,
+      "sha256": "e221fe36615b1a794c56d34b127ab7d527fc321633d8382427c3b1933439633c"
+    },
+    "probes.json": {
+      "bytes": 40289,
+      "sha256": "3303f88ba1140ca95d0b314ecacb20dca52883772027c3989c2c04e9afb44f07"
+    },
+    "selected-cases.json": {
+      "bytes": 26324,
+      "sha256": "a7ede252d8e85ee4345bc5bba30fc0f16449807e90e1382e16cafced318bd218"
+    },
+    "trace-slices.json": {
+      "bytes": 108803,
+      "sha256": "9f68d63db94675902bf1611ab7bb72f73d8123a122bd2eb9c90612914f2e95a4"
+    }
+  },
+  "core_implementation_sha": "7d474de2fc32494e0c6465b369c452a8865e6ae9",
+  "credential_scan": {
+    "matched": false,
+    "scope": "All raw members and copied derived/test artifacts; active OpenRouter key and credential patterns checked without publishing their values."
+  },
+  "dependencies": {
+    "seeded-fixtures.zip": {
+      "path": "..\\current-core\\seeded-fixtures.zip",
+      "sha256": "ffd26ccbdad42cf891a44aa7abb7477d8b9f1bff1f5cb1a82a01aa02187bdcb7"
+    },
+    "typed-d0306e9-raw.zip": {
+      "path": "..\\current-core\\typed-d0306e9-raw.zip",
+      "sha256": "b6634bc48520922a06347776c6ba9d1aa55ea647dfa2eaccf0a61f56ceff71ef"
+    }
+  },
+  "dependency_locator_map": "..\\current-core\\manifest.json",
+  "evaluation_sha": "2814d10065ae2495b0ffa00b55cb3d990fcb789f",
+  "frozen_input_original_root": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-typed-smoke",
+  "history_scope_note": "Provider histories are library snapshots; mutable message lists can contain later turns. probes.json compares reconstructed initial system/user prefixes, not immutable HTTP request captures.",
+  "original_root": "C:\\Users\\sandeeppawar\\.copilot\\session-state\\4fc1d5d0-25b1-4323-b111-f91ae7bc94cd\\files\\knowledge-context-comparison",
+  "raw_file_count": 379,
+  "schema_version": 1,
+  "source_identity_note": "Offline analysis can use extracted results anywhere. Live reuse validates original source identities and snapshots; moving data is not a fingerprint-preserving rebind."
+}

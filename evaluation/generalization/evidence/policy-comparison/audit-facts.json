@@ -1,0 +1,87 @@
+{
+  "C_package_lesson_states": {
+    "csv|inventory": {
+      "candidate": 1
+    },
+    "csv|manufacturing": {
+      "candidate": 1
+    },
+    "csv|service": {},
+    "lakehouse|inventory": {
+      "candidate": 1
+    },
+    "lakehouse|manufacturing": {
+      "candidate": 1
+    },
+    "lakehouse|service": {},
+    "parquet|inventory": {
+      "candidate": 1
+    },
+    "parquet|manufacturing": {
+      "candidate": 1
+    },
+    "parquet|service": {}
+  },
+  "harness_hashes_unchanged": {
+    "__init__.py": "4b61de3d5e9dd107f112b27d764b16db59aa874e87a7e6d951443efe605b977b",
+    "audit.py": "a635e2899245ead383c51c93964130a5678bc1e31554bdc692af4f6e0266f0ec",
+    "current_smoke.py": "274ca2bdf13cf0bf87adb76e56917c14aafca5563e6335208d7377458bf00472",
+    "evidence_summary.py": "15a1e5b79d1158857e27e82eeeafe76060110854c65e4841db87531e50cb6ea8",
+    "fixtures.py": "2952b67550db1d826e7af7a681aac8114276c49d02ecb2b6b089aaaa69acb050",
+    "freeze.py": "196cc4e91d63e962a665a113343da7a3bb8c8a935ea9bf60216cc11a3c389d4f",
+    "grader.py": "673cc6037802003ab8a44ebf4f44ebf2bef5bcb15fa6abccf6d243f7e110d58c",
+    "insufficient_metadata.py": "33a36763cfcd357bfe797a145ea4439c5e4dd1cc381353667278f08336af4a17",
+    "nonregression.py": "140c991a971b430de3d81968fd7debc3ce10aac35ee69d4694700191c351095e",
+    "references.py": "511e90bd7cae86b3d6c6b97b974ac5b179c03f0396c05b01e3d816b3c998c6c0",
+    "representations.py": "19ca0b61c4648a8da9a1f03e4f9abc1778b5334e2511c6cd79c72681b6996123",
+    "runner.py": "242324afeccda886b03c15fed37e8ce3febd1237193d00a91d120f0660340e56"
+  },
+  "manufacturing_join_probe": {
+    "complete_production_rows": 2,
+    "existence_join_rows": 2,
+    "existence_join_sum": 1800,
+    "raw_join_rows": 4,
+    "raw_join_sum": 3600
+  },
+  "settings": {
+    "max_cost_usd": 2.0,
+    "model": "openai/gpt-4.1-mini",
+    "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "repetitions": 3,
+    "run_order": [
+      {
+        "knowledge_execution": "auto",
+        "representation": "parquet"
+      },
+      {
+        "knowledge_execution": "context_only",
+        "representation": "parquet"
+      },
+      {
+        "knowledge_execution": "context_only",
+        "representation": "lakehouse"
+      },
+      {
+        "knowledge_execution": "auto",
+        "representation": "lakehouse"
+      },
+      {
+        "knowledge_execution": "auto",
+        "representation": "csv"
+      },
+      {
+        "knowledge_execution": "context_only",
+        "representation": "csv"
+      }
+    ],
+    "seed": 20260908,
+    "versions": {
+      "deltalake": "1.5.0",
+      "dspy": "3.2.1",
+      "duckdb": "1.5.0",
+      "numpy": "2.4.0",
+      "pandas": "2.3.3",
+      "pyarrow": "23.0.1"
+    }
+  }
+}
