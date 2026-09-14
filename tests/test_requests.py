@@ -57,6 +57,10 @@ def test_a_bare_value_is_looked_up_in_the_groupings_and_a_partial_or_unknown_one
     assert [(p["column"], v) for p, v in named.filters] == [("region", "Americas")]
     reversed_order = parse_request("what moved for the Americas region", probe)
     assert [(p["column"], v) for p, v in reversed_order.filters] == [("region", "Americas")]
+    after_a_period = parse_request("what changed in June 2024 for sector Technology", probe)  # the blanked period must not hand the clause to "in"
+    assert [(p["column"], v) for p, v in after_a_period.filters] == [("sector", "Technology")] and after_a_period.period == {"year": 2024, "month": 6}
+    kept_measure = parse_request("was amount in June 2024 normal for Europe", probe)  # the check strips only its own words
+    assert kept_measure.check and kept_measure.measures == ("amount",) and [(p["column"], v) for p, v in kept_measure.filters] == [("region", "Europe")]
 
 
 def test_a_period_asked_about_the_trend_is_root_cause_with_a_check():
