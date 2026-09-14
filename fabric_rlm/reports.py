@@ -85,7 +85,7 @@ really overall business performance performing doing numbers figures results dri
 behind contributed contributing responsible higher lower well badly something anything nothing no not yes so rather still yet again back off
 let lets make made take took put set based basis kind sort regarding since during data table fact
 """.split())
-_STOP_TOKENS = frozenset({"a", "an", "the", "of", "in", "on", "at", "to", "for", "by", "and", "or", "is", "was", "were", "are", "it", "its", "this", "that", "what", "whats", "why", "how", "did", "do", "does", "up", "down", "over", "under", "out", "off", "per", "as", "vs", "with", "from"})
+_STOP_TOKENS = frozenset({"a", "an", "the", "of", "in", "on", "at", "to", "for", "by", "and", "or", "is", "was", "were", "are", "it", "its", "this", "that", "what", "whats", "why", "how", "did", "do", "does", "per", "as", "vs", "with", "from"})  # up and down stay: a production log measures Down
 _MONTHS = {name.casefold(): index for index, name in enumerate(calendar.month_name) if name}
 _MONTHS.update({name.casefold(): index for index, name in enumerate(calendar.month_abbr) if name})
 _PERIOD = re.compile(r"\b(?:(" + "|".join(sorted(_MONTHS, key=len, reverse=True)) + r")\.?\s+)?((?:19|20)\d{2})\b", re.IGNORECASE)
