@@ -30,7 +30,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .source_model import _NUMERIC_TYPE, _TEXT_TYPE, AgentDataSource, AgentSnapshot, _is_key, _is_time_column, _measure_columns, _month_name, _path_table, _tables_named_in, attribute_paths, build_vocabulary, excluded_terms, humanize_column
-from .sweep import Comparison, Movement, Point, Sweep, _aggregate_for, _choose_paths, _points, _probe_for, sweep, verify_sweep
+from .sweep import _GROUPING_HINT, Comparison, Movement, Point, Sweep, _aggregate_for, _choose_paths, _points, _probe_for, sweep, verify_sweep
 
 __all__ = ["Report", "ReportSpec", "parse_request", "report"]
 
@@ -44,12 +44,28 @@ _KINDS = {
 _KIND_NAMES = {"brief": "Monday Morning Brief", "root_cause": "root cause analysis", "top_movers": "top movers", "trend": "trend analysis", "recap": "recap of what moved"}
 _FOCUS = re.compile(r"\b(which|focus|moving|driving|behind|contribut\w*|responsible)\b", re.IGNORECASE)
 # a question about whether a period was in line with the trend or the season: read as a check, not as a request for a trend page
-_TREND_CHECK = re.compile(
-    r"\b(?:in\s?line with|against|versus|vs\.?|compared? (?:to|with)|consistent with|expected (?:from|by|given)|explained by|match(?:es|ing)?|follow(?:s|ing)?|part of|fit(?:s|ting)?|normal for|typical for)\b[^.?;]{0,30}?\b(?:trend|trends|season\w*|pattern|history|usual|normal|expectation|expected)\b"
-    r"|\b(?:is|was|were|are)\b[^.?;]{0,40}?\b(?:in line|normal|expected|usual|typical|unusual|abnormal|an? (?:anomaly|outlier)|out of line|seasonal)\b(?:\s+with\b[^.?;]{0,30}?\b(?:trend|trends|season\w*|pattern|history|usual|normal|expectation|expected)\b)?"
-    r"|\b(?:anything|something|nothing)\s+(?:unusual|abnormal|odd|strange)\b|\banomal\w*\b|\boutliers?\b",
+_TREND_WORDS = r"(?:trend|trends|season\w*|pattern|history|usual|normal|expectation|expected)"
+_CHECK_WORDS = r"(?:in\s?line|normal|expected|usual|typical|unusual|abnormal|an? (?:anomaly|outlier)|out of line|seasonal|anomal\w*|outliers?)"
+# "in line with the trend", "against the usual pattern", "compared to the season": the phrase itself
+_CHECK_PHRASE = re.compile(
+    r"\b(?:in\s?line with|against|versus|vs\.?|compared? (?:to|with)|consistent with|expected (?:from|by|given)|explained by|match(?:es|ing)?|follow(?:s|ing)?|part of|fit(?:s|ting)?|normal for|typical for)"
+    r"\s+(?:(?:the|its|a|an)\s+)?(?:(?:usual|normal|seasonal|historical|recent|long[- ]term|overall)\s+)?" + _TREND_WORDS + r"\b",
     re.IGNORECASE,
 )
+# "was it in line", "was August 2025 normal", "is that unusual": the question form, detected across the words in between
+_CHECK_ASK = re.compile(r"\b(?:is|was|were|are)\b[^.?;]{0,40}?\b" + _CHECK_WORDS + r"\b", re.IGNORECASE)
+_CHECK_ANY = re.compile(r"\b(?:anything|something|nothing)\s+(?:unusual|abnormal|odd|strange)\b|\banomal\w*\b|\boutliers?\b", re.IGNORECASE)
+# the words that leave the text once a check is detected: the check words and their trend tail, never the measure or the period around them
+_CHECK_STRIP = re.compile(r"\b" + _CHECK_WORDS + r"\b(?:\s+with\s+(?:(?:the|its|a|an)\s+)?" + _TREND_WORDS + r"\b)?", re.IGNORECASE)
+
+
+def _trend_check(text: str) -> tuple[bool, str, set[str]]:
+    """Whether the question asks how a period sits against the trend; the text without the words of that question; the words they used."""
+    if not (_CHECK_PHRASE.search(text) or _CHECK_ASK.search(text) or _CHECK_ANY.search(text)):
+        return False, text, set()
+    used = _words_in(_CHECK_PHRASE, text) | _words_in(_CHECK_STRIP, text) | _words_in(_CHECK_ANY, text)
+    stripped = _CHECK_ANY.sub(" ", _CHECK_STRIP.sub(" ", _CHECK_PHRASE.sub(" ", text)))
+    return True, stripped, used
 _YOY_WORDS = re.compile(r"\b(year over year|yoy|y/y|prior year|last year|previous year|a year (ago|earlier))\b", re.IGNORECASE)
 _MOM_WORDS = re.compile(r"\b(month over month|mom|m/m|previous month|prior month|last month|latest month|month before)\b", re.IGNORECASE)
 _ANNUAL_WORDS = re.compile(r"\b(annual|yearly|full year|by year)\b", re.IGNORECASE)
@@ -66,10 +82,10 @@ today yesterday ago earlier later same versus vs against compared compare compar
 seasonal season seasonality pattern history usual typical anomaly anomalies outlier outliers top bottom biggest largest smallest most least more
 less fewer much many all any some every each per across between within into out about around especially particularly only just also too very
 really overall business performance performing doing numbers figures results drivers driver driving drove cause caused causes reason reasons
-behind contributed contributing responsible big small high low higher lower best worst good bad well badly key main major minor new old first
-second third one ones thing things something anything nothing no not yes so rather still yet again back off let lets make made take took put set
-based basis kind sort regarding since during date dates level levels number numbers rate share total totals amount value values data table fact
+behind contributed contributing responsible higher lower well badly something anything nothing no not yes so rather still yet again back off
+let lets make made take took put set based basis kind sort regarding since during data table fact
 """.split())
+_STOP_TOKENS = frozenset({"a", "an", "the", "of", "in", "on", "at", "to", "for", "by", "and", "or", "is", "was", "were", "are", "it", "its", "this", "that", "what", "whats", "why", "how", "did", "do", "does", "up", "down", "over", "under", "out", "off", "per", "as", "vs", "with", "from"})
 _MONTHS = {name.casefold(): index for index, name in enumerate(calendar.month_name) if name}
 _MONTHS.update({name.casefold(): index for index, name in enumerate(calendar.month_abbr) if name})
 _PERIOD = re.compile(r"\b(?:(" + "|".join(sorted(_MONTHS, key=len, reverse=True)) + r")\.?\s+)?((?:19|20)\d{2})\b", re.IGNORECASE)
@@ -301,7 +317,7 @@ def _match_measures(text: str, schema: Any, table: str, vocabulary: Any) -> tupl
     # a word that names the table is not a measure word ("sessions by device" is not "sessions revenue"), unless a measure column carries it itself (SalesAmount for "sales")
     own_words = {w for c in candidates for w in _tokens(humanize_column(c))}
     table_words = (set(_tokens(vocabulary.table(table))) | set(_tokens(humanize_column(table.rsplit(".", 1)[-1])))) - own_words
-    tokens = [t for t in _tokens(text) if t not in table_words]
+    tokens = [t for t in _tokens(text) if t not in table_words and t not in _STOP_TOKENS]
     lowered_text = " " + " ".join(tokens) + " "
     scored: list[tuple[int, int, str]] = []
     matched_words: list[str] = []
@@ -446,16 +462,18 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
     fact = {"table": table, "date": axis, "measure": "rows", "aggregate": "count"}
     noun = vocabulary.table(table)
     paths = list(attribute_paths(schema, table, joins, excluded))
-    candidates = _choose_paths(schema, table, joins, excluded, terms, 12)
+
+    def numeric(path: Mapping[str, Any]) -> bool:
+        return bool(_NUMERIC_TYPE.search(schema.column_type(_path_table(path, table), str(path["column"]))))
+
+    # where a bare value is looked for: every text grouping the sweep could use, the ones named like a grouping (category, type, region, status) first
+    candidates = sorted((p for p in _choose_paths(schema, table, joins, excluded, terms, 40) if not numeric(p)), key=lambda p: not _GROUPING_HINT.search(str(p["column"])))
     fact_words = set(_tokens(noun)) | set(_tokens(humanize_column(table.rsplit(".", 1)[-1])))
     table_words = {w for t in schema.tables for w in _tokens(humanize_column(t.rsplit(".", 1)[-1]))} | {w for t in schema.tables for w in _tokens(vocabulary.table(t))}
     filters: list[tuple[Mapping[str, Any], Any]] = []
     lines: list[str] = []
     spent = 0
     taken: set[str] = set()
-
-    def numeric(path: Mapping[str, Any]) -> bool:
-        return bool(_NUMERIC_TYPE.search(schema.column_type(_path_table(path, table), str(path["column"]))))
 
     def lookup(path: Mapping[str, Any], value: str) -> list[dict[str, Any]]:
         nonlocal spent
@@ -511,7 +529,7 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
             found = False
             for path, text_value in splits:
                 key = (str(path["column"]), text_value.casefold())
-                if key in seen or not text_value or str(path["column"]) in taken:
+                if key in seen or not text_value or str(path["column"]) in taken or len(seen) >= 20:
                     continue
                 seen.add(key)
                 if numeric(path) and not re.fullmatch(r"-?\d+(\.\d+)?", text_value):
@@ -577,11 +595,8 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
     text_tokens = set(_tokens(text))
     consumed: set[str] = _words_in(_PERIOD, text) | _words_in(_AGAINST, text) | _words_in(_YOY_WORDS, text) | _words_in(_MOM_WORDS, text) | _words_in(_ANNUAL_WORDS, text)
     period, against = _periods(text)
-    check = bool(_TREND_CHECK.search(text))
-    kind_text = text
-    if check:
-        consumed |= _words_in(_TREND_CHECK, text)
-        kind_text = _TREND_CHECK.sub(" ", text)  # "was it in line with the trend" asks for a check, not for the trend page
+    check, kind_text, check_words = _trend_check(text)  # "was it in line with the trend" asks for a check, not for the trend page
+    consumed |= check_words
     kind = _kind(kind_text, period is not None)
     for pattern in _KINDS.values():
         consumed |= _words_in(pattern, kind_text)
@@ -651,6 +666,9 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
         residue = _PERIOD.sub(" ", kind_text)
         residue = _BROAD_GROUPING_CLAUSE.sub(" ", residue)
         residue = re.sub(r"\btop\s+\d{1,3}\b", " ", residue, flags=re.IGNORECASE)
+        residue = re.sub(r"\s+", " ", residue)
+        for _ in range(3):  # an introducer left with nothing after it ("in", once the period is blanked) is dropped, so the next clause keeps its own introducer
+            residue = re.sub(r"\b(?:where|for|with|in|on|at|of|about|especially|particularly|only|just|regarding)\s+(?=(?:where|for|with|in|on|at|of|about|especially|particularly|only|just|regarding|by|per|which|and|vs\.?|versus|against)\b|[,.;?]|$)", "", residue, flags=re.IGNORECASE)
         filters, filter_lines, lookups = _match_filters(residue, probe=probe, dialect=probe.dialect(joins), schema=schema, table=table, joins=joins, excluded=excluded, terms=terms, vocabulary=vocabulary, consumed=consumed)
         reading.extend(filter_lines)
     if check:
@@ -744,6 +762,12 @@ def report(
             result = replace(result, notes=result.notes + tuple(notes))
     if verify:
         result = verify_sweep(result, probe)
+    if spec.period is not None:
+        totals = [m for m in result.ledger if m.path is None]
+        if totals and all(m.after_rows == 0 for m in totals):
+            months = sorted({(p.year, p.month) for points in result.series.values() for p in points})
+            span = f"; the data runs from {calendar.month_name[months[0][1]]} {months[0][0]} to {calendar.month_name[months[-1][1]]} {months[-1][0]}" if months else ""
+            result = replace(result, notes=(f"the source has no rows in {_month_name(spec.period)}{span}, so there is nothing to compare", *result.notes))
     result = replace(result, elapsed=round(time.monotonic() - started, 1))
     if not spec.facts or not spec.measures:
         spec = replace(spec, reading=_reading_after(spec, result))  # the request named no fact or measure: say what was actually swept, not what was guessed

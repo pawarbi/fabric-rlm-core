@@ -722,9 +722,8 @@ def _filter_values(value: Any) -> list[Any] | None:
 
 
 def _like_pattern(value: str) -> str:
-    """A case-folded LIKE pattern that contains the text, with the wildcards of the text itself escaped."""
-    escaped = value.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+    """A case-folded LIKE pattern that contains the text (an underscore or a percent sign in the text stays a wildcard: the read-only gate has no ESCAPE)."""
+    return f"%{value.casefold()}%"
 
 
 class _Sql:
@@ -853,7 +852,7 @@ class _Sql:
         joins = _Joins()
         ref = joins.ref(path)
         text = f"lower(CAST({ref} AS VARCHAR))"
-        return f"SELECT {ref} AS label, COUNT(*) AS n {self._from(fact, joins)} WHERE {text} LIKE {_sql_literal(_like_pattern(value))} ESCAPE '\\' GROUP BY {ref} ORDER BY ({text} = {_sql_literal(value.casefold())}) DESC, n DESC LIMIT {limit}"
+        return f"SELECT {ref} AS label, COUNT(*) AS n {self._from(fact, joins)} WHERE {text} LIKE {_sql_literal(_like_pattern(value))} GROUP BY {ref} ORDER BY ({text} = {_sql_literal(value.casefold())}) DESC, n DESC LIMIT {limit}"
 
     def movement(self, fact: Mapping[str, Any], comparison: Comparison, filters: _Filters) -> str:
         joins = _Joins()
