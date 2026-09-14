@@ -18,11 +18,11 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-@dataclass(frozen=True)
 # --------------------------------------------------------------------------- #
 # What an agent has: its sources, instructions and few-shots, and a schema of a source
 # --------------------------------------------------------------------------- #
 
+@dataclass(frozen=True)
 class FewShot:
     id: str
     question: str
