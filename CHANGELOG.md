@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Added
+
+- **Joins and keys a column name does not reveal.** An export spells a key
+  ord_no, cust_cd or item_nbr and an amount amt1 or amt2, and the review used
+  to see no fact at all in such a lakehouse: no key matched, so order lines
+  never reached the date on their header and no question could be asked.
+  Keys may now end in no, nbr, num, cd, code or ref, and amt is a measure.
+  `source_model.joins_from_data` settles a join no name reveals by asking the
+  data which table owns a shared key. The key must be unique in exactly one
+  holder, that holder must carry no measures, and no name may already
+  resolve it, so a small fact that is unique by chance never becomes the
+  parent of another fact. `source_model.shadow_tables` finds a stale copy of
+  a table: the same columns, fewer rows, and every key already present in
+  the original. The review discovers both once per source, passes the joins
+  to every discovery step and to question generation, and leaves stale copies
+  out of the questions.
+- **Data Agent configuration distilled from the queries the agent ran.**
+  `experimental.query_forensics` compares the query a Data Agent executed,
+  read from its run steps, with the reference query that produced the right
+  answer, and names each difference as a fact with the line that closes it:
+  a stale table read instead of the original, a different or an extra column
+  in the measure, a conversion the reference applies and the agent never
+  reads, a filter the reference applies, the period filtered on another date
+  column, a lookup joined for a readable name, and a join made before
+  aggregating. `suggest()` takes the agent answers and adds those lines to
+  the instructions of each data source. On a deliberately ambiguous sales
+  lakehouse the unconfigured agent answered July revenue 136 percent too
+  high; the one query it ran yielded four lines, one per mistake: revenue is
+  amt2 alone, amounts depend on the currency column, and test and cancelled
+  orders are filtered out.
+
 ## 0.6.3 — 2026-09-14 — scalar answers serialize the same way on every path
 
 ### Fixed
