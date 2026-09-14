@@ -497,7 +497,7 @@ def _match_filters(residue: str, *, probe: Any, dialect: Any, schema: Any, table
             if len(parts) == 2 and parts[0].strip() and parts[1].strip():
                 column_words, value = parts[0].strip(), parts[1].strip().strip("\'\"")
             else:
-                kept = [w for w in clause.split() if w.casefold() not in fact_words and w.casefold() not in table_words and w.casefold() not in consumed and w.casefold() not in _FUNCTION_WORDS and w.casefold() not in _GENERIC]
+                kept = [w for w in clause.split() if w.casefold() not in fact_words and w.casefold() not in table_words and w.casefold() not in consumed and (w.casefold() not in _FUNCTION_WORDS and w.casefold() not in _GENERIC or _exact_path(paths, w) is not None)]
                 consumed.update(w.casefold() for w in clause.split() if w.casefold() in table_words)
                 if not kept:
                     continue  # the clause named the fact, a measure or a period: not a filter
@@ -604,7 +604,6 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
     consumed: set[str] = _words_in(_PERIOD, text) | _words_in(_AGAINST, text) | _words_in(_YOY_WORDS, text) | _words_in(_MOM_WORDS, text) | _words_in(_ANNUAL_WORDS, text)
     period, against = _periods(text)
     check, kind_text, check_words = _trend_check(text)  # "was it in line with the trend" asks for a check, not for the trend page
-    consumed |= check_words
     kind = _kind(kind_text, period is not None)
     for pattern in _KINDS.values():
         consumed |= _words_in(pattern, kind_text)
@@ -705,6 +704,7 @@ def parse_request(request: str, probe: Any, *, instructions: str = "", scope: st
         reading.append(f"check: {_month_name(period)} is a whole year, which is not read against the season; name a month to check it")
     elif check:
         reading.append("check: " + (f"{_month_name(period)} against the trend and season of each measure" if period is not None else "the latest complete month against the trend and season of each measure"))
+    consumed |= check_words  # joined only now: the check phrase is already out of the residue, so a word of it is free to name something else there ("c1 line" after "in line with the trend")
     ignored = _ignored_words(text, consumed)
     if ignored:
         reading.append(f"ignored: {', '.join(ignored)} (nothing in the source matched)")

@@ -333,6 +333,30 @@
 
 ### Fixed
 
+- **A question about a month before the last two years is checked
+  against its series.** The monthly series kept for the page and for the
+  trend check started at the second to last complete year, so "was scrap
+  in July 2026 in line with the trend" on data that runs to 2028 answered
+  "the monthly series does not cover July 2026". The series now reaches
+  back to the earliest year the comparison names (July 2025 here) and
+  runs on to the end of the data, and the check sentence comes out.
+- **A word of the check phrase can still name a column.** "was scrap in
+  July 2026 in line with the trend for c1 line" read "line" as part of
+  "in line with" and dropped it from the filter clause, so the bare "c1"
+  landed on the first grouping that held it, the asset "Gas Turbine C1",
+  rather than the line. The words of the check phrase are set aside only
+  after the filters are read, and a filler word that exactly names a
+  column reachable from the fact ("line" for line_name) counts as that
+  column, so the page says "only: line = Line C1 - Turbine Assembly
+  (matched 'c1')".
+- **The note about the months after the compared one says what is
+  true.** When a question named a month with data after it, every later
+  month was listed as holding "far fewer rows than a typical month", 78
+  against 81. A month that was asked for now gets "the data runs on to
+  December 2028; the month comparison stops at July 2026 as asked", and
+  only a month holding under half a typical month's rows is called
+  incomplete, a typical month being the median of the six months up to
+  the compared one (it used to be the median of the six largest counts).
 - The concentration KPI over a semantic model ("top 3 share of sales
   amount by product") read wrongly: the window was a `CALCULATE` filter on
   the date column inside the measure, which overrides the row's own date,

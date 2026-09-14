@@ -158,3 +158,67 @@ def test_a_month_is_read_against_the_trend_and_the_season():
     assert period_check(story, 2019, 5, name="orders") is None
     short = SeriesStory(months=(Month(2023, 1, 10.0, 1), Month(2023, 2, 11.0, 1)), window=0, average=(None, None), shifts=(), yoy=(), decomposition=None, trend_per_year=None)
     assert expected_value(short, 2023, 2) is None
+
+
+def _production_lines():
+    """One fact whose line names and asset names both carry the token C1, so a bare "c1" is ambiguous and the word "line" settles it."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("CREATE TABLE production (run_id INTEGER, run_date DATE, units DOUBLE, line_name VARCHAR, asset_name VARCHAR, shift VARCHAR)")
+    rows, n = [], 0
+    for year in (2023, 2024):
+        for month in range(1, 13):
+            for line, asset in (("Line C1 - Turbine", "Gas Turbine C1"), ("Line D1 - Turbine", "Gas Turbine D1")):
+                for shift in ("Day", "Night"):
+                    n += 1
+                    rows.append((n, f"{year}-{month:02d}-15", 100.0 + month + (50.0 if line.startswith("Line C1") else 0.0), line, asset, shift))
+    con.executemany("INSERT INTO production VALUES (?, ?, ?, ?, ?, ?)", rows)
+    tables = {"production": ("run_id", "run_date", "units", "line_name", "asset_name", "shift")}
+    types = {"production": {"run_id": "INTEGER", "run_date": "DATE", "units": "DOUBLE", "line_name": "VARCHAR", "asset_name": "VARCHAR", "shift": "VARCHAR"}}
+    return LakehouseProbe.from_executor(_module._executor(con, tables), schema_from_tables("lh-3", tables, types=types), name="Production")
+
+
+def test_a_word_of_the_check_phrase_still_names_a_column_in_a_filter():
+    probe = _production_lines()
+    spec = parse_request("was units in June 2024 in line with the trend for c1 line", probe)  # "line" is a word of the check phrase and the column asked for
+    assert spec.check and spec.period == {"year": 2024, "month": 6} and spec.measures == ("units",)
+    assert [(p["column"], v) for p, v in spec.filters] == [("line_name", "Line C1 - Turbine")]
+    assert any(line.startswith("only: line = Line C1 - Turbine (matched 'c1'") for line in spec.reading)
+    assert "check: June 2024 against the trend and season of each measure" in spec.reading
+    assert not any(line.startswith("ignored") for line in spec.reading)
+    plain = parse_request("what changed in June 2024 for c1 line", probe)
+    assert [(p["column"], v) for p, v in plain.filters] == [("line_name", "Line C1 - Turbine")]
+
+
+def _four_years_of_orders():
+    """Four complete years of monthly orders with a season and a trend, so a month two years before the end has a series to be read against."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("CREATE TABLE orders (order_id INTEGER, order_date DATE, amount DOUBLE, region VARCHAR)")
+    rows, n = [], 0
+    for year in range(2022, 2026):
+        for month in range(1, 13):
+            level = (1000.0 + 20.0 * (12 * (year - 2022) + month)) * (1.2 if month in (11, 12) else 0.9 if month in (1, 2) else 1.0)
+            for region, share in (("Europe", 0.6), ("Americas", 0.4)):
+                for k in range(3):
+                    n += 1
+                    rows.append((n, f"{year}-{month:02d}-{5 + 7 * k:02d}", round(level * share / 3, 2), region))
+    con.executemany("INSERT INTO orders VALUES (?, ?, ?, ?)", rows)
+    tables = {"orders": ("order_id", "order_date", "amount", "region")}
+    types = {"orders": {"order_id": "INTEGER", "order_date": "DATE", "amount": "DOUBLE", "region": "VARCHAR"}}
+    return LakehouseProbe.from_executor(_module._executor(con, tables), schema_from_tables("lh-4", tables, types=types), name="Orders")
+
+
+def test_a_month_before_the_last_two_years_is_read_against_its_own_series():
+    probe = _four_years_of_orders()
+    result = report(probe, "was amount in July 2023 in line with the trend", budget=100)
+    spec = result.spec
+    assert spec.check and spec.period == {"year": 2023, "month": 7} and "check: July 2023 against the trend and season of each measure" in spec.reading
+    points = result.sweep.series["orders|amount"]
+    assert (points[0].year, points[0].month) == (2022, 1) and (points[-1].year, points[-1].month) == (2025, 12)  # back to the earliest year a comparison names, on to the end of the data
+    assert len(result.checks) == 1 and "July 2023" in result.checks[0] and "implied" in result.checks[0] and "does not cover" not in result.checks[0]
+    assert any("the data runs on to December 2025" in note and "the month comparison stops at July 2023 as asked" in note for note in result.sweep.notes)
+    assert not any("far fewer" in note for note in result.sweep.notes)
+    latest = report(probe, "was amount in December 2025 in line with the trend", budget=100)
+    assert latest.sweep.series["orders|amount"][0].year == 2024 and not any("runs on to" in note for note in latest.sweep.notes)  # nothing after the compared month: the usual two years
+    assert len(latest.checks) == 1 and "December 2025" in latest.checks[0] and "implied" in latest.checks[0]

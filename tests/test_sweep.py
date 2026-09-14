@@ -616,3 +616,29 @@ def test_the_lakehouse_probe_asks_for_the_full_row_limit_and_refuses_a_cut_resul
     seen["truncate"] = True
     with pytest.raises(ValueError, match="more than 10,000 rows and was cut"):
         probe.run("SELECT 1 AS day FROM sales")
+
+
+def test_the_note_about_the_months_after_the_compared_one_says_what_is_true():
+    from fabric_rlm.sweep import Comparison, _skipped_tail
+
+    months = [{"year": 2026, "month": m, "n": 80} for m in range(1, 13)] + [{"year": 2027, "month": m, "n": 78} for m in range(1, 13)]
+    july = [Comparison("month", {"year": 2026, "month": 6}, {"year": 2026, "month": 7})]
+    assert _skipped_tail(months, july, "production log") is None  # nothing after July 2026 looks incomplete, so a stop nobody asked for has nothing to explain
+    assert _skipped_tail(months, july, "production log", asked=True) == "the data runs on to December 2027 (78 production log); the month comparison stops at July 2026 as asked"
+    months[-1]["n"] = 9
+    november = [Comparison("month", {"year": 2027, "month": 10}, {"year": 2027, "month": 11})]
+    assert _skipped_tail(months, november, "production log") == "December 2027 (9 production log) holds far fewer production log than a typical month (78), so the month comparison stops at November 2027; pass comparisons=[Comparison('month', ...)] to compare a later month anyway"
+    assert _skipped_tail(months, july, "production log", asked=True) == "the data runs on to December 2027 (9 production log); the month comparison stops at July 2026 as asked; December 2027 (9 production log) holds far fewer production log than a typical month (80) and looks incomplete"
+    assert _skipped_tail(months, [Comparison("month", {"year": 2027, "month": 11}, {"year": 2027, "month": 12})], "production log", asked=True) is None  # nothing after the compared month
+
+
+def test_the_series_reaches_back_to_the_earliest_year_a_comparison_names():
+    from fabric_rlm.sweep import Comparison, _earliest_year, _points
+
+    months = [{"year": y, "month": m, "n": 3, "v0": 10.0} for y in range(2022, 2026) for m in range(1, 13)]
+    years = [2022, 2023, 2024, 2025]
+    assert _points(months, 0, "sum", years)[0].year == 2024  # the usual window: the last two compared years and whatever follows
+    comparisons = [Comparison("month", {"year": 2023, "month": 6}, {"year": 2023, "month": 7}), Comparison("same_month_prior_year", {"year": 2022, "month": 7}, {"year": 2023, "month": 7})]
+    assert _earliest_year(comparisons) == 2022 and _points(months, 0, "sum", years, first=_earliest_year(comparisons))[0].year == 2022
+    assert _points(months, 0, "sum", years, first=2025)[0].year == 2024  # a later year never cuts the series short
+    assert _earliest_year([Comparison("custom", {"start": "2021-03-01", "end": "2021-03-31"}, {"year": 2023, "month": 7})]) == 2021 and _earliest_year([]) is None

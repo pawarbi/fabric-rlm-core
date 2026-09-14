@@ -1477,7 +1477,8 @@ def sweep(
                 if not wanted_comparisons:
                     notes.append(f"{table}: no comparison the time axis supports for {fact_years}")
                     continue
-                skipped = _skipped_tail(months, wanted_comparisons, vocabulary.table(table))
+                asked_month = any(isinstance(c, Comparison) and c.kind == "month" for c in (comparisons or ()))
+                skipped = _skipped_tail(months, wanted_comparisons, vocabulary.table(table), asked=asked_month)
                 if skipped:
                     notes.append(f"{table}: {skipped}")
                 try:
@@ -1498,7 +1499,7 @@ def sweep(
                     fact = {"table": table, "date": axis, "measure": measure, "aggregate": _aggregate_of(measure, summed, schema.tables[table])}
                     key = f"{table}|{measure}"
                     words[key] = vocabulary.table(table) if measure == _ROWS else _channel_measure(vocabulary.table(table), vocabulary.measure(measure.strip("[]")))
-                    series[key] = _points(months, index, fact["aggregate"], fact_years)
+                    series[key] = _points(months, index, fact["aggregate"], fact_years, first=_earliest_year(wanted_comparisons))
                     run_totals = [_movement(run, dialect, fact, comparison, fact_filters) for comparison in wanted_comparisons]
                     run_totals = [replace(t, flags=_flags(t, t.comparison, max_date, months, noun=vocabulary.table(table))) for t in run_totals]
                     ledger.extend(run_totals)
@@ -1675,8 +1676,8 @@ def _comparisons(months: Sequence[Mapping[str, Any]], years: Sequence[int]) -> l
     return comparisons
 
 
-def _skipped_tail(months: Sequence[Mapping[str, Any]], comparisons: Sequence[Comparison], noun: str = "rows") -> str | None:
-    """Says when the month comparison stops short of the latest month because the trailing months look still to arrive."""
+def _skipped_tail(months: Sequence[Mapping[str, Any]], comparisons: Sequence[Comparison], noun: str = "rows", *, asked: bool = False) -> str | None:
+    """Says when the month comparison stops short of the latest month: the trailing months look still to arrive, or (``asked``) an earlier month was named and the data runs on past it."""
     counts = {(int(r["year"]), int(r["month"])): int(r.get("n") or 0) for r in months if r.get("year") is not None and r.get("month") is not None and int(r.get("n") or 0) > 0}
     month = next((c for c in comparisons if c.kind == "month" and "month" in c.after), None)
     if month is None or not counts:
@@ -1685,10 +1686,23 @@ def _skipped_tail(months: Sequence[Mapping[str, Any]], comparisons: Sequence[Com
     skipped = [m for m in sorted(counts) if m > after]
     if not skipped:
         return None
-    earlier = sorted(counts[m] for m in sorted(counts) if m <= after)[-6:]
-    typical = sorted(earlier)[len(earlier) // 2] if earlier else 0
-    names = ", ".join(f"{_month_name({'year': m[0], 'month': m[1]})} ({counts[m]:,} {noun})" for m in skipped)
-    return f"{names} hold{'s' if len(skipped) == 1 else ''} far fewer {noun} than a typical month ({typical:,}), so the month comparison stops at {_month_name({'year': after[0], 'month': after[1]})}; pass comparisons=[Comparison('month', ...)] to compare a later month anyway"
+    recent = [counts[m] for m in sorted(counts) if m <= after][-6:]  # the six months up to the compared one, not the six largest
+    typical = sorted(recent)[len(recent) // 2] if recent else 0
+    thin = [m for m in skipped if typical and counts[m] < 0.5 * typical]
+    stops = f"the month comparison stops at {_month_name({'year': after[0], 'month': after[1]})}"
+
+    def listed(items: Sequence[tuple[int, int]]) -> str:
+        return ", ".join(f"{_month_name({'year': m[0], 'month': m[1]})} ({counts[m]:,} {noun})" for m in items)
+
+    if not asked:
+        if not thin:
+            return None
+        return f"{listed(thin)} hold{'s' if len(thin) == 1 else ''} far fewer {noun} than a typical month ({typical:,}), so {stops}; pass comparisons=[Comparison('month', ...)] to compare a later month anyway"
+    last = skipped[-1]
+    text = f"the data runs on to {_month_name({'year': last[0], 'month': last[1]})} ({counts[last]:,} {noun}); {stops} as asked"
+    if thin:
+        text += f"; {listed(thin)} hold{'s' if len(thin) == 1 else ''} far fewer {noun} than a typical month ({typical:,}) and look{'s' if len(thin) == 1 else ''} incomplete"
+    return text
 
 
 def _twin_figures(a: Sequence[Movement], b: Sequence[Movement]) -> bool:
@@ -1716,9 +1730,23 @@ def _latest_covered(present: Sequence[tuple[int, int]], counts: Mapping[tuple[in
     return present[-1]
 
 
-def _points(months: Sequence[Mapping[str, Any]], index: int, aggregate: str, years: Sequence[int], value_key: str | None = None) -> tuple[Point, ...]:
-    """The monthly series of one measure over the compared years and whatever follows them."""
+def _earliest_year(comparisons: Sequence[Comparison]) -> int | None:
+    """The first year any comparison names, so the series kept for the page and the checks reaches back to it."""
+    years: list[int] = []
+    for comparison in comparisons:
+        for period in (comparison.before, comparison.after):
+            if period.get("year") is not None:
+                years.append(int(period["year"]))
+            elif period.get("start"):
+                years.append(int(str(period["start"])[:4]))
+    return min(years) if years else None
+
+
+def _points(months: Sequence[Mapping[str, Any]], index: int, aggregate: str, years: Sequence[int], value_key: str | None = None, *, first: int | None = None) -> tuple[Point, ...]:
+    """The monthly series of one measure over the compared years and whatever follows them; ``first``, the earliest year a comparison names, is reached back to when it lies before them (a question about July 2026 when the data runs to 2028)."""
     start = int(years[-2]) if len(years) >= 2 else (int(years[0]) if years else 0)
+    if first is not None and first < start:
+        start = int(first)
     key = value_key or f"v{index}"
     points: list[Point] = []
     for row in months:
