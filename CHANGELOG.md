@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added
+
+- `verified_task` accepts optional `reconcile_lm` and `reconcile_max_turns`.
+  Omitted overrides inherit the initial solver's settings. `VerifiedResult`
+  exposes selected-attempt and reconciliation/fallback provenance without
+  changing existing verdict strings.
+
+### Fixed
+
+- Fabric setup now uses dependency-resolved installation and session restart;
+  analytics guidance no longer incorrectly requires the DSPy engine. Nested-model
+  examples distinguish worker-serializable specs from DSPy's host-side LM objects.
+- Documentation clarifies that printed source rows may reach the model provider,
+  network blocking is not OS isolation, and notebook credential providers are
+  not transferred to ordinary worker-bound semantic-model handles.
+- Verified-task helpers are included in the package's public export list.
+
+- Skill documentation now covers all twelve bundled playbooks, actual defaults,
+  loading versus activation, and verifier limitations. The authoring template
+  is executable and tested. Card prompt wording no longer incorrectly implies
+  explicitly selected skill verifiers are inactive; runtime selection is unchanged.
+
+- Typed `outputs` mappings in `verified_task` now select their first field name
+  when `field_name` is omitted instead of raising `KeyError: 0` (#86). Empty
+  outputs and undeclared comparison fields fail before any model calls.
+
 ## 0.6.3 — 2026-09-14 — scalar answers serialize the same way on every path
 
 ### Fixed

@@ -14,6 +14,15 @@ calculate results, and write new artifacts. Output contracts and validators
 decide whether the work is accepted. Failed checks go back into the run for
 another attempt.
 
+For read-only analytical questions, [`verified_task`](docs/verified-task.md)
+can compare two independent solves and optionally use a different model to
+reconcile disagreement. Agreement is not a correctness guarantee.
+
+The [API reference](docs/api-reference.md) explains every argument, its default,
+when to use it, and engine-specific limits. See the
+[argument test matrix](docs/api-argument-tests.md) for data-backed verification
+and remaining environment-specific gaps.
+
 The runtime uses a CPython subprocess inside the notebook session. pandas,
 DuckDB, Polars, openpyxl, PyMuPDF, and other installed packages remain
 available. Large files stay on disk. The model sees previews, summaries, and
@@ -76,9 +85,10 @@ LiteLLM.
 A CSV with 1.57 million rows cannot be placed in a model prompt. The `File`
 input passes its Lakehouse path into the Python worker instead. The model can
 write DuckDB, Polars, or pandas code to inspect the schema, filter rows, and
-calculate aggregates. Only bounded execution feedback, such as schema details,
-previews, aggregates, and errors, enters the next model call. The raw dataset
-does not enter the model prompt.
+calculate aggregates. Files are not automatically embedded in the prompt.
+Execution feedback is size-bounded, not content-redacted: generated code can
+print raw source rows, and that output can reach the configured model provider.
+Choose appropriate sources, permissions, and provider data-handling policies.
 
 This pattern also works with wide Excel workbooks, Parquet files, JSONL
 streams, PDFs, and combinations of those sources. File size is constrained by
@@ -122,9 +132,8 @@ tabular engine, Delta reads honor the transaction log, file processing runs in
 Python, and generated artifacts can be written back to `Files/` without giving
 the isolated worker OneLake credentials.
 
-In Fabric Jupyter runtimes where SemPy's automatic token service is
-unavailable, opt into refreshable user-identity authentication without moving
-the token into the worker payload:
+For parent-notebook calls where SemPy's automatic token service is unavailable,
+opt into refreshable user-identity authentication:
 
 ```python
 model = SemanticModel(
@@ -134,8 +143,12 @@ model = SemanticModel(
 )
 ```
 
-This calls `notebookutils.credentials.getToken("pbi")` in the process that
-uses the model. The token itself is never serialized.
+This calls `notebookutils.credentials.getToken("pbi")` in the parent process.
+Neither the token nor the `credential_provider` setting is serialized into a
+task-bound worker handle. Ordinary worker-side semantic-model queries still
+require working SemPy automatic authentication. Use parent-side registered
+operations or trusted host tools for this credential-provider path; successful
+parent access alone does not establish that worker queries will authenticate.
 
 Learn a reusable, source-bound package when the same approved sources support
 multiple tasks:
@@ -892,18 +905,25 @@ optionally routed to a cheaper `sub_lm=`.
 | `"dspy"` | Delegates to `dspy.predict.RLM` with the subprocess as its backend | You want dspy-native composability or `tools=`. |
 | `"adaptive"` | Escalates compute (more turns, then higher reasoning effort, then best-of-N, then a stronger LM) when a validator rejects an attempt | Hard, verifiable tasks. Experimental (opt-in `UserWarning`). |
 
-The default `core` skill carries a PLAN / VERIFY / REFLECT contract: plan before
-running code, self-check before SUBMIT, and carry prior-attempt failures into
-retries. It is on by default. Set `FABRIC_RLM_PVR=0` to turn it off for
-token-sensitive batch runs on trivial tasks.
+When loaded, the `core` skill supplies PLAN / VERIFY / prior-attempt-feedback
+guidance. No skill loads in an otherwise default run; enabling the router selects
+`core` as its default baseline. `FABRIC_RLM_PVR=0` removes selected planning
+clauses from the loaded body, not the skill itself; `FABRIC_RLM_PVR_MODE` takes
+precedence.
 
 ## Skills
 
 Skills are Markdown playbooks that tell the model how to do a kind of work
 properly: which library to reach for, the traps to avoid, and what to check
-before submitting. Eleven ship with the package. Name the ones a task needs and
-they are prepended to the prompt. The keyword router can also select them from
-the task and input names.
+before submitting. Twelve ship with the package, but none are selected by default.
+Name the ones a task needs and they are prepended to the prompt. When
+`enable_router=True`, a keyword heuristic can select skills from bound input
+values, falling back to task text when there are no input matches.
+
+Start with the [Skills Guide](docs/skills-guide.md) for the complete catalog,
+defaults, loading versus activation, best practices, and a tested authoring
+example. The [API reference](docs/api-reference.md#skills-and-routing) covers
+individual controls and engine limits.
 
 ```python
 from fabric_rlm import RLM, File, FabricLM
@@ -913,28 +933,31 @@ rlm = RLM.task(
     inputs={"workbook": File("/lakehouse/default/Files/finance/q3.xlsx")},
     outputs=["answer"],
     lm=FabricLM("gpt-5.1"),
-    skills=["excel_modify", "data_exploration"],   # load as many as the task needs
+    skills=["excel_modify", "data_exploration"],   # start with a small, relevant set
 )
 print(rlm.run().answer)
 ```
 
 | Skill | What it covers |
 |---|---|
+| `analytical_integrity` | Guidance for rankings, grain, materiality, provenance and reconciliation; distinct from the runtime flag |
 | `excel_modify` | Editing `.xlsx` in place with openpyxl: writing computed values rather than formula strings, merged-cell anchors, target-range discipline, verifying by reloading |
 | `excel_extract` | Reading workbooks: locating real header rows, multi-table sheets, formula versus cached value, pulling structured records out of messy layouts |
-| `data_exploration` | Files too large for context: DuckDB and Polars over CSV, Parquet and JSONL, aggregating in code so raw rows never reach the prompt |
+| `data_exploration` | Files too large for context: DuckDB and Polars over CSV, Parquet and JSONL, preferring bounded aggregates instead of printing raw rows |
 | `delta_lakehouse` | Read-only Delta table discovery and analysis through mounted Lakehouse paths or OneLake `abfss://` paths |
 | `deep_insight_discovery` | Source-agnostic search for trends, cohorts, interactions, anomalies, and decision-grade findings with executable numeric evidence |
 | `deep_insight_critic` | Adversarial review of audited findings, alternative explanations, action readiness, and required follow-up evidence |
 | `pdf_document_analysis` | Long documents with PyMuPDF: page enumeration, chunking, and per-chunk extraction |
 | `semantic_model` | Power BI semantic model discovery, measure selection, DAX queries, and result validation |
-| `core` | The PLAN / VERIFY / REFLECT contract applied to every run |
+| `core` | Planning, verification, and prior-attempt-feedback guidance when loaded |
 | `validation` | Checking an answer against the task's constraints before submitting |
 | `error_handling` | What to do when a turn raises, so the next turn fixes rather than repeats |
 
-The eight domain skills are keyword-routed. For example, `data_exploration`
-activates when a task or input name mentions logs or CSV files. The core and
-utility skills provide planning, validation, and error recovery.
+With routing enabled, the eight domain skills can compete for keyword-ranked
+selection; mentioning logs or CSV is a signal for `data_exploration`, not a
+guarantee of activation. Core and utility skills provide planning, validation,
+and error recovery when selected. Utility classification alone does not load
+a skill or show its card.
 
 ### Writing your own
 
@@ -943,7 +966,7 @@ notebook can read, including Lakehouse `Files`, and point a `SkillLoader` at tha
 folder:
 
 ```python
-from fabric_rlm import RLM, SkillLoader, FabricLM
+from fabric_rlm import RLM, File, SkillLoader, FabricLM
 
 loader = SkillLoader(skill_dir="/lakehouse/default/Files/skills")
 print(loader.list_skills())        # your skills plus the bundled ones
@@ -971,7 +994,7 @@ measurements behind them are thinner than a default install should carry. Point 
 loader at the folder to use one:
 
 ```python
-from fabric_rlm import RLM, File, SkillLoader
+from fabric_rlm import RLM, File, SkillLoader, FabricLM
 
 loader = SkillLoader(skill_dir="contrib-skills")
 
@@ -981,6 +1004,7 @@ rlm = RLM.task(
     outputs=["answer"],
     skill_loader=loader,
     skills=["pdf_document_analysis", "financial_documents"],
+    lm=FabricLM("gpt-5.1"),
 )
 ```
 

@@ -1,7 +1,13 @@
 """verified_task: blind double-solve with structural agreement and reconciliation."""
 from __future__ import annotations
 
+from types import MappingProxyType
+from unittest.mock import patch
+
+import pytest
+
 import fabric_rlm.runtime as runtime_module
+import fabric_rlm.verify as verify_module
 from fabric_rlm.verify import VerifiedResult, answers_agree, verified_task
 
 
@@ -80,6 +86,11 @@ def test_agreement_stops_at_two_solves(monkeypatch):
     assert len(vr.attempts) == 2
     assert lm.calls == 2                       # no reconciler consumed
     assert vr.total_prompt_tokens == 200       # billed across the ensemble
+    assert vr.selected_attempt_index == 0
+    assert not vr.reconciliation_attempted
+    assert not vr.reconciliation_succeeded
+    assert not vr.fallback_used
+    assert vr.reconciliation_reason is None
 
 
 def test_disagreement_runs_reconciler_and_wins(monkeypatch):
@@ -90,6 +101,10 @@ def test_disagreement_runs_reconciler_and_wins(monkeypatch):
     assert vr.result.payload["answer"] == "9"
     assert len(vr.attempts) == 3
     assert vr.answer_a == "7" and vr.answer_b == "9"
+    assert vr.reconciliation_succeeded
+    assert vr.selected_attempt_index == 2
+    assert not vr.fallback_used
+    assert vr.reconciliation_reason == "disagreement"
 
 
 def test_empty_reconciler_falls_back_to_candidates(monkeypatch):
@@ -101,6 +116,137 @@ def test_empty_reconciler_falls_back_to_candidates(monkeypatch):
     vr = verified_task("How many?", outputs=["answer"], lm=lm, max_turns=2, timeout=5)
     assert vr.verdict == "reconciled"
     assert vr.result.payload["answer"] == "7"  # falls back to candidate A
+    assert vr.fallback_used
+    assert vr.selected_attempt_index == 0
+    assert vr.reconciliation_attempted
+    assert not vr.reconciliation_succeeded
+
+
+def test_agreement_never_calls_strong_reconciler(monkeypatch):
+    _wire(monkeypatch, [{"answer": "42"}, {"answer": "42"}])
+    lm = ScriptedLM([CODE, CODE])
+    strong = ScriptedLM([])
+    vr = verified_task(
+        "How many?", outputs=["answer"], lm=lm, max_turns=2,
+        reconcile_lm=strong, reconcile_max_turns=4,
+    )
+    assert vr.verdict == "agree"
+    assert len(vr.attempts) == 2
+    assert lm.calls == 2 and strong.calls == 0
+
+
+def test_strong_reconciler_overrides_only_third_solve(monkeypatch):
+    _wire(monkeypatch, [{"answer": "7"}, {"answer": "9"}, {"answer": "11"}])
+    lm = ScriptedLM([CODE, CODE])
+    strong = RecordingLM([CODE])
+    inputs = {"data": [7, 9, 11]}
+    outputs = {"answer": str}
+    validated = []
+    validated_context = []
+
+    def validate(payload):
+        validated.append(payload["answer"])
+
+    def validate_context(payload, context):
+        validated_context.append(payload["answer"])
+
+    settings = dict(
+        lm=lm, max_turns=2, timeout=5, output_validator=validate,
+        output_validator_context=validate_context,
+    )
+    with patch.object(verify_module.RLM, "from_task", wraps=verify_module.RLM.from_task) as factory:
+        vr = verified_task(
+            "How many?", outputs=outputs, inputs=inputs,
+            reconcile_lm=strong, reconcile_max_turns=4, **settings,
+        )
+    assert vr.verdict == "reconciled"
+    assert vr.result is vr.attempts[2]
+    assert vr.result.payload["answer"] == "11"
+    assert lm.calls == 2 and strong.calls == 1
+    assert validated == validated_context == ["7", "9", "11"]
+    assert len(factory.call_args_list) == 3
+    for index, call in enumerate(factory.call_args_list):
+        expected = dict(settings, outputs=outputs, inputs=inputs)
+        if index == 2:
+            expected.update(lm=strong, max_turns=4)
+        else:
+            assert call.args == ("How many?",)
+        assert call.kwargs == expected
+        assert call.kwargs["inputs"] is inputs
+        assert call.kwargs["outputs"] is outputs
+    assert any("Analyst 1 answered: 7" in text and "Analyst 2 answered: 9" in text
+               for text in strong.seen)
+
+
+@pytest.mark.parametrize("base_turns,override", [(None, None), (2, None), (2, 1), (2, 3)])
+@pytest.mark.parametrize("separate_lm", [False, True])
+def test_reconciler_turn_budget_and_fallback(monkeypatch, base_turns, override, separate_lm):
+    turns = override if override is not None else (base_turns if base_turns is not None else 20)
+    _wire(monkeypatch, [{"answer": "7"}, {"answer": "9"}] + [{"answer": ""}] * turns)
+    lm = ScriptedLM([CODE] * (2 if separate_lm else 2 + turns))
+    strong = ScriptedLM([CODE] * turns) if separate_lm else None
+    kwargs = {} if base_turns is None else {"max_turns": base_turns}
+    vr = verified_task(
+        "How many?", outputs=["answer"], lm=lm, reconcile_lm=strong,
+        reconcile_max_turns=override, **kwargs,
+    )
+    assert vr.verdict == "reconciled"
+    assert vr.result is vr.attempts[0]
+    assert len(vr.attempts) == 3
+    assert lm.calls == (2 if separate_lm else 2 + turns)
+    if strong is not None:
+        assert strong.calls == turns
+
+
+@pytest.mark.parametrize("field_name,verdict", [(None, "agree"), ("other", "reconciled")])
+def test_typed_mapping_selects_first_field_or_explicit_field(monkeypatch, field_name, verdict):
+    _wire(monkeypatch, [
+        {"count": 42, "other": "7"}, {"count": 42, "other": "9"},
+        {"count": 42, "other": "11"},
+    ])
+    lm = ScriptedLM([CODE] * 3)
+    vr = verified_task(
+        "How many?", outputs=MappingProxyType({"count": int, "other": str}),
+        field_name=field_name, lm=lm, max_turns=1,
+    )
+    assert vr.verdict == verdict
+    assert vr.answer_a == ("42" if field_name is None else "7")
+    assert vr.result.payload["count"] == 42
+    assert lm.calls == (2 if field_name is None else 3)
+
+
+@pytest.mark.parametrize("outputs", [[], {}, MappingProxyType({})])
+def test_empty_outputs_fail_before_solving(monkeypatch, outputs):
+    tasks = _stub_solves(monkeypatch, [])
+    with pytest.raises(ValueError, match="outputs must contain at least one field name"):
+        verified_task("How many?", outputs=outputs, field_name="answer")
+    assert tasks == []
+
+
+@pytest.mark.parametrize("outputs", [["answer"], {"answer": str}])
+@pytest.mark.parametrize("field_name", ["missing", ""])
+def test_unknown_field_fails_before_solving(monkeypatch, outputs, field_name):
+    tasks = _stub_solves(monkeypatch, [])
+    with pytest.raises(ValueError, match="not declared in outputs"):
+        verified_task("Question", outputs=outputs, field_name=field_name)
+    assert tasks == []
+
+
+def test_typed_output_default_still_repairs_wrong_type(monkeypatch):
+    _wire(monkeypatch, [{"answer": 42}, {"answer": "42"}, {"answer": "42"}])
+    lm = ScriptedLM([CODE] * 3)
+    vr = verified_task("Answer as text.", outputs={"answer": str}, lm=lm, max_turns=2)
+    assert vr.verdict == "agree"
+    assert vr.result.payload == {"answer": "42"}
+    assert lm.calls == 3
+
+
+@pytest.mark.parametrize("turns", [0, -1, 1.5, "2", True, False])
+def test_invalid_reconcile_turn_budget_fails_before_solving(monkeypatch, turns):
+    tasks = _stub_solves(monkeypatch, [])
+    with pytest.raises(ValueError, match="reconcile_max_turns must be a positive integer"):
+        verified_task("How many?", outputs=["answer"], reconcile_max_turns=turns)
+    assert tasks == []
 
 
 # ---------------------------------------------------------- agreement logic --
@@ -161,6 +307,11 @@ def test_sign_flip_reconciles(monkeypatch):
     assert vr.verdict == "reconciled"
     assert vr.result.payload["answer"] == "-10"
     assert len(vr.attempts) == 3
+    assert vr.reconciliation_attempted
+    assert vr.reconciliation_succeeded
+    assert not vr.fallback_used
+    assert vr.selected_attempt_index == 2
+    assert vr.reconciliation_reason == "disagreement"
 
 
 class RecordingLM(ScriptedLM):
@@ -277,3 +428,7 @@ def test_reconciler_failure_falls_back_to_a_usable_candidate(monkeypatch):
     ])
     vr = verified_task("How many?", outputs=["answer"])
     assert vr.verdict == "reconciled" and vr.result is usable
+    assert vr.fallback_used
+    assert vr.selected_attempt_index == 1
+    assert not vr.reconciliation_succeeded
+    assert vr.reconciliation_reason == "unavailable_answer"

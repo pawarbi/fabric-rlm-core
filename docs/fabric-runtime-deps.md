@@ -1,102 +1,112 @@
-# Fabric notebook setup — installing fabric_rlm + dspy reliably
+# Fabric notebook setup and dependency troubleshooting
 
-If your Fabric notebook fails at import time with errors like:
-- `ImportError: cannot import name 'Sentinel' from 'typing_extensions'`
-- `ImportError: cannot import name 'Query' from 'yarl'`
-- `ModuleNotFoundError: aiohttp.ConnectionTimeoutError`
+Import errors involving `typing_extensions.Sentinel`, `yarl.Query`, or
+`aiohttp.ConnectionTimeoutError` can stem from incompatible dependency versions,
+mixed package locations, or modules loaded before an installation. They are not
+proof that a particular kernel is running or that the kernel is broken.
 
-…you are running on the **Synapse PySpark** kernel (Python 3.11) whose pre-installed
-`cluster-env` ships old versions of `pydantic`, `aiohttp`, `yarl`, and `typing_extensions`.
-A fresh `pip install dspy>=3.x` pulls newer transitive deps that conflict with that frozen
-environment, and the kernel crashes before the first user cell ever runs. There is **no
-reliable way** to overwrite the cluster-env packages from a notebook subprocess — `pip
---target=…` either silently no-ops or hot-swaps a partially-loaded module and corrupts the
-kernel.
+## 1. Select the runtime in Fabric
 
-## Recipe — use the Python 3.12 (`jupyter_python`) kernel
+Python 3.12 is recommended for the current documented notebook workflow. Select
+the Python runtime through the Fabric notebook UI, subject to the options in
+your workspace. This is not a guarantee of a clean dependency environment or
+compatibility with every Fabric runtime; the package's supported Python versions
+and dependency constraints are declared in [pyproject.toml](../pyproject.toml).
 
-Fabric exposes a second kernel — **Python 3.12 / `jupyter_python`** — whose pip is clean
-and behaves like a normal Python environment. Switch your notebook to it and the entire
-cascade goes away.
+Imported notebooks may contain hardcoded kernel or runtime metadata. Check the
+selected runtime in the UI after import rather than assuming that metadata
+selects an available kernel. No manual notebook or per-cell metadata editing is
+needed for this setup. Attach a default lakehouse through the UI if using the
+lakehouse paths below.
 
-### 1. Notebook metadata (top of `.ipynb`)
+## 2. Install with normal dependency resolution
 
-```json
-"metadata": {
-    "kernelspec":  {"display_name": "Python 3.12", "language": "python", "name": "python3.12"},
-    "language_info": {"name": "python", "version": "3.12"},
-    "kernel_info":   {"name": "jupyter", "jupyter_kernel_name": "python3.12"},
-    "microsoft": {"language": "python", "language_group": "jupyter_python"},
-    "dependencies": {"lakehouse": {"default_lakehouse": "<LH_ID>",
-                                   "default_lakehouse_name": "<LH_NAME>",
-                                   "default_lakehouse_workspace_id": "<WS_ID>"}}
-}
-```
-
-### 2. Per-cell metadata (every cell)
-
-```json
-{"language": "python", "language_group": "jupyter_python"}
-```
-
-### 3. First code cell — install via `%pip` magic (NOT `subprocess.pip`)
+Run this in a notebook cell before importing the package:
 
 ```python
-%pip uninstall -y pathlib 2>/dev/null || true
-%pip install -q --no-deps --force-reinstall "/lakehouse/default/Files/.../fabric_rlm-X.Y.Z-py3-none-any.whl"
-%pip install -q "dspy>=3.0.4"
+%pip install "fabric-rlm[analytics]"
 ```
 
-`%pip` runs in the kernel's own pip, so the new packages are picked up immediately. No
-`sys.modules.pop` + reload trickery is needed.
-
-### 4. Use `engine="dspy"` for data-analysis tasks
-
-`engine="default"` does not provide pandas/duckdb-aware skills out of the box. For any
-task that needs to read CSV/parquet, use `engine="dspy"` and pass
-`skills=["data_exploration"]`:
+Alternatively, upload a release wheel to your lakehouse and install it with its
+analytics extra. Replace the example path and version with your actual wheel:
 
 ```python
-from fabric_rlm import RLM, FabricLM
+%pip install "/lakehouse/default/Files/wheels/fabric_rlm-X.Y.Z-py3-none-any.whl[analytics]"
+```
 
-base_lm = FabricLM("gpt-5.1", reasoning_effort="medium", max_tokens=16000)
-rlm = RLM(
-    signature="question -> answer",
-    lm=base_lm,
-    engine="dspy",
+Use one installation route, not both. Let pip resolve the package's declared
+dependencies, including the DSPy compatibility bounds. The source of truth is
+[pyproject.toml](../pyproject.toml), with release-specific constraints carried in
+the installed wheel's metadata; do not separately install an unconstrained DSPy
+version or bypass dependency resolution. The analytics extra supplies the
+data-analysis libraries used by the example.
+
+**Restart the Python session after installation, before running the remaining
+cells.** A restart is mandatory if affected modules were already imported:
+`%pip` does not reload them. Use Fabric's session restart control, then rerun
+imports and setup cells, not the installation cell. Do not try to repair a
+running session by removing entries from `sys.modules`, hot-reloading dependency
+chains, or overwriting managed runtime package directories.
+
+If imports still fail after a restart, inspect the full traceback, installed
+versions, and package locations. `%pip check` can identify declared dependency
+conflicts, but a successful check does not establish that imports or live model
+calls work. Resolve conflicts in the notebook's configured environment rather
+than blindly uninstalling managed packages or repeatedly forcing reinstalls.
+
+## 3. Run a data-analysis task
+
+Both `engine="default"` and `engine="dspy"` can analyze CSV and Parquet files
+through the Python subprocess when the required libraries and files are
+available. Start with `engine="auto"`: it selects `"dspy"` when a non-empty
+`tools=[...]` is supplied and `"default"` otherwise. Passing
+`skills=["data_exploration"]` alone does not require the DSPy engine.
+
+Upload a CSV named `sales.csv` to the default lakehouse's `Files` area, then run
+the following cell after restarting. Change `data_path` for another CSV or
+Parquet file accessible to the notebook and worker.
+
+```python
+from fabric_rlm import FabricLM, File, RLM
+
+data_path = "/lakehouse/default/Files/sales.csv"
+lm = FabricLM("gpt-5.1", reasoning_effort="medium", max_tokens=16000)
+rlm = RLM.task(
+    task=(
+        "Inspect the supplied data file. Report its row count, column names, "
+        "missing-value counts, and a concise summary grounded in the data."
+    ),
+    inputs={"data_file": File(data_path)},
+    outputs=["answer"],
+    lm=lm,
+    engine="auto",
     skills=["data_exploration"],
     max_turns=8,
     timeout=300.0,
 )
-result = rlm.run({"question": "..."})
+result = rlm()
+print(result.payload)
 ```
 
-> Note: `engine="auto"` (the default since 0.2.x) routes to `"dspy"` only
-> when a non-empty `tools=[...]` iterable is supplied. Passing
-> `skills=["data_exploration"]` alone keeps you on `"default"`, so set
-> `engine="dspy"` explicitly here.
+`FabricLM` uses the notebook's Fabric identity and requires access to Fabric's
+AI endpoint. Confirm model availability for your region and workspace against
+the [Fabric AI services model list](https://learn.microsoft.com/en-us/fabric/data-science/ai-services/ai-services-overview#consumption-rate).
+The explicit reasoning effort and token budget above are a starting point for
+this model, not settings supported by every provider or model. Adjust them when
+changing models. `cache=False` is an optional LM setting, not a prohibited Fabric
+kernel configuration or a dependency fix.
 
-### Reference notebook
+## Examples and benchmark reproduction
 
-`examples/notebooks/rlm_spark_log_root_cause.ipynb` is a ready-to-import working
-example: it runs an RLM over a large Spark log to find a failure's root cause
-without any of the dependency cascades above.
+- [Spark log root-cause notebook](../examples/notebooks/rlm_spark_log_root_cause.ipynb): a log-analysis example. Review its setup, file paths, and model before running; importing it does not guarantee dependency compatibility.
+- [SpreadsheetBench 400 OpenRouter/MLflow notebook](../benchmarks/notebooks/spreadsheetbench_400_openrouter_minimax_mlflow.ipynb): configure its provider credentials, dataset, and logging settings for your run.
+- [SpreadsheetBench MiniMax M3 Fabric reproduction](../benchmarks/notebooks/ssb400_minimax_m3_fabric_repro.ipynb): review the notebook's installation and reproduction prerequisites before execution.
 
-## Don't do this
+General examples live under `examples/notebooks/*.ipynb`; benchmark reproduction
+notebooks live under `benchmarks/notebooks/*.ipynb`. These tracked notebooks are
+starting points, not guarantees of runtime compatibility, model availability,
+or identical benchmark results.
 
-- Avoid: `subprocess.check_call(["pip","install","dspy>=3.0.4"])` from inside a Synapse PySpark
-  cell — the install pulls newer pydantic-core that needs `typing_extensions.Sentinel`
-  which the Synapse cluster-env doesn't have.
-- Avoid: `pip install --target=<cluster-env site-packages>` to "patch" a single dep — works
-  for one package but the next transitive dep (aiohttp → yarl → multidict → ...) hits the
-  same wall. Whack-a-mole.
-- Avoid: `cache=False` on `FabricLM` — known to interact badly with the DSPy engine on the
-  jupyter_python kernel; omit it.
-
-## Reproducible benchmark notebooks
-
-The `examples/notebooks/` directory ships ready-to-import Fabric notebooks that
-follow the recipe above — including the SpreadsheetBench runs
-(`spreadsheetbench_400_openrouter_minimax_mlflow.ipynb` and
-`ssb400_minimax_m3_fabric_repro.ipynb`). Import one and adjust the model and
-dataset cells for your run.
+See the [Test Drive Guide](../QUICKSTART.md) for general usage and provider setup.
+Use this page for Fabric installation and restart guidance; neither guide
+guarantees that a particular managed environment or live provider will work.

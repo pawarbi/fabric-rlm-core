@@ -1,183 +1,228 @@
-# Playbook Contract
+# Authoring Skills
 
-> **Authoring a new skill?** Start from `SKILL_TEMPLATE.md`.
+A skill is a Markdown playbook loaded by `fabric_rlm.skill_loader.SkillLoader`.
+Write concise task guidance, define the expected outputs, and optionally add a
+verifier for checks you can actually justify. The loader does not require a
+fixed list or order of prose sections. A skill without a verifier can still be
+loaded and activated; it simply contributes no submission checks.
 
-> Skills MUST follow this contract. The fabric-rlm runtime expects every skill
-> to include the sections defined here, in this order, using exactly these
-> heading names. The reflect-before-submit turn relies on each playbook
-> exposing concrete invariants and a runnable verifier — generic checklists
-> are not enough to catch wrong math, only field-level definitions and
-> invariants are.
+Start with [skill-template.md](skill-template.md), a working `csv_summary`
+example, not an unfinished stub. It lives under `docs/`, so it is **not a
+bundled skill**. For your own application, copy it into a custom skills directory
+and rename it `csv_summary.md` (or choose your own filename and update the title,
+metadata, contract, and tests). Keep unrelated documentation out of that directory:
+the loader discovers every immediate `*.md` file with a safe name, not just files
+that follow this suggested layout.
 
-Every skill file under `fabric_rlm/skills/` (excluding this contract document
-itself) MUST contain the six top-level sections shown below in the order
-listed. The contract test (`tests/test_playbook_contract.py`) checks the
-headings are present.
+## Names and Loading
 
-## Frontmatter (Track 5″)
+The filename stem is the skill's identity, not its Markdown title. Safe names
+start with an ASCII letter or digit and contain only ASCII letters, digits,
+underscores, and hyphens. `load("csv_summary")` and `load("csv_summary.md")` both
+work; paths such as `../csv_summary` do not.
 
-Each skill SHOULD begin with a YAML frontmatter block delimited by `---`
-lines. The block is consumed by the SkillRouter (see `skill_router.py`) to
-decide whether the skill is preloaded into the system prompt, presented as
-a card, or omitted entirely. Defaults are applied when fields are missing,
-so the block is technically optional — but unannotated skills will only ever
-be matched alphabetically as a fallback.
+Pass your custom loader to the runtime explicitly. For example, after placing
+your authored file in `my_skills/csv_summary.md`, use this configuration with
+your configured `lm` and input CSV:
+
+```python
+from fabric_rlm import RLM
+from fabric_rlm.skill_loader import SkillLoader
+
+loader = SkillLoader(skill_dir="my_skills")
+rlm = RLM.from_task(
+    "Count CSV records in csv_path and sum the amount column using csv_summary.",
+    outputs={"summary": dict},
+    lm=lm,
+    skills=["csv_summary"],
+    skill_loader=loader,
+    enable_router=False,
+    enable_verifier=True,
+)
+result = rlm.run(inputs={"csv_path": "data/amounts.csv"})
+```
+
+Custom directories layer over packaged skills by default. A custom file wins
+over a packaged file of the same name; with multiple directories, the last
+directory wins. Use `include_packaged=False` with a custom directory for an
+isolated collection. Dependencies are included by `compose_skills` by default,
+or by `load_text(..., include_dependencies=True)`; `load()` alone does not expand
+them. Composition detects dependency cycles.
+
+This example directly selects the skill so its extracted verifier runs on
+submission with verification enabled. With routing enabled, verification also
+depends on activation. Do not assume that worker-side `load_skill()` or
+`list_skills()` discovers your custom directory: those convenience functions
+construct a default, packaged loader. Nor does merely reading Markdown register
+a verifier with the runtime.
+
+## Metadata That Is Parsed
+
+Put optional YAML frontmatter at the very start of the file, between `---`
+lines. Follow it immediately with a title, an explicit `Summary:`, and, if
+needed, a legacy `Dependencies:` line. The loader examines only the first 20
+body lines for these metadata lines; prose is not used to invent a summary.
 
 ```yaml
 ---
 applies_when:
-  keywords: ["invoice reconciliation", "variance analysis"]
-  output_fields: ["reconciled_total", "unmatched_items"]
+  keywords: ["csvsummary", "csv summary"]
+  output_fields: []
 excludes: []
-depends_on: ["core"]
-specificity: domain        # one of: core | domain | utility
+depends_on: []
+specificity: domain
 ---
 ```
 
-- `applies_when.keywords` — lowercased substrings the router looks for in
-  the question text. Each match contributes weight 2 to the skill's score.
-- `applies_when.output_fields` — output keys that, when present in the
-  question, contribute weight 1 to the skill's score.
-- `excludes` — list of skill names that conflict with this one and must not
-  be co-loaded with it.
-- `depends_on` — list of skill names whose bodies should also be loaded
-  whenever this skill is. Falls back to the legacy `Dependencies:` line if
-  the frontmatter is absent.
-- `specificity` — `core` skills are always-on (e.g. `core.md`), `utility`
-  skills (e.g. `validation`, `error_handling`) are presented as cards by
-  default, `domain` skills (the bulk) participate in keyword routing.
-- `verifier_present` is **auto-derived**: true when `## Required verifier`
-  contains a runnable Python `verify(payload)` block. Authors do not set it.
+- `applies_when.keywords`: case-insensitive question substrings; each match
+  contributes 2 points to automatic routing.
+- `applies_when.output_fields`: each exact match contributes 1 point, but the
+  question extractor only recognizes tokens matching `[A-Z][A-Za-z]?\d+`, such
+  as `Q1`, `Q23`, or `A1`. It is not a general output-schema parser; a field like
+  `summary` does not score through this heuristic. Use keywords for this example.
+- `depends_on`: a **nonempty normalized** frontmatter value takes precedence
+  over legacy `Dependencies:`. Empty, absent, or unusable values fall back to the
+  legacy line, even when frontmatter exists. To declare no dependencies, use
+  `depends_on: []` and omit the legacy line or set it to `Dependencies: none`.
+- `excludes`: advisory, directional exclusions during automatic ranking, not
+  a safety gate. Already-active skills' exclusions block later ranked candidates;
+  a candidate's own exclusions do not retroactively remove earlier selections.
+  Baseline selection, explicit selection, dependency expansion, and direct
+  composition do not enforce a universal mutual-exclusion rule.
+- `specificity`: optional, defaults to `domain`; recognized values are `core`,
+  `domain`, and `utility`. Unknown values warn and fall back to `domain`. The
+  router defaults to a `core` baseline unless its baseline is explicitly
+  overridden; candidate-specificity filters can further restrict ranking.
+  Utilities are not inherently card-only. Cards are ranked but inactive
+  candidates, with utilities having extracted verifiers ordered first.
+- `verifier_present`: derived from nonempty extracted source, not an author-set
+  flag and not proof that the source compiles or defines a working `verify`.
 
-## Required sections
+List-like metadata accepts lists/tuples or comma-separated strings; use YAML
+lists for clarity. If YAML parsing fails, produces a non-mapping, or PyYAML is
+unavailable, recognized frontmatter is removed from the body but its metadata
+is ignored. Legacy body metadata still applies. Without routing metadata, a
+skill can still be explicitly selected or loaded as a dependency; there is no
+automatic alphabetical fallback activation. Score ties preserve candidate order
+(the loader's discovery order is sorted).
 
-1. `## Purpose`
-   1 sentence (was: 1–3). When does this skill apply? What task class does
-   it solve? No procedural content here — just scope.
+## Suggested Layout
 
-2. `## Contract: output fields`
-   The operational definition of every required output key (was named
-   `## Output fields`). Nothing here may be left to model interpretation.
-   For each field provide:
-   - **name** (e.g. `Q2`)
-   - **type** (e.g. `int`, `str`)
-   - **exact definition**, citing the source (question prompt line, benchmark
-     spec, paper). Quote the prompt verbatim where possible.
-   - **canonical formula or procedure** for computing it.
+These are authoring suggestions, not runtime-mandatory headings:
 
-3. `## Required verifier`
-   A fenced ` ```python ` block (≈5–20 lines) defining
-   `verify(payload) -> None`. The function MUST raise `AssertionError(...)`
-   with a clear message on each invariant violation. The playbook MUST
-   instruct the model to call `verify(payload)` on its computed solution and
-   only emit `SUBMIT(...)` if it passes silently.
+- `## Purpose`: state the task class and when not to use the skill.
+- `## Contract: output fields`: name each output, its type, meaning, formula,
+  and source. Quote exact task wording when implementing a specific task; do not
+  invent a benchmark contract for a generic skill.
+- `## Required verifier`: optional executable checks, using the extraction
+  convention below if you include them.
+- `## Tripwires`: concrete mistakes to avoid, not invented incident histories.
+- `## Procedure`: short parse, compute, verify, and submit instructions where
+  useful. Add examples or invariants only when they clarify the contract.
 
-   **A skill without a runnable verifier is a *hint*, not a skill** — the
-   runtime will present it as a card only and will not reject SUBMITs on
-   its behalf.
+For verifier extraction, use the exact heading `## Required verifier` on its own
+line followed by a fenced block opened with exactly three backticks and
+`python`. The loader extracts the first such block after the heading, provided
+there is no intervening `## ` heading. Keep all imports and helpers required by
+`verify(payload)` inside that block. Other prose headings have no equivalent
+mandatory extraction contract.
 
-4. `## Tripwires`
-   3–5 bullets (was: 2–3 under `## Common failure modes`), each one sentence,
-   naming historically observed failures. Reference specific instance IDs /
-   runs where possible — concrete failures teach better than abstract
-   warnings.
+## Verifier Do and Don't
 
-5. `## Invariants`
-   A bullet list (or table) of every invariant the output must satisfy. Cover
-   ranges, signs, monotonicity, cross-field consistency, and format
-   constraints. Be concrete: "`Q2 >= 0`", not "Q2 should be reasonable". The
-   verifier from §3 should encode each of these.
+- **Do** define `verify(payload)` to return silently on success and raise
+  `AssertionError` with a field-specific repair message on a contract violation.
+- **Do** check container types and required/unexpected keys before indexing,
+  then check value types before arithmetic. Reject `bool` explicitly where an
+  integer or float is required: Python treats booleans as integers.
+- **Do** test empty inputs, zero, negative totals where allowed, non-finite
+  numbers, missing fields, extra fields, and malformed types independently.
+- **Do** distinguish structural checks from factual validation. The CSV example
+  checks shape and numeric bounds; it does not reopen the CSV or prove the
+  reported count and sum are true. Use an independent source-aware check when
+  that guarantee is needed.
+- **Don't** reject a structurally defined answer using an invented exact
+  formula or hard-coded expected total. Check only justified bounds unless
+  independent evidence supports equality.
+- **Don't** use `ValueError`, `KeyError`, `TypeError`, or a `NotImplementedError`
+  stub as the rejection mechanism. Non-assertion errors, timeouts, and other
+  verifier failures fail open: the runtime logs/skips the broken check rather
+  than rejecting the payload on its behalf. A returned `False` is not rejection
+  either. Catch expected parsing errors and explicitly raise `AssertionError`
+  when parsing is part of the verifier's contract.
+- **Don't** treat an extracted verifier, an activated skill, or even a passing
+  structural check as proof of task correctness. Also test known-correct answers
+  and deliberately wrong ones against the checks you actually claim to enforce.
 
-6. `## Procedure` *(optional but recommended-terse)*
-   The actual playbook steps (parse → solve → verify → submit). **Only fill
-   if the model genuinely needs procedural guidance** — leave terse, or omit
-   entirely if §2 + §3 + §4 are self-explanatory. Step-by-step tutorial prose
-   is the bloat the contract-first format is trying to remove. When present,
-   steps must reference the verifier from §3 explicitly.
+## Run the Example Locally
 
-## Notes for authors
-
-- Anything outside the required sections (additional `###` subsections
-  inside them, `## Example self-test`, `## Strict final format`, etc.) is
-  allowed but is not part of the contract. Add it only if it earns its
-  keep — duplication is the enemy of precision.
-- Keep the YAML-like metadata header (`# <name>`, `Summary:`, `Dependencies:`)
-  intact at the top of the file, **after** the frontmatter block — the skill
-  loader still parses those lines for back-compat. Frontmatter `depends_on`
-  takes precedence over the legacy `Dependencies:` line when both are
-  present.
-- If a definition is genuinely ambiguous (e.g. the prompt is under-specified),
-  state the assumption in §2 and make the §3 verifier *permissive* on that
-  field rather than wrong. A loose-but-correct invariant beats a tight wrong
-  one.
-
-## Third-party libraries
-
-Skills routinely need a library the package does not depend on — `python-docx`
-for Word, `python-pptx` for PowerPoint, `markitdown` for document conversion.
-Two things follow.
-
-**The sandbox cannot install anything.** `subprocess` and `pip` are blocked by
-the default `SecurityPolicy`, so a skill that opens with a runtime install
-wastes a turn and returns:
-
-```
-SecurityPolicyViolation: call to 'subprocess.run' is disabled because
-shell/subprocess execution bypasses the network and filesystem guardrails.
-```
-
-Install in the notebook environment instead, before the RLM runs, and say so in
-the skill so the model does not try:
+Run this Python self-test from the repository root in your project environment.
+It needs no model, worker, CSV file, or custom-directory copy. The loader name
+is `skill-template` here because the file still lives under its documentation
+filename. Execute only trusted authored verifier code; `exec` here is ordinary
+Python execution, not a sandbox.
 
 ```python
-%pip install python-docx
+from pathlib import Path
+from fabric_rlm.skill_loader import SkillLoader
+
+loader = SkillLoader(skill_dir=Path("docs"), include_packaged=False)
+skill = loader.load("skill-template")
+assert skill.title == "csv_summary"
+assert skill.summary
+assert skill.dependencies == ()
+assert skill.verifier_source is not None
+namespace = {}
+exec(skill.verifier_source, namespace)
+verify = namespace["verify"]
+
+valid = [
+    {"summary": {"row_count": 0, "total": 0}},
+    {"summary": {"row_count": 3, "total": 50}},
+    {"summary": {"row_count": 2, "total": -1.5}},
+]
+invalid = [
+    None,
+    {},
+    {"summary": []},
+    {"summary": {"row_count": 1}},
+    {"summary": {"row_count": 1, "total": 0, "extra": 1}},
+    {"summary": {"row_count": 1, "total": 0}, "extra": 1},
+    {"summary": {"row_count": -1, "total": 0}},
+    {"summary": {"row_count": 1.0, "total": 0}},
+    {"summary": {"row_count": True, "total": 0}},
+    {"summary": {"row_count": 1, "total": False}},
+    {"summary": {"row_count": 1, "total": "50"}},
+    {"summary": {"row_count": 1, "total": float("nan")}},
+    {"summary": {"row_count": 1, "total": float("inf")}},
+    {"summary": {"row_count": 1, "total": float("-inf")}},
+]
+for payload in valid:
+    verify(payload)
+for payload in invalid:
+    try:
+        verify(payload)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError(f"Invalid payload was accepted: {payload!r}")
+print(f"Passed {len(valid)} valid and {len(invalid)} invalid cases")
 ```
 
-**Degrade explicitly rather than assuming.** Have the skill probe once and
-branch, so a missing library produces a stated limitation instead of an empty
-result that reads like a real answer:
+Unexpected exception types deliberately escape this test: a `ValueError` is a
+broken verifier, not a successful rejection. These fixture values test the
+contract, not a particular CSV's truth, and the verifier does not pin a total.
 
-```python
-try:
-    from docx import Document
-    HAVE_DOCX = True
-except ImportError:
-    HAVE_DOCX = False
-```
+The companion regression command is `python -m pytest tests/test_skills_guide.py`.
+That test file is being added separately; until it is available, run the
+self-test above. Existing loader/router coverage can also be run with
+`python -m pytest tests/test_skill_loader_layering.py tests/test_skill_frontmatter.py tests/test_skill_router.py`.
 
-Where a standard-library path exists, give it. A `.docx` is a zip of XML, so
-reading one needs no dependency at all — only writing does. A skill that offers
-the fallback keeps working in environments where the install never happened.
+## Libraries and Permissions
 
-Do not relax `SecurityPolicy.forbidden_calls` to permit the install. That
-reopens network and filesystem access for LM-emitted code, which is a poor
-trade for a file-format reader.
-
-### Authoring rules (learned the hard way)
-
-> **Rule: quote question text verbatim.**
-> When defining output fields in §2, quote the question's exact wording in
-> a `>` blockquote. Do **not** paraphrase. Paraphrasing introduces drift
-> between what the playbook says and what the question asks. The B' MCM
-> playbook had this bug on `Q4` ("longest matched-paren span" instead of
-> the prompt's "longest distance between an opening and closing parentheses
-> in number of matrices"), causing `MCM_hard_3` to regress in the v2
-> signal pilot (`20260427-signal-pilot-mcm3-v2`).
-
-> **Rule: don't pin a value where the question doesn't.**
-> If a field's definition is structural (it depends on the shape of another
-> output, not a closed form over the inputs), the §3 verifier should check
-> **bounds** (range, type, sign) but NOT pin an exact formula. Reserve hard
-> equality invariants for fields the question explicitly defines as a
-> formula. Example: MCM `Q5 = (Q4 - Q3) * Q2` is question-pinned and safe
-> to assert as `==`. MCM `Q4` is structural (depends on `Q1`'s parse tree),
-> so the verifier asserts only `0 <= Q4 <= n`. A wrong tight invariant
-> rejects correct answers; a loose correct invariant lets the model
-> through to score normally.
-
-> **Rule: ground-truth must pass.**
-> Every `verify` function shipped in §3 MUST accept every labeled answer
-> in the project's benchmark dataset. The
-> `tests/test_skill_verifiers_against_groundtruth.py` regression test
-> enforces this automatically — adding a new invariant that rejects any
-> ground-truth row will fail CI before any Fabric run.
+Prefer standard-library procedures when sufficient, as in the CSV example.
+If a skill needs a third-party library, document installation in the host or
+notebook environment before the run and an explicit missing-library fallback
+or limitation. Do not instruct worker code to install dependencies: default
+security policy blocks shell/subprocess installation. Do not weaken that policy
+to accommodate a playbook. Keep verifier code small and self-contained, and
+avoid relying on undeclared worker variables or network access.
