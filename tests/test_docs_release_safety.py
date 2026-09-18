@@ -60,7 +60,9 @@ def _without_magics(source):
     )
 
 
-@pytest.mark.parametrize("filename", ["README.md", "QUICKSTART.md", "docs/fabric-runtime-deps.md"])
+@pytest.mark.parametrize("filename", [
+    "README.md", "docs/usage-guide.md", "QUICKSTART.md", "docs/fabric-runtime-deps.md",
+])
 def test_release_python_examples_parse(filename):
     for index, block in enumerate(_python_blocks((ROOT / filename).read_text(encoding="utf-8"))):
         ast.parse(_without_magics(block), filename=f"{filename}:example {index}")
@@ -111,12 +113,16 @@ def test_quickstart_default_sub_lm_example_is_a_serializable_configuration(monke
     assert not outer.calls, "Constructing the documented configuration must not call a provider"
 
 
-def test_readme_warns_about_raw_feedback_and_parent_only_authentication():
+def test_readme_warns_about_raw_feedback():
     text = " ".join((ROOT / "README.md").read_text(encoding="utf-8").lower().split())
     assert "not automatically embedded" in text
     assert "not content-redacted" in text
     assert re.search(r"print raw.{0,100}reach.{0,50}model provider", text)
     assert not re.search(r"never (?:sees?|receives?|sends?).{0,30}raw", text)
+
+
+def test_usage_guide_explains_parent_only_authentication():
+    text = " ".join((ROOT / "docs/usage-guide.md").read_text(encoding="utf-8").lower().split())
     assert "parent process" in text
     assert "neither the token nor the `credential_provider` setting is serialized" in text
     assert "worker-side semantic-model queries still require working sempy automatic authentication" in text

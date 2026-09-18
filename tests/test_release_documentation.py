@@ -5,18 +5,18 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_file_destination_readme_example_is_self_contained() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    blocks = re.findall(r"```python\n(.*?)\n```", readme, re.DOTALL)
+def test_file_destination_usage_guide_example_is_self_contained() -> None:
+    guide = (ROOT / "docs/usage-guide.md").read_text(encoding="utf-8")
+    blocks = re.findall(r"```python\n(.*?)\n```", guide, re.DOTALL)
     example = next(
         (block for block in blocks if "with FileDestination(" in block),
         None,
     )
 
-    assert example is not None, "No FileDestination code block found in README"
+    assert example is not None, "No FileDestination code block found in usage guide"
     assert "LakehouseSource" in example
     assert "lakehouse = LakehouseSource(" in example
-    compile(example, "<README FileDestination example>", "exec")
+    compile(example, "<usage-guide FileDestination example>", "exec")
 
 
 def test_project_uses_modern_spdx_license_metadata() -> None:

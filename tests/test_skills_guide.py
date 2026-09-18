@@ -107,12 +107,14 @@ def test_bundled_catalog_matches_loader_metadata_exactly_once():
         assert int(count) == len(names)
 
 
-def test_readme_skills_table_matches_packaged_names_exactly_once():
+def test_readme_links_to_skills_guide_and_states_no_default_skills():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
-    skills = section(text, "## Skills", end=r"^### Writing your own[ \t]*$|\Z")
-    assert "### Writing your own" in text
-    names = re.findall(r"^\|\s*`([^`]+)`\s*\|", skills, re.MULTILINE)
-    assert Counter(names) == Counter(SkillLoader().list_skills())
+    skills = section(text, "## Skills")
+    assert "(docs/skills-guide.md)" in skills
+    prose = " ".join(skills.replace("*", "").lower().split())
+    assert "no skills are selected by default" in prose
+    for count in re.findall(r"\b(\d+)\s+bundled\s+(?:skills|playbooks)\b", prose):
+        assert int(count) == len(SkillLoader().list_skills())
 
 
 def test_template_metadata_is_a_working_unbundled_example(template):

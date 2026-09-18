@@ -19,7 +19,8 @@ the package that breaks a harness fails the suite.
 ## Notebooks
 
 - `notebooks/ssb400_minimax_m3_fabric_repro.ipynb` reproduces the
-  SpreadsheetBench-400 figure reported in the README. It needs an
+  SpreadsheetBench-400 figure reported in the
+  [usage guide](../docs/usage-guide.md#spreadsheetbench-verified-400). It needs an
   OpenRouter key read from Key Vault or the environment and costs a few
   dollars.
 - `notebooks/spreadsheetbench_400_openrouter_minimax_mlflow.ipynb` is the
