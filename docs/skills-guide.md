@@ -412,7 +412,7 @@ python -m pytest tests/test_skills_guide.py tests/test_skill_lifecycle.py tests/
 
 These tests verify instructions and runtime mechanics, not that loading a skill makes every answer correct. Only three bundled skills currently contain a required verifier, and their acceptance coverage is limited as documented above.
 
-The full offline regression suite also passed: **3,692 passed, 13 skipped** (54 warnings). Provider credentials were removed from the test process; no paid model calls were made. Skipped environment/provider cases are not verified passes.
+The clean release-checkout offline regression suite also passed: **3,447 passed, 13 skipped** (55 warnings). Uncommitted research tests are excluded from this count. Provider credentials were removed from the test process; no paid model calls were made. Skipped environment/provider cases are not verified passes.
 
 ## References
 
