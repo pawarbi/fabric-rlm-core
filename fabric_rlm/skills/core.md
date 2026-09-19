@@ -7,19 +7,21 @@ depends_on: []
 specificity: core
 ---
 # core
-Summary: Minimal always-on contract every RLM run obeys.
+Summary: Submission, planning, and verification guidance for runs using this skill.
 
 ## Purpose
 
-Define the non-negotiable behavior of every RLM turn: how to submit, when
-to verify, and what never to echo back. This skill is always active.
+Guide turns using this playbook: how to submit, when to verify, and what
+never to echo back. Select this skill explicitly or through the router baseline.
 
 ## Contract: output fields
 
 When the prompt declares output fields or provides a `solution = {...}`
 literal, the SUBMIT payload MUST be a JSON object whose top-level keys
 exactly match the declared schema names — no extras, no missing keys,
-no renames, no nesting tricks.
+no renames, no nesting tricks. This is instructional discipline; use explicit
+output declarations and validators for runtime enforcement. The generic runtime
+does not interpret arbitrary example literals as schemas or reject all extra keys.
 
 ## Required behavior
 
@@ -75,9 +77,9 @@ no renames, no nesting tricks.
    every item is `OK`.
 
 3. **Single SUBMIT.** Emit exactly one `SUBMIT(...)` call with the computed
-   value. Do not include extra prose around it. The runtime owns the strict
-   `solution = ...` output contract; comply with whatever the active
-   signature/playbook tells you to put inside `output`.
+    value. Do not include extra prose around it. Comply with the active
+    signature and task's output names; do not assume an example `solution = ...`
+    literal creates a runtime contract or that every task uses a field named `output`.
 
 4. **Do not echo the prompt.** Never copy the question, the playbook
    text, or earlier scratch back into the SUBMIT payload.

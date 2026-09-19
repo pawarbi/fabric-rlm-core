@@ -26,14 +26,6 @@ import nbformat as nbf
 HERE = pathlib.Path(__file__).parent
 SKILL = (HERE / "skills" / "report_context.md").read_text(encoding="utf-8")
 
-# ---- change these three for your own workspace -------------------------
-WORKSPACE_ID = "002964bb-c154-4279-a405-cac05ecb54a6"
-LAKEHOUSE_ID = "d2317250-2392-49cb-8db3-e4327daa10bb"
-LAKEHOUSE_NAME = "evalresults"
-# The semantic model name is set in the notebook's parameter cell (MODEL_NAME)
-# so it can be overridden per run with `fab job run -P MODEL_NAME:string=...`.
-# ------------------------------------------------------------------------
-
 BASE = "/lakehouse/default/Files/multisource"
 OUT_XLSX = f"{BASE}/reports/ops_review.xlsx"
 
@@ -51,10 +43,18 @@ workbook written to the lakehouse.
 
 Set `ARM` to `full` (all four) or `noskill` (drop the custom skill) to see what
 the skill is carrying.
+
+Attach a default lakehouse in Fabric and edit the configuration cell below.
+You must supply an existing manufacturing semantic model with the schema in
+the README; this notebook generates only the CSV, PDF, and context skill.
+The recommended LM is Fabric's built-in endpoint: no external API key or
+separate Azure OpenAI resource is needed. Fabric AI services must be enabled.
 """
 
 CELL_PARAM = '''ARM = "full"             # "full" | "noskill"
-MODEL_NAME = "Manufacturing Ops AI Ready"
+WORKSPACE_ID = "<workspace-id>"  # workspace containing the semantic model
+MODEL_NAME = "<semantic-model-name>"
+LM_MODEL = "gpt-5.1"
 MAX_TURNS = 30
 TIMEOUT_S = 1200
 print("arm:", ARM)
@@ -62,8 +62,18 @@ print("arm:", ARM)
 
 CELL_INSTALL = (
     "%pip install -q reportlab pypdf openpyxl "
-    "fabric-rlm[analytics]==0.6.3\n"
+    "fabric-rlm[analytics]==0.6.4\n"
 )
+
+CELL_SETUP = '''from fabric_rlm import FabricLM
+
+if WORKSPACE_ID.startswith("<") or MODEL_NAME.startswith("<"):
+    raise ValueError("Set WORKSPACE_ID and MODEL_NAME in the configuration cell.")
+if ARM not in ("full", "noskill"):
+    raise ValueError("ARM must be 'full' or 'noskill'.")
+
+LM = FabricLM(LM_MODEL)
+'''
 
 # --- fixtures -------------------------------------------------------------
 TARGETS_ROWS = [
@@ -148,7 +158,7 @@ import pandas as pd
 DATASET = MODEL_NAME
 
 def dax(q):
-    return fabric.evaluate_dax(DATASET, q)
+    return fabric.evaluate_dax(DATASET, q, workspace=WORKSPACE_ID)
 
 # Trailing 30 days ending at the model's last date - the window the skill
 # defines, and the one every "Actual" must use.
@@ -180,7 +190,7 @@ assert set(ACTUAL) == {{"Total Sales", "Production Yield", "Downtime", "Scrap Ra
     f"unexpected DAX column names: {{list(_a.columns)}}"
 
 # Plant column is discovered rather than assumed - column naming varies.
-_cols = fabric.list_columns(DATASET)
+_cols = fabric.list_columns(DATASET, workspace=WORKSPACE_ID)
 _cand = [(r["Table Name"], r["Column Name"]) for _, r in _cols.iterrows()
          if "plant" in str(r["Column Name"]).lower()]
 print("plant column candidates:", _cand[:5])
@@ -288,11 +298,6 @@ print(build_task()[:400], "...")
 CELL_RUN = f'''import time, os, json
 from fabric_rlm import RLM, SemanticModel, SkillLoader
 
-with open("/lakehouse/default/Files/orkey.txt", encoding="utf-8") as fh:
-    _key = fh.read().strip()
-LM = {{"model": "openrouter/minimax/minimax-m3", "api_key": _key,
-      "api_base": "https://openrouter.ai/api/v1", "timeout": 900}}
-
 OUT = "{OUT_XLSX}"
 if os.path.exists(OUT):
     os.remove(OUT)          # never grade a stale file from a previous run
@@ -326,7 +331,7 @@ r = RLM.task(
     task=build_task(),
     inputs={{"targets_csv": f"{BASE}/targets.csv",
             "ops_memo_pdf": f"{BASE}/ops_memo.pdf",
-            "model": SemanticModel(MODEL_NAME),
+            "model": SemanticModel(MODEL_NAME, workspace=WORKSPACE_ID),
             "output_path": OUT}},
     outputs=["path", "summary"],
     lm=LM,
@@ -507,41 +512,48 @@ def param_cell(src):
     return c
 
 
-nb = nbf.v4.new_notebook(cells=[
-    nbf.v4.new_markdown_cell(MD),
-    param_cell(CELL_PARAM),
-    nbf.v4.new_code_cell(CELL_INSTALL),
-    nbf.v4.new_code_cell(CELL_FIXTURES),
-    nbf.v4.new_code_cell(CELL_SKILL),
-    nbf.v4.new_code_cell(CELL_TRUTH),
-    nbf.v4.new_code_cell(CELL_TASK),
-    nbf.v4.new_code_cell(CELL_RUN),
-    nbf.v4.new_code_cell(CELL_GRADE),
-])
-nb.metadata.update({
-    "kernel_info": {"name": "jupyter", "jupyter_kernel_name": "python3.12"},
-    "kernelspec": {"name": "jupyter", "display_name": "Jupyter"},
-    "language_info": {"name": "python"},
-    "microsoft": {"language": "python", "language_group": "jupyter_python"},
-    "dependencies": {"lakehouse": {
-        "default_lakehouse": LAKEHOUSE_ID,
-        "default_lakehouse_name": LAKEHOUSE_NAME,
-        "default_lakehouse_workspace_id": WORKSPACE_ID}},
-})
-nbf.validate(nb)
-_, nb = nbf.validator.normalize(nb)
-for i, c in enumerate(nb.cells):
-    if c.cell_type == "code" and not c.source.strip().startswith("%"):
-        compile(c.source, f"<cell{i}>", "exec")
+def build_notebook():
+    """Build and validate notebook cells without contacting Fabric or writing files."""
+    nb = nbf.v4.new_notebook(cells=[
+        nbf.v4.new_markdown_cell(MD),
+        param_cell(CELL_PARAM),
+        nbf.v4.new_code_cell(CELL_INSTALL),
+        nbf.v4.new_code_cell(CELL_SETUP),
+        nbf.v4.new_code_cell(CELL_FIXTURES),
+        nbf.v4.new_code_cell(CELL_SKILL),
+        nbf.v4.new_code_cell(CELL_TRUTH),
+        nbf.v4.new_code_cell(CELL_TASK),
+        nbf.v4.new_code_cell(CELL_RUN),
+        nbf.v4.new_code_cell(CELL_GRADE),
+    ])
+    nb.metadata.update({
+        "kernel_info": {"name": "jupyter", "jupyter_kernel_name": "python3.12"},
+        "kernelspec": {"name": "jupyter", "display_name": "Jupyter"},
+        "language_info": {"name": "python"},
+        "microsoft": {"language": "python", "language_group": "jupyter_python"},
+    })
+    nbf.validate(nb)
+    for i, cell in enumerate(nb.cells):
+        if cell.cell_type == "code" and not cell.source.strip().startswith("%"):
+            compile(cell.source, f"<cell{i}>", "exec")
+    return nb
 
-IT = HERE / "multisource_report.Notebook"
-IT.mkdir(exist_ok=True)
-(IT / ".platform").write_text(json.dumps({
-    "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/"
-               "platformProperties/2.0.0/schema.json",
-    "metadata": {"type": "Notebook", "displayName": "multisource_report"},
-    "config": {"version": "2.0", "logicalId": "00000000-0000-0000-0000-000000000000"},
-}, indent=4), encoding="utf-8", newline="\n")
-with open(IT / "notebook-content.ipynb", "w", encoding="utf-8", newline="\n") as fh:
-    nbf.write(nb, fh)
-print(f"built {IT.name}: {len(nb.cells)} cells, all compile")
+
+def write_notebook(output_dir=HERE / "multisource_report.Notebook"):
+    """Write a Fabric notebook item; attach its default lakehouse after import."""
+    nb = build_notebook()
+    output_dir = pathlib.Path(output_dir)
+    output_dir.mkdir(exist_ok=True)
+    (output_dir / ".platform").write_text(json.dumps({
+        "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/"
+                   "platformProperties/2.0.0/schema.json",
+        "metadata": {"type": "Notebook", "displayName": "multisource_report"},
+        "config": {"version": "2.0", "logicalId": "00000000-0000-0000-0000-000000000000"},
+    }, indent=4), encoding="utf-8", newline="\n")
+    with open(output_dir / "notebook-content.ipynb", "w", encoding="utf-8", newline="\n") as fh:
+        nbf.write(nb, fh)
+    return output_dir
+
+
+if __name__ == "__main__":
+    print(f"built {write_notebook().name}: all Python cells compile")

@@ -65,6 +65,7 @@ Usage:
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -176,6 +177,13 @@ class VerifiedResult:
     token accounting and trajectories stay auditable. A ``"failed"`` verdict
     means no solve produced an answer; ``result`` is then the last attempt
     and carries its ``failure_reason``.
+
+    For compatibility, ``"reconciled"`` also covers fallback to a blind
+    candidate when reconciliation yields no usable answer. Inspect
+    ``reconciliation_succeeded``, ``fallback_used``, and the zero-based
+    ``selected_attempt_index`` to distinguish these cases. ``ok`` indicates
+    an available answer, not verified correctness. ``reconciliation_reason``
+    identifies disagreement versus an unavailable initial answer.
     """
 
     result: RLMResult
@@ -183,6 +191,26 @@ class VerifiedResult:
     answer_a: str
     answer_b: str
     attempts: list[RLMResult] = field(default_factory=list)
+    reconciliation_reason: str | None = None
+
+    @property
+    def selected_attempt_index(self) -> int | None:
+        """Zero-based selected attempt, or None for a manually constructed result."""
+        return next((i for i, attempt in enumerate(self.attempts) if attempt is self.result), None)
+
+    @property
+    def reconciliation_attempted(self) -> bool:
+        return len(self.attempts) == 3
+
+    @property
+    def reconciliation_succeeded(self) -> bool:
+        """A usable reconciler answer was selected; not a correctness guarantee."""
+        return self.verdict == "reconciled" and self.selected_attempt_index == 2
+
+    @property
+    def fallback_used(self) -> bool:
+        """The reconciler failed to answer and an earlier usable answer was selected."""
+        return self.reconciliation_attempted and self.selected_attempt_index in (0, 1)
 
     @property
     def ok(self) -> bool:
@@ -200,10 +228,12 @@ class VerifiedResult:
 def verified_task(
     task: str,
     *,
-    outputs: list[str],
+    outputs: list[str] | Mapping[str, type],
     inputs: dict[str, Any] | None = None,
     field_name: str | None = None,
     reconcile_guidance: str = _RECONCILE_GUIDANCE,
+    reconcile_lm: Any = None,
+    reconcile_max_turns: int | None = None,
     agree: Any = None,
     **rlm_kwargs: Any,
 ) -> VerifiedResult:
@@ -211,15 +241,43 @@ def verified_task(
 
     Accepts the same keyword arguments as :meth:`RLM.from_task` (``lm``,
     ``skills``, ``max_turns``, ``timeout``, ...). ``field_name`` selects which
-    output field is compared; it defaults to the first entry of ``outputs``.
+    output field is compared; it defaults to the first field name in ``outputs``,
+    a non-empty list of names or mapping of names to types.
     Pass ``agree`` to override the comparison with your own
     ``(a: str, b: str) -> bool``.
+
+    ``reconcile_lm`` and ``reconcile_max_turns`` override only the third solve's
+    ``lm`` and ``max_turns``. When either is ``None``, that setting is inherited
+    unchanged, including runtime defaults. ``reconcile_max_turns`` must be a
+    positive integer when supplied. All other settings are shared by all solves.
+    Agreement skips the third solve entirely. If the reconciler produces no
+    usable answer, a usable blind candidate is still returned as ``"reconciled"``;
+    this verdict does not guarantee a successful reconciliation or correctness.
+    Inspect ``fallback_used`` and ``reconciliation_succeeded`` on the result.
+    Budgets are per solve, not shared; an omitted ``max_turns`` uses RLM's
+    default of 20 for each solve. Validators apply to all attempts.
     """
-    fname = field_name or outputs[0]
+    if not outputs:
+        raise ValueError("outputs must contain at least one field name")
+    if reconcile_max_turns is not None and (
+        isinstance(reconcile_max_turns, bool)
+        or not isinstance(reconcile_max_turns, int)
+        or reconcile_max_turns <= 0
+    ):
+        raise ValueError("reconcile_max_turns must be a positive integer")
+    fname = next(iter(outputs)) if field_name is None else field_name
+    if fname not in outputs:
+        raise ValueError(f"field_name {fname!r} is not declared in outputs")
     check = agree or answers_agree
 
-    def solve(text: str) -> tuple[RLMResult, str]:
-        res = RLM.from_task(text, outputs=outputs, inputs=inputs, **rlm_kwargs).run()
+    def solve(text: str, reconciliation: bool = False) -> tuple[RLMResult, str]:
+        kwargs = dict(rlm_kwargs)
+        if reconciliation:
+            if reconcile_lm is not None:
+                kwargs["lm"] = reconcile_lm
+            if reconcile_max_turns is not None:
+                kwargs["max_turns"] = reconcile_max_turns
+        res = RLM.from_task(text, outputs=outputs, inputs=inputs, **kwargs).run()
         val = (res.payload or {}).get(fname, "")
         return res, ("" if val is None else str(val))
 
@@ -229,7 +287,8 @@ def verified_task(
 
     # Only a submitted, non-blank answer is a candidate. A custom ``agree``
     # is never asked about a solve that failed.
-    if _usable(res_a, ans_a) and _usable(res_b, ans_b) and check(ans_a, ans_b):
+    both_usable = _usable(res_a, ans_a) and _usable(res_b, ans_b)
+    if both_usable and check(ans_a, ans_b):
         winner = _prefer(res_a, ans_a, res_b, ans_b)
         return VerifiedResult(result=winner, verdict="agree",
                               answer_a=ans_a, answer_b=ans_b, attempts=attempts)
@@ -239,7 +298,7 @@ def verified_task(
         f"Analyst 1 answered: {ans_a.strip() or '(no answer)'}\n\n"
         f"Analyst 2 answered: {ans_b.strip() or '(no answer)'}\n"
     )
-    res_c, ans_c = solve(reconcile_task)
+    res_c, ans_c = solve(reconcile_task, reconciliation=True)
     attempts.append(res_c)
     if _usable(res_c, ans_c):
         winner, verdict = res_c, "reconciled"
@@ -248,7 +307,8 @@ def verified_task(
     else:
         winner, verdict = res_c, "failed"
     return VerifiedResult(result=winner, verdict=verdict,
-                          answer_a=ans_a, answer_b=ans_b, attempts=attempts)
+                          answer_a=ans_a, answer_b=ans_b, attempts=attempts,
+                          reconciliation_reason="disagreement" if both_usable else "unavailable_answer")
 
 
 def _usable(res: RLMResult, answer: str) -> bool:

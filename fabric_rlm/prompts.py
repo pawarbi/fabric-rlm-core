@@ -273,7 +273,7 @@ def _format_skill_section(
     ]
     if router_active:
         parts.append(
-            "`activate_skill(name)` loads a SKILL **and** turns on its verifier for the rest of this run. "
+            "`activate_skill(name)` loads a SKILL and registers its available verifier when verification is enabled. "
             "Activate a skill only when its card matches your task — extra active skills add prompt cost and verifier checks."
         )
     if skill_index:
@@ -282,7 +282,7 @@ def _format_skill_section(
         parts.extend(
             [
                 "",
-                "Skill cards (not active; use `activate_skill(name)` to enable):",
+                "Skill cards (bodies not preloaded; use `load_skill(name)` to read):",
                 skill_cards,
             ]
         )

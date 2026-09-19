@@ -120,6 +120,9 @@ __all__ = [
     "TurnRecord",
     "ValidationCheck",
     "ValidationReport",
+    "VerifiedResult",
+    "answers_agree",
+    "verified_task",
     "WorkerProtocolError",
     "WorkerTimeout",
     "assert_in_range",
@@ -148,4 +151,4 @@ __all__ = [
 
 # Single source of truth for the package version. pyproject.toml reads this
 # statically via [tool.setuptools.dynamic] — bump it here and nowhere else.
-__version__ = "0.6.3"
+__version__ = "0.6.4"

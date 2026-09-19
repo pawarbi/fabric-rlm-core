@@ -13,7 +13,11 @@ def test_deprecated_notebook_utility_namespace_is_absent() -> None:
         repository / "tests",
         repository / ".github",
     )
-    candidates = [repository / "README.md", repository / "SECURITY.md"]
+    candidates = [
+        repository / "README.md",
+        repository / "SECURITY.md",
+        repository / "docs/usage-guide.md",
+    ]
     for root in roots:
         candidates.extend(
             path

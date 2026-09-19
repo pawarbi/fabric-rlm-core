@@ -2,6 +2,14 @@
 
 A 5-minute getting-started guide for the `fabric_rlm` package.
 
+For parameter defaults, practical usage guidance, and engine-specific behavior,
+see the [API reference](docs/api-reference.md). The
+[argument test matrix](docs/api-argument-tests.md) distinguishes local data-backed
+tests from live Fabric/provider validation.
+
+For the bundled catalog, defaults, loading, custom authoring, and dos/don'ts,
+see the [Skills Guide](docs/skills-guide.md).
+
 > **What is it?** A portable Python-subprocess runtime for **Recursive Language
 > Models** (RLMs). The model writes Python code, the code runs in a real CPython
 > subprocess (not Pyodide/WASM), and the model iterates until it calls
@@ -169,10 +177,10 @@ print(result.total_prompt_tokens, result.total_completion_tokens)
 ## 4. Engines — `"auto"` is the default
 
 ```python
-RLM(...)                       # engine="auto" — picks "dspy" if non-empty tools=[...] is supplied, else "default"
-RLM(..., engine="default")     # custom loop, supports skills/router/reflection/verifier
-RLM(..., engine="dspy")        # delegates to dspy.predict.RLM, our subprocess as backend
-RLM(..., engine="dspy", tools=[my_tool, ...])  # tools= requires dspy
+RLM(signature="question -> answer", lm=lm)  # auto: dspy with non-empty tools, else default
+RLM(signature="question -> answer", lm=lm, engine="default")  # custom loop
+RLM(signature="question -> answer", lm=lm, engine="dspy")  # delegates to dspy.predict.RLM
+RLM(signature="question -> answer", lm=lm, engine="dspy", tools=[my_tool])  # tools require dspy
 ```
 
 | Engine | When to use |
@@ -181,8 +189,8 @@ RLM(..., engine="dspy", tools=[my_tool, ...])  # tools= requires dspy
 | `"default"` | You want skills, router, reflection, multi-turn verifier feedback. |
 | `"dspy"` | You want dspy-native behavior + composability with the rest of your dspy program, or you need `tools=`. Same SUBMIT contract, same subprocess interpreter. |
 
-Both write the SAME Python code through the SAME subprocess. Choose by what
-you want around the loop, not for raw capability.
+Both execute generated Python in a subprocess, but their nested-LM helpers
+and execution controls differ; see §7 and the API reference.
 
 ---
 
@@ -229,7 +237,12 @@ The power-user surface is also available:
 
 ```python
 from fabric_rlm.experimental import AdaptiveRunner, LadderPolicy, Budget
-runner = AdaptiveRunner(rlm_factory=lambda cfg: RLM(...), policy=LadderPolicy(...), budget=Budget(...))
+# Supply build_rlm(cfg): your factory mapping AttemptConfig to a fresh RLM.
+runner = AdaptiveRunner(
+    rlm_factory=build_rlm,
+    policy=LadderPolicy(),
+    budget=Budget(),
+)
 adaptive_result = runner.run({"question": "..."})
 adaptive_result.attempts          # full per-attempt log
 adaptive_result.winner.verdict    # validator's last call on the winner
@@ -299,13 +312,14 @@ and the model retries. After a valid SUBMIT the loop terminates and
 
 ## 7. Tools (sub-LM, files, custom callbacks)
 
-The model can call helper functions the runtime injects. The two you'll use most:
+With `engine="default"`, generated worker code can use `predict_sync(...)`
+or its async form `predict(...)` for nested model calls:
 
 ```python
 # inside the model's Python:
 
 # Recursive sub-LM call via a DSPy-style signature. Returns a result object
-# whose attributes are the signature's output fields (uses sub_lm or the main lm).
+# whose attributes are the signature's output fields (requires a worker LM spec).
 fr = predict_sync("english -> french", english="Good morning")
 print(fr.french)
 
@@ -314,8 +328,17 @@ print(fr.french)
 #   RLM.task(..., inputs={"doc": File("/path/report.pdf")})
 ```
 
-`predict(...)` is the async form of `predict_sync(...)`. The runtime also injects
-`load_skill`, `activate_skill`, and `list_skills` for on-demand skill loading.
+The default engine requires a serializable string/dict `sub_lm` spec for these
+helpers. If omitted, only a string/dict outer `lm` is reused as the worker spec.
+A callable outer LM, including `FabricLM(...)` or `dspy.LM(...)`, does not
+implicitly configure a worker LM. Passing a live LM object as `sub_lm` is not
+supported by the default engine's worker serialization path.
+
+The default worker also exposes `load_skill`, `activate_skill`, and `list_skills`
+for on-demand skill loading. `File` contents are not automatically embedded in
+the prompt, but generated code can read and print raw data. That output can
+reach the model provider in subsequent feedback: bounded feedback is not
+redacted feedback, and `File` is not a privacy boundary.
 
 To publish a new workbook or other generated file to an unattached OneLake
 Lakehouse, bind a `FileDestination` whose root is a full `abfss://.../Files`
@@ -346,11 +369,45 @@ intentional replacement. It returns `{"path", "name", "size"}` after the
 trusted parent has copied the staged file and verified the OneLake destination.
 The isolated worker never receives storage credentials.
 
-You can also pass `sub_lm=` separately if you want a cheaper model for nested calls:
+For a cheaper nested model in the **default engine**, use a serialized spec.
+This is illustrative configuration, not a live-provider validation:
 
 ```python
-RLM(..., lm=FabricLM("gpt-5.1"), sub_lm=FabricLM("gpt-5-mini"))   # in Fabric
-RLM(..., lm=gpt5, sub_lm=dspy.LM("openrouter/openai/gpt-5-mini", ...))   # outside
+import os
+
+rlm = RLM.task(
+    "Use predict_sync to translate 'Good morning' to French and submit french.",
+    outputs={"french": str},
+    lm=lm,
+    engine="default",
+    sub_lm={"model": "openai/gpt-5-mini", "api_key": os.environ["OPENAI_API_KEY"]},
+)
+```
+
+Default environment scrubbing removes secret-like variables from the worker,
+so this example explicitly passes the nested provider credential in the spec;
+the outer Fabric identity does not authenticate this OpenAI worker call. Treat
+that spec as a secret: do not print or log it, or include it in task inputs.
+Explicit `sub_lm` cannot be combined with `block_network=True`.
+
+For locally demonstrated behavior, see
+`tests/test_api_arguments_engines.py::test_worker_sub_lm_roundtrip`: a serialized
+dict with a fake key and loopback endpoint exercises worker `predict(...)`
+without a remote provider. `tests/test_worker_predict.py` covers the synchronous
+helper with local stubs. These tests do not validate live Fabric/provider calls.
+
+The **DSPy engine** instead uses host-side `llm_query(...)` and
+`llm_query_batched(...)`, not worker `predict` helpers. Live LM objects are
+supported on that path. Illustrative Fabric configuration (not live-validated):
+
+```python
+rlm = RLM.task(
+    "Use llm_query to translate 'Good morning' to French and submit french.",
+    outputs={"french": str},
+    engine="dspy",
+    lm=FabricLM("gpt-5.1"),
+    sub_lm=FabricLM("gpt-5-mini"),
+)
 ```
 
 ---
@@ -435,10 +492,10 @@ for h in lm.history:
 
 ```python
 # Recommended: explicit preload
-rlm = RLM(..., skills=["pdf_document_analysis", "data_exploration"])
+rlm = RLM(signature="question -> answer", lm=lm, skills=["pdf_document_analysis", "data_exploration"])
 
 # Keyword-heuristic routing; verify router_active in trajectory metadata.
-rlm = RLM(..., enable_router=True, max_active_skills=2)
+rlm = RLM(signature="question -> answer", lm=lm, enable_router=True, max_active_skills=2)
 ```
 
 Browse `fabric_rlm/skills/*.md` for examples (e.g. `pdf_document_analysis.md`,
@@ -527,11 +584,12 @@ Once the basic example runs:
    ready-to-import Fabric notebooks for API basics, PDF workflows, and
    Spark-log root-cause analysis.
 3. **Long-file analysis** — point the `data_exploration` skill at a CSV/log
-   too big for context (§9a): the subprocess greps/queries it; the LM never
-   sees the raw bytes.
-4. **Sub-LM calls** — give the model a cheaper `sub_lm=` and a task that
-   needs per-item summarization; watch it call `predict_sync()` from inside its
-   own generated code (§7).
+   too big for context (§9a): the subprocess greps/queries it. `File` does not
+   automatically embed contents, but generated prints can send raw data to the
+   provider; feedback limits do not redact it (§7).
+4. **Sub-LM calls** — with `engine="default"`, configure a cheaper serialized
+   `sub_lm` spec for worker `predict_sync()` calls. With `engine="dspy"`, request
+   DSPy's host-side `llm_query()` instead (§7).
 
 ---
 
