@@ -28,10 +28,13 @@
 #
 # The final table compares correctness, turns, tokens, time, and provenance.
 # No Lakehouse attachment is required.
+# Supply an existing semantic model; this notebook does not create one.
+# Fabric's built-in AI endpoint is used, with no external API key or separate
+# Azure OpenAI resource. Your capacity/tenant must allow Fabric AI services.
 
 # CELL ********************
 
-%pip install -q "fabric-rlm==0.6.3"
+%pip install -q "fabric-rlm==0.6.4"
 
 # METADATA ********************
 
@@ -44,8 +47,12 @@
 
 # ## 1. Configure the demo
 #
-# Edit only these values when using another workspace or semantic model.
-# Choose a scalar measure that is meaningful to your users.
+# Edit the configuration below for your workspace and semantic model.
+# Required business mapping: `MEASURE` must name an existing numeric scalar
+# measure for the annual recurring revenue requested by `QUESTION`. `ARR $`
+# is an example name, not a measure this notebook creates. If using a different
+# business metric, change both MEASURE and QUESTION together. No table or column
+# names are assumed here; the selected measure's dependencies must already exist.
 
 # CELL ********************
 
@@ -57,11 +64,17 @@ import pandas as pd
 import fabric_rlm
 from fabric_rlm import FabricLM, RLM, SemanticModel
 
-WORKSPACE_ID = "2680c303-be42-4d4a-b230-281d2cedf17b"
-MODEL_ID = "f76244f0-6352-4947-bbaf-98ad3f76f96c"
+WORKSPACE_ID = "<workspace-id>"
+MODEL_ID = "<semantic-model-id>"
 MEASURE = "ARR $"
-QUESTION = "What is the total annual recurring revenue across the model?"
+QUESTION = f"What is the total annual recurring revenue across the model? Use measure [{MEASURE}]."
+LM_MODEL = "gpt-5.1"
+REASONING_EFFORT = "medium"
+MAX_TURNS = 6
 KNOWLEDGE_STORE = Path("/tmp/rlm_learn_semantic_model_value.json")
+
+if WORKSPACE_ID.startswith("<") or MODEL_ID.startswith("<"):
+    raise ValueError("Set WORKSPACE_ID and MODEL_ID in the configuration cell.")
 
 print(
     {
@@ -97,6 +110,8 @@ model = SemanticModel(
 )
 
 expected_frame = model.measure(MEASURE)
+if len(expected_frame) != 1 or pd.isna(expected_frame[MEASURE].iloc[0]):
+    raise ValueError("MEASURE must return one non-blank numeric total for this comparison.")
 expected_value = float(expected_frame[MEASURE].sum())
 
 display(expected_frame)
@@ -125,11 +140,11 @@ cold_result = RLM.task(
     inputs={"business_model": model},
     outputs={"value": float, "analysis": str},
     lm=FabricLM(
-        "gpt-5.1",
-        reasoning_effort="medium",
+        LM_MODEL,
+        reasoning_effort=REASONING_EFFORT,
         cache=False,
     ),
-    max_turns=6,
+    max_turns=MAX_TURNS,
 ).run()
 cold_wall_seconds = time.perf_counter() - cold_started
 
@@ -199,11 +214,11 @@ learned_result = RLM.task(
     knowledge=knowledge,
     outputs={"value": float, "analysis": str},
     lm=FabricLM(
-        "gpt-5.1",
-        reasoning_effort="medium",
+        LM_MODEL,
+        reasoning_effort=REASONING_EFFORT,
         cache=False,
     ),
-    max_turns=6,
+    max_turns=MAX_TURNS,
 ).run()
 learned_wall_seconds = time.perf_counter() - learned_started
 
@@ -268,7 +283,6 @@ display(comparison)
 
 learned_metadata = learned_result.trajectory.metadata
 assert cold_result.submitted, "The cold SemanticModel task did not submit."
-assert answer_value(cold_result) != 0.0, "The cold task returned a placeholder zero."
 assert is_correct(cold_result), "The cold answer did not match the trusted value."
 assert is_correct(learned_result), "The learned answer did not match the trusted value."
 assert learned_metadata.get("knowledge_mode") == "registered_operation"

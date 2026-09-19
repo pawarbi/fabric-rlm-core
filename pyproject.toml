@@ -80,6 +80,9 @@ Changelog = "https://github.com/pawarbi/fabric-rlm-core/blob/main/CHANGELOG.md"
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.23",
+  "nbformat>=5.10",
+  "ipython>=8",
+  "openpyxl>=3.1",
 ]
 fabric = [
   "synapseml",

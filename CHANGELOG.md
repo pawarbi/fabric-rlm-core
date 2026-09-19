@@ -2,8 +2,20 @@
 
 ## Unreleased
 
+## 0.6.4 - 2026-09-18 - configurable reconciliation and practical Fabric examples
+
+### Removed
+
+- Removed the Data Agent review notebooks from public `examples/`. The
+  experimental library module is unchanged.
+- Removed the deterministic What Moved notebook from public RLM examples;
+  reporting and sweep APIs are unchanged.
+
 ### Added
 
+- `rlm_verified_deep_insights.ipynb` demonstrates semantic-model discovery with
+  a structured skill contract and a displayed Markdown report, with explicit
+  verification limits and editable Fabric model configuration.
 - `verified_task` accepts optional `reconcile_lm` and `reconcile_max_turns`.
   Omitted overrides inherit the initial solver's settings. `VerifiedResult`
   exposes selected-attempt and reconciliation/fallback provenance without
@@ -11,6 +23,13 @@
 
 ### Fixed
 
+- Public notebook setup uses explicit prerequisites and generated starter data.
+  IMF downloads replace the final file only after validation; workbook graders
+  check full country tables and streak results. Semantic examples use FabricLM
+  instead of plaintext key files, and PDF runs surface unsuccessful submissions.
+- Deep-discovery example instructions now match the skill's nonempty-insights
+  contract. IMF checks also validate submitted streak summaries, prevent stale
+  workbook reuse, and preserve economy-specific PDF timing distinctions.
 - Fabric setup now uses dependency-resolved installation and session restart;
   analytics guidance no longer incorrectly requires the DSPy engine. Nested-model
   examples distinguish worker-serializable specs from DSPy's host-side LM objects.
@@ -99,8 +118,8 @@
   fact even when the default facts left it out. `sweep` takes `filters`
   and the DAX and SQL dialects narrow the series, the top groups, the
   grouped series and the latest date to them.
-- **Data Agent review** (`fabric_rlm.data_agent_review`, notebook
-  `examples/notebooks/rlm_data_agent_review.py`). Point it at a Fabric Data
+- **Data Agent review** (`fabric_rlm.data_agent_review`; notebook historical,
+  removed from public examples). Point it at a Fabric Data
   Agent and it reads what the agent uses and how it is instructed (sources,
   agent and data-source instructions, descriptions, few-shots), profiles the
   same sources through `RLM.learn`, and then: diagnoses the setup against

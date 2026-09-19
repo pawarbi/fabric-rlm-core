@@ -199,6 +199,7 @@ Read [SECURITY.md](SECURITY.md) before connecting sensitive or production data.
 | --- | --- |
 | [API tour notebook](examples/notebooks/rlm_api_tour.ipynb) | Small runnable examples of inputs, outputs, skills, validators, and inspection |
 | [Large-file workbook notebook](examples/notebooks/rlm_vs_plain_llm_imf_cpi.ipynb) | IMF data analysis, Excel output, and independent result checks |
+| [Deep insights notebook](examples/notebooks/rlm_verified_deep_insights.ipynb) | Model-driven semantic analysis, structured findings, and a Markdown report |
 | [All examples](examples/) | PDFs, invoices, logs, reports, and multi-source workflows |
 | [API reference](docs/api-reference.md) | Every argument, defaults, when to use it, and engine-specific limits |
 | [Skills guide](docs/skills-guide.md) | Catalog, loading, cards, authoring, and dos/don'ts |

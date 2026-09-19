@@ -1,7 +1,7 @@
 # API Reference
 
 This reference describes the checked-in [runtime](../fabric_rlm/runtime.py) and
-[verified-task prototype](../fabric_rlm/verify.py), not a promise that every
+[verified-task implementation](../fabric_rlm/verify.py), not a promise that every
 engine implements every control identically. Defaults below are signature
 defaults; a `None` default may select behavior during construction.
 
@@ -199,7 +199,7 @@ preemptive LM-request or spend limit.
 
 ## verified_task
 
-Prototype for read-only, determinate analytical answers. Unlike `RLM.task`, it
+For read-only, determinate analytical answers. Unlike `RLM.task`, it
 **executes immediately** and returns `VerifiedResult`.
 
 ```python
