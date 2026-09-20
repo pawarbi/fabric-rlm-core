@@ -102,6 +102,13 @@ def test_validator_accepts_a_correct_model(tmp_path: Path) -> None:
     workbook_formula_validator({"My Scenarios!B2": _premium(0.25)}, path_field="p")({"p": str(path)})
 
 
+def test_validator_accepts_numpy_expectations_within_tolerance(tmp_path: Path) -> None:
+    np = pytest.importorskip("numpy")
+    path = _model(tmp_path / "model.xlsx")
+    workbook_formula_validator({"My Scenarios!B2": np.float64(_premium(0.25) + 0.001),
+                                "Baseline!B2": np.int64(100)})({"report_path": str(path)})
+
+
 def test_validator_names_the_wrong_cell_and_both_values(tmp_path: Path) -> None:
     path = _model(tmp_path / "wrong.xlsx", wrong=True)
     with pytest.raises(AssertionError) as raised:

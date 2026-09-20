@@ -43,6 +43,14 @@ Fixes from running every example and the documented flows in a Fabric Python
 - `SemanticModel.measure(groupby=..., filters=...)` answers through the DAX path
   when SemPy's measure endpoint refuses the request, and reports both failures
   when neither works (#93).
+- The analytical-integrity screen no longer rejects a correct sentence because
+  of a noun that looks like a direction word. "The contract version number
+  increases from 2.0 to 3.1" and "Growth rate fell from 5% to 3%" were both
+  sent back. The verb beside "from" now decides, the bare word "contract" is no
+  longer read as "contracted", and wording that points both ways passes
+  instead of costing the run a turn.
+- Calling `predict()` in a run with no sub-LM raises an error that tells the
+  model to do the step in Python, and tells the host how to enable it.
 - `result.report()` names what rejected a submission (your `output_validator`, a
   skill's verifier, or the integrity screen) instead of always blaming an
   `output_validator` (#92).

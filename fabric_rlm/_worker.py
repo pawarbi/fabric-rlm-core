@@ -324,7 +324,14 @@ def _set_lm_spec(spec: Any) -> None:
 def _get_lm() -> Any:
     global _lm_instance
     if _lm_spec is None:
-        raise RuntimeError("Sub-LM is not configured. Call Interpreter.configure_lm() first.")
+        # Read by the model that called predict(), so it says what to do next;
+        # the second sentence is for the person reading the trace.
+        raise RuntimeError(
+            "predict() and predict_sync() are not available in this run: no sub-LM is "
+            "configured. Do this step in Python on the text you already extracted and do "
+            "not call them again. (Host: a live LM object cannot cross into the worker; "
+            "pass sub_lm='provider/model' or a spec dict to enable them.)"
+        )
     if _lm_instance is None:
         from .lm import resolve_lm
 

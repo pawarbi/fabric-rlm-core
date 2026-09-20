@@ -638,6 +638,7 @@ def workbook_formula_validator(
                 ) from exc
             for reference, expected in scenario["expected"].items():
                 got = values.get(reference)
+                expected = _plain_value(expected)      # a numpy scalar from a pandas truth table
                 if isinstance(expected, (int, float)) and not isinstance(expected, bool):
                     ok = (
                         isinstance(got, (int, float))

@@ -1080,7 +1080,9 @@ def validate_grain(
 
 _DECREASE_STEMS = (
     "declin", "decreas", "fell", "fall", "drop", "deteriorat", "worsen", "shrank",
-    "shrink", "slid", "slip", "contract", "eroded", "erod", "lower", "weaken",
+    "shrink", "slid", "slip", "eroded", "erod", "lower", "weaken",
+    # Not the bare stem: "contract" is nearly always the noun in business prose.
+    "contracted", "contracting", "contraction",
 )
 _INCREASE_STEMS = (
     "increas", "grew", "grow", "rose", "rise", "risen", "improv", "climb", "expand",
@@ -1121,13 +1123,37 @@ class DirectionalClaim:
     actual: str
 
 
-def _claimed_direction(*fragments: str) -> str | None:
-    words = re.findall(r"[a-z]+", " ".join(fragments).lower())
-    for word in words:
-        if any(word.startswith(stem) for stem in _DECREASE_STEMS):
-            return "decrease"
-        if any(word.startswith(stem) for stem in _INCREASE_STEMS):
-            return "increase"
+def _word_direction(word: str) -> str | None:
+    if any(word.startswith(stem) for stem in _DECREASE_STEMS):
+        return "decrease"
+    if any(word.startswith(stem) for stem in _INCREASE_STEMS):
+        return "increase"
+    return None
+
+
+def _claimed_direction(lead: str, tail: str = "") -> str | None:
+    """The direction the prose asserts for one "from A to B", or None.
+
+    The verb beside "from" is the claim: in "growth rate fell from 5% to 3%"
+    that is "fell", not the noun "growth" that happens to come first. When the
+    words before "from" point both ways and none of them sits beside it, or
+    when only the trailing clause speaks and it points both ways, the sentence
+    is too doubtful to reject and nothing is claimed. A rejected correct
+    sentence costs the run a turn, so doubt passes.
+    """
+
+    lead_words = re.findall(r"[a-z]+", lead.lower())
+    beside = list(reversed(lead_words))
+    while beside and beside[0].endswith("ly"):      # "fell sharply from"
+        beside.pop(0)
+    if beside and _word_direction(beside[0]):
+        return _word_direction(beside[0])
+    for words in (lead_words, re.findall(r"[a-z]+", tail.lower())):
+        found = {direction for direction in map(_word_direction, words) if direction}
+        if len(found) == 1:
+            return found.pop()
+        if found:
+            return None
     return None
 
 
