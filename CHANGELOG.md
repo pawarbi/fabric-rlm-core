@@ -73,7 +73,8 @@ Fixes from running every example and the documented flows in a Fabric Python
   eight traced PDF runs the model called them first and lost that turn. The
   prompt is unchanged, byte for byte, when a sub-LM is configured. If generated
   code calls them anyway, the error says to do the step in Python and tells
-  the host how to enable them (#104).
+  the host how to enable them: in Fabric, `sub_lm="fabric/gpt-5-mini"`, which
+  was checked there with sequential and gathered calls (#104).
 - `predict_sync()` no longer hides the real error. A `RuntimeError` raised
   inside the call was swallowed and the spent coroutine retried, so the model
   saw "cannot reuse already awaited coroutine" and tried again.

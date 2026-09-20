@@ -944,6 +944,14 @@ such as `FabricLM("gpt-5.1")` cannot cross into the worker. When no nested
 model is configured, the run is told that `predict` is not available, so the
 model does that work in Python instead of calling it and losing a turn.
 
+In Fabric, name the built-in endpoint with the `fabric/` prefix. The worker
+gets its own token, so no key is involved:
+
+```python
+rlm = RLM.task(task, inputs=inputs, outputs=outputs,
+               lm=FabricLM("gpt-5.1"), sub_lm="fabric/gpt-5-mini")
+```
+
 ## Engines
 
 `RLM` ships with three stable engines, plus the experimental `adaptive`:

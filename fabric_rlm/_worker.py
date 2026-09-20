@@ -330,7 +330,8 @@ def _get_lm() -> Any:
             "predict() and predict_sync() are not available in this run: no sub-LM is "
             "configured. Do this step in Python on the text you already extracted and do "
             "not call them again. (Host: a live LM object cannot cross into the worker; "
-            "pass sub_lm='provider/model' or a spec dict to enable them.)"
+            "pass sub_lm='provider/model' or a spec dict to enable them, in Fabric "
+            "sub_lm='fabric/gpt-5-mini'.)"
         )
     if _lm_instance is None:
         from .lm import resolve_lm
