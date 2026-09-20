@@ -759,7 +759,8 @@ the complete result is materialized.
 `query()` returns at most `max_rows` rows (1,000 by default) and sets
 `"truncated": True` when it cut the result. The SQL itself always reads the whole
 table, so an aggregate is exact; only a query that returns many rows is cut.
-Inside a run a truncated result prints a warning into the turn's output, and the
+Called from a notebook cell, a truncated result raises a `UserWarning`. Inside a
+run it prints a warning into the turn's output, and the
 analytical-integrity screen sends back a submission whose last read of a source
 was truncated, because figures computed from the first rows alone are wrong.
 

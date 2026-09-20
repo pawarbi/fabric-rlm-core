@@ -404,13 +404,19 @@ class LakehouseSource:
             # the cut shows up in the turn's output where the model will see it.
             _announce_truncation(result, max_rows)
             return result
-        return execute_lakehouse_query(
+        result = execute_lakehouse_query(
             resolved,
             sql=sql,
             sources=sources,
             max_rows=max_rows,
             timeout=timeout,
         )
+        if isinstance(result, Mapping) and result.get("truncated"):
+            # A person calling this from a notebook reads result["rows"] too.
+            import warnings
+
+            warnings.warn(_truncation_message(max_rows), UserWarning, stacklevel=2)
+        return result
 
     def __rlm_describe__(self) -> str:
         state = (
@@ -1480,15 +1486,19 @@ _SKIPPED_MARKER = "__skipped__"
 TRUNCATION_NOTICE = "LakehouseSource.query truncated"
 
 
-def _announce_truncation(result: Any, max_rows: int) -> None:
-    if not (isinstance(result, Mapping) and result.get("truncated")):
-        return
-    print(
-        f"WARNING: {TRUNCATION_NOTICE} this result at {max_rows:,} rows; the source "
+def _truncation_message(max_rows: int) -> str:
+    return (
+        f"{TRUNCATION_NOTICE} this result at {max_rows:,} rows; the source "
         "has more. Figures computed from these rows alone are wrong. Aggregate in "
         "SQL (GROUP BY, SUM, COUNT, MIN, MAX) so the query reads every row and "
         f"returns few, or pass max_rows up to {_MAX_QUERY_ROWS:,} for a bounded list."
     )
+
+
+def _announce_truncation(result: Any, max_rows: int) -> None:
+    if not (isinstance(result, Mapping) and result.get("truncated")):
+        return
+    print(f"WARNING: {_truncation_message(max_rows)}")
 
 
 def _delta_name(path: str) -> str:

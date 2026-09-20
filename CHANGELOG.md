@@ -33,8 +33,8 @@ Fixes from running every example and the documented flows in a Fabric Python
   It is left out of the catalog, listed in `LakehouseSource.skipped` with the
   reason, and the task is told. A scope that is that one table still fails, and
   the error names the path (#90).
-- A truncated `LakehouseSource.query` result prints a warning into the turn's
-  output, and the analytical-integrity screen sends back a submission whose last
+- A truncated `LakehouseSource.query` result raises a `UserWarning` for a direct
+  caller and prints a warning into the turn's output inside a run, and the analytical-integrity screen sends back a submission whose last
   read of a source was truncated (#99).
 - The error for a source that is not in a handle's catalog lists what the handle
   holds and says to bind the tables on one `LakehouseSource(root, tables=[...])`

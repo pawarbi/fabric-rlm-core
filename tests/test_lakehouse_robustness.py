@@ -174,6 +174,26 @@ def test_a_complete_result_prints_nothing(monkeypatch, capsys) -> None:
     assert capsys.readouterr().out == ""
 
 
+def test_a_direct_caller_is_warned_about_a_cut_result(monkeypatch) -> None:
+    # An analyst calling query() in a notebook cell reads result["rows"] too.
+    source = LakehouseSource(ROOT, catalog=[{"kind": "delta", "name": "t", "path": f"{ROOT}/Tables/t"}])
+    outcomes = iter([
+        {"columns": ["a"], "rows": [[1]] * 50, "truncated": True},
+        {"columns": ["n"], "rows": [[7]], "truncated": False},
+    ])
+    monkeypatch.setattr(lakehouse_module, "execute_lakehouse_query", lambda *a, **k: next(outcomes))
+
+    with pytest.warns(UserWarning, match="truncated this result at 50 rows.*Aggregate in SQL"):
+        cut = source.query("SELECT a FROM t", sources={"t": "t"}, max_rows=50)
+    assert cut["truncated"] is True
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert source.query("SELECT count(*) n FROM t", sources={"t": "t"})["rows"] == [[7]]
+
+
 def _turn(number, *calls):
     return SimpleNamespace(turn=number, source_calls=list(calls))
 
