@@ -9,6 +9,7 @@ from types import ModuleType
 
 import pytest
 
+from fabric_rlm.knowledge import canonical_json
 from fabric_rlm.knowledge_sources import ProfileLimits, profile_sources
 from fabric_rlm.semantic_model import SemanticModel
 
@@ -524,3 +525,73 @@ def test_fabric_registry_composes_semantic_model_and_local_adapters():
 
     assert registry.resolve(FakeSemanticModel()).family == "semantic_model"
     assert registry.resolve("orders.csv").family == "csv"
+
+
+def _wide_model(measure_count=4800, column_count=2500):
+    return FakeSemanticModel(
+        tables=[{"Name": f"T{i:03d}", "Description": "", "Type": "Table"} for i in range(120)],
+        columns=[
+            {"Table Name": f"T{i % 120:03d}", "Column Name": f"Column {i:04d}",
+             "Data Type": "String", "Description": ""}
+            for i in range(column_count)
+        ],
+        measures=[
+            {"Table Name": "T000", "Measure Name": f"Measure {i:04d} POS $ Sales IYA",
+             "Measure Expression": f"SUM(T000[C{i}])", "Measure Description": ""}
+            for i in range(measure_count)
+        ],
+        relationships=[],
+    )
+
+
+def test_a_model_with_thousands_of_measures_profiles_at_default_limits():
+    # Found in Fabric: a 122-table, 2,533-column, 4,800-measure model failed
+    # RLM.learn with "canonical SourceProfile exceeds max_diagnostic_bytes".
+    limits = ProfileLimits()
+    profile = _profile(_wide_model(), limits=limits)
+    # The same encoding profile_sources() measures against the limit.
+    encoded = canonical_json(profile.to_dict()).encode("utf-8")
+
+    assert len(encoded) <= limits.max_diagnostic_bytes
+    assert profile.diagnostics["records_truncated"] is True
+    assert 0 < profile.diagnostics["retained_record_cap"] < limits.max_records
+    assert profile.diagnostics["records_inspected"] >= 120 + 2500 + 4800
+    assert profile.schema["measures"]                     # something useful is kept
+    assert _profile(_wide_model(), limits=limits).to_dict() == profile.to_dict()   # deterministic
+
+
+def test_shrinking_what_is_retained_does_not_weaken_drift_detection():
+    limits = ProfileLimits()
+    before = _profile(_wide_model(), limits=limits)
+    retained = set(before.schema["measures"])
+    assert len(retained) < 4800
+    # Which records are retained follows a hash order, so edit every measure in
+    # turn until one is found that neither profile retains.
+    for index in range(4800):
+        changed = _wide_model()
+        record = changed._metadata["measures"][index]
+        record["Measure Expression"] = "SUM(T000[other])"
+        key = f"T000[{record['Measure Name']}]"
+        after = _profile(changed, limits=limits)
+        if key not in retained and key not in after.schema["measures"]:
+            break
+    else:
+        pytest.fail("every measure was retained")
+
+    assert after.snapshot_fingerprint != before.snapshot_fingerprint
+
+
+def test_a_model_that_fits_is_profiled_exactly_as_before():
+    profile = _profile(FakeSemanticModel())
+    assert "retained_record_cap" not in profile.diagnostics
+
+
+def test_the_generic_profile_size_error_says_which_source_and_how_to_raise_it(tmp_path):
+    path = tmp_path / "wide.csv"
+    path.write_text(",".join(f"column_{i:03d}_{'x' * 40}" for i in range(200)) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError) as raised:
+        profile_sources({"wide": path}, roles={"wide": "numeric_evidence"},
+                        limits=ProfileLimits(max_diagnostic_bytes=512))
+    message = str(raised.value)
+    assert "source alias wide" in message and "512" in message
+    assert "ProfileLimits(max_diagnostic_bytes=" in message

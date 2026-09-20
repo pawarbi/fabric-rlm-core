@@ -214,6 +214,19 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development and testing, and
 [CHANGELOG.md](CHANGELOG.md) for release history. Bug reports should include the
 package version, runtime, task configuration, and a redacted traceback or trajectory.
 
+## Where it fits
+
+Use `fabric-rlm` for data that is too large to place in a prompt, exact
+calculation across many rows, files, or Fabric sources, and deliverables that
+have to be built and checked, such as a workbook or a report. Each run leaves
+its code, a trace, and a validated payload to review.
+
+A direct model call is usually better for short questions or text that already
+fits in context: a run takes minutes, not seconds. When the same step applies to
+each row on its own, such as classifying a text column, [Fabric AI functions](https://learn.microsoft.com/fabric/data-science/ai-functions/overview)
+are simpler. Results vary by model and by run, and a rule stated once in a long
+document can be missed, so state the definitions that matter and validate outputs.
+
 ## Acknowledgments
 
 fabric-rlm builds on the following work:

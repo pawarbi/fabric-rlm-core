@@ -6,6 +6,22 @@ import inspect
 from typing import Mapping, Any
 
 
+# The sub-LM helpers, as the model is told about them when one is configured.
+_PREDICT_AVAILABLE = """`await predict(signature, instructions=None, pydantic_schemas=None, **kwargs)` calls the configured sub-LM.
+`predict_sync(signature, instructions=None, pydantic_schemas=None, **kwargs)` is the synchronous form.
+Both return a Prediction object; read outputs by field name, for example
+`predict_sync("text -> label", text=text).label`.
+Use instructions for task-specific guidance, pydantic_schemas for typed outputs, and dspy.Image input fields for images.
+"""
+# A live LM object (FabricLM(...), a dspy.LM, any callable) cannot cross into
+# the worker, so no sub-LM is configured unless ``sub_lm=`` or a string or dict
+# ``lm`` names one. Advertising the helpers anyway cost a turn in every
+# PDF-skill run traced in Fabric: the model called them first and got an error.
+_PREDICT_UNAVAILABLE = (
+    "`predict` and `predict_sync` are not available in this run: no sub-LM is configured. "
+    "Where a skill suggests them, do that step yourself: print the text you need and read it, or use Python.\n"
+)
+
 SYSTEM_PROMPT_TEMPLATE = """You are an RLM (Recursive Language Model) running in a Python REPL.
 
 You solve the task by writing Python code. Each block you write is executed in
@@ -15,12 +31,7 @@ turns. Build your answer incrementally.
 ## Sandbox API
 
 `File(path)` wraps a file path.
-`await predict(signature, instructions=None, pydantic_schemas=None, **kwargs)` calls the configured sub-LM.
-`predict_sync(signature, instructions=None, pydantic_schemas=None, **kwargs)` is the synchronous form.
-Both return a Prediction object; read outputs by field name, for example
-`predict_sync("text -> label", text=text).label`.
-Use instructions for task-specific guidance, pydantic_schemas for typed outputs, and dspy.Image input fields for images.
-`SUBMIT(**fields)` finishes the task. You MUST call SUBMIT once ready. SUBMIT is already defined in your namespace; never import it.
+{predict_section}`SUBMIT(**fields)` finishes the task. You MUST call SUBMIT once ready. SUBMIT is already defined in your namespace; never import it.
 `is_material_change(current, baseline, absolute_tolerance=0, relative_tolerance=0, direction=None)` and `restrict_to_candidate_tuples(frame, candidates, keys=[...])` are predefined; `validate_analysis_integrity(...)` runs pre-SUBMIT analytical checks.
 {skill_section}{cross_source_section}
 
@@ -87,6 +98,7 @@ def build_system_prompt(
     skill_cards: str | None = None,
     router_active: bool = False,
     learned_guidance: str | None = None,
+    sub_lm_available: bool = True,
 ) -> str:
     inputs = inputs or {}
     task_description, outputs = _task_and_outputs(signature, inline_task, inline_outputs)
@@ -108,6 +120,7 @@ def build_system_prompt(
             skill_index, preloaded_skills, skill_cards=skill_cards, router_active=router_active
         ),
         cross_source_section=_cross_source_section(inputs),
+        predict_section=_PREDICT_AVAILABLE if sub_lm_available else _PREDICT_UNAVAILABLE,
         learned_guidance_section=f"\n{guidance}\n" if guidance else "",
     )
 

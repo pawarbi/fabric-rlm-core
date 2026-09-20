@@ -29,6 +29,7 @@ from typing import Any, Iterable, Mapping, Sequence
 __all__ = [
     "DEFAULT_NOISE_RELATIVE_TOLERANCE",
     "check_unsupported_literals",
+    "check_truncated_source_reads",
     "AnalyticalIntegrityError",
     "DirectionalClaim",
     "IntegrityReport",
@@ -447,11 +448,15 @@ class RankingRequest:
     concept: str
     tokens: tuple[str, ...]
     phrase: str
+    # True for "rank ... by" and "prioritize ... by". "sorted by", "ordered by"
+    # and "top N ... by" also say how a table is to be laid out, so they only
+    # count as a request for a ranking when the answer is a written one.
+    explicit: bool = True
 
 
 _RANKING_REQUEST_RES = (
     re.compile(
-        r"\b(?:rank(?:ed|ing)?|prioriti[sz]e[ds]?|sort(?:ed)?|order(?:ed)?|top\s+\d+|bottom\s+\d+)"
+        r"\b(?P<verb>rank(?:ed|ing)?|prioriti[sz]e[ds]?|sort(?:ed)?|order(?:ed)?|top\s+\d+|bottom\s+\d+)"
         r"\b[^.?!;\n]{0,80}?\bby\s+(?:the\s+|their\s+|its\s+)?(?P<concept>[^.,;:?!\n]+)",
         re.IGNORECASE,
     ),
@@ -462,28 +467,43 @@ _CONCEPT_CUTS = re.compile(
 )
 
 
+# "sorted by amount descending": the direction is how to sort, not what to sort by.
+_SORT_DIRECTION_RE = re.compile(
+    r"\s+(?:in\s+)?(?:desc(?:ending)?|asc(?:ending)?)(?:\s+order)?\s*$", re.IGNORECASE
+)
+# "sorted descending by that average": the concept was defined earlier in the task.
+_BACK_REFERENCE_RE = re.compile(
+    r"^(?:this|that|these|those|it|them|the\s+(?:same|above|latter|former))\b", re.IGNORECASE
+)
+
+
 def infer_requested_ranking(task_text: str | None) -> RankingRequest | None:
     """Find "rank ... by <concept>" in a task; None when no ranking is asked.
 
     Only explicit "by <concept>" forms count. Superlatives such as "the
     largest customers" are left alone: they name a size, not a concept
-    that needs an operational definition.
+    that needs an operational definition. A sort direction is not part of
+    the concept, and a back-reference ("by that average") names nothing an
+    answer could be asked to mention, so the next request in the task is
+    used instead.
     """
     if not task_text:
         return None
     for pattern in _RANKING_REQUEST_RES:
-        match = pattern.search(task_text)
-        if not match:
-            continue
-        raw = match.group("concept")
-        concept = _CONCEPT_CUTS.split(raw, maxsplit=1)[0].strip(" \t\"'")
-        words = concept.split()
-        if len(words) > 6:
-            concept = " ".join(words[:6])
-        tokens = tuple(_tokens(concept))
-        if not tokens:
-            continue
-        return RankingRequest(concept=concept, tokens=tokens, phrase=match.group(0).strip())
+        for match in pattern.finditer(task_text):
+            raw = match.group("concept")
+            concept = _CONCEPT_CUTS.split(raw, maxsplit=1)[0].strip(" \t\"'")
+            concept = _SORT_DIRECTION_RE.sub("", concept).strip(" \t\"'")
+            if _BACK_REFERENCE_RE.match(concept):
+                continue
+            words = concept.split()
+            if len(words) > 6:
+                concept = " ".join(words[:6])
+            tokens = tuple(_tokens(concept))
+            if not tokens:
+                continue
+            explicit = match.group("verb").lower().startswith(("rank", "priorit"))
+            return RankingRequest(concept=concept, tokens=tokens, phrase=match.group(0).strip(), explicit=explicit)
     return None
 
 
@@ -879,6 +899,150 @@ def _submit_literals(code: str) -> list[tuple[float, str]]:
     return literals
 
 
+def check_truncated_source_reads(turns: Iterable[Any]) -> list[str]:
+    """A query result that was cut at ``max_rows`` and never replaced.
+
+    Reads the typed source-call telemetry on each turn, never the data. A
+    truncated result is a finding unless a later query on the same source came
+    back complete: a ``SELECT *`` used as a preview is harmless once the run
+    goes on to aggregate in SQL, while a run whose last read of a source was
+    capped has, in practice, computed its figures from the first rows alone.
+    One such run reported a 0.00% lapse rate from 1,000 of 378,791 rows.
+    """
+
+    last_read: dict[str, tuple[Any, bool, Any]] = {}
+    for turn in turns:
+        for call in getattr(turn, "source_calls", None) or ():
+            if not isinstance(call, Mapping) or call.get("query_type") != "lakehouse_sql":
+                continue
+            if call.get("reason") or call.get("truncated") is None:
+                continue          # failed, or an older record with no flag
+            last_read[str(call.get("source_root", ""))] = (
+                getattr(turn, "turn", None),
+                bool(call.get("truncated")),
+                call.get("max_rows"),
+            )
+    problems: list[str] = []
+    for turn_number, truncated, max_rows in last_read.values():
+        if truncated:
+            problems.append(
+                f"Turn {turn_number}: a LakehouseSource.query result was truncated at "
+                f"max_rows={max_rows} and no later query on that source replaced it. "
+                "Any figure computed from those rows covers only part of the data. "
+                "Recompute it as an aggregate in SQL (GROUP BY, SUM, COUNT) so the "
+                "engine reads every row, then SUBMIT again."
+            )
+    return problems
+
+
+def check_submitted_paths_exist(
+    payload: Mapping[str, Any] | None,
+    inputs: Mapping[str, Any] | None,
+) -> list[str]:
+    """A file path the task supplied, handed back as an output, with no file there.
+
+    One run failed before ``wb.save`` in every build turn and then submitted
+    ``report_path`` with its figures; the payload had the right type and was
+    accepted. Returning the path is the run's own statement that the file is
+    there, so its absence is a finding. Kept narrow so a correct run is never
+    sent back: only a string that an input also holds, only a local path with
+    a file extension, and only when its folder exists (a path from another
+    machine, a replayed trajectory or a remote URL cannot be judged from here).
+    """
+
+    import os
+
+    if not isinstance(payload, Mapping) or not isinstance(inputs, Mapping):
+        return []
+    supplied = {value for value in inputs.values() if isinstance(value, str)}
+    problems: list[str] = []
+    for field, value in payload.items():
+        if not isinstance(value, str) or value not in supplied or "://" in value:
+            continue
+        if not ("/" in value or "\\" in value) or not os.path.splitext(value)[1]:
+            continue
+        try:
+            folder_exists = os.path.isdir(os.path.dirname(value))
+            file_exists = os.path.exists(value)
+        except (OSError, ValueError):
+            continue
+        if folder_exists and not file_exists:
+            problems.append(
+                f"{field} is {value} but no file exists there: it was never saved. An "
+                "earlier turn may have failed before the save ran. Write the file, reopen "
+                "it to check it, then SUBMIT again."
+            )
+    return problems
+
+
+def _is_empty_result(value: Any) -> bool:
+    """Zero, NaN, None, or a collection that is empty or holds only such values."""
+
+    if value is None:
+        return True
+    if isinstance(value, bool) or isinstance(value, str):
+        return False
+    if isinstance(value, (int, float)):
+        return value == 0 or value != value
+    if isinstance(value, Mapping):
+        return all(_is_empty_result(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return all(_is_empty_result(item) for item in value)
+    return False
+
+
+def check_blind_empty_submit(code: str | None, payload: Mapping[str, Any] | None) -> list[str]:
+    """A zero or empty output submitted from the same step that computed it.
+
+    Output reaches the model only after a step ends, so a value computed and
+    submitted in one block was never looked at. When that value is zero or
+    empty, it is what a filter that matched nothing, or an ``except`` that
+    skipped every row, looks like: one run parsed dates inside
+    ``try/except: continue``, skipped every row, and submitted a total of 0.0
+    from its first turn; another wrote its loader and SUBMIT in one block and
+    reported 0 of 2,000 files loaded. A true zero costs one confirming step.
+
+    Narrow by construction: only a keyword of the ``SUBMIT`` call whose value
+    is empty, is not a literal (the literal check owns those), and is built
+    from a name assigned in that same block. Strings and booleans are never
+    judged, and code that cannot be parsed is left alone.
+    """
+
+    if not code or not isinstance(payload, Mapping):
+        return []
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "SUBMIT"
+    ]
+    if not calls:
+        return []
+    assigned = {
+        node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+    }
+    unseen: list[str] = []
+    for keyword in calls[-1].keywords:
+        if keyword.arg is None or isinstance(keyword.value, ast.Constant):
+            continue
+        if keyword.arg not in payload or not _is_empty_result(payload[keyword.arg]):
+            continue
+        used = {node.id for node in ast.walk(keyword.value) if isinstance(node, ast.Name)}
+        if used & assigned:
+            unseen.append(f"{keyword.arg} = {payload[keyword.arg]!r}")
+    if not unseen:
+        return []
+    return [
+        f"{', '.join(unseen)} was submitted from the same step that computed it, so it was never "
+        "looked at. A zero or an empty result is also what a filter that matched nothing, or an "
+        "`except` that skipped every row, looks like. Print what leads to it in one step (rows "
+        "read, rows kept, the value), read the output, and SUBMIT in the next step. If it is the "
+        "true answer, that output is your evidence."
+    ]
+
+
 def check_unsupported_literals(
     code: str | None,
     payload: Mapping[str, Any] | None,
@@ -1043,7 +1207,9 @@ def validate_grain(
 
 _DECREASE_STEMS = (
     "declin", "decreas", "fell", "fall", "drop", "deteriorat", "worsen", "shrank",
-    "shrink", "slid", "slip", "contract", "eroded", "erod", "lower", "weaken",
+    "shrink", "slid", "slip", "eroded", "erod", "lower", "weaken",
+    # Not the bare stem: "contract" is nearly always the noun in business prose.
+    "contracted", "contracting", "contraction",
 )
 _INCREASE_STEMS = (
     "increas", "grew", "grow", "rose", "rise", "risen", "improv", "climb", "expand",
@@ -1084,13 +1250,37 @@ class DirectionalClaim:
     actual: str
 
 
-def _claimed_direction(*fragments: str) -> str | None:
-    words = re.findall(r"[a-z]+", " ".join(fragments).lower())
-    for word in words:
-        if any(word.startswith(stem) for stem in _DECREASE_STEMS):
-            return "decrease"
-        if any(word.startswith(stem) for stem in _INCREASE_STEMS):
-            return "increase"
+def _word_direction(word: str) -> str | None:
+    if any(word.startswith(stem) for stem in _DECREASE_STEMS):
+        return "decrease"
+    if any(word.startswith(stem) for stem in _INCREASE_STEMS):
+        return "increase"
+    return None
+
+
+def _claimed_direction(lead: str, tail: str = "") -> str | None:
+    """The direction the prose asserts for one "from A to B", or None.
+
+    The verb beside "from" is the claim: in "growth rate fell from 5% to 3%"
+    that is "fell", not the noun "growth" that happens to come first. When the
+    words before "from" point both ways and none of them sits beside it, or
+    when only the trailing clause speaks and it points both ways, the sentence
+    is too doubtful to reject and nothing is claimed. A rejected correct
+    sentence costs the run a turn, so doubt passes.
+    """
+
+    lead_words = re.findall(r"[a-z]+", lead.lower())
+    beside = list(reversed(lead_words))
+    while beside and beside[0].endswith("ly"):      # "fell sharply from"
+        beside.pop(0)
+    if beside and _word_direction(beside[0]):
+        return _word_direction(beside[0])
+    for words in (lead_words, re.findall(r"[a-z]+", tail.lower())):
+        found = {direction for direction in map(_word_direction, words) if direction}
+        if len(found) == 1:
+            return found.pop()
+        if found:
+            return None
     return None
 
 

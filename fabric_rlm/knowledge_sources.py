@@ -1,8 +1,13 @@
 """Internal, dependency-minimal profiling for explicitly named sources.
 
-Large-file snapshot fingerprints cover only bounded head/tail observations.
-Consequently, a mutation confined to an unobserved middle region can remain
-undetected; ``snapshot_exact`` discloses whether the complete file was hashed.
+Two budgets apply to a file. ``max_input_bytes`` bounds what the profiler
+parses to infer a schema. ``max_snapshot_bytes`` bounds what is hashed for the
+snapshot fingerprint; hashing streams in constant memory, so that budget is
+far larger. A file within it is hashed in full and ``snapshot_exact`` is true.
+
+Beyond it, the fingerprint covers only bounded head/tail observations. A
+mutation confined to the unobserved middle can then go undetected, so
+``snapshot_exact`` is false and the source never enters registered execution.
 """
 
 from __future__ import annotations
@@ -55,8 +60,15 @@ class ProfileLimits:
     max_nesting_depth: int = 8
     max_diagnostic_bytes: int = 64 * 1024
     read_chunk_bytes: int = 64 * 1024
+    # Largest file hashed in full for an exact snapshot. ``None`` means
+    # DEFAULT_MAX_SNAPSHOT_BYTES, or ``max_input_bytes`` when that is larger.
+    max_snapshot_bytes: int | None = None
 
     def __post_init__(self) -> None:
+        if self.max_snapshot_bytes is not None and (
+            type(self.max_snapshot_bytes) is not int or self.max_snapshot_bytes < 1
+        ):
+            raise ValueError("max_snapshot_bytes must be a positive integer or None")
         for name in (
             "max_input_bytes",
             "max_records",
@@ -234,12 +246,42 @@ def _read_region(
     return b"".join(chunks)
 
 
+DEFAULT_MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
+_HASH_CHUNK_BYTES = 1024 * 1024
+
+
+def snapshot_budget(limits: object) -> int:
+    """Bytes up to which a file is hashed in full for an exact snapshot."""
+
+    configured = getattr(limits, "max_snapshot_bytes", None)
+    parse_budget = int(getattr(limits, "max_input_bytes", 0) or 0)
+    if configured is None:
+        return max(DEFAULT_MAX_SNAPSHOT_BYTES, parse_budget)
+    return max(int(configured), parse_budget)
+
+
+def _stream_digest(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    observed = 0
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(_HASH_CHUNK_BYTES)
+            if not chunk:
+                break
+            digest.update(chunk)
+            observed += len(chunk)
+    return digest.hexdigest(), observed
+
+
 def _snapshot(path: Path, size_bytes: int, limits: ProfileLimits) -> _Snapshot:
-    budget = min(size_bytes, limits.max_input_bytes)
-    exact = size_bytes <= limits.max_input_bytes
+    exact = size_bytes <= snapshot_budget(limits)
     if exact:
-        observed = _read_prefix(path, budget, limits.read_chunk_bytes)
+        # The whole file, streamed in constant memory. For a file within
+        # ``max_input_bytes`` this is the digest earlier versions computed, so
+        # packages they saved stay valid.
+        digest, observed_bytes = _stream_digest(path)
     else:
+        budget = min(size_bytes, limits.max_input_bytes)
         head_length = (budget + 1) // 2
         tail_length = budget - head_length
         head = _read_region(
@@ -252,19 +294,20 @@ def _snapshot(path: Path, size_bytes: int, limits: ProfileLimits) -> _Snapshot:
             chunk_bytes=limits.read_chunk_bytes,
         )
         observed = head + tail
-    digest = hashlib.sha256(observed).hexdigest()
+        digest = hashlib.sha256(observed).hexdigest()
+        observed_bytes = len(observed)
     identity = {
         "size_bytes": size_bytes,
         "content_digest": digest,
         "snapshot_exact": exact,
-        "observed_bytes": len(observed),
+        "observed_bytes": observed_bytes,
         "observation_code": "full" if exact else "head_tail",
     }
     return _Snapshot(
         fingerprint=_domain_fingerprint("local-source-snapshot-v1", identity),
         content_digest=digest,
         size_bytes=size_bytes,
-        observed_bytes=len(observed),
+        observed_bytes=observed_bytes,
         exact=exact,
     )
 
@@ -984,7 +1027,11 @@ def profile_sources(
         encoded_size = len(canonical_json(profile.to_dict()).encode("utf-8"))
         if encoded_size > active_limits.max_diagnostic_bytes:
             raise ValueError(
-                "canonical SourceProfile exceeds max_diagnostic_bytes"
+                f"canonical SourceProfile exceeds max_diagnostic_bytes: the profile "
+                f"of source alias {source_id} is {encoded_size:,} bytes against a "
+                f"limit of {active_limits.max_diagnostic_bytes:,}. Narrow the source, "
+                "or pass limits=ProfileLimits(max_diagnostic_bytes=...) to RLM.learn() "
+                "and load_knowledge()."
             )
         profiles.append(profile)
     return tuple(profiles)

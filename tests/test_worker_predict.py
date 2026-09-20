@@ -122,3 +122,15 @@ def test_predict_sync_works_outside_running_loop(monkeypatch) -> None:
 
     result = _worker.predict_sync('english -> french', english='hello')
     assert result.french == 'bonjour'
+
+
+def test_predict_without_a_sub_lm_tells_the_model_what_to_do(monkeypatch) -> None:
+    import pytest
+
+    monkeypatch.setattr(_worker, "_lm_spec", None)
+    monkeypatch.setattr(_worker, "_lm_instance", None)
+    with pytest.raises(RuntimeError) as raised:
+        _worker._get_lm()
+    message = str(raised.value)
+    assert "not available in this run" in message and "Do this step in Python" in message
+    assert "sub_lm=" in message          # and the host learns how to enable it

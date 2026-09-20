@@ -369,22 +369,97 @@ def test_save_rejects_oversized_envelope_before_filesystem_side_effects(
     assert not list(tmp_path.rglob("*.tmp"))
 
 
-def test_no_overwrite_unsupported_publication_fails_explicitly(
+@pytest.mark.parametrize(
+    "code",
+    [errno.ENOTSUP, errno.EPERM, errno.EACCES, errno.ENOSYS, errno.EXDEV],
+)
+def test_no_overwrite_falls_back_when_the_filesystem_has_no_hard_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    code: int,
+) -> None:
+    # The Fabric Lakehouse mount answers os.link with EPERM; other FUSE mounts
+    # say ENOTSUP or ENOSYS. The documented RLM.learn(store=<mount path>)
+    # example failed there with a bare PermissionError.
+    import fabric_rlm.knowledge_store as store
+
+    primitive = "rename" if os.name == "nt" else "link"
+
+    def unsupported(*args: object, **kwargs: object) -> None:
+        raise OSError(code, os.strerror(code))
+
+    monkeypatch.setattr(store.os, primitive, unsupported)
+    destination = tmp_path / "knowledge.json"
+
+    save_knowledge_package(destination, _package())
+
+    assert load_knowledge_package(destination, bindings=_bindings()).package == _package()
+    assert list(tmp_path.iterdir()) == [destination]
+
+
+def test_the_fallback_still_refuses_to_overwrite(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import fabric_rlm.knowledge_store as store
 
     primitive = "rename" if os.name == "nt" else "link"
+    monkeypatch.setattr(
+        store.os,
+        primitive,
+        lambda *a, **k: (_ for _ in ()).throw(OSError(errno.EPERM, "not permitted")),
+    )
+    destination = tmp_path / "knowledge.json"
+    destination.write_bytes(b"original")
 
-    def unsupported(*args: object, **kwargs: object) -> None:
-        raise OSError(errno.ENOTSUP, "unsupported")
+    with pytest.raises(FileExistsError):
+        save_knowledge_package(destination, _package())
 
-    monkeypatch.setattr(store.os, primitive, unsupported)
+    assert destination.read_bytes() == b"original"
+    assert list(tmp_path.iterdir()) == [destination]
 
-    with pytest.raises(KnowledgePersistenceError, match="atomic no-clobber"):
+
+def test_no_overwrite_fails_explicitly_when_nothing_works(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fabric_rlm.knowledge_store as store
+
+    primitive = "rename" if os.name == "nt" else "link"
+    monkeypatch.setattr(
+        store.os,
+        primitive,
+        lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOTSUP, "unsupported")),
+    )
+    real_open = os.open
+
+    def no_exclusive_create(path, flags, *args, **kwargs):
+        if flags & os.O_EXCL and str(path).endswith("knowledge.json"):
+            raise OSError(errno.ENOTSUP, "unsupported")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(store.os, "open", no_exclusive_create)
+
+    with pytest.raises(KnowledgePersistenceError, match="no-clobber publication is unsupported"):
         save_knowledge_package(tmp_path / "knowledge.json", _package())
 
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_unrelated_publication_error_is_not_swallowed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fabric_rlm.knowledge_store as store
+
+    primitive = "rename" if os.name == "nt" else "link"
+    monkeypatch.setattr(
+        store.os,
+        primitive,
+        lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "disk full")),
+    )
+    with pytest.raises(OSError, match="disk full"):
+        save_knowledge_package(tmp_path / "knowledge.json", _package())
     assert list(tmp_path.iterdir()) == []
 
 

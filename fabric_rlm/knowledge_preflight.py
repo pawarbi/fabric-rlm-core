@@ -56,6 +56,54 @@ class KnowledgePreflightResult:
         return not self.drift
 
 
+def drift_message(
+    drift: Mapping[str, str],
+    *,
+    limits: object | None = None,
+    while_loading: bool = False,
+) -> str:
+    """Say why sources cannot be used, by cause.
+
+    A source that changed is stale. A source whose snapshot is inexact did not
+    change: it is larger than what is hashed in full, or it is a Lakehouse
+    Files entry with no transaction log. Calling that "stale" sent readers
+    looking for a modification that never happened.
+    """
+
+    from .knowledge_sources import snapshot_budget
+
+    changed = sorted(k for k, kind in drift.items() if kind != "inexact")
+    inexact = sorted(k for k, kind in drift.items() if kind == "inexact")
+    parts: list[str] = []
+    if changed:
+        parts.append(
+            "stale knowledge sources detected"
+            + (" while loading" if while_loading else "")
+            + ": "
+            + ", ".join(changed)
+        )
+    if inexact:
+        budget = snapshot_budget(limits) if limits is not None else None
+        detail = (
+            f" A file is verified by hashing it in full, up to "
+            f"ProfileLimits.max_snapshot_bytes ({budget:,} bytes here); pass "
+            "limits=ProfileLimits(max_snapshot_bytes=...) to RLM.learn() and "
+            "load_knowledge() to raise it."
+            if budget is not None
+            else ""
+        )
+        parts.append(
+            "knowledge sources cannot be verified exactly"
+            + (" while loading" if while_loading else "")
+            + ": "
+            + ", ".join(inexact)
+            + ". They did not necessarily change: their snapshot is inexact."
+            + detail
+            + " A source bound through inputs= needs no verification."
+        )
+    return "; ".join(parts)
+
+
 def _exact_aliases(
     package: KnowledgePackage,
     sources: Mapping[str, object],

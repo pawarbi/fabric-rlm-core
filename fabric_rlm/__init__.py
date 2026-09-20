@@ -19,6 +19,10 @@ from .excel_artifacts import (
     summarize_workbook_structure_context,
     summarize_workbook_context,
     validate_target_range_sanity,
+    RecalculatedWorkbook,
+    formula_errors,
+    recalculate_workbook,
+    workbook_formula_validator,
 )
 from .grounding import (
     evidence_report,
@@ -35,6 +39,7 @@ from .interpreter import (
 from .inspector import RunInspector
 from .knowledge import EvidenceRecord, LearnedLesson
 from .knowledge_api import Knowledge, load_knowledge
+from .knowledge_sources import ProfileLimits
 from .knowledge_evidence import harvest_evidence
 from .knowledge_retrieval import retrieve_lessons
 from .lm import AnthropicLM, FabricLM, OpenAILM, register_backend, resolve_lm
@@ -88,6 +93,8 @@ __all__ = [
     "LocalArtifactStore",
     "LakehouseSource",
     "OpenAILM",
+    "ProfileLimits",
+    "RecalculatedWorkbook",
     "Issue",
     "ReplayInterpreter",
     "ReplayLM",
@@ -137,7 +144,10 @@ __all__ = [
     "harvest_evidence",
     "iter_target_cells",
     "list_skills",
+    "formula_errors",
     "load_knowledge",
+    "recalculate_workbook",
+    "workbook_formula_validator",
     "load_skill",
     "parse_target_ranges",
     "register_backend",
@@ -151,4 +161,4 @@ __all__ = [
 
 # Single source of truth for the package version. pyproject.toml reads this
 # statically via [tool.setuptools.dynamic] — bump it here and nowhere else.
-__version__ = "0.6.4"
+__version__ = "0.6.5"

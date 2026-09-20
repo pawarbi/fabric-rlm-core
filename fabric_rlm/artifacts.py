@@ -101,6 +101,16 @@ class File:
     def __repr__(self) -> str:
         return f"File({self.path!r})"
 
+    def __str__(self) -> str:
+        """The path, so a handle dropped into an f-string still points at the file.
+
+        Generated code builds SQL and paths with f-strings on its first turn:
+        ``f"read_csv_auto('{data_file}')"``. With only ``__repr__`` defined
+        that read ``File('/lakehouse/...')`` and the turn was lost to a
+        FileNotFoundError. ``repr()`` keeps the ``File(...)`` form.
+        """
+        return self.path
+
     def __fspath__(self) -> str:
         """Make File usable anywhere os.PathLike is accepted (open, os.path.exists,
         Path(...), shutil, etc.). Without this, models naturally write
@@ -737,6 +747,7 @@ def encode_for_worker(value: Any) -> Any:
                 "files": list(value.files),
                 "catalog": [dict(item) for item in value.catalog or ()],
                 "max_sources": value.max_sources,
+                "skipped": [dict(item) for item in value.skipped],
             }
         }
     if isinstance(value, (str, int, float, bool)) or value is None:
@@ -789,6 +800,7 @@ def decode_from_worker_wire(value: Any) -> Any:
                 files=spec.get("files"),
                 catalog=spec.get("catalog", []),
                 max_sources=spec.get("max_sources", 200),
+                skipped=spec.get("skipped"),
             )
         return {k: decode_from_worker_wire(v) for k, v in value.items()}
     if isinstance(value, list):

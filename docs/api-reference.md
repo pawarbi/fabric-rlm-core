@@ -50,8 +50,14 @@ read-only, determinate answer merits two or three solves and the extra cost.
 **Validation status:** the combined argument-level selection passed 169 tests; the
 [API argument test coverage](api-argument-tests.md) will record coverage and gaps.
 This source-based reference does not claim every argument/engine combination is
-tested. Live authenticated Fabric execution has not been tested; provider/model
-availability and authentication are separate from local runtime argument tests.
+tested. The argument tests run locally. Separately, the documented flows were run
+in a live Fabric Python 3.12 notebook on 2026-09-19: typed outputs, validators,
+skills, `verified_task`, files, `LakehouseSource`, `SemanticModel`,
+`FileDestination` and `RLM.learn`, mostly with a model reached through
+OpenRouter and in part with `FabricLM("gpt-5.1")` at low, medium and high
+reasoning effort. That is not every argument and engine combination.
+Provider/model availability and authentication remain separate from the local
+argument tests.
 
 ## RLM.task and RLM
 
@@ -294,7 +300,7 @@ non-`1.0`/non-`None` temperature overrides for recognized reasoning models.
 
 Microsoft's [Fabric model documentation](https://learn.microsoft.com/en-us/fabric/data-science/ai-services/ai-services-overview#consumption-rate-for-openai-language-models)
 lists `gpt-5.1` and `gpt-5-mini` when checked on 2026-09-18. Availability depends
-on current Fabric region/capacity configuration. These names and authentication
-behavior were checked against documentation/source, **not a live authenticated
-Fabric trial**. See also the [public quick start](../README.md#quick-start-in-fabric)
+on current Fabric region/capacity configuration. `gpt-5.1` and notebook-identity
+authentication were exercised in a live Fabric notebook on 2026-09-19; `gpt-5-mini`
+was checked against documentation only. See also the [public quick start](../README.md#quick-start-in-fabric)
 and [reconciliation guide](verified-task.md).

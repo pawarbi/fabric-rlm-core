@@ -148,3 +148,46 @@ def test_report_never_raises_on_a_bare_result():
 def test_turn_count_matches_the_trajectory(n_turns):
     r = run([code(f"x = {i}") for i in range(n_turns)], max_turns=n_turns)
     assert r.report(as_dict=True)["turns"] == r.n_turns == n_turns
+
+
+# --- who rejected the submission ----------------------------------------------
+
+def test_a_validator_rejection_is_blamed_on_the_validator():
+    seen = []
+
+    def needs_usd(payload):
+        seen.append(payload)
+        if payload.get("answer") != "USD":
+            raise AssertionError("answer must be exactly USD")
+
+    r = run([code("SUBMIT(answer='dollars')"), code("SUBMIT(answer='USD')")],
+            output_validator=needs_usd, analytical_integrity=False)
+    text = r.report()
+    assert r.submitted and len(seen) == 2
+    assert "your output_validator rejected a payload" in text
+    assert "answer must be exactly USD" in text
+
+
+def test_other_rejections_are_not_blamed_on_a_validator_nobody_wrote():
+    # Seen on every run of the flagship notebook: repairs came from a skill
+    # verifier or the integrity screen, and the hint named an output_validator.
+    from fabric_rlm.runtime import _repair_hints
+
+    hints = _repair_hints([
+        {"skill": "excel_modify", "assertion": "sheet 'Report' is missing", "turn": 3},
+        {"skill": "analytical_integrity", "assertion": "says rose, numbers fell", "turn": 4},
+        {"skill": "analytical_integrity", "assertion": "a truncated result", "turn": 5},
+    ])
+    joined = "\n".join(hints)
+    assert "output_validator" not in joined
+    assert "verifier of skill 'excel_modify'" in joined and "sheet 'Report' is missing" in joined
+    assert "analytical-integrity screen rejected a submission 2 times" in joined
+    assert "a truncated result" in joined            # the latest reason is the one shown
+
+
+def test_a_repair_with_no_recorded_source_gets_a_neutral_hint():
+    from fabric_rlm.runtime import _repair_hints
+
+    assert _repair_hints(None) == _repair_hints([])
+    assert "verifier_repair_history" in _repair_hints(None)[0]
+    assert "output_validator" not in _repair_hints(None)[0]

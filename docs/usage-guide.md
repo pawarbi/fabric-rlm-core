@@ -186,7 +186,32 @@ knowledge = load_knowledge(
 
 `RLM.learn(...)` deterministically profiles bounded source metadata, keeps
 runtime paths and authorization handles outside the persisted package, and can
-save locally or to a canonical OneLake `abfss://.../Files/...` path. Loading
+save locally, to the attached Lakehouse mount (`/lakehouse/default/Files/...`),
+or to a canonical OneLake `abfss://.../Files/...` path. A saved package is never
+replaced unless you pass `overwrite=True`.
+
+Two budgets in `ProfileLimits` apply to a file source. `max_input_bytes`
+(1 MiB) bounds what the profiler parses to infer a schema. `max_snapshot_bytes`
+(512 MiB) bounds what is hashed to detect change; hashing streams, so a file
+within it is verified exactly whatever its size. A larger file is hashed at its
+head and tail only. `RLM.learn` warns about such a source, no operation is
+registered for it, and a task given that knowledge refuses it with a message
+that says so. Raise the budget where that is acceptable:
+
+```python
+from fabric_rlm import ProfileLimits
+
+knowledge = RLM.learn(
+    sources={"orders": File("/lakehouse/default/Files/orders.parquet")},
+    limits=ProfileLimits(max_snapshot_bytes=4 * 1024**3),
+)
+```
+
+Pass the same `limits` to `load_knowledge`. A semantic model with thousands of
+measures keeps as many tables, columns and measures as fit in
+`max_diagnostic_bytes`; its fingerprints still cover the complete metadata, so
+change detection is unaffected and only the registered operation's allowlist is
+shorter (`retained_record_cap` in the profile diagnostics says by how much). Loading
 requires fresh, exact source aliases and rejects source drift before binding.
 Every knowledge-enabled task preflights the current sources before the model is
 called. For a `SemanticModel`, learning also registers one bounded
@@ -366,6 +391,35 @@ Output mappings enforce runtime types. `output_validator` can enforce business
 rules. `output_validator_context` can inspect files and other side effects.
 Markdown skills can include their own verifier. A failed check becomes feedback
 for the next attempt.
+
+### Check what a workbook's formulas evaluate to
+
+openpyxl stores a formula as text and never evaluates it, and a workbook saved
+from Python has no cached values. Reopening the file can confirm that a cell
+holds a formula, not that the formula is right. For a what-if model or a
+dashboard whose cells must be formulas, recalculate the saved file in the
+validator (`pip install fabric-rlm[excel]`):
+
+```python
+from fabric_rlm import RLM, workbook_formula_validator
+
+validator = workbook_formula_validator([
+    {"inputs": {}, "expected": {"Scenarios!G3": 548_349.0}},
+    {"inputs": {"Assumptions!B9": 0.8}, "expected": {"Scenarios!G3": 1_693_384.0}},
+])
+
+result = RLM.task(task, inputs=inputs, outputs={"report_path": str},
+                  output_validator=validator, lm=lm).run()
+```
+
+Each scenario writes its input cells into a copy of the workbook, recalculates,
+and compares. A wrong cell comes back to the run as repair feedback that names
+the cell, what it recalculated to and what was expected. Give at least two
+scenarios with different inputs: hard-coded numbers can satisfy one, not both.
+`recalculate_workbook(path, inputs)` and `formula_errors(path)` are the same
+machinery for use in your own checks. The engine covers ordinary arithmetic and
+functions such as SUM, IF, SUMIFS, COUNTIFS, INDEX, MATCH and IFERROR; dynamic
+array functions are not supported.
 
 ### Keep domain rules beside the data
 
@@ -564,6 +618,7 @@ Optional extras install packages used by specific workloads:
 |---|---|---|
 | `fabric-rlm[pdf]` | PyMuPDF | PDF analysis and extraction |
 | `fabric-rlm[analytics]` | DuckDB, Polars | Large CSV, Parquet, and JSONL analysis |
+| `fabric-rlm[excel]` | openpyxl, formulas | Recalculating a saved workbook to check its formulas |
 | `fabric-rlm[fabric]` | SynapseML | Fabric model integration when the runtime does not provide it |
 | `fabric-rlm[dev]` | pytest and development tools | Local development |
 
@@ -666,6 +721,28 @@ summary = lakehouse.query(
 )
 ```
 
+To give a task some tables and not others (a table with personal data, or a
+lakehouse with hundreds of tables), list them on one handle. `tables=` takes a
+sequence:
+
+```python
+source = LakehouseSource(
+    "abfss://workspace-id@onelake.dfs.fabric.microsoft.com/lakehouse-id",
+    tables=["Tables/dbo/fact_policy_month", "Tables/dbo/dim_product"],
+)
+```
+
+A query can only join sources that belong to the same handle. Several
+`LakehouseSource` objects can be bound in one task, but tables bound as separate
+handles cannot be joined to each other, so keep tables that belong together on
+one handle. Lakehouses with and without schemas (`Tables/dbo/<table>` and
+`Tables/<table>`) are both discovered.
+
+A table folder that cannot be read, for example one a failed write left with an
+empty `_delta_log`, is left out of the catalog and listed in `source.skipped`
+with the reason. The task is told which folders were skipped. Discovery fails
+only when the scope is that one table, or when nothing in the scope is readable.
+
 Catalog searches match source names, paths, columns, and data types. They do
 not widen the Tables or Files scopes supplied by the caller. `query()` runs in
 the trusted parent process against only the named catalog entries and returns
@@ -678,6 +755,14 @@ deadline, a 256 MiB DuckDB memory limit with temporary spill disabled, a
 10,000-row ceiling, and a 5 MiB serialized-result ceiling. Results are fetched
 and sized one row at a time so an oversized scalar or row is rejected before
 the complete result is materialized.
+
+`query()` returns at most `max_rows` rows (1,000 by default) and sets
+`"truncated": True` when it cut the result. The SQL itself always reads the whole
+table, so an aggregate is exact; only a query that returns many rows is cut.
+Called from a notebook cell, a truncated result raises a `UserWarning`. Inside a
+run it prints a warning into the turn's output, and the
+analytical-integrity screen sends back a submission whose last read of a source
+was truncated, because figures computed from the first rows alone are wrong.
 
 ### Semantic models
 
@@ -727,6 +812,21 @@ raises the ceiling for a model that handles wide grains well, and
 `arr.query_telemetry` records the estimate, timing, and outcome of each call.
 `arr.dax(...)` is unchanged and runs whatever it is given.
 
+`order_by` names one requested measure or groupby column. Besides a string it
+accepts the forms generated code tends to write: `("ARR $", "desc")`,
+`["ARR $"]` and `[("ARR $", "desc")]`. Several sort keys are refused with a
+message that shows the accepted form.
+
+A measure the engine types as variant (a SWITCH over numbers and text, a
+calculation group) is serialized by SemPy as text. `aggregate()`, `measure()` and
+the expression columns of `dax()` give such columns their numeric dtype back
+when every value is a plainly written number, so `sort_values` and `sum` behave.
+Model columns (`Table[Column]`) are never converted.
+
+SemPy's measure endpoint rejects some valid groupings, for example a column on
+a fact table. `arr.measure(...)` then answers the same request through the DAX
+path that `aggregate()` uses and returns it in its usual shape.
+
 Bind several at once and the model routes between them:
 
 ```python
@@ -766,11 +866,21 @@ contradiction reconciliation.
 
 Before accepting a `SUBMIT`, the runtime also screens the answer: prose that
 contradicts its own numbers, a "rank by impact" task whose ranking that reaches
-the answer sorted by something else or whose answer hides the impact metric,
+the answer sorted by something else or whose written answer hides the impact
+metric (with no prose in the payload, only an explicit "rank by" or "prioritize
+by" is screened: "sorted by" and "top N by" are the layout of a table),
 and code that consumed independent per-dimension value lists from a candidate
 frame together (a cartesian filter, whether as `.isin` chains or
 `aggregate(filters=...)`) without restoring the compound identity on those
-dimensions afterwards, are sent back with the reason. The code detectors are
+dimensions afterwards, are sent back with the reason. So is a submission that
+returns a file path the task supplied when no file exists there, which is what a
+run looks like when every attempt to build the workbook failed before the save.
+So, once, is a zero or an empty result that was computed and submitted in the
+same step: output reaches the model only after a step ends, so that value was
+never looked at, and zero is also what a filter that matched nothing or an
+`except` that skipped every row looks like. A true zero costs one confirming
+step, and the check stays silent on a run's last turn.
+The code detectors are
 high-confidence and best-effort: they read pandas, polars, pyspark, `sorted`
 and SQL `ORDER BY` spellings and follow variable lineage from `SUBMIT`, and
 they stay silent when they cannot tell. In the default `"repair"` mode this happens at
@@ -828,6 +938,21 @@ is named `inspect`, `result.inspect` is that submitted value; use
 Inside its Python, the model can call a nested model with
 `predict_sync("english -> french", english=phrase)` (or the async `predict`),
 optionally routed to a cheaper `sub_lm=`.
+
+The nested model runs inside the worker process, so it has to be named by
+something that can be sent there: `sub_lm="provider/model"` or a spec
+dictionary, or an `lm` that is itself a string or a dictionary. A live object
+such as `FabricLM("gpt-5.1")` cannot cross into the worker. When no nested
+model is configured, the run is told that `predict` is not available, so the
+model does that work in Python instead of calling it and losing a turn.
+
+In Fabric, name the built-in endpoint with the `fabric/` prefix. The worker
+gets its own token, so no key is involved:
+
+```python
+rlm = RLM.task(task, inputs=inputs, outputs=outputs,
+               lm=FabricLM("gpt-5.1"), sub_lm="fabric/gpt-5-mini")
+```
 
 ## Engines
 

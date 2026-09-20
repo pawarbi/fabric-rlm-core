@@ -1,6 +1,109 @@
 # Changelog
 
-## Unreleased
+## 0.6.5 - 2026-09-20 - fixes from running every example and documented flow in Fabric
+
+Fixes from running every example and the documented flows in a Fabric Python
+3.12 notebook against 0.6.4 (issues #88 to #105).
+
+### Fixed
+
+- A semantic-model run no longer ends as `worker_died` when SemPy's .NET client
+  prints to stdout. The worker moves its JSON protocol off file descriptor 1, so
+  nothing native code prints can reach it, and the parent skips lines that are
+  not protocol frames instead of failing the turn. Set
+  `FABRIC_RLM_ISOLATE_PROTOCOL=0` to keep the old shared stream (#94).
+- Measures the engine types as variant arrive from SemPy as text. `aggregate()`,
+  `measure()` and the expression columns of `dax()` restore a numeric dtype when
+  every value is a plainly written number, so a pandas sort no longer ranks
+  them as strings. Model columns are never converted (#97).
+- `RLM.learn(store=...)` works on the Lakehouse mount. Where the filesystem has
+  no hard links, publication falls back to an exclusive create, which still
+  refuses to overwrite an existing package (#88).
+- A learned file over 1 MiB is no longer refused as "stale". Snapshots hash the
+  whole file in a streaming pass up to the new `ProfileLimits.max_snapshot_bytes`
+  (512 MiB); `max_input_bytes` only bounds parsing. Fingerprints of files under
+  1 MiB are unchanged. Beyond the budget, `learn()` warns and the refusal says
+  the source cannot be verified exactly and how to raise the limit. A change in
+  the middle of a large file is now detected (#89).
+- `RLM.learn` on a semantic model with thousands of measures keeps as much of
+  the schema as fits in `max_diagnostic_bytes` instead of failing. Fingerprints
+  still cover the complete metadata. The generic size error names the source,
+  the size and the limit (#95).
+- One unreadable table folder no longer fails discovery of the whole lakehouse.
+  It is left out of the catalog, listed in `LakehouseSource.skipped` with the
+  reason, and the task is told. A scope that is that one table still fails, and
+  the error names the path (#90).
+- A truncated `LakehouseSource.query` result raises a `UserWarning` for a direct
+  caller and prints a warning into the turn's output inside a run, and the analytical-integrity screen sends back a submission whose last
+  read of a source was truncated (#99).
+- The error for a source that is not in a handle's catalog lists what the handle
+  holds and says to bind the tables on one `LakehouseSource(root, tables=[...])`
+  to join them (#100).
+- `str(File(...))` is the path, so a handle in an f-string names the file (#91).
+- `SemanticModel.measure(groupby=..., filters=...)` answers through the DAX path
+  when SemPy's measure endpoint refuses the request, and reports both failures
+  when neither works (#93).
+- The integrity screen no longer treats the sort order of a sheet as a ranking
+  the answer has to justify. A task that said "sorted descending by that
+  average", "sorted by department name" or "revenue descending" had its
+  submission sent back once or twice for never mentioning those words, which a
+  payload of numbers and a file path cannot do; it happened in 21 logged runs
+  and in all four runs of the IMF notebook, and a correct result came back with
+  `integrity_ok` false. The ranking checks are about a written answer, so when
+  the payload holds no prose they now apply only to an explicit "rank ... by" or
+  "prioritize ... by"; "sorted by" and "top N by" describe the layout of a
+  table, and the code detector was calling an intermediate sort or a column
+  named `avg5` a drift from "five-year average". A sort direction is no longer
+  part of the concept, and a back-reference such as "that average" is not a
+  concept. Written answers are screened exactly as before.
+- A zero or empty answer that was computed and submitted in the same step is
+  sent back once, because the model never saw it. One run parsed dates inside
+  `try/except: continue`, skipped every row and submitted a total of 0.0 from
+  its first turn; another reported 0 of 2,000 files loaded. Replayed over 125
+  logged runs the check would have sent back six, all six wrong answers, and
+  no correct run. A true zero costs one confirming step, literals, strings and
+  booleans are never judged, and the check is silent on a run's last turn (#105).
+- A run can no longer hand back the path of a file it never wrote. One review
+  failed before `wb.save` in every build turn and then submitted `report_path`
+  with its figures. The integrity screen now sends back a submission that
+  returns a local file path the task supplied when nothing exists there.
+- `LakehouseSource(root, tables=[...])` with a misspelled table raised nothing
+  and resolved to a catalog without it. A named scope that matches nothing now
+  raises and lists what the other scopes hold, and the "found no Delta tables"
+  error names the scopes it looked in.
+- An input `File(...)` that does not exist is announced with a warning before
+  the first model call, instead of surfacing as a run that used all its turns.
+- The analytical-integrity screen no longer rejects a correct sentence because
+  of a noun that looks like a direction word. "The contract version number
+  increases from 2.0 to 3.1" and "Growth rate fell from 5% to 3%" were both
+  sent back. The verb beside "from" now decides, the bare word "contract" is no
+  longer read as "contracted", and wording that points both ways passes
+  instead of costing the run a turn.
+- A run with no sub-LM no longer tells the model that `predict()` and
+  `predict_sync()` exist. Every shipped example passes a live `FabricLM(...)`
+  object, which cannot cross into the worker, so the helpers could not work
+  there, yet the prompt advertised them and the PDF skill recommends them: in
+  eight traced PDF runs the model called them first and lost that turn. The
+  prompt is unchanged, byte for byte, when a sub-LM is configured. If generated
+  code calls them anyway, the error says to do the step in Python and tells
+  the host how to enable them: in Fabric, `sub_lm="fabric/gpt-5-mini"`, which
+  was checked there with sequential and gathered calls (#104).
+- `predict_sync()` no longer hides the real error. A `RuntimeError` raised
+  inside the call was swallowed and the spent coroutine retried, so the model
+  saw "cannot reuse already awaited coroutine" and tried again.
+- `result.report()` names what rejected a submission (your `output_validator`, a
+  skill's verifier, or the integrity screen) instead of always blaming an
+  `output_validator` (#92).
+
+### Added
+
+- `aggregate(order_by=...)` accepts `("Measure", "desc")`, `["Measure"]` and
+  `[("Measure", "desc")]` as well as a string (#96).
+- `recalculate_workbook`, `formula_errors` and `workbook_formula_validator`
+  evaluate the formulas of a saved workbook, optionally after setting input
+  cells, so a validator can check what Excel would show. Needs the new
+  `fabric-rlm[excel]` extra (#101).
+- `ProfileLimits` is exported from `fabric_rlm`.
 
 ## 0.6.4 - 2026-09-18 - configurable reconciliation and practical Fabric examples
 
