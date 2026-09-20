@@ -59,8 +59,17 @@ Fixes from running every example and the documented flows in a Fabric Python
   sent back. The verb beside "from" now decides, the bare word "contract" is no
   longer read as "contracted", and wording that points both ways passes
   instead of costing the run a turn.
-- Calling `predict()` in a run with no sub-LM raises an error that tells the
-  model to do the step in Python, and tells the host how to enable it.
+- A run with no sub-LM no longer tells the model that `predict()` and
+  `predict_sync()` exist. Every shipped example passes a live `FabricLM(...)`
+  object, which cannot cross into the worker, so the helpers could not work
+  there, yet the prompt advertised them and the PDF skill recommends them: in
+  eight traced PDF runs the model called them first and lost that turn. The
+  prompt is unchanged, byte for byte, when a sub-LM is configured. If generated
+  code calls them anyway, the error says to do the step in Python and tells
+  the host how to enable them (#104).
+- `predict_sync()` no longer hides the real error. A `RuntimeError` raised
+  inside the call was swallowed and the spent coroutine retried, so the model
+  saw "cannot reuse already awaited coroutine" and tried again.
 - `result.report()` names what rejected a submission (your `output_validator`, a
   skill's verifier, or the integrity screen) instead of always blaming an
   `output_validator` (#92).

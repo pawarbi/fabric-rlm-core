@@ -2357,6 +2357,7 @@ class RLM:
                     skill_cards=cards_text,
                     router_active=self.enable_router,
                     learned_guidance=learned_guidance,
+                    sub_lm_available=self.sub_lm_spec is not None,
                 ),
             },
             {"role": "user", "content": build_initial_user_message(bound_inputs)},

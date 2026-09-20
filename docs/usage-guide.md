@@ -932,6 +932,13 @@ Inside its Python, the model can call a nested model with
 `predict_sync("english -> french", english=phrase)` (or the async `predict`),
 optionally routed to a cheaper `sub_lm=`.
 
+The nested model runs inside the worker process, so it has to be named by
+something that can be sent there: `sub_lm="provider/model"` or a spec
+dictionary, or an `lm` that is itself a string or a dictionary. A live object
+such as `FabricLM("gpt-5.1")` cannot cross into the worker. When no nested
+model is configured, the run is told that `predict` is not available, so the
+model does that work in Python instead of calling it and losing a turn.
+
 ## Engines
 
 `RLM` ships with three stable engines, plus the experimental `adaptive`:

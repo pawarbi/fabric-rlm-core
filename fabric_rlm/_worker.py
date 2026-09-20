@@ -395,11 +395,25 @@ def predict_sync(
     )
     try:
         loop = asyncio.get_event_loop()
-        if loop.is_running():
-            return loop.run_until_complete(coro)
+        running = loop.is_running()
     except RuntimeError:
-        pass
-    return asyncio.run(coro)
+        loop, running = None, False
+    if not running:
+        return asyncio.run(coro)
+    try:
+        return loop.run_until_complete(coro)
+    except RuntimeError as exc:
+        # Only a loop that refuses re-entry (nest_asyncio missing) is handled
+        # here, and it raises before the coroutine starts. Any other
+        # RuntimeError came out of predict() itself and is the real error:
+        # retrying the spent coroutine used to replace it with "cannot reuse
+        # already awaited coroutine", which cost the model another turn.
+        if "already running" not in str(exc):
+            raise
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 def _build_dspy_signature(
