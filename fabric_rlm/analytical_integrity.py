@@ -956,6 +956,74 @@ def check_submitted_paths_exist(
     return problems
 
 
+def _is_empty_result(value: Any) -> bool:
+    """Zero, NaN, None, or a collection that is empty or holds only such values."""
+
+    if value is None:
+        return True
+    if isinstance(value, bool) or isinstance(value, str):
+        return False
+    if isinstance(value, (int, float)):
+        return value == 0 or value != value
+    if isinstance(value, Mapping):
+        return all(_is_empty_result(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return all(_is_empty_result(item) for item in value)
+    return False
+
+
+def check_blind_empty_submit(code: str | None, payload: Mapping[str, Any] | None) -> list[str]:
+    """A zero or empty output submitted from the same step that computed it.
+
+    Output reaches the model only after a step ends, so a value computed and
+    submitted in one block was never looked at. When that value is zero or
+    empty, it is what a filter that matched nothing, or an ``except`` that
+    skipped every row, looks like: one run parsed dates inside
+    ``try/except: continue``, skipped every row, and submitted a total of 0.0
+    from its first turn; another wrote its loader and SUBMIT in one block and
+    reported 0 of 2,000 files loaded. A true zero costs one confirming step.
+
+    Narrow by construction: only a keyword of the ``SUBMIT`` call whose value
+    is empty, is not a literal (the literal check owns those), and is built
+    from a name assigned in that same block. Strings and booleans are never
+    judged, and code that cannot be parsed is left alone.
+    """
+
+    if not code or not isinstance(payload, Mapping):
+        return []
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "SUBMIT"
+    ]
+    if not calls:
+        return []
+    assigned = {
+        node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+    }
+    unseen: list[str] = []
+    for keyword in calls[-1].keywords:
+        if keyword.arg is None or isinstance(keyword.value, ast.Constant):
+            continue
+        if keyword.arg not in payload or not _is_empty_result(payload[keyword.arg]):
+            continue
+        used = {node.id for node in ast.walk(keyword.value) if isinstance(node, ast.Name)}
+        if used & assigned:
+            unseen.append(f"{keyword.arg} = {payload[keyword.arg]!r}")
+    if not unseen:
+        return []
+    return [
+        f"{', '.join(unseen)} was submitted from the same step that computed it, so it was never "
+        "looked at. A zero or an empty result is also what a filter that matched nothing, or an "
+        "`except` that skipped every row, looks like. Print what leads to it in one step (rows "
+        "read, rows kept, the value), read the output, and SUBMIT in the next step. If it is the "
+        "true answer, that output is your evidence."
+    ]
+
+
 def check_unsupported_literals(
     code: str | None,
     payload: Mapping[str, Any] | None,

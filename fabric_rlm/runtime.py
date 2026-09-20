@@ -138,6 +138,7 @@ from .analytical_integrity import (
     check_answer_hygiene,
     check_directional_claims,
     check_ranking_disclosure,
+    check_blind_empty_submit,
     check_submitted_paths_exist,
     check_truncated_source_reads,
     check_zero_change_items,
@@ -3235,6 +3236,7 @@ class RLM:
         problems.extend(check_answer_hygiene(combined))
         problems.extend(check_directional_claims(combined))
         problems.extend(self._unsupported_literal_problems(payload, context))
+        problems.extend(self._blind_empty_submit_problems(payload, context))
 
         task_text, _ = _task_and_outputs(self.signature, self._inline_task, self._inline_outputs)
         if task_asks_about_change(task_text):
@@ -3256,6 +3258,24 @@ class RLM:
                 if issue.kind == "cartesian_candidate_filter":
                     problems.append(f"Turn {issue.turn}: {issue.message}")
         return problems
+
+    def _blind_empty_submit_problems(
+        self, payload: Mapping[str, Any] | None, context: Mapping[str, Any]
+    ) -> list[str]:
+        """A zero or empty output submitted from the step that computed it.
+
+        The remedy is one more step in which the run looks at its own numbers,
+        so the check stays silent on a run's last turn: asking for a
+        confirmation that cannot be given would only fail the run.
+        """
+        turn = context.get("turn")
+        if isinstance(turn, int) and turn >= self.max_turns:
+            return []
+        trajectory = context.get("trajectory")
+        turns = list(getattr(trajectory, "turns", None) or [])
+        if not turns:
+            return []
+        return check_blind_empty_submit(turns[-1].code or "", payload)
 
     def _unsupported_literal_problems(
         self, payload: Mapping[str, Any] | None, context: Mapping[str, Any]

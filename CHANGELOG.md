@@ -43,6 +43,13 @@ Fixes from running every example and the documented flows in a Fabric Python
 - `SemanticModel.measure(groupby=..., filters=...)` answers through the DAX path
   when SemPy's measure endpoint refuses the request, and reports both failures
   when neither works (#93).
+- A zero or empty answer that was computed and submitted in the same step is
+  sent back once, because the model never saw it. One run parsed dates inside
+  `try/except: continue`, skipped every row and submitted a total of 0.0 from
+  its first turn; another reported 0 of 2,000 files loaded. Replayed over 125
+  logged runs the check would have sent back six, all six wrong answers, and
+  no correct run. A true zero costs one confirming step, literals, strings and
+  booleans are never judged, and the check is silent on a run's last turn (#105).
 - A run can no longer hand back the path of a file it never wrote. One review
   failed before `wb.save` in every build turn and then submitted `report_path`
   with its figures. The integrity screen now sends back a submission that
