@@ -687,6 +687,8 @@ def test_lakehouse_source_description_explains_resolved_worker_contract() -> Non
     assert "list_sources" in description
     assert "find_sources" in description
     assert ".query(" in description
+    assert "unreadable" in description
+    assert "diagnostic" in description
     assert "credentials remain in the parent" in description
     assert "Do not call notebookutils" in description
 
@@ -806,6 +808,53 @@ def test_auto_discovery_builds_delta_and_files_catalog(monkeypatch) -> None:
     ]
 
 
+def test_broad_delta_discovery_records_unreadable_table_and_continues(
+    monkeypatch,
+) -> None:
+    root = "abfss://ws@onelake.dfs.fabric.microsoft.com/lh"
+    tables = f"{root}/Tables"
+    healthy = f"{tables}/healthy"
+    unreadable = f"{tables}/half_written"
+    fs = _FakeFS(
+        {
+            tables: [_Item(healthy, is_dir=True), _Item(unreadable, is_dir=True)],
+            healthy: [_Item(f"{healthy}/_delta_log", is_dir=True)],
+            unreadable: [_Item(f"{unreadable}/_delta_log", is_dir=True)],
+        }
+    )
+    monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
+
+    def read_metadata(path):
+        if path == unreadable:
+            raise LakehouseDiscoveryError("transaction metadata is incomplete")
+        return {
+            "columns": [["id", "BIGINT"]],
+            "table_id": "healthy-id",
+            "version": 1,
+        }
+
+    monkeypatch.setattr("fabric_rlm.lakehouse._read_delta_metadata", read_metadata)
+
+    resolved = LakehouseSource(root).resolve()
+
+    assert [entry["name"] for entry in resolved.catalog] == [
+        "half_written",
+        "healthy",
+    ]
+    unreadable_entry = resolved.catalog[0]
+    assert unreadable_entry["kind"] == "unreadable"
+    assert unreadable_entry["path"] == unreadable
+    assert unreadable_entry["diagnostic"] == {
+        "code": "delta_metadata_unreadable",
+        "path": unreadable,
+        "error": (
+            f"Delta metadata for table {unreadable!r} could not be read: "
+            "transaction metadata is incomplete"
+        ),
+    }
+    assert resolved.catalog[1]["kind"] == "delta"
+
+
 def test_specific_delta_table_scope_resolves_without_sibling_discovery(
     monkeypatch,
 ) -> None:
@@ -836,6 +885,28 @@ def test_specific_delta_table_scope_resolves_without_sibling_discovery(
             "version": 9,
         },
     )
+
+
+def test_specific_unreadable_delta_table_scope_fails_closed(monkeypatch) -> None:
+    table = (
+        "abfss://ws@onelake.dfs.fabric.microsoft.com/"
+        "lh/Tables/dbo/half_written"
+    )
+    fs = _FakeFS({table: [_Item(f"{table}/_delta_log", is_dir=True)]})
+    monkeypatch.setattr("fabric_rlm.lakehouse._get_fs", lambda: fs)
+
+    def read_metadata(_path):
+        raise LakehouseDiscoveryError("transaction metadata is incomplete")
+
+    monkeypatch.setattr("fabric_rlm.lakehouse._read_delta_metadata", read_metadata)
+
+    with pytest.raises(
+        LakehouseDiscoveryError,
+        match="Delta metadata for table",
+    ) as exc:
+        LakehouseSource(table).resolve()
+
+    assert table in str(exc.value)
 
 
 def test_auto_discovery_fails_when_scope_is_inaccessible(monkeypatch) -> None:

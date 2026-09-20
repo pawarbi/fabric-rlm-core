@@ -400,7 +400,9 @@ class LakehouseSource:
         )
         return (
             f"LakehouseSource: {state}. Catalog entries are dictionaries with "
-            "kind, name, path, and columns. Use .list_sources(kind=...) or "
+            "kind, name, path, and columns. Entries with kind='unreadable' "
+            "also carry a diagnostic and cannot be queried. Use "
+            ".list_sources(kind=...) or "
             ".find_sources(query, kind=...) to choose relevant sources. Use "
             ".query(sql, sources={alias: catalog_name}) to analyze them through "
             "the parent process. Do not call notebookutils from the worker; the "
@@ -1444,12 +1446,35 @@ def _discover_delta_entries(fs: Any, scope: str) -> Iterator[dict[str, Any]]:
         current, depth = pending.popleft()
         children = _list(fs, current)
         if any(item.isDir and item.name.rstrip("/") == "_delta_log" for item in children):
-            yield {
-                "kind": "delta",
-                "name": _delta_name(current),
-                "path": current,
-                **_read_delta_metadata(current),
-            }
+            try:
+                metadata = _read_delta_metadata(current)
+            except LakehouseDiscoveryError as exc:
+                if current == scope.rstrip("/"):
+                    raise LakehouseDiscoveryError(
+                        f"Delta metadata for table {current!r} could not be read: "
+                        f"{exc}"
+                    ) from exc
+                yield {
+                    "kind": "unreadable",
+                    "name": _delta_name(current),
+                    "path": current,
+                    "columns": [],
+                    "diagnostic": {
+                        "code": "delta_metadata_unreadable",
+                        "path": current,
+                        "error": (
+                            f"Delta metadata for table {current!r} could not be "
+                            f"read: {exc}"
+                        ),
+                    },
+                }
+            else:
+                yield {
+                    "kind": "delta",
+                    "name": _delta_name(current),
+                    "path": current,
+                    **metadata,
+                }
             continue
         if depth >= 3:
             if any(item.isDir and not item.name.startswith("_") for item in children):

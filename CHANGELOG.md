@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Lakehouse discovery now preserves healthy Delta tables when one sibling has
+  unreadable transaction metadata, while direct discovery of that table still
+  fails closed with a diagnostic.
+
 ## 0.6.4 - 2026-09-18 - configurable reconciliation and practical Fabric examples
 
 ### Removed
