@@ -3247,7 +3247,12 @@ class RLM:
         problems.extend(check_truncated_source_reads(turns))
         problems.extend(check_submitted_paths_exist(payload, context.get("inputs")))
         if request is not None:
-            problems.extend(check_ranking_disclosure(combined, request))
+            # Disclosure is a property of a written answer. A payload of numbers,
+            # labels and a file path has no prose in which to name a metric, and
+            # "sorted by amount descending" in such a task is the order of a sheet,
+            # not a ranking to justify. The drift detector below still reads the code.
+            if any(len(text.split()) >= 8 for text in texts):
+                problems.extend(check_ranking_disclosure(combined, request))
             drift = detect_ranking_drift(turns, request, answer_text=combined)
             if drift is not None:
                 problems.append(drift.message)

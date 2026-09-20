@@ -463,28 +463,42 @@ _CONCEPT_CUTS = re.compile(
 )
 
 
+# "sorted by amount descending": the direction is how to sort, not what to sort by.
+_SORT_DIRECTION_RE = re.compile(
+    r"\s+(?:in\s+)?(?:desc(?:ending)?|asc(?:ending)?)(?:\s+order)?\s*$", re.IGNORECASE
+)
+# "sorted descending by that average": the concept was defined earlier in the task.
+_BACK_REFERENCE_RE = re.compile(
+    r"^(?:this|that|these|those|it|them|the\s+(?:same|above|latter|former))\b", re.IGNORECASE
+)
+
+
 def infer_requested_ranking(task_text: str | None) -> RankingRequest | None:
     """Find "rank ... by <concept>" in a task; None when no ranking is asked.
 
     Only explicit "by <concept>" forms count. Superlatives such as "the
     largest customers" are left alone: they name a size, not a concept
-    that needs an operational definition.
+    that needs an operational definition. A sort direction is not part of
+    the concept, and a back-reference ("by that average") names nothing an
+    answer could be asked to mention, so the next request in the task is
+    used instead.
     """
     if not task_text:
         return None
     for pattern in _RANKING_REQUEST_RES:
-        match = pattern.search(task_text)
-        if not match:
-            continue
-        raw = match.group("concept")
-        concept = _CONCEPT_CUTS.split(raw, maxsplit=1)[0].strip(" \t\"'")
-        words = concept.split()
-        if len(words) > 6:
-            concept = " ".join(words[:6])
-        tokens = tuple(_tokens(concept))
-        if not tokens:
-            continue
-        return RankingRequest(concept=concept, tokens=tokens, phrase=match.group(0).strip())
+        for match in pattern.finditer(task_text):
+            raw = match.group("concept")
+            concept = _CONCEPT_CUTS.split(raw, maxsplit=1)[0].strip(" \t\"'")
+            concept = _SORT_DIRECTION_RE.sub("", concept).strip(" \t\"'")
+            if _BACK_REFERENCE_RE.match(concept):
+                continue
+            words = concept.split()
+            if len(words) > 6:
+                concept = " ".join(words[:6])
+            tokens = tuple(_tokens(concept))
+            if not tokens:
+                continue
+            return RankingRequest(concept=concept, tokens=tokens, phrase=match.group(0).strip())
     return None
 
 

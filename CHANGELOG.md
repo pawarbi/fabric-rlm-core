@@ -43,6 +43,16 @@ Fixes from running every example and the documented flows in a Fabric Python
 - `SemanticModel.measure(groupby=..., filters=...)` answers through the DAX path
   when SemPy's measure endpoint refuses the request, and reports both failures
   when neither works (#93).
+- The integrity screen no longer treats the sort order of a sheet as a ranking
+  the answer has to justify. A task that said "sorted descending by that
+  average", "sorted by department name" or "revenue descending" had its
+  submission sent back once or twice for never mentioning those words, which a
+  payload of numbers and a file path cannot do; it happened in 21 logged runs
+  and in all four runs of the IMF notebook, and a correct result came back with
+  `integrity_ok` false. The disclosure check now applies only when the payload
+  holds a written answer, a sort direction is no longer part of the concept,
+  and a back-reference such as "that average" is not a concept. Narrative
+  answers are held to the requested concept as before.
 - A zero or empty answer that was computed and submitted in the same step is
   sent back once, because the model never saw it. One run parsed dates inside
   `try/except: continue`, skipped every row and submitted a total of 0.0 from
