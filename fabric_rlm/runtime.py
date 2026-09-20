@@ -3246,12 +3246,18 @@ class RLM:
         turns = list(getattr(trajectory, "turns", None) or [])
         problems.extend(check_truncated_source_reads(turns))
         problems.extend(check_submitted_paths_exist(payload, context.get("inputs")))
+        # The ranking checks are about a written answer: does it name the metric,
+        # and did the ranking it presents come from that metric. A payload of
+        # numbers, labels and a file path has no prose to read, and there "sorted
+        # by amount descending" or "the top 15 by streak length" is the layout of a
+        # sheet. The drift detector cannot see the sheet, only variable names such
+        # as `avg5` and intermediate sorts, so it would be guessing. Without prose,
+        # only an explicit "rank ... by" or "prioritize ... by" is still screened.
+        written_answer = any(len(text.split()) >= 8 for text in texts)
+        if request is not None and not written_answer and not request.explicit:
+            request = None
         if request is not None:
-            # Disclosure is a property of a written answer. A payload of numbers,
-            # labels and a file path has no prose in which to name a metric, and
-            # "sorted by amount descending" in such a task is the order of a sheet,
-            # not a ranking to justify. The drift detector below still reads the code.
-            if any(len(text.split()) >= 8 for text in texts):
+            if written_answer:
                 problems.extend(check_ranking_disclosure(combined, request))
             drift = detect_ranking_drift(turns, request, answer_text=combined)
             if drift is not None:

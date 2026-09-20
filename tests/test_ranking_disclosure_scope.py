@@ -48,6 +48,20 @@ def test_a_narrative_answer_is_still_held_to_the_concept():
     assert check_ranking_disclosure("Ranked by business impact (ARR at risk): A (20M), B (5M).", request) == []
 
 
+@pytest.mark.parametrize(
+    ("task", "explicit"),
+    [
+        ("Rank the segments by business impact.", True),
+        ("Prioritize the accounts by churn risk.", True),
+        ("One row per region sorted by amount descending.", False),
+        ("Rows 3 to 17: the top 15 countries, sorted by streak length descending.", False),
+        ("List the rows ordered by revenue.", False),
+    ],
+)
+def test_only_rank_and_prioritize_are_explicit_requests(task, explicit):
+    assert infer_requested_ranking(task).explicit is explicit
+
+
 def _run(task, *codes, outputs, **kwargs):
     lm = _ScriptedLM(list(codes))
     result = RLM.task(task, inputs={"rows": [["North", 2.5], ["South", 10.0]]}, outputs=outputs, lm=lm, max_turns=4, **kwargs).run()
@@ -67,4 +81,32 @@ def test_a_written_answer_that_hides_the_metric_is_still_sent_back():
     result = _run("Rank the regions by amount and explain.", hidden, "SUBMIT(answer=answer)", shown, "SUBMIT(answer=answer)",
                   outputs={"answer": str})
     assert result.submitted and "Ranked by amount" in result.outputs["answer"]
+    assert "verifier_repair" in [turn.turn_type for turn in result.turns]
+
+
+STREAKS = (
+    "streaks = sorted(rows, key=lambda r: r[0])\n"          # an intermediate sort, as any streak computation needs
+    "ranked = sorted(streaks, key=lambda r: -r[1])\n"
+    "longest = ranked[0][0]\nprint(ranked, longest)"
+)
+
+
+def test_a_table_task_is_not_screened_for_the_names_its_code_sorted_by():
+    # Seen in Fabric after the disclosure fix: "sorted by ['TIME_PERIOD']" and "['COUNTRY', 'avg5']" were called drift.
+    task = "Rows 3 to 17: the top 15 countries, sorted by streak length descending. Return longest_country."
+    result = _run(task, STREAKS, "SUBMIT(longest_country=longest)", outputs={"longest_country": str})
+    assert result.submitted and result.integrity_ok
+    assert [turn.turn_type for turn in result.turns] == ["normal", "normal"]
+
+
+def test_an_explicit_ranking_request_is_still_screened_without_prose():
+    # "Rank ... by impact" with a typed list and no prose: the code that reaches the answer sorted by something else.
+    code = ("import pandas as pd\n"
+            "frame = pd.DataFrame(rows, columns=['region', 'latest_arr'])\n"
+            "ranked = frame.sort_values('latest_arr', ascending=False)\n"
+            "top = ranked.region.tolist()\nprint(top)")
+    fixed = ("frame['impact'] = frame.latest_arr * 2\nranked = frame.sort_values('impact', ascending=False)\n"
+             "top = ranked.region.tolist()\nprint(top)")
+    result = _run("Rank the regions by business impact.", code, "SUBMIT(top=top)", fixed, "SUBMIT(top=top)", outputs={"top": list})
+    assert result.submitted
     assert "verifier_repair" in [turn.turn_type for turn in result.turns]

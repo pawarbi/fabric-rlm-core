@@ -448,11 +448,15 @@ class RankingRequest:
     concept: str
     tokens: tuple[str, ...]
     phrase: str
+    # True for "rank ... by" and "prioritize ... by". "sorted by", "ordered by"
+    # and "top N ... by" also say how a table is to be laid out, so they only
+    # count as a request for a ranking when the answer is a written one.
+    explicit: bool = True
 
 
 _RANKING_REQUEST_RES = (
     re.compile(
-        r"\b(?:rank(?:ed|ing)?|prioriti[sz]e[ds]?|sort(?:ed)?|order(?:ed)?|top\s+\d+|bottom\s+\d+)"
+        r"\b(?P<verb>rank(?:ed|ing)?|prioriti[sz]e[ds]?|sort(?:ed)?|order(?:ed)?|top\s+\d+|bottom\s+\d+)"
         r"\b[^.?!;\n]{0,80}?\bby\s+(?:the\s+|their\s+|its\s+)?(?P<concept>[^.,;:?!\n]+)",
         re.IGNORECASE,
     ),
@@ -498,7 +502,8 @@ def infer_requested_ranking(task_text: str | None) -> RankingRequest | None:
             tokens = tuple(_tokens(concept))
             if not tokens:
                 continue
-            return RankingRequest(concept=concept, tokens=tokens, phrase=match.group(0).strip())
+            explicit = match.group("verb").lower().startswith(("rank", "priorit"))
+            return RankingRequest(concept=concept, tokens=tokens, phrase=match.group(0).strip(), explicit=explicit)
     return None
 
 

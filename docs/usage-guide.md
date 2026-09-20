@@ -867,7 +867,8 @@ contradiction reconciliation.
 Before accepting a `SUBMIT`, the runtime also screens the answer: prose that
 contradicts its own numbers, a "rank by impact" task whose ranking that reaches
 the answer sorted by something else or whose written answer hides the impact
-metric (a payload with no prose is not asked to name a sort key),
+metric (with no prose in the payload, only an explicit "rank by" or "prioritize
+by" is screened: "sorted by" and "top N by" are the layout of a table),
 and code that consumed independent per-dimension value lists from a candidate
 frame together (a cartesian filter, whether as `.isin` chains or
 `aggregate(filters=...)`) without restoring the compound identity on those
