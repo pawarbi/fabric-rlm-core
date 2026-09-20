@@ -1596,9 +1596,12 @@ def build_lakehouse_catalog(source: LakehouseSource) -> LakehouseSource:
     fs = _get_fs()
     entries: dict[str, dict[str, Any]] = {}
     skipped: dict[str, dict[str, str]] = {}
+    empty_scopes: list[str] = []
     for scope in source.tables:
         discovered = _discover_delta_entries(fs, f"{source.root}/{scope}")
+        found_any = False
         for entry in discovered:
+            found_any = True
             if entry.get(_SKIPPED_MARKER):
                 skipped.setdefault(
                     entry["path"],
@@ -1608,16 +1611,22 @@ def build_lakehouse_catalog(source: LakehouseSource) -> LakehouseSource:
             entries.setdefault(entry["path"], entry)
             if len(entries) > source.max_sources:
                 break
+        if not found_any:
+            empty_scopes.append(scope)
         if len(entries) > source.max_sources:
             break
     for scope in source.files:
         if len(entries) > source.max_sources:
             break
         discovered = _discover_file_entries(fs, f"{source.root}/{scope}")
+        found_any = False
         for entry in discovered:
+            found_any = True
             entries.setdefault(entry["path"], entry)
             if len(entries) > source.max_sources:
                 break
+        if not found_any:
+            empty_scopes.append(scope)
     if len(entries) > source.max_sources:
         raise LakehouseDiscoveryError(
             f"Lakehouse catalog contains more than {source.max_sources} sources, exceeding "
@@ -1635,7 +1644,19 @@ def build_lakehouse_catalog(source: LakehouseSource) -> LakehouseSource:
                 f"them: {details}"
             )
         raise LakehouseDiscoveryError(
-            "Lakehouse discovery found no Delta tables or files in the supplied scopes."
+            "Lakehouse discovery found no Delta tables or files in the supplied scopes: "
+            f"{', '.join(source.tables + source.files)} under {source.root}. Check the "
+            "spelling and that the lakehouse and workspace are the ones you mean."
+        )
+    # A scope that names something specific and matches nothing is a typo or a
+    # table that is gone. Dropping it silently leaves a run that cannot see a
+    # source its author believes it has. The bare roots may be empty.
+    named_and_empty = [scope for scope in empty_scopes if scope.strip("/") not in {"Tables", "Files"}]
+    if named_and_empty:
+        raise LakehouseDiscoveryError(
+            f"Lakehouse discovery found nothing under: {', '.join(named_and_empty)} "
+            f"(root {source.root}). Check the spelling. The other scopes hold: "
+            f"{', '.join(item['name'] for item in catalog[:20])}."
         )
     _require_unique_catalog_names(catalog, discovery=True)
     return LakehouseSource(

@@ -103,6 +103,30 @@ def test_nothing_readable_at_all_fails_and_lists_the_folders(monkeypatch) -> Non
         LakehouseSource(ROOT).resolve()
 
 
+def test_a_misspelled_table_among_several_is_named_not_dropped(monkeypatch) -> None:
+    # Found in Fabric: tables=[good, typo] resolved to a catalog of one, silently.
+    _lakehouse(monkeypatch, {"orders": True, "stores": True})
+    # OneLake lists a folder that is not there as empty; it does not raise.
+    lakehouse_module._get_fs().listings[f"{ROOT}/Tables/dbo/ordrs"] = []
+    with pytest.raises(LakehouseDiscoveryError) as raised:
+        LakehouseSource(ROOT, tables=["Tables/dbo/orders", "Tables/dbo/ordrs"]).resolve()
+    message = str(raised.value)
+    assert "found nothing under: Tables/dbo/ordrs" in message
+    assert "dbo.orders" in message          # what the other scopes do hold
+
+    both = LakehouseSource(ROOT, tables=["Tables/dbo/orders", "Tables/dbo/stores"]).resolve()
+    assert [entry["name"] for entry in both.catalog] == ["dbo.orders", "dbo.stores"]
+
+
+def test_a_single_scope_that_matches_nothing_is_named(monkeypatch) -> None:
+    _lakehouse(monkeypatch, {"orders": True})
+    with pytest.raises(LakehouseDiscoveryError, match="Tables/dbo/no_such_table"):       # the listing raises
+        LakehouseSource(f"{ROOT}/Tables/dbo/no_such_table").resolve()
+    lakehouse_module._get_fs().listings[f"{ROOT}/Tables/dbo/no_such_table"] = []
+    with pytest.raises(LakehouseDiscoveryError, match="no Delta tables or files.*Tables/dbo/no_such_table"):
+        LakehouseSource(f"{ROOT}/Tables/dbo/no_such_table").resolve()              # the listing is empty
+
+
 def test_skipped_folders_survive_the_trip_to_the_worker(monkeypatch) -> None:
     _lakehouse(monkeypatch, {"sales": True, "half_written": False})
     resolved = LakehouseSource(ROOT).resolve()

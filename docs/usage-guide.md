@@ -870,7 +870,10 @@ the answer sorted by something else or whose answer hides the impact metric,
 and code that consumed independent per-dimension value lists from a candidate
 frame together (a cartesian filter, whether as `.isin` chains or
 `aggregate(filters=...)`) without restoring the compound identity on those
-dimensions afterwards, are sent back with the reason. The code detectors are
+dimensions afterwards, are sent back with the reason. So is a submission that
+returns a file path the task supplied when no file exists there, which is what a
+run looks like when every attempt to build the workbook failed before the save.
+The code detectors are
 high-confidence and best-effort: they read pandas, polars, pyspark, `sorted`
 and SQL `ORDER BY` spellings and follow variable lineage from `SUBMIT`, and
 they stay silent when they cannot tell. In the default `"repair"` mode this happens at

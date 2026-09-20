@@ -916,6 +916,46 @@ def check_truncated_source_reads(turns: Iterable[Any]) -> list[str]:
     return problems
 
 
+def check_submitted_paths_exist(
+    payload: Mapping[str, Any] | None,
+    inputs: Mapping[str, Any] | None,
+) -> list[str]:
+    """A file path the task supplied, handed back as an output, with no file there.
+
+    One run failed before ``wb.save`` in every build turn and then submitted
+    ``report_path`` with its figures; the payload had the right type and was
+    accepted. Returning the path is the run's own statement that the file is
+    there, so its absence is a finding. Kept narrow so a correct run is never
+    sent back: only a string that an input also holds, only a local path with
+    a file extension, and only when its folder exists (a path from another
+    machine, a replayed trajectory or a remote URL cannot be judged from here).
+    """
+
+    import os
+
+    if not isinstance(payload, Mapping) or not isinstance(inputs, Mapping):
+        return []
+    supplied = {value for value in inputs.values() if isinstance(value, str)}
+    problems: list[str] = []
+    for field, value in payload.items():
+        if not isinstance(value, str) or value not in supplied or "://" in value:
+            continue
+        if not ("/" in value or "\\" in value) or not os.path.splitext(value)[1]:
+            continue
+        try:
+            folder_exists = os.path.isdir(os.path.dirname(value))
+            file_exists = os.path.exists(value)
+        except (OSError, ValueError):
+            continue
+        if folder_exists and not file_exists:
+            problems.append(
+                f"{field} is {value} but no file exists there: it was never saved. An "
+                "earlier turn may have failed before the save ran. Write the file, reopen "
+                "it to check it, then SUBMIT again."
+            )
+    return problems
+
+
 def check_unsupported_literals(
     code: str | None,
     payload: Mapping[str, Any] | None,

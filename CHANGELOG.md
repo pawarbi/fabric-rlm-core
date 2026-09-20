@@ -43,6 +43,16 @@ Fixes from running every example and the documented flows in a Fabric Python
 - `SemanticModel.measure(groupby=..., filters=...)` answers through the DAX path
   when SemPy's measure endpoint refuses the request, and reports both failures
   when neither works (#93).
+- A run can no longer hand back the path of a file it never wrote. One review
+  failed before `wb.save` in every build turn and then submitted `report_path`
+  with its figures. The integrity screen now sends back a submission that
+  returns a local file path the task supplied when nothing exists there.
+- `LakehouseSource(root, tables=[...])` with a misspelled table raised nothing
+  and resolved to a catalog without it. A named scope that matches nothing now
+  raises and lists what the other scopes hold, and the "found no Delta tables"
+  error names the scopes it looked in.
+- An input `File(...)` that does not exist is announced with a warning before
+  the first model call, instead of surfacing as a run that used all its turns.
 - The analytical-integrity screen no longer rejects a correct sentence because
   of a noun that looks like a direction word. "The contract version number
   increases from 2.0 to 3.1" and "Growth rate fell from 5% to 3%" were both

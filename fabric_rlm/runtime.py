@@ -138,11 +138,45 @@ from .analytical_integrity import (
     check_answer_hygiene,
     check_directional_claims,
     check_ranking_disclosure,
+    check_submitted_paths_exist,
     check_truncated_source_reads,
     check_zero_change_items,
     infer_requested_ranking,
     task_asks_about_change,
 )
+
+
+def _warn_about_missing_input_files(inputs: Any) -> None:
+    """Say so before the first model call when an input ``File`` is not there.
+
+    The run would otherwise spend its turns finding that out, and its report
+    would suggest raising ``max_turns``. A warning, not an error: a ``File``
+    may name a path the task is meant to create. Only local paths whose folder
+    exists are judged.
+    """
+
+    import warnings
+
+    from .artifacts import File
+
+    if not isinstance(inputs, Mapping):
+        return
+    for name, value in inputs.items():
+        items = value if isinstance(value, (list, tuple)) else [value]
+        for item in items:
+            if not isinstance(item, File) or "://" in item.path:
+                continue
+            try:
+                missing = os.path.isdir(os.path.dirname(item.path)) and not os.path.exists(item.path)
+            except (OSError, ValueError):
+                continue
+            if missing:
+                warnings.warn(
+                    f"input {name!r} is File({item.path!r}) and no file exists there. If the "
+                    "task reads it, the run will fail; check the path.",
+                    UserWarning,
+                    stacklevel=3,
+                )
 
 
 def _repair_hints(history: Any) -> list[str]:
@@ -2211,6 +2245,7 @@ class RLM:
         # withheld. The section costs a few hundred tokens once.
         knowledge_metadata = {**knowledge_metadata, **guidance_metadata}
         bound_inputs = resolve_lakehouse_inputs(bound_inputs)
+        _warn_about_missing_input_files(bound_inputs)
 
         if self.engine == "adaptive":
             return self._attach_knowledge_metadata(
@@ -3207,6 +3242,7 @@ class RLM:
         trajectory = context.get("trajectory")
         turns = list(getattr(trajectory, "turns", None) or [])
         problems.extend(check_truncated_source_reads(turns))
+        problems.extend(check_submitted_paths_exist(payload, context.get("inputs")))
         if request is not None:
             problems.extend(check_ranking_disclosure(combined, request))
             drift = detect_ranking_drift(turns, request, answer_text=combined)
