@@ -49,3 +49,17 @@ def test_worker_wire_file_destination_roundtrip(tmp_path: Path) -> None:
     worker_destination.close()
     assert Path(destination.staging_root).exists()
     destination.close()
+
+
+def test_file_in_an_fstring_is_its_path(tmp_path: Path) -> None:
+    # Generated code writes f"read_csv_auto('{data_file}')"; that has to name
+    # the file, not the handle's repr.
+    target = tmp_path / "orders.csv"
+    target.write_text("a\n1\n", encoding="utf-8")
+    handle = File(target)
+
+    assert str(handle) == str(target)
+    assert f"{handle}" == str(target)
+    assert "{}".format(handle) == str(target)
+    assert repr(handle) == f"File({str(target)!r})"
+    assert open(f"{handle}", encoding="utf-8").read() == "a\n1\n"

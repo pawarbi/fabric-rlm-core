@@ -264,6 +264,10 @@ class LakehouseSource:
     files: tuple[str, ...] = ()
     catalog: tuple[dict[str, Any], ...] | None = field(default=None, repr=False)
     max_sources: int = 200
+    # Table folders discovery found but could not read (a failed write leaves
+    # an empty ``_delta_log``). They are not in the catalog; each is a
+    # ``{"name", "path", "reason"}`` dictionary.
+    skipped: tuple[dict[str, str], ...] = field(default=(), repr=False, compare=False)
 
     def __init__(
         self,
@@ -273,6 +277,7 @@ class LakehouseSource:
         files: str | Sequence[str] | None = None,
         catalog: Sequence[Mapping[str, Any]] | None = None,
         max_sources: int = 200,
+        skipped: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         supplied_path = str(root)
         if not supplied_path.strip():
@@ -299,6 +304,14 @@ class LakehouseSource:
         )
         object.__setattr__(self, "catalog", _normalize_catalog(catalog))
         object.__setattr__(self, "max_sources", max_sources)
+        object.__setattr__(
+            self,
+            "skipped",
+            tuple(
+                {key: str(item.get(key, "")) for key in ("name", "path", "reason")}
+                for item in (skipped or ())
+            ),
+        )
 
     @property
     def is_resolved(self) -> bool:
@@ -307,12 +320,15 @@ class LakehouseSource:
         return self.catalog is not None
 
     def __frozen__(self) -> dict[str, Any]:
-        return {
+        frozen: dict[str, Any] = {
             "root": self.root,
             "tables": list(self.tables),
             "files": list(self.files),
             "catalog": [dict(item) for item in self.catalog or ()],
         }
+        if self.skipped:
+            frozen["skipped"] = [dict(item) for item in self.skipped]
+        return frozen
 
     def resolve(self) -> "LakehouseSource":
         """Build the catalog in the current process unless one was supplied."""
@@ -376,13 +392,18 @@ class LakehouseSource:
 
         resolved = self.resolve()
         if _HOST_QUERY_TRANSPORT is not None:
-            return _HOST_QUERY_TRANSPORT(
+            result = _HOST_QUERY_TRANSPORT(
                 root=resolved.root,
                 catalog=list(resolved.catalog or ()),
                 sql=sql,
                 sources=dict(sources),
                 max_rows=max_rows,
             )
+            # Inside a worker the caller is generated code, and it reads
+            # result["rows"] far more often than result["truncated"]. Print, so
+            # the cut shows up in the turn's output where the model will see it.
+            _announce_truncation(result, max_rows)
+            return result
         return execute_lakehouse_query(
             resolved,
             sql=sql,
@@ -398,13 +419,27 @@ class LakehouseSource:
             if self.is_resolved
             else "unresolved source (resolved automatically before worker startup)"
         )
+        unreadable = ""
+        if self.skipped:
+            names = ", ".join(item["name"] for item in self.skipped[:8])
+            more = f" and {len(self.skipped) - 8} more" if len(self.skipped) > 8 else ""
+            unreadable = (
+                f" {len(self.skipped)} table folder"
+                f"{'s' if len(self.skipped) != 1 else ''} could not be read and "
+                f"{'are' if len(self.skipped) != 1 else 'is'} not in the catalog: "
+                f"{names}{more} (see .skipped for the reason). Say so if the task "
+                "needed one of them."
+            )
         return (
             f"LakehouseSource: {state}. Catalog entries are dictionaries with "
             "kind, name, path, and columns. Use .list_sources(kind=...) or "
             ".find_sources(query, kind=...) to choose relevant sources. Use "
             ".query(sql, sources={alias: catalog_name}) to analyze them through "
-            "the parent process. Do not call notebookutils from the worker; the "
+            "the parent process; a query can only join sources of this one handle, "
+            "and it returns at most max_rows rows, so aggregate in SQL. Do not call "
+            "notebookutils from the worker; the "
             "catalog is already resolved and credentials remain in the parent."
+            + unreadable
         )
 
     def __repr__(self) -> str:
@@ -874,8 +909,24 @@ def execute_lakehouse_query(
         _quote_identifier(alias_text)
         name_text = str(catalog_name)
         if name_text not in catalog:
+            unreadable = next(
+                (item for item in resolved.skipped if item["name"] == name_text), None
+            )
+            if unreadable is not None:
+                raise ValueError(
+                    f"Source {name_text!r} was found but could not be read: "
+                    f"{unreadable['reason']}"
+                )
+            held = ", ".join(sorted(catalog)[:12]) or "(nothing)"
+            more = f" and {len(catalog) - 12} more" if len(catalog) > 12 else ""
             raise ValueError(
-                f"Source {name_text!r} is not in this LakehouseSource catalog."
+                f"Source {name_text!r} is not in this LakehouseSource catalog. This "
+                f"handle holds: {held}{more}. A query can only join sources of one "
+                "handle. If the table is bound as a separate input, ask for the "
+                "tables to be bound together: LakehouseSource(root, "
+                'tables=["Tables/<a>", "Tables/<b>"]) or the parent Tables scope. '
+                "Do not pull whole tables to join them in Python: results are capped "
+                "at max_rows."
             )
         selected.append((alias_text, catalog[name_text]))
 
@@ -1425,6 +1476,21 @@ def _list(fs: Any, path: str) -> list[Any]:
         ) from exc
 
 
+_SKIPPED_MARKER = "__skipped__"
+TRUNCATION_NOTICE = "LakehouseSource.query truncated"
+
+
+def _announce_truncation(result: Any, max_rows: int) -> None:
+    if not (isinstance(result, Mapping) and result.get("truncated")):
+        return
+    print(
+        f"WARNING: {TRUNCATION_NOTICE} this result at {max_rows:,} rows; the source "
+        "has more. Figures computed from these rows alone are wrong. Aggregate in "
+        "SQL (GROUP BY, SUM, COUNT, MIN, MAX) so the query reads every row and "
+        f"returns few, or pass max_rows up to {_MAX_QUERY_ROWS:,} for a bounded list."
+    )
+
+
 def _delta_name(path: str) -> str:
     relative = path.split("/Tables/", 1)[-1]
     return relative.replace("/", ".")
@@ -1444,11 +1510,25 @@ def _discover_delta_entries(fs: Any, scope: str) -> Iterator[dict[str, Any]]:
         current, depth = pending.popleft()
         children = _list(fs, current)
         if any(item.isDir and item.name.rstrip("/") == "_delta_log" for item in children):
+            try:
+                metadata = _read_delta_metadata(current)
+            except LakehouseDiscoveryError as exc:
+                if current == scope:
+                    # The caller asked for exactly this table: there is nothing
+                    # else to return, so fail, and say which table.
+                    raise LakehouseDiscoveryError(f"{current!r}: {exc}") from None
+                yield {
+                    _SKIPPED_MARKER: True,
+                    "name": _delta_name(current),
+                    "path": current,
+                    "reason": str(exc),
+                }
+                continue
             yield {
                 "kind": "delta",
                 "name": _delta_name(current),
                 "path": current,
-                **_read_delta_metadata(current),
+                **metadata,
             }
             continue
         if depth >= 3:
@@ -1505,9 +1585,16 @@ def build_lakehouse_catalog(source: LakehouseSource) -> LakehouseSource:
         return source
     fs = _get_fs()
     entries: dict[str, dict[str, Any]] = {}
+    skipped: dict[str, dict[str, str]] = {}
     for scope in source.tables:
         discovered = _discover_delta_entries(fs, f"{source.root}/{scope}")
         for entry in discovered:
+            if entry.get(_SKIPPED_MARKER):
+                skipped.setdefault(
+                    entry["path"],
+                    {key: entry[key] for key in ("name", "path", "reason")},
+                )
+                continue
             entries.setdefault(entry["path"], entry)
             if len(entries) > source.max_sources:
                 break
@@ -1529,6 +1616,14 @@ def build_lakehouse_catalog(source: LakehouseSource) -> LakehouseSource:
         )
     catalog = sorted(entries.values(), key=lambda item: item["name"])
     if not catalog:
+        if skipped:
+            details = "; ".join(
+                f"{item['name']} ({item['reason']})" for item in list(skipped.values())[:5]
+            )
+            raise LakehouseDiscoveryError(
+                "Lakehouse discovery found table folders but could read none of "
+                f"them: {details}"
+            )
         raise LakehouseDiscoveryError(
             "Lakehouse discovery found no Delta tables or files in the supplied scopes."
         )
@@ -1539,6 +1634,7 @@ def build_lakehouse_catalog(source: LakehouseSource) -> LakehouseSource:
         files=source.files,
         catalog=catalog,
         max_sources=source.max_sources,
+        skipped=sorted(skipped.values(), key=lambda item: item["name"]),
     )
 
 

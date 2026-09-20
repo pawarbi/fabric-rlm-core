@@ -471,23 +471,79 @@ def _read_bounded(path: Path) -> bytes:
     return data
 
 
+# What a filesystem answers when it has no hard links (or, on Windows, no
+# rename that refuses an existing target). FUSE mounts differ: the Fabric
+# Lakehouse mount answers EPERM, others ENOTSUP or ENOSYS.
+_LINK_UNSUPPORTED_ERRNOS = frozenset(
+    code
+    for code in (
+        errno.ENOTSUP,
+        getattr(errno, "EOPNOTSUPP", None),
+        errno.ENOSYS,
+        errno.EPERM,
+        errno.EACCES,
+        errno.EXDEV,
+        errno.EMLINK,
+    )
+    if code is not None
+)
+
+
 def _publish_no_clobber(temporary: Path, destination: Path) -> None:
+    """Publish ``temporary`` as ``destination`` without replacing an existing file.
+
+    A hard link gives both properties at once: the name appears complete or
+    not at all, and linking onto an existing name fails. Where the filesystem
+    has no hard links the destination is created exclusively instead, which
+    keeps the no-overwrite guarantee. A reader that catches the file half
+    written fails the fingerprint check on load, so it cannot use a torn
+    package.
+    """
+
     try:
         if os.name == "nt":
             os.rename(temporary, destination)
         else:
             os.link(temporary, destination)
             temporary.unlink()
-    except OSError as exc:
-        if exc.errno in {
-            errno.ENOTSUP,
-            errno.EOPNOTSUPP,
-            errno.ENOSYS,
-        }:
-            raise KnowledgePersistenceError(
-                "atomic no-clobber publication is unsupported"
-            ) from exc
+        return
+    except FileExistsError:
         raise
+    except OSError as exc:
+        if exc.errno not in _LINK_UNSUPPORTED_ERRNOS:
+            raise
+        link_error = exc
+    _publish_exclusive_create(temporary, destination, link_error)
+
+
+def _publish_exclusive_create(
+    temporary: Path, destination: Path, link_error: OSError
+) -> None:
+    data = temporary.read_bytes()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    try:
+        descriptor = os.open(destination, flags, 0o644)
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        raise KnowledgePersistenceError(
+            "no-clobber publication is unsupported here: linking failed with "
+            f"{link_error.strerror or link_error} and exclusive creation with "
+            f"{exc.strerror or exc}. Pass overwrite=True, or use an abfss:// "
+            "OneLake path."
+        ) from exc
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            try:
+                os.fsync(stream.fileno())
+            except OSError:  # some FUSE mounts refuse fsync; close still flushes
+                pass
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+    temporary.unlink(missing_ok=True)
 
 
 def save_knowledge_package(

@@ -150,25 +150,48 @@ def _load_roles(
     return persisted
 
 
+def _warn_about_inexact_sources(
+    profiles: tuple[SourceProfile, ...], limits: object
+) -> None:
+    """Say at learn() time what would otherwise surface as a refusal at run time."""
+
+    import warnings
+
+    from .knowledge_preflight import drift_message
+
+    inexact = {
+        profile.source_id: "inexact"
+        for profile in profiles
+        if profile.diagnostics.get("snapshot_exact") is False
+    }
+    if inexact:
+        warnings.warn(
+            "RLM.learn: " + drift_message(inexact, limits=limits)
+            + " Tasks given this knowledge will refuse these sources.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
 def _validate_current_profiles(
     package: KnowledgePackage,
     profiles: tuple[SourceProfile, ...],
+    limits: object | None = None,
 ) -> None:
     persisted = {profile.source_id: profile for profile in package.sources}
-    drift: list[str] = []
+    drift: dict[str, str] = {}
     for current in profiles:
         learned = persisted[current.source_id]
-        if (
-            current.diagnostics.get("snapshot_exact") is not True
-            or current.schema_fingerprint != learned.schema_fingerprint
-            or current.snapshot_fingerprint != learned.snapshot_fingerprint
-        ):
-            drift.append(current.source_id)
+        if current.diagnostics.get("snapshot_exact") is not True:
+            drift[current.source_id] = "inexact"
+        elif current.schema_fingerprint != learned.schema_fingerprint:
+            drift[current.source_id] = "schema"
+        elif current.snapshot_fingerprint != learned.snapshot_fingerprint:
+            drift[current.source_id] = "snapshot"
     if drift:
-        raise ValueError(
-            "stale knowledge sources detected while loading: "
-            + ", ".join(sorted(drift))
-        )
+        from .knowledge_preflight import drift_message
+
+        raise ValueError(drift_message(drift, limits=limits, while_loading=True))
 
 
 def _onelake_location(store: KnowledgeStore) -> OneLakeKnowledgeLocation | None:
@@ -215,6 +238,7 @@ def learn(
         limits=active_limits,
         registry=active_registry,
     )
+    _warn_about_inexact_sources(profiles, active_limits)
     package = KnowledgePackage(
         package_id=_package_id(profiles, package_id),
         sources=profiles,
@@ -468,7 +492,7 @@ def load_knowledge(
         limits=active_limits,
         registry=active_registry,
     )
-    _validate_current_profiles(package, profiles)
+    _validate_current_profiles(package, profiles, active_limits)
     bindings = _bindings_from_profiles(profiles, sources)
     bound = bind_knowledge_package(
         package,

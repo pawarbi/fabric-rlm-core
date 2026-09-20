@@ -783,10 +783,9 @@ def execute_registered_operation(
         registry=knowledge._registry,
     )
     if preflight.drift:
-        raise ValueError(
-            "stale knowledge sources detected: "
-            + ", ".join(sorted(preflight.drift))
-        )
+        from .knowledge_preflight import drift_message
+
+        raise ValueError(drift_message(preflight.drift, limits=knowledge._limits))
     current_operation = next(
         item
         for item in preflight.package.operations

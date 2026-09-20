@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from fabric_rlm import File, RLM
+from fabric_rlm import File, ProfileLimits, RLM
 from fabric_rlm.knowledge_execution import (
     OperationPlanError,
     OperationResultTooLarge,
@@ -81,7 +81,12 @@ def test_inexact_large_file_does_not_register_an_operation(
         encoding="utf-8",
     )
 
-    knowledge = RLM.learn(sources={"large": path})
+    # 1.2 MB against a 1 MiB snapshot budget: hashed head and tail only.
+    with pytest.warns(UserWarning, match="cannot be verified exactly"):
+        knowledge = RLM.learn(
+            sources={"large": path},
+            limits=ProfileLimits(max_snapshot_bytes=1024 * 1024),
+        )
 
     assert knowledge.package.sources[0].diagnostics["snapshot_exact"] is False
     assert knowledge.package.operations == ()

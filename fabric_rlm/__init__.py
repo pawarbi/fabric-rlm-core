@@ -35,6 +35,7 @@ from .interpreter import (
 from .inspector import RunInspector
 from .knowledge import EvidenceRecord, LearnedLesson
 from .knowledge_api import Knowledge, load_knowledge
+from .knowledge_sources import ProfileLimits
 from .knowledge_evidence import harvest_evidence
 from .knowledge_retrieval import retrieve_lessons
 from .lm import AnthropicLM, FabricLM, OpenAILM, register_backend, resolve_lm
@@ -88,6 +89,7 @@ __all__ = [
     "LocalArtifactStore",
     "LakehouseSource",
     "OpenAILM",
+    "ProfileLimits",
     "Issue",
     "ReplayInterpreter",
     "ReplayLM",

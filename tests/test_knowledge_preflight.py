@@ -268,7 +268,7 @@ def test_unchanged_large_inexact_snapshot_never_returns_current(
 ) -> None:
     path = tmp_path / "large.csv"
     path.write_text("id,note\n" + "1,x\n" * 500, encoding="utf-8")
-    limits = ProfileLimits(max_input_bytes=64, read_chunk_bytes=8)
+    limits = ProfileLimits(max_input_bytes=64, read_chunk_bytes=8, max_snapshot_bytes=64)
     learned = replace(
         profile_sources(
             {"large": path},
@@ -324,7 +324,7 @@ def test_same_size_middle_only_large_file_mutation_is_inexact_not_current(
     path = tmp_path / "large.bin"
     original = b"A" * 64 + b"B" * 128 + b"C" * 64
     path.write_bytes(original)
-    limits = ProfileLimits(max_input_bytes=64, read_chunk_bytes=8)
+    limits = ProfileLimits(max_input_bytes=64, read_chunk_bytes=8, max_snapshot_bytes=64)
     learned = replace(
         profile_sources(
             {"large": path},

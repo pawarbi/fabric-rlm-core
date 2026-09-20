@@ -200,6 +200,7 @@ def test_csv_honors_record_field_and_byte_bounds(tmp_path: Path) -> None:
         max_nesting_depth=2,
         max_diagnostic_bytes=4096,
         read_chunk_bytes=3,
+        max_snapshot_bytes=18,
     )
 
     profile = _profile(path, limits=limits)

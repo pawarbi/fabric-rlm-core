@@ -81,6 +81,36 @@ class WorkerProtocolError(RuntimeError):
     """Raised when the worker exits or returns invalid protocol data."""
 
 
+# A worker that prints this many non-protocol lines without ever answering is
+# broken, not noisy.
+_MAX_SKIPPED_PROTOCOL_LINES = 10_000
+
+
+def _parse_protocol_line(line: str) -> dict[str, Any] | None:
+    """Return the protocol frame on this line, or ``None`` when it holds none.
+
+    A frame is a JSON object. Anything else on the stream came from code that
+    wrote to the worker's stdout behind Python's back. When such a write has
+    no trailing newline it shares a line with the next frame, so the frame is
+    also looked for after the stray text.
+    """
+
+    text = line.strip()
+    if not text:
+        return None
+    try:
+        message = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find('{"')
+        if start <= 0:
+            return None
+        try:
+            message = json.loads(text[start:])
+        except json.JSONDecodeError:
+            return None
+    return message if isinstance(message, dict) else None
+
+
 _LAKEHOUSE_QUERY_TOOL = "__fabric_rlm_lakehouse_query__"
 _FILE_PUBLISH_TOOL = "__fabric_rlm_file_publish__"
 
@@ -548,23 +578,41 @@ class Interpreter:
 
     def _recv(self, *, timeout: float | None = None) -> dict[str, Any]:
         active_timeout = self.timeout if timeout is None else timeout
-        try:
-            line = self._stdout_queue.get(timeout=active_timeout)
-        except queue.Empty as exc:
-            self.kill()
-            raise WorkerTimeout(
-                f"Worker timed out after {active_timeout}s"
-            ) from exc
+        deadline = time.monotonic() + active_timeout
+        skipped = 0
+        while True:
+            try:
+                line = self._stdout_queue.get(
+                    timeout=max(deadline - time.monotonic(), 0.001)
+                )
+            except queue.Empty as exc:
+                self.kill()
+                raise WorkerTimeout(
+                    f"Worker timed out after {active_timeout}s"
+                ) from exc
 
-        if line is None:
-            raise WorkerProtocolError(
-                self._format_worker_exit("Worker exited without response")
-                + concurrency_death_hint(getattr(self, "_last_exec_code", None)))
+            if line is None:
+                raise WorkerProtocolError(
+                    self._format_worker_exit("Worker exited without response")
+                    + concurrency_death_hint(getattr(self, "_last_exec_code", None)))
 
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise WorkerProtocolError(f"Invalid worker JSON response: {line!r}") from exc
+            message = _parse_protocol_line(line)
+            if message is not None:
+                return message
+            # Not a protocol frame. The worker moves its protocol off fd 1, but
+            # an older worker, or one without real file descriptors, can still
+            # share the stream with native code that prints. One stray line
+            # must not end the run; an endless stream of them must. The
+            # deadline above covers the whole wait, not each line.
+            skipped += 1
+            self._stderr_buf.append(f"[worker stdout] {line}")
+            if len(self._stderr_buf) > 200:
+                self._stderr_buf.pop(0)
+            if skipped > _MAX_SKIPPED_PROTOCOL_LINES:
+                raise WorkerProtocolError(
+                    f"Worker wrote {skipped} non-protocol lines without a "
+                    f"response; last: {line!r}"
+                )
 
     def _pump_stdout(self) -> None:
         assert self.proc is not None and self.proc.stdout is not None
@@ -902,10 +950,9 @@ class SubprocessPythonInterpreter:
 
         while True:
             line = self._read_response_line(self.timeout, "during execute")
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                # Skip non-JSON lines defensively (matches dspy's behaviour).
+            msg = _parse_protocol_line(line)
+            if msg is None:
+                # Not a protocol frame (matches dspy's behaviour of skipping).
                 continue
 
             # Worker -> host tool callback.
@@ -1028,9 +1075,8 @@ class SubprocessPythonInterpreter:
         )
         while True:
             line = self._read_response_line(timeout, context)
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
+            msg = _parse_protocol_line(line)
+            if msg is None:
                 continue
             if msg.get("method") == "tool_call":
                 self._handle_tool_call(msg)

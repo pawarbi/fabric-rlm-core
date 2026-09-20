@@ -78,6 +78,43 @@ for _stream in (_REAL_STDIN, _REAL_STDOUT):
         except Exception:  # pragma: no cover - best-effort on exotic streams
             pass
 
+PROTOCOL_ISOLATION_ENV = "FABRIC_RLM_ISOLATE_PROTOCOL"
+
+
+def _isolate_protocol_channel() -> bool:
+    """Move the JSON protocol off file descriptor 1.
+
+    ``contextlib.redirect_stdout`` only captures writes that go through
+    ``sys.stdout``. Anything that writes to fd 1 directly lands in the
+    protocol stream instead: C extensions, a .NET runtime loaded through
+    pythonnet (SemPy's XMLA client prints type warnings this way), child
+    processes. One such line used to read as a corrupt response and end the
+    run as ``worker_died``.
+
+    The protocol keeps a private duplicate of the original fd 1, and fd 1 is
+    pointed at stderr, which the parent drains into a ring buffer. Called from
+    ``main()`` only, never at import, so importing this module in a test
+    process leaves that process's stdout alone. Returns whether it took effect.
+    """
+
+    global _REAL_STDOUT
+    if os.environ.get(PROTOCOL_ISOLATION_ENV, "1") == "0":
+        return False
+    try:
+        stdout_fd = sys.__stdout__.fileno()
+        stderr_fd = sys.__stderr__.fileno()
+        sys.__stdout__.flush()
+        protocol_fd = os.dup(stdout_fd)
+        os.dup2(stderr_fd, stdout_fd)
+        _REAL_STDOUT = os.fdopen(
+            protocol_fd, "w", encoding="utf-8", errors="replace", buffering=1
+        )
+    except (AttributeError, OSError, ValueError):
+        # No real file descriptors (embedded interpreter, closed streams):
+        # keep the shared stream; the parent also skips non-protocol lines.
+        return False
+    return True
+
 
 _ACTIVATE_MARKER = "[FABRIC_RLM_ACTIVATE]"
 
@@ -1110,6 +1147,9 @@ def _handle_jsonrpc(message: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def main() -> None:
+    # First, before anything can print: native writes to fd 1 must not reach
+    # the protocol stream.
+    _isolate_protocol_channel()
     # Opt-in egress block. Installed here rather than at import so it lands
     # after nest_asyncio has built its event loop, and before any user code
     # runs. The guard permits loopback, so the ordering is belt-and-braces.

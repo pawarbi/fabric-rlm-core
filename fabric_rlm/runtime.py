@@ -138,10 +138,50 @@ from .analytical_integrity import (
     check_answer_hygiene,
     check_directional_claims,
     check_ranking_disclosure,
+    check_truncated_source_reads,
     check_zero_change_items,
     infer_requested_ranking,
     task_asks_about_change,
 )
+
+
+def _repair_hints(history: Any) -> list[str]:
+    """One hint per thing that rejected a submission, naming it.
+
+    A repair turn can come from a user's ``output_validator``, from a skill's
+    verifier, or from the analytical-integrity screen. Blaming the validator
+    for all three sent readers looking for a validator they never wrote.
+    """
+
+    entries = [entry for entry in (history or []) if isinstance(entry, Mapping)]
+    if not entries:
+        return ["a submission was rejected and repaired; the rejection is in "
+                "trajectory.metadata['verifier_repair_history']"]
+    by_source: dict[str, list[Mapping[str, Any]]] = {}
+    for entry in entries:
+        by_source.setdefault(str(entry.get("skill") or "a check"), []).append(entry)
+    hints: list[str] = []
+    for source, rejected in by_source.items():
+        times = f" {len(rejected)} times" if len(rejected) > 1 else ""
+        reason = " ".join(str(rejected[-1].get("assertion") or "").split())[:140]
+        said = f': "{reason}"' if reason else ""
+        if source in {"output_validator", "output_validator_context"}:
+            hints.append(
+                f"your {source} rejected a payload{times}{said}; make sure its message "
+                "says what to change, not just that it was wrong"
+            )
+        elif source == "analytical_integrity":
+            hints.append(
+                f"the analytical-integrity screen rejected a submission{times}{said}; "
+                "see result.integrity_problems, or pass analytical_integrity=False if "
+                "the finding does not apply"
+            )
+        else:
+            hints.append(
+                f"the verifier of skill '{source}' rejected a submission{times}{said}; "
+                "pass enable_verifier=False to see the run without it"
+            )
+    return hints
 
 
 logger = logging.getLogger(__name__)
@@ -753,8 +793,8 @@ class RLMResult:
                 f"stuck rather than progressing - start at turn {errored[0].turn}"
             )
         if repairs.get("verifier_repair"):
-            hints.append("an output_validator rejected a payload; make sure its message "
-                         "says what to change, not just that it was wrong")
+            metadata = getattr(self.trajectory, "metadata", None) or {}
+            hints.extend(_repair_hints(metadata.get("verifier_repair_history")))
         if wall > 5 and wk_s is not None and (wk_s / wall) > 0.8:
             hints.append(f"{wk_s / wall:.0%} of the time was worker execution rather than "
                          "the model - the bottleneck is the data work, not the LM")
@@ -1366,9 +1406,10 @@ class RLM:
             registry=self._knowledge._registry,
         )
         if preflight.drift:
+            from .knowledge_preflight import drift_message
+
             raise ValueError(
-                "stale knowledge sources detected: "
-                + ", ".join(sorted(preflight.drift))
+                drift_message(preflight.drift, limits=self._knowledge._limits)
             )
         bound = dict(explicit_inputs)
         bound.update(self._knowledge.bindings)
@@ -3165,6 +3206,7 @@ class RLM:
         request = infer_requested_ranking(task_text or "")
         trajectory = context.get("trajectory")
         turns = list(getattr(trajectory, "turns", None) or [])
+        problems.extend(check_truncated_source_reads(turns))
         if request is not None:
             problems.extend(check_ranking_disclosure(combined, request))
             drift = detect_ranking_drift(turns, request, answer_text=combined)

@@ -459,6 +459,128 @@ def _normalized_column_name(value: Any) -> str:
     return text.strip("_").lower() or "column"
 
 
+# A number as an engine serializes it: no thousands separators, and no leading
+# zeros, so an identifier such as "007" or "02134" is never taken for a number.
+_STRICT_NUMBER = re.compile(
+    r"^[+-]?(?:(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$"
+)
+
+
+def _restore_numeric_columns(frame: Any, columns: Any) -> Any:
+    """Give numeric dtype back to result columns that arrived as strings.
+
+    A measure whose type the engine reports as variant (``System.Object``: a
+    SWITCH over numbers and text, a calculation group, a format-string
+    expression) is serialized by SemPy as text. The frame then looks numeric
+    when printed, but ``sort_values`` orders it as text and ``sum``
+    concatenates, so an ordinary pandas step gives a wrong answer without
+    raising. Only the named columns are touched, and only when every non-null
+    value is a plainly written number.
+    """
+
+    try:
+        import pandas as pd
+    except Exception:  # pragma: no cover - pandas ships with sempy
+        return frame
+    targets = [c for c in columns if c in getattr(frame, "columns", ())]
+    converted: dict[Any, Any] = {}
+    for column in targets:
+        series = frame[column]
+        if series.dtype != object and not pd.api.types.is_string_dtype(series.dtype):
+            continue
+        present = series.dropna()
+        if present.empty:
+            continue
+        if not all(
+            isinstance(value, str) and _STRICT_NUMBER.match(value.strip())
+            for value in present
+        ):
+            continue
+        converted[column] = pd.to_numeric(series, errors="coerce")
+    if not converted:
+        return frame
+    result = frame.copy()
+    for column, values in converted.items():
+        result[column] = values
+    return result
+
+
+def _expression_columns(frame: Any) -> list[Any]:
+    """Result columns that come from an expression, not from a model column.
+
+    SemPy names a model column ``Table[Column]`` and an expression (a measure
+    or a named extension column) ``[name]``.
+    """
+
+    return [
+        column
+        for column in getattr(frame, "columns", ())
+        if isinstance(column, str) and column.startswith("[") and column.endswith("]")
+    ]
+
+
+_DESCENDING_WORDS = {"desc", "descending", "down", "high", "largest"}
+_ASCENDING_WORDS = {"asc", "ascending", "up", "low", "smallest"}
+_ORDER_BY_FORMS = (
+    'order_by="Total Sales", descending=True (also accepted: ("Total Sales", "desc"), '
+    '["Total Sales"], [("Total Sales", "desc")])'
+)
+
+
+def _normalize_order_by(order_by: Any, descending: bool) -> tuple[str | None, bool]:
+    """Reduce the shapes callers write for one sort key to ``(name, descending)``.
+
+    Generated code reaches for pandas and SQL habits: a list of names, a
+    ``(name, direction)`` pair, a list of such pairs, a one-item mapping. Each
+    is unambiguous for a single key, so each is accepted. Several keys are
+    not supported and the error says so instead of listing valid names.
+    """
+
+    if order_by is None:
+        return None, bool(descending)
+    if isinstance(order_by, str):
+        return order_by, bool(descending)
+    if isinstance(order_by, Mapping):
+        order_by = list(order_by.items())
+    if isinstance(order_by, (list, tuple)):
+        items = list(order_by)
+        if len(items) == 2 and isinstance(items[0], str) and _is_direction(items[1]):
+            items = [tuple(items)]
+        if len(items) != 1:
+            raise SemanticModelQueryError(
+                f"aggregate() orders by one key; got {len(items)} in {order_by!r}. "
+                f"Use {_ORDER_BY_FORMS} and sort further in pandas."
+            )
+        item = items[0]
+        if isinstance(item, str):
+            return item, bool(descending)
+        if (
+            isinstance(item, (list, tuple))
+            and len(item) == 2
+            and isinstance(item[0], str)
+            and _is_direction(item[1])
+        ):
+            return item[0], _direction_is_descending(item[1])
+    raise SemanticModelQueryError(
+        f"order_by must name one measure or groupby column; got {order_by!r}. "
+        f"Use {_ORDER_BY_FORMS}."
+    )
+
+
+def _is_direction(value: Any) -> bool:
+    if isinstance(value, bool):
+        return True
+    return isinstance(value, str) and value.strip().lower() in (
+        _DESCENDING_WORDS | _ASCENDING_WORDS
+    )
+
+
+def _direction_is_descending(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return value.strip().lower() in _DESCENDING_WORDS
+
+
 def _plain_frame(frame: Any, aliases: dict[str, str] | None = None) -> Any:
     try:
         import pandas as pd
@@ -771,6 +893,7 @@ class SemanticModel:
             total_seconds=round(time.monotonic() - started, 3),
         )
         self._record_query(record)
+        result = _restore_numeric_columns(result, _expression_columns(result))
         return _plain_frame(result) if normalize_columns else result
 
     def _evaluate(self, query: str) -> Any:
@@ -787,6 +910,11 @@ class SemanticModel:
 
         No DAX to author, so no DAX syntax to get wrong. ``groupby`` entries are
         fully qualified, e.g. ``["Owner[Owner Country]"]``.
+
+        SemPy's measure endpoint rejects some valid requests, for example a
+        grouping column that lives on a fact table. When it refuses a grouped
+        or filtered request, the same request runs through the DAX path that
+        :meth:`aggregate` uses, and the result keeps this method's shape.
         """
         kwargs: dict[str, Any] = dict(self._kw)
         if groupby:
@@ -808,13 +936,26 @@ class SemanticModel:
         try:
             result = self._fabric.evaluate_measure(self.dataset, measure, **kwargs)
         except Exception as exc:
-            record.update(
-                execution_seconds=round(time.monotonic() - started, 3),
+            failure = dict(
                 reason="execution_error",
                 error=f"{type(exc).__name__}: {exc}"[:300],
             )
-            self._record_query(record)
-            raise
+            if not (groupby or filters):
+                record.update(
+                    execution_seconds=round(time.monotonic() - started, 3), **failure
+                )
+                self._record_query(record)
+                raise
+            try:
+                result = self._measure_through_dax(measures, groupby, filters, exc)
+            except Exception:
+                record.update(
+                    execution_seconds=round(time.monotonic() - started, 3), **failure
+                )
+                self._record_query(record)
+                raise
+            record["fallback"] = "dax"
+        result = _restore_numeric_columns(result, measures)
         record.update(
             execution_seconds=round(time.monotonic() - started, 3),
             returned_rows=_row_count(result),
@@ -822,6 +963,46 @@ class SemanticModel:
         )
         self._record_query(record)
         return result
+
+    def _measure_through_dax(
+        self,
+        measures: list[str],
+        groupby: list[str] | None,
+        filters: Mapping[str, Any] | None,
+        cause: BaseException,
+    ) -> Any:
+        """Answer a request ``evaluate_measure`` refused, in ``measure()``'s shape."""
+
+        try:
+            frame = self.aggregate(
+                measures,
+                groupby=list(groupby or ()),
+                filters=filters,
+                normalize_columns=False,
+            )
+        except SemanticModelQueryTooBroad:
+            raise
+        except Exception as fallback_error:
+            shown = ", ".join(str(g) for g in (groupby or ())) or "(none)"
+            raise SemanticModelQueryError(
+                f"measure({measures!r}) could not be evaluated grouped by {shown}. "
+                f"The measure endpoint answered: {type(cause).__name__}: "
+                f"{str(cause)[:200]}. The DAX path answered: "
+                f"{type(fallback_error).__name__}: {str(fallback_error)[:200]}. "
+                "Check the names with .metadata(), or use aggregate(measures=[...], "
+                "groupby=[...], filters={...})."
+            ) from cause
+        rename: dict[str, str] = {}
+        for column in getattr(frame, "columns", ()):
+            text = str(column)
+            if text.startswith("[") and text.endswith("]"):
+                rename[column] = text[1:-1]
+            elif _COLUMN_REF.match(text):
+                rename[column] = _split_column_ref(text)[1]
+        try:
+            return frame.rename(columns=rename) if rename else frame
+        except Exception:  # pragma: no cover - non-pandas frame
+            return frame
 
     def read_table(self, table: str, num_rows: int | None = None) -> Any:
         """Read a table. Use for small dimension tables only, never a fact table."""
@@ -838,7 +1019,7 @@ class SemanticModel:
         *,
         groupby: list[str] | None = None,
         filters: Mapping[str, Any] | None = None,
-        order_by: str | None = None,
+        order_by: Any = None,
         descending: bool = True,
         top: int | None = None,
         max_groups: int | None = None,
@@ -861,7 +1042,13 @@ class SemanticModel:
         then ``FABRIC_RLM_SEMANTIC_MAX_GROUPS``, then 10,000. The preflight
         budget comes from ``FABRIC_RLM_SEMANTIC_PREFLIGHT_TIMEOUT`` (default
         30 seconds). Returns an ordinary pandas DataFrame with snake-case
-        columns unless ``normalize_columns=False``.
+        columns unless ``normalize_columns=False``. Measure columns are
+        numeric even when the engine reports the measure as variant-typed.
+
+        ``order_by`` names one requested measure or groupby column. Besides a
+        string it accepts ``("Total Sales", "desc")``, ``["Total Sales"]`` and
+        ``[("Total Sales", "desc")]``; a direction given that way wins over
+        ``descending``.
         """
         started = time.monotonic()
         record: dict[str, Any] = {"query_type": "aggregate", "executed": False}
@@ -1123,6 +1310,7 @@ class SemanticModel:
                 )
             resolved_filters.append((canonical, values))
 
+        order_by, descending = _normalize_order_by(order_by, descending)
         canonical_order: str | None = None
         if order_by is not None:
             text = str(order_by).strip()
@@ -1141,7 +1329,8 @@ class SemanticModel:
                 options = list(resolved_measures) + [f"{t}[{c}]" for t, c in group_columns]
                 raise SemanticModelQueryError(
                     f"order_by must name one of the requested measures or groupby "
-                    f"columns; got {order_by!r}. Options: {options}"
+                    f"columns; got {order_by!r}. Options: {options}. "
+                    "Request the measure in measures=[...] to sort by it."
                 )
         elif top is not None:
             canonical_order = resolved_measures[0]
@@ -1160,6 +1349,9 @@ class SemanticModel:
         frame: Any, plan: _AggregatePlan, normalize_columns: bool
     ) -> Any:
         aliases = plan.aliases
+        frame = _restore_numeric_columns(
+            frame, [f"[{alias}]" for alias in aliases] + list(aliases)
+        )
         if normalize_columns:
             mapping: dict[str, str] = {}
             for alias, name in aliases.items():

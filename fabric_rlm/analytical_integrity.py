@@ -29,6 +29,7 @@ from typing import Any, Iterable, Mapping, Sequence
 __all__ = [
     "DEFAULT_NOISE_RELATIVE_TOLERANCE",
     "check_unsupported_literals",
+    "check_truncated_source_reads",
     "AnalyticalIntegrityError",
     "DirectionalClaim",
     "IntegrityReport",
@@ -877,6 +878,42 @@ def _submit_literals(code: str) -> list[tuple[float, str]]:
         for keyword in node.keywords:
             collect(keyword.value)
     return literals
+
+
+def check_truncated_source_reads(turns: Iterable[Any]) -> list[str]:
+    """A query result that was cut at ``max_rows`` and never replaced.
+
+    Reads the typed source-call telemetry on each turn, never the data. A
+    truncated result is a finding unless a later query on the same source came
+    back complete: a ``SELECT *`` used as a preview is harmless once the run
+    goes on to aggregate in SQL, while a run whose last read of a source was
+    capped has, in practice, computed its figures from the first rows alone.
+    One such run reported a 0.00% lapse rate from 1,000 of 378,791 rows.
+    """
+
+    last_read: dict[str, tuple[Any, bool, Any]] = {}
+    for turn in turns:
+        for call in getattr(turn, "source_calls", None) or ():
+            if not isinstance(call, Mapping) or call.get("query_type") != "lakehouse_sql":
+                continue
+            if call.get("reason") or call.get("truncated") is None:
+                continue          # failed, or an older record with no flag
+            last_read[str(call.get("source_root", ""))] = (
+                getattr(turn, "turn", None),
+                bool(call.get("truncated")),
+                call.get("max_rows"),
+            )
+    problems: list[str] = []
+    for turn_number, truncated, max_rows in last_read.values():
+        if truncated:
+            problems.append(
+                f"Turn {turn_number}: a LakehouseSource.query result was truncated at "
+                f"max_rows={max_rows} and no later query on that source replaced it. "
+                "Any figure computed from those rows covers only part of the data. "
+                "Recompute it as an aggregate in SQL (GROUP BY, SUM, COUNT) so the "
+                "engine reads every row, then SUBMIT again."
+            )
+    return problems
 
 
 def check_unsupported_literals(
