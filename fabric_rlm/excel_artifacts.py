@@ -432,3 +432,235 @@ def _openpyxl() -> Any:
             "Excel artifact helpers require openpyxl. Install it with `pip install openpyxl`."
         ) from exc
     return openpyxl
+
+
+# ---------------------------------------------------------------------------
+# Recalculating a saved workbook
+#
+# openpyxl writes formulas as text and never evaluates them, and a workbook
+# saved from Python has no cached values. "Reopen the file and check it" can
+# therefore confirm that a cell holds a formula, never that the formula is
+# right. Two models produced finished-looking what-if models and dashboards
+# whose formulas were wrong this way. These helpers evaluate the saved file
+# with the optional ``formulas`` package so a validator can check what Excel
+# would show, including after an input cell is changed.
+# ---------------------------------------------------------------------------
+
+_EXCEL_ERROR_PREFIX = "#"
+# Excel accepts Sheet!A1:Sheet!B2 and rewrites it as Sheet!A1:B2; the engine
+# only reads the second form.
+_REPEATED_SHEET_RANGE = re.compile(
+    r"(('[^']+'|[A-Za-z_][\w. ]*)!\$?[A-Za-z]{1,3}\$?\d+):\2!"
+)
+
+
+def _formulas_engine() -> Any:
+    try:
+        import formulas
+    except ImportError as exc:  # pragma: no cover - depends on optional environment
+        raise ImportError(
+            "Recalculating a workbook needs the optional formula engine. "
+            "Install it with `pip install fabric-rlm[excel]` (or `pip install formulas`)."
+        ) from exc
+    return formulas
+
+
+def _cell_key(sheet: str, cell: str) -> str:
+    return f"{_normalize_sheet_name(sheet).upper()}!{cell.replace('$', '').upper()}"
+
+
+def _split_cell_reference(reference: str) -> tuple[str, str]:
+    sheet, separator, cell = str(reference).rpartition("!")
+    if not separator or not sheet or not cell:
+        raise ValueError(
+            f"cell reference {reference!r} must look like 'Sheet!A1' or \"'My Sheet'!A1\""
+        )
+    return _normalize_sheet_name(sheet), cell.replace("$", "")
+
+
+def _plain_value(value: Any) -> Any:
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            value = item()
+        except Exception:  # noqa: BLE001
+            pass
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)          # Excel errors arrive as engine objects: '#VALUE!'
+
+
+class RecalculatedWorkbook(dict):
+    """Cell values after recalculation, keyed ``'SHEET!A1'``; lookups ignore case."""
+
+    def __getitem__(self, reference: str) -> Any:
+        return super().__getitem__(_cell_key(*_split_cell_reference(reference)))
+
+    def get(self, reference: str, default: Any = None) -> Any:  # type: ignore[override]
+        try:
+            return self[reference]
+        except (KeyError, ValueError):
+            return default
+
+    def __contains__(self, reference: object) -> bool:
+        try:
+            return super().__contains__(_cell_key(*_split_cell_reference(str(reference))))
+        except ValueError:
+            return False
+
+
+def recalculate_workbook(
+    path: str | Path,
+    inputs: dict[str, Any] | None = None,
+) -> RecalculatedWorkbook:
+    """Evaluate every formula in a saved workbook and return the cell values.
+
+    ``inputs`` maps ``'Sheet!A1'`` to a value written into that cell before
+    calculating, which is how a what-if model or a dashboard dropdown is
+    exercised. The file on disk is never modified. A formula the engine
+    cannot evaluate comes back as its Excel error text (``'#VALUE!'``).
+    Requires ``pip install fabric-rlm[excel]``.
+    """
+
+    import os
+    import tempfile
+
+    formulas = _formulas_engine()
+    openpyxl = _openpyxl()
+    source = Path(path)
+    workbook = openpyxl.load_workbook(source)
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if isinstance(cell.value, str) and cell.value.startswith("="):
+                    cell.value = _REPEATED_SHEET_RANGE.sub(r"\1:", cell.value)
+    for reference, value in (inputs or {}).items():
+        sheet_name, cell = _split_cell_reference(reference)
+        workbook[_resolve_sheet_name(workbook, sheet_name)][cell] = value
+    handle, temporary = tempfile.mkstemp(suffix=".xlsx", prefix="fabric_rlm_recalc_")
+    os.close(handle)
+    try:
+        workbook.save(temporary)
+        solution = formulas.ExcelModel().loads(temporary).finish().calculate()
+    finally:
+        try:
+            os.unlink(temporary)
+        except OSError:  # pragma: no cover
+            pass
+    values = RecalculatedWorkbook()
+    for key, ranges in solution.items():
+        text = str(key)
+        _, _, cell = text.rpartition("!")
+        if ":" in cell:
+            continue
+        sheet = text.rpartition("!")[0].rpartition("]")[2].strip("'")
+        try:
+            value = ranges.value[0, 0]
+        except Exception:  # noqa: BLE001
+            continue
+        dict.__setitem__(values, _cell_key(sheet, cell), _plain_value(value))
+    return values
+
+
+def _resolve_sheet_name(workbook: Any, name: str) -> str:
+    for candidate in workbook.sheetnames:
+        if candidate.casefold() == name.casefold():
+            return candidate
+    raise KeyError(f"workbook has no sheet {name!r}; sheets: {workbook.sheetnames}")
+
+
+def formula_errors(path: str | Path, inputs: dict[str, Any] | None = None) -> dict[str, str]:
+    """Formula cells that evaluate to an Excel error, as ``{'SHEET!A1': '#VALUE!'}``."""
+
+    openpyxl = _openpyxl()
+    workbook = openpyxl.load_workbook(Path(path))
+    formula_cells = {
+        _cell_key(sheet.title, cell.coordinate)
+        for sheet in workbook.worksheets
+        for row in sheet.iter_rows()
+        for cell in row
+        if isinstance(cell.value, str) and cell.value.startswith("=")
+    }
+    values = recalculate_workbook(path, inputs)
+    return {
+        key: value
+        for key, value in dict.items(values)
+        if key in formula_cells and isinstance(value, str) and value.startswith(_EXCEL_ERROR_PREFIX)
+    }
+
+
+def workbook_formula_validator(
+    scenarios: Any,
+    *,
+    path_field: str = "report_path",
+    relative_tolerance: float = 1e-6,
+    absolute_tolerance: float = 0.005,
+    max_reported: int = 8,
+) -> Any:
+    """Build an ``output_validator`` that recalculates the submitted workbook.
+
+    ``scenarios`` is one mapping of expected cells (``{'Scenarios!B2': 15.8e6}``)
+    or a list of ``{"inputs": {...}, "expected": {...}}`` mappings; each scenario
+    sets its input cells, recalculates, and compares. A mismatch raises
+    ``AssertionError`` naming the cell, what it recalculated to and what was
+    expected, which is what the run receives as repair feedback. Expectations
+    that change with the inputs cannot be satisfied by hard-coded numbers.
+    """
+
+    if isinstance(scenarios, dict) and not {"inputs", "expected"} & set(scenarios):
+        scenarios = [{"inputs": {}, "expected": scenarios}]
+    elif isinstance(scenarios, dict):
+        scenarios = [scenarios]
+    normalized = [
+        {"inputs": dict(item.get("inputs") or {}), "expected": dict(item.get("expected") or {})}
+        for item in scenarios
+    ]
+    if not normalized or not all(item["expected"] for item in normalized):
+        raise ValueError("every scenario needs at least one expected cell")
+
+    def validate(payload: dict[str, Any]) -> None:
+        path = Path(str(payload.get(path_field, "")))
+        if not path.is_file():
+            raise AssertionError(f"{path_field} does not name a saved workbook: {path}")
+        problems: list[str] = []
+        for number, scenario in enumerate(normalized, start=1):
+            label = f"scenario {number}" + (
+                f" with {scenario['inputs']}" if scenario["inputs"] else ""
+            )
+            try:
+                values = recalculate_workbook(path, scenario["inputs"])
+            except ImportError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise AssertionError(
+                    f"the saved workbook could not be recalculated ({label}): "
+                    f"{type(exc).__name__}: {str(exc)[:300]}"
+                ) from exc
+            for reference, expected in scenario["expected"].items():
+                got = values.get(reference)
+                if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+                    ok = (
+                        isinstance(got, (int, float))
+                        and not isinstance(got, bool)
+                        and abs(got - expected)
+                        <= max(absolute_tolerance, relative_tolerance * abs(expected))
+                    )
+                else:
+                    ok = got == expected
+                if not ok:
+                    problems.append(
+                        f"[{label}] {reference} recalculates to {got!r}, expected {expected!r}"
+                    )
+        if problems:
+            shown = "\n".join(problems[:max_reported])
+            more = (
+                f"\n... and {len(problems) - max_reported} more"
+                if len(problems) > max_reported
+                else ""
+            )
+            raise AssertionError(
+                "The saved workbook was recalculated with a formula engine and these "
+                f"cells are wrong. Fix the formulas, do not hard-code values:\n{shown}{more}"
+            )
+
+    return validate

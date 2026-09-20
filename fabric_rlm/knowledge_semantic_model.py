@@ -474,21 +474,16 @@ class SemanticModelKnowledgeAdapter:
             "semantic-model-snapshot-v1",
             {"schema": structural, "metadata": first},
         )
-        schema, records_truncated, fields_truncated, text_truncated = (
-            _retained_schema(first, limits)
-        )
         retained_fingerprints, fingerprint_fields_truncated = (
             _retained_fingerprints(first, limits)
         )
         total_records = sum(len(records) for records in first.values())
-        return SourceProfile(
-            source_id=source_id,
-            family=self.family,
-            locator=locator,
-            snapshot_fingerprint=snapshot_fingerprint,
-            schema_fingerprint=schema_fingerprint,
-            schema=schema,
-            diagnostics={
+
+        def build(record_cap: int) -> SourceProfile:
+            schema, records_truncated, fields_truncated, text_truncated = (
+                _retained_schema(first, _with_record_cap(limits, record_cap))
+            )
+            diagnostics: dict[str, object] = {
                 "snapshot_exact": True,
                 "provider_materialization_bounded": False,
                 "records_inspected": total_records,
@@ -499,9 +494,62 @@ class SemanticModelKnowledgeAdapter:
                 "text_truncated": text_truncated,
                 "nesting_truncated": limits.max_nesting_depth < 3,
                 **retained_fingerprints,
-            },
-            role=role,
-        )
+            }
+            if record_cap < limits.max_records:
+                # Only present when the byte budget, not max_records, set the
+                # cap, so profiles of models that fit are unchanged.
+                diagnostics["retained_record_cap"] = record_cap
+            return SourceProfile(
+                source_id=source_id,
+                family=self.family,
+                locator=locator,
+                snapshot_fingerprint=snapshot_fingerprint,
+                schema_fingerprint=schema_fingerprint,
+                schema=schema,
+                diagnostics=diagnostics,
+                role=role,
+            )
+
+        # The fingerprints above cover the complete metadata, so drift is
+        # detected however little of the schema is retained. What is retained
+        # only bounds what a registered operation may offer. A model with
+        # thousands of measures used to fail learn() outright on the diagnostic
+        # byte budget; it now keeps as many records per family as fit.
+        profile = build(limits.max_records)
+        if _profile_bytes(profile) <= limits.max_diagnostic_bytes:
+            return profile
+        low, high, best = 0, limits.max_records, build(0)
+        while low <= high:
+            middle = (low + high) // 2
+            candidate = build(middle)
+            if _profile_bytes(candidate) <= limits.max_diagnostic_bytes:
+                best, low = candidate, middle + 1
+            else:
+                high = middle - 1
+        return best
+
+
+def _profile_bytes(profile: SourceProfile) -> int:
+    from fabric_rlm.knowledge import canonical_json
+
+    return len(canonical_json(profile.to_dict()).encode("utf-8"))
+
+
+def _with_record_cap(limits: ProfileLimits, record_cap: int) -> ProfileLimits:
+    if record_cap == limits.max_records:
+        return limits
+    return _RecordCappedLimits(limits, record_cap)  # type: ignore[return-value]
+
+
+class _RecordCappedLimits:
+    """``limits`` with a lower ``max_records``; zero is allowed, unlike ProfileLimits."""
+
+    def __init__(self, limits: ProfileLimits, max_records: int) -> None:
+        self._limits = limits
+        self.max_records = max_records
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._limits, name)
 
 
 def semantic_model_adapter() -> SemanticModelKnowledgeAdapter:

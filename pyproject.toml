@@ -83,12 +83,19 @@ dev = [
   "nbformat>=5.10",
   "ipython>=8",
   "openpyxl>=3.1",
+  "formulas>=1.2.7",
 ]
 fabric = [
   "synapseml",
 ]
 pdf = [
   "pymupdf>=1.24",
+]
+excel = [
+  "openpyxl>=3.1",
+  # recalculate_workbook / workbook_formula_validator: evaluates the formulas
+  # of a saved workbook, which openpyxl never does. Pure Python.
+  "formulas>=1.2.7",
 ]
 analytics = [
   "duckdb>=1.1",

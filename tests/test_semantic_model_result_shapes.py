@@ -149,6 +149,34 @@ def test_restore_numeric_does_not_mutate_the_input():
     assert result["[x]"].tolist() == [1, 2]
 
 
+def test_restore_numeric_handles_repeated_column_names():
+    frame = pd.DataFrame([["7", "a", "10"], ["8", "b", "9"]], columns=["[m]", "T[c]", "[m]"])
+    result = _restore_numeric_columns(frame, ["[m]"])
+    assert list(result.columns) == ["[m]", "T[c]", "[m]"]
+    assert result.iloc[:, 0].tolist() == [7, 8]
+    assert result.iloc[:, 1].tolist() == ["a", "b"]
+    assert result.iloc[:, 2].tolist() == [10, 9]
+
+
+def test_restore_numeric_keeps_the_frame_class():
+    class Tagged(pd.DataFrame):
+        @property
+        def _constructor(self):
+            return Tagged
+
+    result = _restore_numeric_columns(Tagged({"[x]": ["1", "2"]}), ["[x]"])
+    assert isinstance(result, Tagged)
+    assert result["[x]"].tolist() == [1, 2]
+
+
+def test_restore_numeric_passes_through_what_is_not_a_pandas_frame():
+    class RowsOnly:
+        columns = ["[x]"]
+
+    rows = RowsOnly()
+    assert _restore_numeric_columns(rows, ["[x]"]) is rows
+
+
 # -- order_by shapes ---------------------------------------------------------------
 
 

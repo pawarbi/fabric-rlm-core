@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+Fixes from running every example and the documented flows in a Fabric Python
+3.12 notebook against 0.6.4 (issues #88 to #101).
+
+### Fixed
+
+- A semantic-model run no longer ends as `worker_died` when SemPy's .NET client
+  prints to stdout. The worker moves its JSON protocol off file descriptor 1, so
+  nothing native code prints can reach it, and the parent skips lines that are
+  not protocol frames instead of failing the turn. Set
+  `FABRIC_RLM_ISOLATE_PROTOCOL=0` to keep the old shared stream (#94).
+- Measures the engine types as variant arrive from SemPy as text. `aggregate()`,
+  `measure()` and the expression columns of `dax()` restore a numeric dtype when
+  every value is a plainly written number, so a pandas sort no longer ranks
+  them as strings. Model columns are never converted (#97).
+- `RLM.learn(store=...)` works on the Lakehouse mount. Where the filesystem has
+  no hard links, publication falls back to an exclusive create, which still
+  refuses to overwrite an existing package (#88).
+- A learned file over 1 MiB is no longer refused as "stale". Snapshots hash the
+  whole file in a streaming pass up to the new `ProfileLimits.max_snapshot_bytes`
+  (512 MiB); `max_input_bytes` only bounds parsing. Fingerprints of files under
+  1 MiB are unchanged. Beyond the budget, `learn()` warns and the refusal says
+  the source cannot be verified exactly and how to raise the limit. A change in
+  the middle of a large file is now detected (#89).
+- `RLM.learn` on a semantic model with thousands of measures keeps as much of
+  the schema as fits in `max_diagnostic_bytes` instead of failing. Fingerprints
+  still cover the complete metadata. The generic size error names the source,
+  the size and the limit (#95).
+- One unreadable table folder no longer fails discovery of the whole lakehouse.
+  It is left out of the catalog, listed in `LakehouseSource.skipped` with the
+  reason, and the task is told. A scope that is that one table still fails, and
+  the error names the path (#90).
+- A truncated `LakehouseSource.query` result prints a warning into the turn's
+  output, and the analytical-integrity screen sends back a submission whose last
+  read of a source was truncated (#99).
+- The error for a source that is not in a handle's catalog lists what the handle
+  holds and says to bind the tables on one `LakehouseSource(root, tables=[...])`
+  to join them (#100).
+- `str(File(...))` is the path, so a handle in an f-string names the file (#91).
+- `SemanticModel.measure(groupby=..., filters=...)` answers through the DAX path
+  when SemPy's measure endpoint refuses the request, and reports both failures
+  when neither works (#93).
+- `result.report()` names what rejected a submission (your `output_validator`, a
+  skill's verifier, or the integrity screen) instead of always blaming an
+  `output_validator` (#92).
+
+### Added
+
+- `aggregate(order_by=...)` accepts `("Measure", "desc")`, `["Measure"]` and
+  `[("Measure", "desc")]` as well as a string (#96).
+- `recalculate_workbook`, `formula_errors` and `workbook_formula_validator`
+  evaluate the formulas of a saved workbook, optionally after setting input
+  cells, so a validator can check what Excel would show. Needs the new
+  `fabric-rlm[excel]` extra (#101).
+- `ProfileLimits` is exported from `fabric_rlm`.
+
 ## 0.6.4 - 2026-09-18 - configurable reconciliation and practical Fabric examples
 
 ### Removed

@@ -482,10 +482,16 @@ def _restore_numeric_columns(frame: Any, columns: Any) -> Any:
         import pandas as pd
     except Exception:  # pragma: no cover - pandas ships with sempy
         return frame
-    targets = [c for c in columns if c in getattr(frame, "columns", ())]
-    converted: dict[Any, Any] = {}
-    for column in targets:
-        series = frame[column]
+    if not isinstance(frame, pd.DataFrame):
+        return frame
+    wanted = set(columns)
+    # By position: a result may repeat a column name, and frame[name] is then
+    # a frame, not a series.
+    converted: dict[int, Any] = {}
+    for position, column in enumerate(frame.columns):
+        if column not in wanted:
+            continue
+        series = frame.iloc[:, position]
         if series.dtype != object and not pd.api.types.is_string_dtype(series.dtype):
             continue
         present = series.dropna()
@@ -496,12 +502,22 @@ def _restore_numeric_columns(frame: Any, columns: Any) -> Any:
             for value in present
         ):
             continue
-        converted[column] = pd.to_numeric(series, errors="coerce")
+        converted[position] = pd.to_numeric(series, errors="coerce")
     if not converted:
         return frame
-    result = frame.copy()
-    for column, values in converted.items():
-        result[column] = values
+    if frame.columns.is_unique:
+        # The usual case. copy() keeps the frame's own class (a FabricDataFrame).
+        result = frame.copy()
+        for position, values in converted.items():
+            result[frame.columns[position]] = values
+        return result
+    # Repeated names: rebuild column by column, since assigning by name would
+    # write every column that shares it.
+    result = pd.concat(
+        [converted.get(i, frame.iloc[:, i]) for i in range(frame.shape[1])], axis=1
+    )
+    result.columns = frame.columns
+    result.attrs = dict(frame.attrs)
     return result
 
 

@@ -1027,7 +1027,11 @@ def profile_sources(
         encoded_size = len(canonical_json(profile.to_dict()).encode("utf-8"))
         if encoded_size > active_limits.max_diagnostic_bytes:
             raise ValueError(
-                "canonical SourceProfile exceeds max_diagnostic_bytes"
+                f"canonical SourceProfile exceeds max_diagnostic_bytes: the profile "
+                f"of source alias {source_id} is {encoded_size:,} bytes against a "
+                f"limit of {active_limits.max_diagnostic_bytes:,}. Narrow the source, "
+                "or pass limits=ProfileLimits(max_diagnostic_bytes=...) to RLM.learn() "
+                "and load_knowledge()."
             )
         profiles.append(profile)
     return tuple(profiles)
