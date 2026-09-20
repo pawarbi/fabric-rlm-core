@@ -62,7 +62,7 @@ print("arm:", ARM)
 
 CELL_INSTALL = (
     "%pip install -q reportlab pypdf openpyxl "
-    "fabric-rlm[analytics]==0.6.4\n"
+    "fabric-rlm[analytics]==0.6.5\n"
 )
 
 CELL_SETUP = '''from fabric_rlm import FabricLM
