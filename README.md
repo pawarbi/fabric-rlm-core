@@ -30,9 +30,6 @@ Host tools and recursive sub-model calls are optional, not prerequisites.
 *One notebook task, multiple sources, an inspectable workbook. Skills provide
 optional context; you choose the sources and acceptance checks.*
 
-**Beta.** Generated code and analytical answers need appropriate checks. Output
-types enforce structure; they do not prove that an answer is correct.
-
 [Start in Fabric](#quick-start-in-fabric) · [Example notebooks](examples/) ·
 [API reference](docs/api-reference.md) · [Skills guide](docs/skills-guide.md)
 
@@ -58,16 +55,12 @@ for `/lakehouse/default/Files` paths, then install:
 %pip install "fabric-rlm[analytics]"
 ```
 
-**Restart the session after installation.** For a small first run with generated
-fixtures, import the [API tour](examples/notebooks/rlm_api_tour.ipynb).
+For a small first run with generated fixtures, import the
+[API tour](examples/notebooks/rlm_api_tour.ipynb).
 
-The example below combines **three sources for one sales review**. Replace the
-workspace, model, and Lakehouse IDs with your own. It assumes a semantic model
-with a `Net Revenue` measure and month/region dimensions, a `dbo.sales` Delta
-table with order-level detail, and a CSV with `month`, `region`, and
-`target_revenue` columns (one row per month/region). All three must use compatible
-region keys, calendar months, revenue definitions, and currency. You need read
-access to each source; these are example business schemas, not bundled fixtures.
+The example below combines **three sources for one sales review**: revenue by
+region from a semantic model measure, targets from a CSV, and order detail from
+a Lakehouse Delta table to explain the regions that fell short.
 
 ```python
 from fabric_rlm import FabricLM, File, LakehouseSource, RLM, SemanticModel
@@ -208,12 +201,6 @@ Read [SECURITY.md](SECURITY.md) before connecting sensitive or production data.
 | [Argument test coverage](docs/api-argument-tests.md) | Data-backed tests and remaining environment-specific gaps |
 | [Benchmarks](benchmarks/) | Evaluation setup and reproduction material, separate from the quickstart |
 
-## Development
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and testing, and
-[CHANGELOG.md](CHANGELOG.md) for release history. Bug reports should include the
-package version, runtime, task configuration, and a redacted traceback or trajectory.
-
 ## Where it fits
 
 Use `fabric-rlm` for data that is too large to place in a prompt, exact
@@ -226,6 +213,12 @@ fits in context: a run takes minutes, not seconds. When the same step applies to
 each row on its own, such as classifying a text column, [Fabric AI functions](https://learn.microsoft.com/fabric/data-science/ai-functions/overview)
 are simpler. Results vary by model and by run, and a rule stated once in a long
 document can be missed, so state the definitions that matter and validate outputs.
+
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and testing, and
+[CHANGELOG.md](CHANGELOG.md) for release history. Bug reports should include the
+package version, runtime, task configuration, and a redacted traceback or trajectory.
 
 ## Acknowledgments
 
