@@ -33,6 +33,15 @@
   - The run without skills is an experiment, so it prints both runs side by side
     and no longer stops the notebook. The two-source scorecard prints before the
     cell raises.
+- A run no longer finishes on a workbook it wrote that does not open. One run
+  wrote a bad key into openpyxl's conditional-formatting store, `wb.save` raised
+  partway and left 2 KB of zip at `report_path`; the last turn submitted the
+  figures, the screen passed them and `integrity_ok` was true. The
+  analytical-integrity screen now sends back a submission when an `.xlsx`,
+  `.xlsm`, `.docx` or `.pptx` the run wrote is not a readable Office container,
+  or a `.parquet` file has lost its footer, whether the path is in the payload
+  or was only an input. Only files modified since the run started are judged; a
+  `File` input and a remote URL never are.
 
 ### Changed
 

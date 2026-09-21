@@ -975,6 +975,92 @@ def check_submitted_paths_exist(
     return problems
 
 
+# Office Open XML: a zip whose part list is [Content_Types].xml.
+_OPC_SUFFIXES = (".xlsx", ".xlsm", ".docx", ".pptx")
+# A file on a mounted store can carry the store's clock, not this machine's.
+_WRITTEN_DURING_RUN_SLACK_S = 120.0
+
+
+def _why_file_does_not_open(path: str) -> str | None:
+    """Why a file cannot be what its extension says, from its container alone.
+
+    Only formats with an exact, cheap signature are judged: a valid file of
+    that kind always passes, so a finding is never a matter of opinion.
+    """
+
+    import os
+    import zipfile
+
+    suffix = os.path.splitext(path)[1].lower()
+    if suffix in _OPC_SUFFIXES:
+        try:
+            if not zipfile.is_zipfile(path):
+                return "it is not a zip archive, which every file of that kind is"
+            with zipfile.ZipFile(path) as archive:
+                if "[Content_Types].xml" not in archive.namelist():
+                    return "the archive has no [Content_Types].xml, so it was cut short while being written"
+        except zipfile.BadZipFile:
+            return "its zip archive is damaged"
+    elif suffix == ".parquet":
+        size = os.path.getsize(path)
+        with open(path, "rb") as handle:
+            head = handle.read(4)
+            handle.seek(max(size - 4, 0))
+            tail = handle.read(4)
+        if size < 12 or head != b"PAR1" or tail != b"PAR1":
+            return "it does not start and end with the PAR1 marker, so it was cut short while being written"
+    return None
+
+
+def check_written_files_open(
+    payload: Mapping[str, Any] | None,
+    inputs: Mapping[str, Any] | None,
+    started_at: float | None = None,
+) -> list[str]:
+    """A workbook, document or Parquet file this run wrote that cannot be opened.
+
+    One run wrote a bad key into openpyxl's conditional-formatting store, so
+    ``wb.save`` raised partway and left 2 KB of zip at ``report_path``; its
+    last turn submitted the figures, the screen passed them, and the notebook
+    crashed opening the report. openpyxl, python-docx and pyarrow all write
+    straight to the destination, so any save that raises leaves this behind.
+
+    Looked at: a local path with a file extension that the task supplied as a
+    plain string or the run returned. Judged: only a file that exists, that
+    this run touched (modified since ``started_at``, when given), and whose
+    container is broken. A ``File`` input is something to read, not something
+    the run wrote, so it is never judged, and neither is a remote URL.
+    """
+
+    import os
+
+    candidates: dict[str, str] = {}
+    for source in (payload, inputs):
+        if not isinstance(source, Mapping):
+            continue
+        for field, value in source.items():
+            if not isinstance(value, str) or "://" in value or not ("/" in value or "\\" in value):
+                continue
+            candidates.setdefault(value, str(field))
+    problems: list[str] = []
+    for path, field in candidates.items():
+        try:
+            if not os.path.isfile(path):
+                continue
+            if started_at is not None and os.path.getmtime(path) < started_at - _WRITTEN_DURING_RUN_SLACK_S:
+                continue
+            reason = _why_file_does_not_open(path)
+        except (OSError, ValueError):
+            continue
+        if reason:
+            problems.append(
+                f"{field} is {path} but the file there does not open: {reason}. A save may "
+                "have raised partway. Build the file again from your data, save it, reopen it "
+                "to check it, then SUBMIT again."
+            )
+    return problems
+
+
 def _is_empty_result(value: Any) -> bool:
     """Zero, NaN, None, or a collection that is empty or holds only such values."""
 
