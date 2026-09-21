@@ -1,12 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.6.6 - 2026-09-20 - a run cannot finish on a file that does not open, and the IMF example is reliable
+
+One library check and one example. The check came out of fixing the example: both were found by running the
+IMF notebook in Fabric with the in-tenant models it ships with.
 
 ### Fixed
 
 - The IMF example notebook (`rlm_vs_plain_llm_imf_cpi.ipynb`) stopped at a
   grading cell in 4 of 4 runs with the in-tenant models it ships with, on 0.6.4
-  and 0.6.5 alike. The library is unchanged; the notebook is fixed.
+  and 0.6.5 alike. It needed no library change: the notebook is fixed.
   - The cause was one openpyxl detail. gpt-5-mini could not read its conditional
     formatting rule back from the saved file, decided the rule was missing and
     added it again, for up to 12 turns, and one run broke `wb.save` that way and

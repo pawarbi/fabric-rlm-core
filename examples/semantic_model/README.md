@@ -39,7 +39,7 @@ lakehouse, then edit the single configuration/parameter cell near the top:
 `WORKSPACE_ID` (the model's workspace), `MODEL_NAME`, and optionally `LM_MODEL`,
 `ARM`, `MAX_TURNS`, and `TIMEOUT_S`. Run all cells. Both ground-truth queries and
 the RLM model handle use that workspace explicitly. The install cell pins
-`fabric-rlm[analytics]==0.6.5`.
+`fabric-rlm[analytics]==0.6.6`.
 
 The notebook generates `targets.csv`, `ops_memo.pdf`, and the context skill under
 `/lakehouse/default/Files/multisource`. It writes the workbook to
@@ -76,7 +76,7 @@ only `MODEL_NAME` does not make an arbitrary model compatible.
 
 The companion [`rlm_learn_semantic_model_value.py`](../notebooks/rlm_learn_semantic_model_value.py)
 uses an existing business semantic model and needs no lakehouse attachment.
-It pins `fabric-rlm==0.6.5` and also uses Fabric's built-in LM. Set the workspace
+It pins `fabric-rlm==0.6.6` and also uses Fabric's built-in LM. Set the workspace
 and model ID placeholders in its configuration cell. Map `MEASURE` to your
 existing numeric scalar ARR measure (`ARR $` is only an example name), and keep
 `QUESTION` aligned with its business meaning. No particular tables or columns
