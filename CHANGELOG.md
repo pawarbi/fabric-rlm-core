@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.6.6 - 2026-09-20 - a run cannot finish on a file that does not open, and the IMF example is reliable
 
 One library check and one example. The check came out of fixing the example: both were found by running the
