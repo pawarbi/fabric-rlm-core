@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Fixed
+
+- The IMF example notebook (`rlm_vs_plain_llm_imf_cpi.ipynb`) stopped at a
+  grading cell in 4 of 4 runs with the in-tenant models it ships with, on 0.6.4
+  and 0.6.5 alike. The library is unchanged; the notebook is fixed.
+  - The cause was one openpyxl detail. gpt-5-mini could not read its conditional
+    formatting rule back from the saved file, decided the rule was missing and
+    added it again, for up to 12 turns, and one run broke `wb.save` that way and
+    submitted a workbook that did not open. The streaks task now says how to read
+    the rule back and how to count charts after a reload: a median of 3 turns
+    over 35 runs (12, 8, 12 and 4 before), with one rule per workbook.
+  - The graders no longer fail a workbook whose content is right. A correct rule
+    added more than once, a submitted median that is right but not rounded, tied
+    two-decimal averages listed by country code, the outlook labels a row higher
+    or lower, and a quoted sentence without its closing period all pass. A wrong
+    rule, value, order, sentence or label still fails, and a workbook that does
+    not open is a failed check, not a traceback.
+  - Every run declares typed outputs, so a median submitted as the text "4.68"
+    goes back to the model, and has an `output_validator` that sends back a
+    workbook that does not open. The two-source run's validator also checks what was read out of the
+    PDF without knowing any answer: the quoted sentence is in the report, each
+    economy and timing comes from that sentence, the stated driver is the
+    report's own words from a sentence about 2026, and every rate and revision
+    is a figure the report states. About one run in eight used to end with a
+    clause where an economy's name belongs, a driver from the wrong paragraph,
+    or a revision assumed to be 0.0; it now goes back to the model with the
+    reason. Against 41 real workbooks and the real report, the validator sends
+    back exactly the 3 with a reading error.
+  - The run without skills is an experiment, so it prints both runs side by side
+    and no longer stops the notebook. The two-source scorecard prints before the
+    cell raises.
+
+### Changed
+
+- README: "Where it fits" moved above "Development"; the beta notice, the
+  restart-after-install line and the list of assumptions before the quick-start
+  example are gone, and the example is described in one sentence.
+
 ## 0.6.5 - 2026-09-20 - fixes from running every example and documented flow in Fabric
 
 Fixes from running every example and the documented flows in a Fabric Python

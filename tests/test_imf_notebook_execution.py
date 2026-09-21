@@ -105,6 +105,12 @@ def reference(tmp_path):
     return path, truth, rows, streaks
 
 
+def _pdf(*pages):
+    document = MagicMock()
+    document.__enter__.return_value = [SimpleNamespace(get_text=lambda page=page: page) for page in pages]
+    return document
+
+
 def report_workbook(path, truth, gap=None):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -220,6 +226,106 @@ def test_report_rejects_wrong_workbooks(namespace, reference, tmp_path, gap, mut
 def test_numeric_checker_rejects_invalid_values(namespace, value):
     assert not namespace["ok"](value, 1.23)
     assert namespace["ok"](1.23000000001, 1.23)
+    assert not namespace["ok_2dp"](value, 1.23)
+
+
+def test_submitted_median_may_be_unrounded(namespace, reference, tmp_path):
+    # One run submitted 4.683596270241045 for a true 4.68: the right figure, not rounded.
+    assert namespace["ok_2dp"](1.2283596, 1.23) and namespace["ok_2dp"](1.23, 1.23)
+    assert not namespace["ok_2dp"](1.2383596, 1.23) and not namespace["ok_2dp"](1.22, 1.23)
+    path, truth, rows, streaks = reference
+    report = tmp_path / "report.xlsx"
+    report_workbook(report, truth)
+    namespace.update(DATA_PATH=str(path), REPORT_PATH=report, truth=truth,
+                     result=SimpleNamespace(submitted=True, payload={"n_countries": 18, "median_avg": 87.5496}))
+    execute("def grade_report", namespace)
+    assert all(namespace["checks"].values())
+    namespace["result"].payload["median_avg"] = 87.56
+    with pytest.raises(AssertionError):
+        execute("def grade_report", namespace)
+
+
+def test_tied_two_decimal_averages_may_follow_exact_values_or_codes(namespace):
+    # GEO 5.8099 and DOM 5.8096 both show 5.81. Two of 24 real workbooks listed DOM first, by code, and
+    # "sorted by the average, ties by country code, rounded to 2 decimals" allows that reading.
+    same_order = namespace["same_order"]
+    truth = [["LBN", 125.56], ["GEO", 5.81], ["DOM", 5.81], ["BBB", 4.46], ["CCC", 4.46], ["AAA", 4.46], ["ZZZ", 1.0]]
+    by_exact = [tuple(row) for row in truth]
+    by_code = [("LBN", 125.56), ("DOM", 5.81), ("GEO", 5.81), ("AAA", 4.46), ("BBB", 4.46), ("CCC", 4.46), ("ZZZ", 1.0)]
+    assert same_order(by_exact, truth) and same_order(by_code, truth)
+    neither = [("LBN", 125.56), ("GEO", 5.81), ("DOM", 5.81), ("CCC", 4.46), ("AAA", 4.46), ("BBB", 4.46), ("ZZZ", 1.0)]
+    assert not same_order(neither, truth)
+    assert not same_order([("GEO", 5.81), ("LBN", 125.56)] + by_exact[2:], truth)   # an untied pair swapped
+    assert not same_order(by_exact[:-1], truth)                                      # a row short
+    assert not same_order([("LBN", 125.5633)] + by_exact[1:], truth)                 # not rounded: one run wrote every cell this way
+    assert not same_order([("LBN", "125.56")] + by_exact[1:], truth)                 # text, not a number
+    assert not same_order([("XXX", 125.56)] + by_exact[1:], truth)                   # a country that does not belong
+
+
+@pytest.mark.parametrize("damage", ["missing", "truncated", "partial_zip", "not_a_workbook"])
+def test_unreadable_workbook_is_a_failed_check_not_a_traceback(namespace, reference, tmp_path, damage):
+    # A save that raised partway left a 2 KB zip with no [Content_Types].xml; the grader died in zipfile.
+    path = tmp_path / "report.xlsx"
+    if damage == "partial_zip":
+        import zipfile
+        with zipfile.ZipFile(path, "w") as archive:  # what the failed save left behind
+            archive.writestr("docProps/app.xml", "<Properties/>")
+    elif damage != "missing":
+        streak_workbook(path, 18, reference[3])
+        path.write_bytes(path.read_bytes()[:900] if damage == "truncated" else b"not a workbook")
+    result = SimpleNamespace(submitted=True, payload={"n_analyzed": 18, "n_with_streak": 17,
+                                                     "longest_country": "C01", "longest_len": 60})
+    checks = namespace["grade_streaks"](path, 18, reference[3], result)
+    assert checks["workbook_opens"] is False and checks["submit_analyzed"]
+    assert namespace["grade_report"](path, reference[1]) == {"workbook_opens": False}
+    # A run that never submitted has no payload to read.
+    unsubmitted = namespace["grade_streaks"](path, 18, reference[3], SimpleNamespace(submitted=False, payload=None))
+    assert not any(unsubmitted.values())
+
+
+def test_output_validator_sends_back_a_workbook_that_does_not_open(reference, tmp_path, monkeypatch):
+    # The library accepts a payload when a validator raises anything but AssertionError,
+    # so every way the file can be wrong has to surface as one.
+    monkeypatch.setitem(sys.modules, "fabric_rlm", SimpleNamespace(RLM=None, File=None))
+    ns = {}
+    execute("rlm = RLM.task(", ns, definitions=True)
+    path = tmp_path / "streaks.xlsx"
+    validate = ns["workbook_opens"](path, ["Streaks", "Summary"])
+    with pytest.raises(AssertionError, match="does not open"):
+        validate({})
+    streak_workbook(path, 18, reference[3])
+    validate({"anything": 1})
+    with pytest.raises(AssertionError, match="needs"):
+        ns["workbook_opens"](path, ["Streaks", "Summary", "Missing"])({})
+    path.write_bytes(path.read_bytes()[:900])
+    with pytest.raises(AssertionError, match="does not open"):
+        validate({})
+
+
+def test_every_run_is_given_the_validator_for_its_own_workbook():
+    for marker, path_name in [("rlm = RLM.task(", "REPORT_PATH"), ("rlm2 = RLM.task(", "REPORT2_PATH"),
+                              ("result3 = rlm3.run()", "NOSKILLS_PATH")]:
+        assert f"output_validator=workbook_opens({path_name}, [" in source(marker)
+    two_source = source("rlm4 = RLM.task(")
+    assert "output_validator=outlook_holds_together," in two_source
+    assert 'workbook_opens(REPORT3_PATH, ["Report", "All countries", "IMF Outlook"])(payload)' in two_source
+
+
+@pytest.mark.parametrize("marker,expected", [
+    ("rlm = RLM.task(", {"n_countries": "int", "median_avg": "float"}),
+    ("rlm2 = RLM.task(", {"n_analyzed": "int", "n_with_streak": "int", "longest_country": "str", "longest_len": "int"}),
+    ("result3 = rlm3.run()", {"n_analyzed": "int", "n_with_streak": "int", "longest_country": "str", "longest_len": "int"}),
+    ("rlm4 = RLM.task(", {"n_countries": "int", "median_avg": "float", "world_2025": "float", "world_2026": "float",
+                          "revision_2026_pp": "float", "revision_2027_pp": "float", "core_target_economies": "int"}),
+])
+def test_every_run_declares_typed_outputs(marker, expected):
+    # One run submitted the median as the text "4.68"; a list of names lets that through, a typed mapping sends it back.
+    calls = [node for node in ast.walk(ast.parse(source(marker))) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and node.func.attr == "task"]
+    assert len(calls) == 1
+    outputs = next(keyword.value for keyword in calls[0].keywords if keyword.arg == "outputs")
+    assert isinstance(outputs, ast.Dict)
+    assert {key.value: value.id for key, value in zip(outputs.keys, outputs.values)} == expected
 
 
 @pytest.mark.parametrize("failure", ["stream", "http", "empty", "html", "header_only", "wrong_schema"])
@@ -297,7 +403,11 @@ def streak_workbook(path, analyzed, expected):
     return wb
 
 
-@pytest.mark.parametrize("mutation", [None, "late_row", "summary", "format", "width", "fill", "chart", "anchor", "series", "categories", "chart_title", "scale"])
+STREAK_MUTATIONS_THAT_STILL_PASS = {None, "scale_repeated"}
+
+
+@pytest.mark.parametrize("mutation", [None, "late_row", "summary", "format", "width", "fill", "chart", "anchor", "series", "categories", "chart_title", "scale",
+                                      "scale_repeated", "scale_wrong_beside_right", "scale_missing", "scale_three_color", "note_row"])
 def test_streak_grader(namespace, reference, tmp_path, mutation):
     path = tmp_path / "streaks.xlsx"
     expected = reference[3]
@@ -325,13 +435,27 @@ def test_streak_grader(namespace, reference, tmp_path, mutation):
         st._charts[0].title = "Wrong"
     elif mutation == "scale":
         st.conditional_formatting["E3:E17"][0].colorScale.color[1].rgb = "0000FF"
+    elif mutation == "scale_repeated":
+        # Runs that could not read their rule back added the same rule again; Excel renders it as one.
+        for _ in range(2):
+            st.conditional_formatting.add("E3:E17", ColorScaleRule(start_type="min", start_color="FFFFFF", end_type="max", end_color="FF0000"))
+    elif mutation == "scale_wrong_beside_right":
+        st.conditional_formatting.add("E3:E17", ColorScaleRule(start_type="min", start_color="FFFFFF", end_type="max", end_color="00FF00"))
+    elif mutation == "scale_missing":
+        st.conditional_formatting._cf_rules.clear()
+    elif mutation == "scale_three_color":
+        st.conditional_formatting._cf_rules.clear()
+        st.conditional_formatting.add("E3:E17", ColorScaleRule(start_type="min", start_color="FFFFFF", mid_type="percentile", mid_value=50,
+                                                               mid_color="FFFF00", end_type="max", end_color="FF0000"))
+    elif mutation == "note_row":
+        st["A18"] = "Ranked by: streak length descending"
     wb.save(path)
     result = SimpleNamespace(submitted=True, payload={"n_analyzed": 18, "n_with_streak": 17,
                                                      "longest_country": "C01", "longest_len": 60})
     checks = namespace["grade_streaks"](path, 18, expected, result)
-    assert all(checks.values()) == (mutation is None), checks
+    assert all(checks.values()) == (mutation in STREAK_MUTATIONS_THAT_STILL_PASS), checks
     namespace.update(DATA_PATH=reference[0], REPORT2_PATH=path, result2=result)
-    if mutation is None:
+    if mutation in STREAK_MUTATIONS_THAT_STILL_PASS:
         execute("def streak_reference", namespace)
     else:
         with pytest.raises(AssertionError):
@@ -341,7 +465,7 @@ def test_streak_grader(namespace, reference, tmp_path, mutation):
 @pytest.mark.parametrize("skills", [True, False])
 @pytest.mark.parametrize("field", [None, "submitted", "n_analyzed", "n_with_streak", "longest_country", "longest_len"])
 @pytest.mark.parametrize("missing", [False, True])
-def test_streak_submission(namespace, reference, tmp_path, skills, field, missing):
+def test_streak_submission(namespace, reference, tmp_path, capsys, skills, field, missing):
     result = SimpleNamespace(submitted=True, payload={"n_analyzed": 18, "n_with_streak": 17,
                                                      "longest_country": "C01", "longest_len": 60},
                              n_turns=1, total_prompt_tokens=0, total_completion_tokens=0)
@@ -365,12 +489,28 @@ def test_streak_submission(namespace, reference, tmp_path, skills, field, missin
         return SimpleNamespace(run=run)
 
     namespace["RLM"] = SimpleNamespace(task=task)
-    marker = "def streak_reference" if skills else "result3 = rlm3.run()"
+    if skills:
+        if field is None:
+            execute("def streak_reference", namespace)
+        else:
+            with pytest.raises(AssertionError):
+                execute("def streak_reference", namespace)
+        return
+    # Without skills the cell is an experiment: it grades, prints both runs and never raises.
+    good = SimpleNamespace(submitted=True, payload={"n_analyzed": 18, "n_with_streak": 17, "longest_country": "C01",
+                                                    "longest_len": 60}, n_turns=3, total_prompt_tokens=10, total_completion_tokens=5)
+    namespace.update(result2=good, streak_checks=namespace["grade_streaks"](path, 18, reference[3], good),
+                     workbook_opens=lambda path, sheets: None)
+    execute("result3 = rlm3.run()", namespace)
+    shown = capsys.readouterr().out
+    assert "with skills" in shown and "without skills" in shown
+    failed = namespace["noskills_failed"]
     if field is None:
-        execute(marker, namespace)
+        assert failed == [] and "failed checks" not in shown
     else:
-        with pytest.raises(AssertionError):
-            execute(marker, namespace)
+        expected = "submitted" if field == "submitted" else {"n_analyzed": "submit_analyzed", "n_with_streak": "submit_with_streak",
+                    "longest_country": "submit_longest_country", "longest_len": "submit_longest_len"}[field]
+        assert failed == [expected] and f"failed checks: {expected}" in shown
 
 
 def test_report_paths_use_fresh_shared_stamp(namespace, tmp_path):
@@ -399,29 +539,43 @@ def test_report_paths_use_fresh_shared_stamp(namespace, tmp_path):
     ("result", "REPORT_PATH"), ("result2", "REPORT2_PATH"),
     ("result3", "NOSKILLS_PATH"), ("result4", "REPORT3_PATH"),
 ])
-def test_failed_rerun_removes_stale_report(namespace, reference, tmp_path, monkeypatch, result_name, path_name):
+def test_failed_rerun_removes_stale_report(namespace, reference, tmp_path, monkeypatch, capsys, result_name, path_name):
     path = tmp_path / ("streaks_noskills_test.xlsx" if path_name == "NOSKILLS_PATH" else "report.xlsx")
     namespace.update(DATA_DIR=str(tmp_path), STAMP="test", DATA_PATH=reference[0], WEO_PATH="offline.pdf",
                      Path=Path, os=os, time=time, TASK="offline", STREAKS_TASK="offline",
-                     TWO_SOURCE_TASK="offline", lm_mini=None, FabricLM=lambda *a, **kw: None)
+                     TWO_SOURCE_TASK="offline", lm_mini=None, FabricLM=lambda *a, **kw: None,
+                     workbook_opens=lambda path, sheets: None, fitz=SimpleNamespace(open=lambda path: _pdf("offline")))
     namespace[path_name] = str(path)
 
     def task(**kwargs):
         assert kwargs["inputs"]["report_path"] == str(path)
         assert not path.exists(), "Previous report survived into a new model call"
-        return SimpleNamespace(run=lambda: SimpleNamespace(submitted=False, payload={}))
+        return SimpleNamespace(run=lambda: SimpleNamespace(
+            submitted=False, payload=None, report=lambda: "NOT SUBMITTED: ran out of turns", n_turns=12,
+            total_prompt_tokens=0, total_completion_tokens=0))
 
     fake = SimpleNamespace(task=task)
     namespace.update(RLM=fake, File=lambda p: p)
     monkeypatch.setitem(sys.modules, "fabric_rlm", SimpleNamespace(RLM=fake, File=lambda p: p))
     tree = ast.parse(source(f"\n{result_name} = "))
+    if result_name == "result3":
+        # The run without skills does not stop the notebook: it reports that nothing was submitted.
+        good = SimpleNamespace(submitted=True, payload={}, n_turns=3, total_prompt_tokens=0, total_completion_tokens=0)
+        namespace.update(result2=good, streak_checks={"submitted": True}, analyzed=18, expected_streaks=reference[3])
+        for _ in range(2):
+            streak_workbook(path, 18, reference[3])
+            exec(compile(tree, "notebook-failed-rerun", "exec"), namespace)
+            assert not path.exists()
+            assert namespace["noskills_failed"][0] == "submitted" and "workbook_opens" in namespace["noskills_failed"]
+            assert "failed checks: submitted" in capsys.readouterr().out
+        return
     # Run through the submission assertion, excluding subsequent display/grading.
     end = next(i for i, n in enumerate(tree.body) if isinstance(n, ast.Assert)
                and isinstance(n.test, ast.Attribute) and n.test.attr == "submitted")
     tree.body = tree.body[:end + 1]
     for _ in range(2):
         streak_workbook(path, 18, reference[3])
-        with pytest.raises(AssertionError):
+        with pytest.raises(AssertionError, match="NOT SUBMITTED: ran out of turns"):
             exec(compile(tree, "notebook-failed-rerun", "exec"), namespace)
         assert not path.exists()
 
@@ -445,7 +599,15 @@ def test_streak_reference_edges_and_ties(namespace, tmp_path):
     ])
 
 
-@pytest.mark.parametrize("mutation", [None, "late_country", "gap", "gap_format", "label", "header", "bold", "format", "rate", "economy", "timing", "quote", "driver", "payload", "failed", "swap_uk_japan", "swap_uk_us", "year_only", "swap_quote"])
+TWO_SOURCE_MUTATIONS_THAT_STILL_PASS = {None, "labels_one_row_lower", "labels_no_empty_row", "median_unrounded",
+                                        "sentence_without_period", "sentence_in_quotes", "driver_capitalized_with_period"}
+
+
+@pytest.mark.parametrize("mutation", [None, "late_country", "gap", "gap_format", "label", "header", "bold", "format", "rate", "economy", "timing", "quote", "driver", "payload", "failed", "swap_uk_japan", "swap_uk_us", "year_only", "swap_quote",
+                                      "labels_one_row_lower", "labels_no_empty_row", "median_unrounded", "median_wrong",
+                                      "driver_label_missing", "labels_swapped", "source_label_not_bold", "sentence_not_below_label",
+                                      "sentence_without_period", "sentence_in_quotes", "driver_capitalized_with_period",
+                                      "sentence_cut_short", "driver_empty"])
 def test_two_source_cell(namespace, reference, tmp_path, mutation):
     truth, rows = reference[1:3]
     path = tmp_path / "combined.xlsx"
@@ -469,7 +631,44 @@ def test_two_source_cell(namespace, reference, tmp_path, mutation):
         outlook[address].number_format = "0.00"
     payload = {"n_countries": 18, "median_avg": 87.55, "world_2025": 4.1,
                "world_2026": 4.7, "revision_2026_pp": .3, "revision_2027_pp": .2, "core_target_economies": 4}
-    if mutation == "late_country":
+
+    def move_tail(shift):
+        # Rows 12 to 16 hold the two labels and their texts; real runs left two empty rows above them, or none.
+        tail = [(outlook.cell(row, 1).value, outlook.cell(row, 1).font.bold) for row in range(12, 17)]
+        for row in range(11, 18):
+            outlook.cell(row, 1).value = None
+            outlook.cell(row, 1).font = Font(bold=False)
+        for offset, (value, bold) in enumerate(tail):
+            outlook.cell(12 + shift + offset, 1).value = value
+            outlook.cell(12 + shift + offset, 1).font = Font(bold=bool(bold))
+
+    if mutation == "labels_one_row_lower":
+        move_tail(1)
+    elif mutation == "labels_no_empty_row":
+        move_tail(-1)
+    elif mutation == "median_unrounded":
+        payload["median_avg"] = 87.5496
+    elif mutation == "median_wrong":
+        payload["median_avg"] = 87.56
+    elif mutation == "driver_label_missing":
+        outlook["A15"] = None
+    elif mutation == "labels_swapped":
+        outlook["A12"], outlook["A15"] = outlook["A15"].value, outlook["A12"].value
+    elif mutation == "source_label_not_bold":
+        outlook["A12"].font = Font(bold=False)
+    elif mutation == "sentence_not_below_label":
+        outlook["A13"], outlook["B13"] = None, sentence
+    elif mutation == "sentence_without_period":
+        outlook["A13"] = sentence.rstrip(".")     # one real run split on the period and lost it
+    elif mutation == "sentence_in_quotes":
+        outlook["A13"] = "“" + sentence + "”"
+    elif mutation == "driver_capitalized_with_period":
+        outlook["A16"] = "Higher energy and food prices."
+    elif mutation == "sentence_cut_short":
+        outlook["A13"] = sentence.rsplit(",", 1)[0] + "."
+    elif mutation == "driver_empty":
+        outlook["A16"] = "."
+    elif mutation == "late_country":
         wb["All countries"]["B18"] = 999
     elif mutation == "gap":
         wb["Report"]["H12"] = 999
@@ -499,15 +698,141 @@ def test_two_source_cell(namespace, reference, tmp_path, mutation):
     # Keep the actual pinned sentence at the PDF boundary, including when the workbook lies.
     document = MagicMock()
     document.__enter__.return_value = [SimpleNamespace(get_text=lambda: sentence + " The increase reflects " + driver + ".")]
+    execute("rlm4 = RLM.task(", namespace, definitions=True)
     namespace.update(REPORT3_PATH=path, truth=truth, rows=rows, WEO_PATH="offline.pdf",
                      fitz=SimpleNamespace(open=lambda path: document),
                      result4=SimpleNamespace(submitted=mutation != "failed", payload=payload))
-    if mutation is None:
+    if mutation in TWO_SOURCE_MUTATIONS_THAT_STILL_PASS:
         execute("WORLD_2025, WORLD_2026", namespace)
         assert all(namespace["two_source_checks"].values())
+        assert len(namespace["core_rows"]) == 4
     else:
         with pytest.raises(AssertionError):
             execute("WORLD_2025, WORLD_2026", namespace)
         if mutation in {"swap_uk_japan", "swap_uk_us", "year_only"}:
             assert namespace["two_source_checks"]["source_sentence_quoted"]
             assert not namespace["two_source_checks"]["timings_correct"]
+
+
+REPORT_PROSE = (
+    # The real report uses the driver's words in more than one place, and the first is not the sentence about 2026:
+    # a validator that looked at the first occurrence only sent back 17 of 30 correct workbooks.
+    "Households in many economies faced higher energy and food prices last winter. "
+    "Driven by surging energy prices, global headline inflation rose for a third month in a row year over year in May, "
+    "breaking the downward trend that has been in place since the beginning of 2024. Headline inflation is projected "
+    "to rise from 4.1 percent in 2025 to 4.7 percent in 2026 before easing to 3.9 percent in 2027, with the increase "
+    "for 2026 driven mainly by higher energy and food prices. The forecast for 2026 is revised upward by 0.3 percentage "
+    "point from the April 2026 WEO, whereas that for 2027 is revised upward by 0.2 percentage point. Growth in one "
+    "economy is revised upward by 0.7 percentage point and reaches 10.4 percent. " + CORE_SENTENCE
+    + " Risks are tilted to the downside."
+)
+
+
+def outlook_workbook(path, truth, **changes):
+    """The two-source workbook as a correct run writes it, with named cells replaced."""
+    wb = report_workbook(path, truth, [1.25] * 10)
+    outlook = wb["IMF Outlook"]
+    cells = {"A7": "United Kingdom", "B7": "by mid-2027", "A8": "Japan", "B8": "by the end of 2027",
+             "A9": "the United States", "B9": "by the end of 2027", "A10": "euro area", "B10": "only in 2028",
+             "A12": "Source sentence", "A13": CORE_SENTENCE, "A15": "Stated driver of the 2026 increase",
+             "A16": "higher energy and food prices", "B3": 4.1, "C3": 4.7, "D3": 3.9}
+    cells.update(changes)
+    for address, value in cells.items():
+        outlook[address] = value
+    wb.save(path)
+
+
+@pytest.fixture
+def two_source_validator(reference, tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "fabric_rlm", SimpleNamespace(RLM=None, File=None))
+    ns = {}
+    execute("rlm = RLM.task(", ns, definitions=True)         # workbook_opens
+    execute("rlm4 = RLM.task(", ns, definitions=True)        # bare, outlook_holds_together
+    path = tmp_path / "combined.xlsx"
+    ns.update(prose=REPORT_PROSE, REPORT3_PATH=path)
+    return ns["outlook_holds_together"], path, reference[1]
+
+
+@pytest.mark.parametrize("changes", [
+    {},
+    {"A13": CORE_SENTENCE.rstrip(".")},                                         # one real run lost the period
+    {"A13": "\u201c" + CORE_SENTENCE + "\u201d"},
+    {"A16": "Higher energy and food prices."},
+    {"A16": "with the increase for 2026 driven mainly by higher energy and food prices"},
+    {"A7": "the United Kingdom", "A10": "the euro area"},
+    {"A12": None, "A13": "Source sentence", "A14": CORE_SENTENCE, "A15": None, "A16": "Stated driver of the 2026 increase",
+     "A17": "higher energy and food prices"},                                  # labels one row lower, as two real runs wrote them
+])
+def test_two_source_validator_accepts_what_real_correct_runs_wrote(two_source_validator, changes):
+    validate, path, truth = two_source_validator
+    outlook_workbook(path, truth, **changes)
+    validate({"core_target_economies": 4})
+    validate({})                                                                # the count is checked only when submitted
+    validate({"world_2025": 4.1, "world_2026": 4.7, "revision_2026_pp": 0.3, "revision_2027_pp": 0.2,
+              "core_target_economies": 4, "n_countries": 18, "median_avg": 87.55})
+
+
+@pytest.mark.parametrize("changes,payload,reason", [
+    # The two slips real runs made, each sent to the grader as a finished report before this validator existed.
+    ({"A10": "several major economies: by mid-2027 in the United Kingdom, by the end of 2027 in Japan and the United States, "
+             "and only in 2028 in the euro area", "B10": "only gradually"}, {}, "not an economy's name"),
+    ({"A16": "Driven by surging energy prices, global headline inflation rose for a third month in a row year over year in "
+             "May, breaking the downward trend that has been in place since the beginning of 2024."}, {}, "not about 2026"),
+    ({"A13": "Core inflation returns to target gradually in the major economies."}, {}, "not a sentence copied verbatim"),
+    ({"A13": None}, {}, "not a sentence copied verbatim"),
+    ({"B8": "in 2027"}, {}, "not worded as the source sentence words it"),
+    ({"B9": None}, {}, "not worded as the source sentence words it"),
+    ({"A9": "Canada"}, {}, "not an economy's name"),
+    ({"A16": "rising energy and grocery bills"}, {}, "not in the report's own words"),
+    ({"A16": None}, {}, "not in the report's own words"),
+    ({"A12": "Source"}, {}, "no 'Source sentence' label"),
+    ({"A15": None}, {}, "no 'Stated driver of the 2026 increase' label"),
+    ({"A7": None}, {}, "No economy rows"),
+    ({}, {"core_target_economies": 3}, "core_target_economies is 3 but the sheet has 4"),
+    # One real run could not find the revision sentence, assumed 0.0 for both revisions and submitted.
+    ({}, {"revision_2026_pp": 0.0, "revision_2027_pp": 0.0}, "revision_2026_pp is 0.0, but the report never says '0 percentage point'"),
+    ({}, {"revision_2027_pp": 0.4}, "revision_2027_pp is 0.4"),
+    ({}, {"revision_2026_pp": 4.1}, "revision_2026_pp is 4.1"),               # a rate is not a revision
+    ({}, {"world_2025": 0.4}, "world_2025 is 0.4"),                            # "10.4 percent" must not count as 0.4
+    ({}, {"world_2026": 0.3}, "world_2026 is 0.3"),                            # a revision is not a rate
+    ({"D3": 9.9}, {}, "IMF Outlook D3 is 9.9"),
+])
+def test_two_source_validator_sends_back_a_slip_with_its_reason(two_source_validator, changes, payload, reason):
+    validate, path, truth = two_source_validator
+    outlook_workbook(path, truth, **changes)
+    # AssertionError only: the library accepts the payload when a validator raises anything else.
+    with pytest.raises(AssertionError, match=reason):
+        validate(payload)
+
+
+def test_two_source_validator_sends_back_a_workbook_that_does_not_open(two_source_validator):
+    validate, path, truth = two_source_validator
+    with pytest.raises(AssertionError, match="does not open"):
+        validate({})
+    outlook_workbook(path, truth)
+    path.write_bytes(path.read_bytes()[:900])
+    with pytest.raises(AssertionError, match="does not open"):
+        validate({})
+
+
+def test_two_source_scorecard_prints_before_the_cell_raises(namespace, reference, tmp_path, capsys):
+    truth, rows = reference[1:3]
+    path = tmp_path / "combined.xlsx"
+    outlook_workbook(path, truth, A16="Driven by surging energy prices, global headline inflation rose in May.")
+    wb = openpyxl.load_workbook(path)
+    outlook = wb["IMF Outlook"]
+    for address, value in {"A1": "IMF World Economic Outlook Update, July 2026", "A2": "Measure", "B2": 2025, "C2": 2026,
+                           "D2": 2027, "A3": "World headline inflation (%)", "B3": 4.1, "C3": 4.7, "D3": 3.9,
+                           "A5": "Core inflation returns to target", "A6": "Economy", "B6": "Timing"}.items():
+        outlook[address] = value
+    wb.save(path)
+    execute("rlm4 = RLM.task(", namespace, definitions=True)
+    payload = {"n_countries": 18, "median_avg": 87.55, "world_2025": 4.1, "world_2026": 4.7, "revision_2026_pp": .3,
+               "revision_2027_pp": .2, "core_target_economies": 4}
+    namespace.update(REPORT3_PATH=path, truth=truth, rows=rows, WEO_PATH="offline.pdf",
+                     fitz=SimpleNamespace(open=lambda path: _pdf(REPORT_PROSE)),
+                     result4=SimpleNamespace(submitted=True, payload=payload))
+    with pytest.raises(AssertionError, match="failed these checks:.*driver_stated"):
+        execute("WORLD_2025, WORLD_2026", namespace)
+    shown = capsys.readouterr().out
+    assert "FAIL  driver_stated" in shown and "PASS  timings_correct" in shown and "checks passed" in shown
