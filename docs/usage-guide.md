@@ -875,6 +875,11 @@ frame together (a cartesian filter, whether as `.isin` chains or
 dimensions afterwards, are sent back with the reason. So is a submission that
 returns a file path the task supplied when no file exists there, which is what a
 run looks like when every attempt to build the workbook failed before the save.
+A workbook, Word or PowerPoint file, or Parquet file that the run wrote and that
+no longer opens is sent back too, whether its path is in the payload or was only
+an input: openpyxl, python-docx and pyarrow write straight to the destination,
+so a save that raises partway leaves a cut-short file behind. A file that was
+there before the run started, a `File` input and a remote URL are never judged.
 So, once, is a zero or an empty result that was computed and submitted in the
 same step: output reaches the model only after a step ends, so that value was
 never looked at, and zero is also what a filter that matched nothing or an

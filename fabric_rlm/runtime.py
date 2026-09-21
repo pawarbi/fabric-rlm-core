@@ -141,6 +141,7 @@ from .analytical_integrity import (
     check_blind_empty_submit,
     check_submitted_paths_exist,
     check_truncated_source_reads,
+    check_written_files_open,
     check_zero_change_items,
     infer_requested_ranking,
     task_asks_about_change,
@@ -2076,6 +2077,8 @@ class RLM:
     def run(self, inputs: dict[str, Any] | None = None) -> RLMResult:
         self._evidence_sources: dict[str, Any] = {}
         self._verifier_log = []
+        # Wall clock, to tell a file this run wrote from one that was already there.
+        self._run_started_wall = time.time()
         result = self._run_engine(inputs)
         return self._finalize_result(result)
 
@@ -3246,6 +3249,11 @@ class RLM:
         turns = list(getattr(trajectory, "turns", None) or [])
         problems.extend(check_truncated_source_reads(turns))
         problems.extend(check_submitted_paths_exist(payload, context.get("inputs")))
+        problems.extend(
+            check_written_files_open(
+                payload, context.get("inputs"), getattr(self, "_run_started_wall", None)
+            )
+        )
         # The ranking checks are about a written answer: does it name the metric,
         # and did the ranking it presents come from that metric. A payload of
         # numbers, labels and a file path has no prose to read, and there "sorted

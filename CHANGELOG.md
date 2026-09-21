@@ -1,12 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.6.6 - 2026-09-20 - a run cannot finish on a file that does not open, and the IMF example is reliable
+
+One library check and one example. The check came out of fixing the example: both were found by running the
+IMF notebook in Fabric with the in-tenant models it ships with.
 
 ### Fixed
 
 - The IMF example notebook (`rlm_vs_plain_llm_imf_cpi.ipynb`) stopped at a
   grading cell in 4 of 4 runs with the in-tenant models it ships with, on 0.6.4
-  and 0.6.5 alike. The library is unchanged; the notebook is fixed.
+  and 0.6.5 alike. It needed no library change: the notebook is fixed.
   - The cause was one openpyxl detail. gpt-5-mini could not read its conditional
     formatting rule back from the saved file, decided the rule was missing and
     added it again, for up to 12 turns, and one run broke `wb.save` that way and
@@ -33,6 +36,15 @@
   - The run without skills is an experiment, so it prints both runs side by side
     and no longer stops the notebook. The two-source scorecard prints before the
     cell raises.
+- A run no longer finishes on a workbook it wrote that does not open. One run
+  wrote a bad key into openpyxl's conditional-formatting store, `wb.save` raised
+  partway and left 2 KB of zip at `report_path`; the last turn submitted the
+  figures, the screen passed them and `integrity_ok` was true. The
+  analytical-integrity screen now sends back a submission when an `.xlsx`,
+  `.xlsm`, `.docx` or `.pptx` the run wrote is not a readable Office container,
+  or a `.parquet` file has lost its footer, whether the path is in the payload
+  or was only an input. Only files modified since the run started are judged; a
+  `File` input and a remote URL never are.
 
 ### Changed
 
