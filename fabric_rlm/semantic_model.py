@@ -1020,6 +1020,29 @@ class SemanticModel:
         except Exception:  # pragma: no cover - non-pandas frame
             return frame
 
+    def period_coverage(
+        self,
+        measure: str | None = None,
+        *,
+        table: str | None = None,
+        date_column: str | None = None,
+        grain: str = "month",
+        as_of: Any = None,
+    ) -> Any:
+        """Days with data per period for a measure, and the latest complete period.
+
+        Call this before choosing a "latest" or "current" period instead of
+        taking the last date in a calendar table: it marks each period
+        complete, partial, in progress, future or empty against the typical
+        earlier period, so a 9-day month or forward-dated rows are visible
+        before they become a headline. Print the result to read it. See
+        :func:`fabric_rlm.semantic_checks.period_coverage`.
+        """
+        from .semantic_checks import period_coverage
+
+        return period_coverage(self, measure, table=table, date_column=date_column,
+                               grain=grain, as_of=as_of)
+
     def read_table(self, table: str, num_rows: int | None = None) -> Any:
         """Read a table. Use for small dimension tables only, never a fact table."""
         kwargs: dict[str, Any] = dict(self._kw)

@@ -844,6 +844,40 @@ The handle gives generated code a clear entry point. Across two semantic models
 and two model families, tasks scored 18-19/19 and 13/15 with the handle. The
 same tasks scored 7/19 and 5/15 when they only named the semantic model.
 
+#### The latest period and the headline numbers
+
+On a model a run has not seen before, the most common way a report goes wrong is its headline period. Real examples include a last month with nine days of data, forward-dated rows years ahead, and a January-to-May "year". `period_coverage` measures this instead of leaving it to judgement:
+
+```python
+print(arr.period_coverage("ARR $"))                 # by month
+print(arr.period_coverage("ARR $", grain="year"))
+```
+
+It prints the date column it used and why, the dates with data in each period against the typical earlier period, a status per period (complete, partial, in progress, future, empty, low coverage), and the latest complete period. It also lists any measure that looks like the model's own as-of date, without applying it. Pass `as_of=` to use one. A weekday-only business and a model with one row per month are not treated as partial.
+
+To enforce it, and to recompute the headline numbers, add the checks to the run:
+
+```python
+from fabric_rlm import semantic_model_checks
+
+model = SemanticModel("Sales Model")
+checks = semantic_model_checks(model, name="model")
+RLM.task(
+    task=my_task + "\n\n" + checks.instructions,
+    inputs={"model": model},
+    outputs={**my_outputs, **checks.outputs},
+    output_validator=checks,
+    lm=FabricLM("gpt-5.1"),
+).run()
+```
+
+When the run submits:
+
+- A headline period that is partial, in progress or in the future goes back for repair, unless the run labels it period-to-date.
+- Each claim is recomputed with DAX the harness writes itself. A claim is a measure, an aggregate over a column, or a ratio of two, with filters and a period. A number whose own query dropped a filter is caught this way, which re-running that query cannot do.
+
+The validator allows three rejections per run by default (`max_rejections`) and records every check in `checks.log`.
+
 ### Analytical integrity
 
 The same rules apply whether a number came from a `File`, a `LakehouseSource`,

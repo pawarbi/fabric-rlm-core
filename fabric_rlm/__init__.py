@@ -10,6 +10,7 @@ from .semantic_model import (
     SemanticModelQueryTooBroad,
     sempy_available,
 )
+from .semantic_checks import PeriodCoverage, SemanticModelChecks, semantic_model_checks
 from .excel_artifacts import (
     ExcelCellValue,
     ExcelTargetRange,
@@ -103,6 +104,9 @@ __all__ = [
     "RunInspector",
     "SemanticModel",
     "SemanticModelMetadata",
+    "SemanticModelChecks",
+    "PeriodCoverage",
+    "semantic_model_checks",
     "AnalyticalIntegrityError",
     "IntegrityReport",
     "is_material_change",
