@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.6.7 - 2026-09-25 - what_moved on real semantic models, and period and claims checks for semantic-model runs
+
+Everything here came from pointing the library at real semantic models it had never seen.
 
 ### Fixed
 
