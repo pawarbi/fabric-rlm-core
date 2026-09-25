@@ -376,3 +376,39 @@ def test_a_turn_is_slow_only_over_sixty_seconds_by_default_and_shows_its_time() 
     over = badges(74.2)
     assert "Slow · 74s" in over and 'title="over 60s"' in over
     assert "Slow · 12s" in _result(_turn(1, duration_s=11.25)).inspect(slow_turn_seconds=10)._repr_html_()
+
+
+def test_a_turn_is_titled_with_the_models_own_statement_of_intent() -> None:
+    code = (
+        "import pandas as pd\n\n"
+        "# Step 3: Find the latest complete month and check its day coverage\n"
+        "cov = model.dax('EVALUATE ...')\n"
+    )
+    html = _result(_turn(1, code=code)).inspect().to_html()
+    assert "Step 3: Find the latest complete month and check its day coverage" in html
+    assert "Queried the semantic model" not in html
+
+
+def test_separators_and_lint_comments_are_not_intents_and_code_first_keeps_the_fallback() -> None:
+    html = _result(_turn(1, code="# ----------\n# noqa: E501 long line\nmodel.schema()")).inspect().to_html()
+    assert "Inspected the source schema" in html
+    html = _result(_turn(1, code="x = 1\n# a comment after code is not the step's intent")).inspect().to_html()
+    assert "Executed Python code" in html
+
+
+def test_a_stated_recovery_is_not_prefixed_twice_and_long_intents_are_shortened() -> None:
+    result = _result(
+        _turn(1, error="ValueError: bad"),
+        _turn(2, code="# Recovery: rebuild the join on normalised keys\nx = 1", submitted=True),
+    )
+    html = result.inspect().to_html()
+    assert "Recovery: rebuild the join on normalised keys; submitted the answer" in html
+    assert "Recovered from the previous error; recovery" not in html
+    long = "# " + "Compare revenue by region " * 12
+    assert "…" in _result(_turn(1, code=long)).inspect().to_html()
+
+
+def test_decorations_around_an_intent_are_dropped() -> None:
+    html = _result(_turn(1, code="# ---- Step 6: independent re-checks for headline KPIs ----
+x = 1")).inspect().to_html()
+    assert ">Step 6: independent re-checks for headline KPIs<" in html

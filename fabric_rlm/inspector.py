@@ -248,9 +248,32 @@ def _turn_action(code: str, *, errored: bool) -> str:
     return "Executed Python code"
 
 
+def _stated_intent(code: str, limit: int = 160) -> str | None:
+    """The step's purpose in the model's own words: its first comment line.
+
+    Models open most code blocks with a line such as ``# Step 3: find the
+    latest complete month``. In 486 turns across 13 semantic models, 460 did.
+    That line says what the step is for; the first method call only says what
+    it touched. Imports and blank lines before it are skipped; a separator or
+    a lint directive is not an intent.
+    """
+    for line in str(code or "").splitlines()[:15]:
+        text = line.strip()
+        if not text or text.startswith(("import ", "from ")):
+            continue
+        if not text.startswith("#"):
+            return None
+        body = text.lstrip("#").strip().strip("-=*~ ").strip()
+        if len(body) < 8 or not any(ch.isalpha() for ch in body) or body.lower().startswith(("noqa", "type:", "pylint", "-*-")):
+            continue
+        return body if len(body) <= limit else body[: limit - 1].rstrip() + "…"
+    return None
+
+
 def _turn_summary(turn: "TurnRecord", *, recovered: bool) -> str:
-    action = _turn_action(turn.code, errored=bool(turn.error))
-    if recovered:
+    intent = _stated_intent(turn.code)
+    action = intent or _turn_action(turn.code, errored=bool(turn.error))
+    if recovered and not action.lower().startswith(("recover", "fix", "retry", "repair")):
         action = f"Recovered from the previous error; {action[:1].lower()}{action[1:]}"
     if turn.error:
         error_lines = turn.error.strip().splitlines()
@@ -369,7 +392,7 @@ class RunInspector:
         return (
             '<details class="frlm-turn"><summary>'
             f'<span class="frlm-turn-title">Turn {turn.turn}</span>'
-            f'<span class="frlm-turn-summary">{escape(summary)}</span>'
+            f'<span class="frlm-turn-summary" title="{escape(summary, quote=True)}">{escape(summary)}</span>'
             f'{"".join(badges)}'
             f'<span class="frlm-neutral">{_format_number(elapsed, suffix="s")}</span>'
             f'</summary><div class="frlm-body">{"".join(sections)}</div></details>'

@@ -8,6 +8,12 @@
   and the label shows the time, for example `Slow · 74s`. Most RLM turns take 10 to 40
   seconds, so at 10 seconds nearly every turn was marked slow and the label said nothing.
   Pass `slow_turn_seconds=` to change it.
+- Each turn in `result.inspect()` is titled with the model's own statement of what the step
+  is for: the first comment line of its code, such as `Step 3: find the latest complete
+  month`. In 486 turns over 13 semantic models, 460 opened with one. The title used to be
+  guessed from the first method call ("Queried the semantic model", "Executed Python
+  code"), which said what the step touched, not why. Turns without such a line keep the
+  old guess. Hover over a title to read it in full.
 
 ### Added
 
