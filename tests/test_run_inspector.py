@@ -409,6 +409,6 @@ def test_a_stated_recovery_is_not_prefixed_twice_and_long_intents_are_shortened(
 
 
 def test_decorations_around_an_intent_are_dropped() -> None:
-    html = _result(_turn(1, code="# ---- Step 6: independent re-checks for headline KPIs ----
-x = 1")).inspect().to_html()
+    code = "# ---- Step 6: independent re-checks for headline KPIs ----\nx = 1"
+    html = _result(_turn(1, code=code)).inspect().to_html()
     assert ">Step 6: independent re-checks for headline KPIs<" in html
