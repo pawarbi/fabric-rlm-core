@@ -28,6 +28,10 @@
   - With governed measures, a month counts as data when a measure has a value there, not when
     the fact has rows. A sales table that also held plan rows a year past the actuals made the
     plan year look current, so actual sales were reported as falling to 0.
+  - A date column on the fact that relates to two date tables no longer loses one of them, so
+    `time_column=` can name either.
+  - Measures named with their table (`'Sales'[Total Revenue]`, `Sales[Total Revenue]`) are
+    taken as the model measure.
 - `period_coverage` recognises as-of measures written with underscores (`Msr_ARR_As_Of_Date`).
 
 ### Added
@@ -41,6 +45,26 @@
   plans written by GPT-5.1 or Luna at high reasoning effort, the engine filtered to actuals,
   drilled to the product behind a drop and set aside a month whose event dates stopped early,
   three traps it fell into on its own.
+- `SemanticModel.period_coverage(measure, grain="month")` counts the dates with data
+  in each period for a measure and marks each period complete, partial, in progress,
+  future, empty or low coverage against the typical earlier period. It also names the
+  latest complete period, the date column it used and why, and any measure that looks
+  like the model's own as-of date. A weekday-only business and a model with one row per
+  month are not flagged. (#111)
+- `semantic_model_checks(model)` returns an `output_validator` plus the outputs and
+  instructions it expects. A headline period that is partial, in progress or in the
+  future is sent back unless the run labels it period-to-date. Each structured claim
+  (a measure, an aggregate or a ratio, with filters and a period) is recomputed with
+  DAX the harness writes itself, and a mismatch is sent back with the recomputed value.
+  (#112)
+- The `semantic_model` skill tells the model to check period coverage before it calls
+  a period latest or current.
+
+Why the semantic-model checks: on semantic models the runs had never seen, the most common
+way a report misled was its headline period. Examples were a 9-day month, a month four years
+ahead from forward-dated rows, and a January-to-May "year". In the first two cases the run had
+already written the problem into its own caveats. A question-answering run also lost a year
+filter inside SUMMARIZECOLUMNS and reported an all-years share as 2017's.
 
 With these, `what_moved` produced verified findings on 11 of 11 models when given the fact,
 the governed measures and the years, up from 3, and on 13 of 18 with no details at all, up
@@ -59,29 +83,6 @@ not a business measure; naming the measures avoids that.
   guessed from the first method call ("Queried the semantic model", "Executed Python
   code"), which said what the step touched, not why. Turns without such a line keep the
   old guess. Hover over a title to read it in full.
-
-### Added
-
-- `SemanticModel.period_coverage(measure, grain="month")` counts the dates with data
-  in each period for a measure and marks each period complete, partial, in progress,
-  future, empty or low coverage against the typical earlier period. It also names the
-  latest complete period, the date column it used and why, and any measure that looks
-  like the model's own as-of date. A weekday-only business and a model with one row per
-  month are not flagged. (#111)
-- `semantic_model_checks(model)` returns an `output_validator` plus the outputs and
-  instructions it expects. A headline period that is partial, in progress or in the
-  future is sent back unless the run labels it period-to-date. Each structured claim
-  (a measure, an aggregate or a ratio, with filters and a period) is recomputed with
-  DAX the harness writes itself, and a mismatch is sent back with the recomputed value.
-  (#112)
-- The `semantic_model` skill tells the model to check period coverage before it calls
-  a period latest or current.
-
-Why: on semantic models the runs had never seen, the most common way a report misled
-was its headline period. Examples were a 9-day month, a month four years ahead from
-forward-dated rows, and a January-to-May "year". In the first two cases the run had
-already written the problem into its own caveats. A question-answering run also lost a
-year filter inside SUMMARIZECOLUMNS and reported an all-years share as 2017's.
 
 ## 0.6.6 - 2026-09-20 - a run cannot finish on a file that does not open, and the IMF example is reliable
 

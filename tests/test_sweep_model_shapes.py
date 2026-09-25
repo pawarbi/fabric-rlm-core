@@ -196,3 +196,21 @@ def test_months_are_judged_by_the_governed_measures_not_by_rows():
     assert [(m["year"], m["month"]) for m in kept] == [(2023, 10), (2023, 11)] and blank == 2
     assert _measured_months(months, ["Amount"]) == (months, 0)                       # a raw column: rows are the data
     assert _measured_months(months[2:], ["[Sales]", "[Margin]"]) == (months[2:], 0)  # nothing measured: leave it to the caller
+
+
+def test_a_named_date_table_resolves_when_the_fact_column_also_joins_another_calendar():
+    s = schema({"Activation": ["Date", "Units"], "Date_Table": ["Date", "Year"], "commondate": ["Date", "Year"]},
+               {"Activation": {"Date": "DateTime", "Units": "Double"}, "Date_Table": {"Date": "DateTime", "Year": "Int64"},
+                "commondate": {"Date": "DateTime", "Year": "Int64"}},
+               [("Activation", "Date", "Date_Table", "Date"), ("Activation", "Date", "commondate", "Date")])
+    axis = _explicit_axis(s, "Activation", joins_of(s), "'Date_Table'[Date]")
+    assert axis == {"kind": "date", "table": "Date_Table", "column": "Date", "via": "Date"}
+
+
+def test_a_measure_named_with_its_table_is_the_model_measure():
+    from fabric_rlm.sweep import _bare_measure
+    known = {"total revenue"}
+    assert _bare_measure("'Sales'[Total Revenue]", known) == "[Total Revenue]"
+    assert _bare_measure("Sales[Total Revenue]", known) == "[Total Revenue]"
+    assert _bare_measure("Sales[Amount]", known) == "Sales[Amount]"
+    assert _bare_measure("[Total Revenue]", known) == "[Total Revenue]"

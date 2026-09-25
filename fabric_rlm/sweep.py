@@ -975,6 +975,12 @@ def _split_ref(ref: Any) -> tuple[str, str]:
     return (match.group(1) or "").replace("''", "'") or (match.group(2) or "").strip(), match.group(3)
 
 
+def _bare_measure(ref: Any, known: set[str]) -> Any:
+    """'Sales'[Total Revenue] or Sales[Total Revenue] is [Total Revenue] when the model has that measure."""
+    match = re.fullmatch(r"\s*(?:'(?:[^']|'')+'|[^\[\]']+?)\s*(\[[^\]]+\])\s*", str(ref))
+    return match.group(1) if match and match.group(1)[1:-1].casefold() in known else ref
+
+
 def _any_date_column(schema: SourceSchema, table: str) -> str | None:
     """Any date-typed column of a date table, a month-named one first: a monthly calendar keyed on ``Month`` = 2016-01-01."""
     columns = [c for c in schema.tables.get(table, ()) if _TIME_TYPE.search(schema.column_type(table, c)) and not (_name_words(c) & _NOT_A_DATE_AXIS_WORDS)]
@@ -995,6 +1001,8 @@ def _explicit_axis(schema: SourceSchema, table: str, joins: Mapping[tuple[str, s
     if owner == table:
         return {"kind": "date", "table": table, "column": column}
     via = next((c for (t, c), (dim, _k) in joins.items() if t == table and dim == owner), None)
+    # one fact column can relate to two date tables; the joins map keeps one, the schema keeps both
+    via = via or next((c for t, c, dim, _k in schema.relationships if t == table and dim == owner), None)
     return {"kind": "date", "table": owner, "column": column, "via": via} if via else None
 
 
@@ -1557,6 +1565,7 @@ def sweep(
                 notes.append(f"{f!r} is not a table in the source, so it was not swept; tables: {', '.join(sorted(schema.tables)[:20])}")
     if not isinstance(measures, int):
         known = {m.casefold() for m in schema.measures}
+        measures = [_bare_measure(m, known) for m in measures]
         for m in measures:
             text = str(m).strip()
             if text.startswith("[") and text.endswith("]") and text[1:-1].casefold() not in known:
