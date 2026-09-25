@@ -848,7 +848,7 @@ class RLMResult:
         self,
         *,
         max_chars: int = 20_000,
-        slow_turn_seconds: float = 10.0,
+        slow_turn_seconds: float = 60.0,
         expanded: bool = True,
         visible_turns: int = 15,
     ) -> "RunInspector":
@@ -856,8 +856,9 @@ class RLMResult:
 
         The returned object renders automatically as HTML in Jupyter and Fabric
         notebooks. The view starts open with individually collapsed turns and a
-        scrollable turn viewport. It can also be exported with
-        ``.save_html(path)``.
+        scrollable turn viewport. A turn that took more than
+        ``slow_turn_seconds`` (default 60) is labelled Slow with its time. It
+        can also be exported with ``.save_html(path)``.
         """
 
         from .inspector import RunInspector
