@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added
+
+- `SemanticModel.period_coverage(measure, grain="month")` counts the dates with data
+  in each period for a measure and marks each period complete, partial, in progress,
+  future, empty or low coverage against the typical earlier period. It also names the
+  latest complete period, the date column it used and why, and any measure that looks
+  like the model's own as-of date. A weekday-only business and a model with one row per
+  month are not flagged. (#111)
+- `semantic_model_checks(model)` returns an `output_validator` plus the outputs and
+  instructions it expects. A headline period that is partial, in progress or in the
+  future is sent back unless the run labels it period-to-date. Each structured claim
+  (a measure, an aggregate or a ratio, with filters and a period) is recomputed with
+  DAX the harness writes itself, and a mismatch is sent back with the recomputed value.
+  (#112)
+- The `semantic_model` skill tells the model to check period coverage before it calls
+  a period latest or current.
+
+Why: on semantic models the runs had never seen, the most common way a report misled
+was its headline period. Examples were a 9-day month, a month four years ahead from
+forward-dated rows, and a January-to-May "year". In the first two cases the run had
+already written the problem into its own caveats. A question-answering run also lost a
+year filter inside SUMMARIZECOLUMNS and reported an all-years share as 2017's.
+
 ## 0.6.6 - 2026-09-20 - a run cannot finish on a file that does not open, and the IMF example is reliable
 
 One library check and one example. The check came out of fixing the example: both were found by running the

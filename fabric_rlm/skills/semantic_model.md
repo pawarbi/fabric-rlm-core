@@ -110,6 +110,11 @@ print(fabric.list_relationships(DATASET).to_string()[:2000])
 - `fabric.read_table` only for small dimension tables, always with `num_rows`.
   Never a fact table - aggregate in DAX instead of pulling rows into pandas.
 
+- Before calling a period "latest", "current" or "this month", run
+  `print(model.period_coverage("<measure>"))` (grain="quarter" or "year" as needed)
+  and lead with its latest complete period. A partial or in-progress period is
+  reported only as period-to-date; periods after today are not current.
+
 Prefer a measure that already exists over recomputing from columns, but read its
 expression first and confirm it computes what was asked.
 
