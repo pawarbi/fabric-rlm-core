@@ -120,6 +120,10 @@ through DSPy/LiteLLM. Configure the provider's endpoint and authentication as
 required; its provisioning requirements and billing apply separately. See the
 [test drive guide](QUICKSTART.md) for provider setup and ordinary Python usage.
 
+**Models it was built and tested with.** GPT-5.1, GPT-5.6 Luna and GPT-6 Luna,
+each at medium and high reasoning effort, and MiniMax M3. For complex multi-step
+tasks, use high reasoning effort or above.
+
 ## How it works
 
 <picture>
