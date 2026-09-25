@@ -133,3 +133,56 @@ def test_months_from_the_current_one_on_are_set_aside(monkeypatch):
               {"year": 2030, "month": 12, "n": 5}, {"year": 2027, "month": None, "n": 3}]
     kept, dropped = sw._before_today(months)
     assert [(m["year"], m["month"]) for m in kept] == [(2026, 7), (2026, 8)] and dropped == 3
+
+
+def test_as_of_sets_aside_its_month_only_when_it_falls_mid_month():
+    import datetime as dt
+    from fabric_rlm.sweep import _as_of_boundary
+    assert _as_of_boundary(dt.date(2014, 12, 7)) == dt.date(2014, 12, 7)      # data ends Dec 7: December is not compared
+    assert _as_of_boundary(dt.date(2018, 5, 1)) == dt.date(2018, 6, 1)       # a monthly snapshot's label: May is complete
+    assert _as_of_boundary(dt.date(2014, 12, 31)) == dt.date(2015, 1, 1)     # a month end: December is complete
+
+
+def test_a_named_grouping_that_is_the_join_key_is_grouped_by_the_facts_own_key():
+    from fabric_rlm.sweep import _choose_paths
+    s = schema({"Sales": ["Prod", "Date", "Amount"], "Products": ["Product Name", "Category"]},
+               {"Sales": {"Prod": "Text", "Date": "Date", "Amount": "Decimal"}, "Products": {"Product Name": "Text", "Category": "Text"}},
+               [("Sales", "Prod", "Products", "Product Name")])
+    chosen = _choose_paths(s, "Sales", joins_of(s), set(), [], ["'Products'[Product Name]", "'Products'[Category]"])
+    assert [p["column"] for p in chosen] == ["Prod", "Category"]
+
+
+def test_a_model_measure_over_the_facts_own_date_is_evaluated_per_day():
+    s = schema({"Sales": ["Date", "Amount"]}, {"Sales": {"Date": "Date", "Amount": "Decimal"}})
+    fact = {"table": "Sales", "date": {"kind": "date", "table": "Sales", "column": "Date"}, "measure": "[Total Sales]"}
+    query = _Dax(s, {}).series(fact, ["[Total Sales]"])
+    assert "SUMMARIZECOLUMNS('Sales'[Date]" in query and "[[" not in query and '"day"' in query
+
+
+def test_a_time_of_day_key_is_not_a_date_key_and_sort_helpers_are_not_groupings():
+    from fabric_rlm.sweep import _choose_paths
+    assert _date_candidates(["DIM_TimeId", "InvoiceDateID"]) == ["InvoiceDateID"]
+    s = schema({"Usage": ["DIM_TimeId", "DIM_CalendarKey", "Units"], "Time": ["DIM_TimeId", "TwelveHourClockTime"], "Calendar": ["DIM_CalendarKey", "Calendar Date"],
+                "Segment": ["Seg", "CE Segment", "CE Segment Sort"]},
+               {"Usage": {"DIM_TimeId": "Integer", "DIM_CalendarKey": "Date", "Units": "Integer"}, "Time": {"DIM_TimeId": "Integer", "TwelveHourClockTime": "DateTime"},
+                "Calendar": {"DIM_CalendarKey": "Date", "Calendar Date": "Date"}, "Segment": {"Seg": "Text", "CE Segment": "Text", "CE Segment Sort": "Integer"}},
+               [("Usage", "DIM_TimeId", "Time", "DIM_TimeId"), ("Usage", "DIM_CalendarKey", "Calendar", "DIM_CalendarKey")])
+    axis = _dax_axis(s, "Usage", joins_of(s))
+    assert axis["table"] == "Calendar"
+    s2 = schema({"Usage": ["Seg", "Units"], "Segment": ["Seg", "CE Segment", "CE Segment Sort"]},
+                {"Usage": {"Seg": "Text", "Units": "Integer"}, "Segment": {"Seg": "Text", "CE Segment": "Text", "CE Segment Sort": "Integer"}},
+                [("Usage", "Seg", "Segment", "Seg")])
+    names = [p["column"] for p in _choose_paths(s2, "Usage", joins_of(s2), set(), [], 8)]
+    assert "CE Segment" in names and "CE Segment Sort" not in names
+
+
+def test_a_quoted_fact_and_an_unusable_time_column_are_handled():
+    model = FakeModel(
+        tables=[{"table_name": "Sales", "hidden": False}],
+        columns=[{"table_name": "Sales", "column_name": "Amount", "data_type": "Decimal"}, {"table_name": "Sales", "column_name": "Code", "data_type": "Text"}],
+        relationships=[], measures=["Total Sales"],
+    )
+    result = sweep(SemanticModelProbe(model), facts=["'Sales'"], measures=["[Total Sales]"], time_column="'Sales'[Code]")
+    notes = " ".join(result.notes)
+    assert "is not a table" not in notes
+    assert "the time column 'Sales'[Code] is not a date column" in notes and "no other time axis was found" in notes

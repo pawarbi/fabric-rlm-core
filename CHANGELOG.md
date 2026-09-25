@@ -19,12 +19,25 @@
     set aside with a note instead of compared; a model with rows through 2030 no longer leads
     with 2029 against 2030.
   - A named fact or measure that does not exist is reported instead of silently dropped.
+  - A date table called "Calendar" keeps its day column: "Calendar Date" was rejected as an
+    end date because "Calendar" contains "end", so fiscal-month begin dates were used instead.
+    Day-column checks now match whole words.
+  - A time-of-day key (`DIM_TimeId`) is not a date key, and sort-helper columns
+    (`CE Segment Sort`) are not offered as groupings.
+  - A model measure over a date column on the fact itself no longer writes invalid DAX.
 - `period_coverage` recognises as-of measures written with underscores (`Msr_ARR_As_Of_Date`).
 
 ### Added
 
 - `what_moved(..., time_column="'Date'[Date]")` names the time axis when discovery would pick
-  the wrong one or none.
+  the wrong one or none; a named column that is not a date falls back to discovery with a note.
+- `what_moved(..., filters={"'Scenario'[Scenario]": "Actual"})` narrows every figure, and
+  `as_of="2014-12-07"` says how far the data can be trusted: the month it falls in is set aside
+  when it falls mid-month. Groupings can be named as `'Table'[Column]`, including a column the
+  fact joins on. These are what a planning step (a person or a model) hands the engine: with
+  plans written by GPT-5.1 or Luna at high reasoning effort, the engine filtered to actuals,
+  drilled to the product behind a drop and set aside a month whose event dates stopped early,
+  three traps it fell into on its own.
 
 With these, `what_moved` produced verified findings on 11 of 11 models when given the fact,
 the governed measures and the years, up from 3, and on 13 of 18 with no details at all, up

@@ -406,7 +406,7 @@ def _date_candidates(columns: Sequence[str]) -> list[str]:
     )
 
 
-_TIME_COLUMN = re.compile(r"(date|timestamp|datetime|_at|_time|_on)([ _]?(key|id))?$", re.IGNORECASE)
+_TIME_COLUMN = re.compile(r"(date[ _]?(key|id)|(date|timestamp|datetime|_at|_time|_on)([ _]?key)?)$", re.IGNORECASE)
 _PERIOD_COLUMN = re.compile(r"(?:^|[_ ])(?:quarter|year_?quarter|fiscal_quarter|period|fiscal_period|year_?month|month)$", re.IGNORECASE)  # 2024/Q1, 2024-03: a period written as text
 _TIME_TYPE = re.compile(r"(timestamp|datetime|date)", re.IGNORECASE)  # Delta names, SQL names or arrow ``DataType<Timestamp(...)>`` and ``Date32``
 _NUMERIC_TYPE = re.compile(r"(int|long|double|float|decimal|numeric|real|number|short|byte)", re.IGNORECASE)
