@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- `result.inspect()` labels a turn Slow only when it took more than 60 seconds (was 10),
+  and the label shows the time, for example `Slow · 74s`. Most RLM turns take 10 to 40
+  seconds, so at 10 seconds nearly every turn was marked slow and the label said nothing.
+  Pass `slow_turn_seconds=` to change it.
+
 ### Added
 
 - `SemanticModel.period_coverage(measure, grain="month")` counts the dates with data

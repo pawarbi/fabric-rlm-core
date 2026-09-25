@@ -954,7 +954,8 @@ result.inspect()
 
 Each turn expands to show the observable model response, executed code, output,
 errors, validator feedback, submitted payload, timing, and token usage. Slow,
-error, repair, and submission turns are labeled in the timeline. Model-provider
+error, repair, and submission turns are labeled in the timeline; a turn is Slow
+when it took more than 60 seconds (`result.inspect(slow_turn_seconds=...)`). Model-provider
 private chain-of-thought is not exposed. The inspector renders open with each
 turn collapsed, and the turn list scrolls after 15 rows. Use
 `result.inspect(visible_turns=10)` to change the viewport or

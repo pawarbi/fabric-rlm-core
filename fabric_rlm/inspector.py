@@ -274,7 +274,7 @@ class RunInspector:
 
     result: "RLMResult"
     max_chars: int = 20_000
-    slow_turn_seconds: float = 10.0
+    slow_turn_seconds: float = 60.0
     expanded: bool = True
     visible_turns: int = 15
 
@@ -336,8 +336,11 @@ class RunInspector:
             badges.append('<span class="frlm-badge frlm-warn">Repair</span>')
         if recovered:
             badges.append('<span class="frlm-badge frlm-good">Recovered</span>')
-        if elapsed is not None and elapsed >= self.slow_turn_seconds:
-            badges.append('<span class="frlm-badge frlm-warn">Slow</span>')
+        if elapsed is not None and elapsed > self.slow_turn_seconds:
+            badges.append(
+                f'<span class="frlm-badge frlm-warn" title="over {self.slow_turn_seconds:g}s">'
+                f"Slow · {elapsed:.0f}s</span>"
+            )
         if turn.submitted:
             badges.append('<span class="frlm-badge frlm-good">Submitted</span>')
         if not badges:

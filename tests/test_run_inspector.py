@@ -363,3 +363,16 @@ def test_inspector_can_save_a_standalone_html_document(tmp_path: Path) -> None:
 def test_inspector_validates_display_limits(kwargs, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         _result(_turn(1)).inspect(**kwargs)
+
+
+def test_a_turn_is_slow_only_over_sixty_seconds_by_default_and_shows_its_time() -> None:
+    def badges(seconds: float) -> str:
+        # worker time plus the 0.75s model call from _turn
+        html = _result(_turn(1, submitted=True, duration_s=seconds - 0.75)).inspect()._repr_html_()
+        return html
+
+    assert "Slow" not in badges(45.0)
+    assert "Slow" not in badges(60.0)
+    over = badges(74.2)
+    assert "Slow · 74s" in over and 'title="over 60s"' in over
+    assert "Slow · 12s" in _result(_turn(1, duration_s=11.25)).inspect(slow_turn_seconds=10)._repr_html_()
