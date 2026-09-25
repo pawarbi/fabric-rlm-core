@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Fixed
+
+- `what_moved` on semantic models it had never seen. Over 18 real models its figures always
+  recomputed, but it found nothing on most of them, and 8 of 11 still failed when the fact,
+  measures and years were named. The causes were all in discovery:
+  - Hidden tables are kept. Hiding fact tables behind measures is standard Power BI practice,
+    and five sample models did it.
+  - Date keys named `Order Date Key`, `order_date_key` or `InvoiceDateID` are recognised.
+  - A calendar whose `Month` column holds dates is used as a monthly date axis, not read as
+    a month number.
+  - A calendar stored as text (`Year` = "2014", `MonthNo` = "2", with an "Unknown" row) is
+    filtered as text, and a month-number column is preferred over month names.
+  - Monthly snapshots dated on the 1st are no longer flagged as incomplete months.
+  - The month in progress and anything dated after it (forward-dated or planned values) are
+    set aside with a note instead of compared; a model with rows through 2030 no longer leads
+    with 2029 against 2030.
+  - A named fact or measure that does not exist is reported instead of silently dropped.
+- `period_coverage` recognises as-of measures written with underscores (`Msr_ARR_As_Of_Date`).
+
+### Added
+
+- `what_moved(..., time_column="'Date'[Date]")` names the time axis when discovery would pick
+  the wrong one or none.
+
+With these, `what_moved` produced verified findings on 11 of 11 models when given the fact,
+the governed measures and the years, up from 3, and on 13 of 18 with no details at all, up
+from 7. Without details it still picks measures by rule and sometimes sums a column that is
+not a business measure; naming the measures avoids that.
+
 ### Changed
 
 - `result.inspect()` labels a turn Slow only when it took more than 60 seconds (was 10),

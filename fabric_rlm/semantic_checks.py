@@ -46,7 +46,7 @@ BASELINE_PERIODS = 6
 
 _COLUMN_REF = re.compile(r"^\s*(?:'((?:[^']|'')+)'|([A-Za-z_][\w ]*?))\s*\[([^\]]+)\]\s*$")
 _DATE_TABLE_HINT = re.compile(r"date|calendar|time|month|period|day", re.I)
-_AS_OF_HINT = re.compile(r"latest|as ?of|current|snapshot|refresh|data through|last (?:data|load)", re.I)
+_AS_OF_HINT = re.compile(r"latest|as[ _]?of|current|snapshot|refresh|data[ _]through|last[ _](?:data|load)", re.I)
 
 
 # ---------------------------------------------------------------- helpers ---
