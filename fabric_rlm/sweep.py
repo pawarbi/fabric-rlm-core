@@ -49,6 +49,7 @@ from .source_model import (
     _MONTH_COLUMN,
     _SECONDARY_DATE,
     _TIME_COLUMN,
+    _TEXT_TYPE,
     _TIME_TYPE,
     _YEAR_COLUMN,
     _channel_measure,
@@ -936,12 +937,73 @@ def _dax_ref(table: str, column: str) -> str:
 _NOT_A_DAY = re.compile(r"(month|quarter|year|week|period|start|end|key)", re.IGNORECASE)
 
 
+def _name_words(name: str) -> set[str]:
+    """The words of a column name, split at spaces, underscores and case changes: "FM Begin Date" and "MonthEndDate" alike."""
+    return {w.casefold() for w in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+", str(name))}
+
+
+_NOT_A_DAY_WORDS = {"month", "quarter", "year", "week", "period", "start", "end", "begin", "key", "fm", "fy", "fq", "fw"}
+_NOT_A_DATE_AXIS_WORDS = {"start", "end", "begin", "time", "clock", "hour", "minute", "second"}
+
+
 def _day_column(schema: SourceSchema, table: str) -> str | None:
     """A day-grain date column of a date table: ``Date`` first, then ``Full Date``, then any other date-typed column that is not a month or a year."""
-    columns = [c for c in schema.tables.get(table, ()) if _TIME_TYPE.search(schema.column_type(table, c)) and not _NOT_A_DAY.search(c)]
+    columns = [c for c in schema.tables.get(table, ()) if _TIME_TYPE.search(schema.column_type(table, c)) and not (_name_words(c) & _NOT_A_DAY_WORDS)]
     if not columns and not schema.types.get(table):
         columns = [c for c in schema.tables.get(table, ()) if re.fullmatch(r"(full[_ ]?|calendar[_ ]?)?date", c, re.IGNORECASE)]
     return sorted(columns, key=lambda c: (c.casefold() != "date", "full" not in c.casefold(), c))[0] if columns else None
+
+
+def _axis_phrase(axis: Mapping[str, Any] | None) -> str:
+    if not axis:
+        return "none"
+    if axis.get("kind") == "parts":
+        return f"{axis['table']}[{axis.get('year')}]" + (f" and [{axis['month']}]" if axis.get("month") else "")
+    return f"{axis['table']}[{axis.get('column')}]"
+
+
+def _is_model_measure(measure: Any) -> bool:
+    text = str(measure)
+    return text.startswith("[") and text.endswith("]")
+
+
+def _split_ref(ref: Any) -> tuple[str, str]:
+    """('Table', 'Column') from 'Table'[Column] or Table[Column]; ('', text) for a bare column name."""
+    match = re.fullmatch(r"\s*(?:'((?:[^']|'')+)'|([^\[\]']+?))\s*\[([^\]]+)\]\s*", str(ref))
+    if not match:
+        return "", str(ref).strip()
+    return (match.group(1) or "").replace("''", "'") or (match.group(2) or "").strip(), match.group(3)
+
+
+def _bare_measure(ref: Any, known: set[str]) -> Any:
+    """'Sales'[Total Revenue] or Sales[Total Revenue] is [Total Revenue] when the model has that measure."""
+    match = re.fullmatch(r"\s*(?:'(?:[^']|'')+'|[^\[\]']+?)\s*(\[[^\]]+\])\s*", str(ref))
+    return match.group(1) if match and match.group(1)[1:-1].casefold() in known else ref
+
+
+def _any_date_column(schema: SourceSchema, table: str) -> str | None:
+    """Any date-typed column of a date table, a month-named one first: a monthly calendar keyed on ``Month`` = 2016-01-01."""
+    columns = [c for c in schema.tables.get(table, ()) if _TIME_TYPE.search(schema.column_type(table, c)) and not (_name_words(c) & _NOT_A_DATE_AXIS_WORDS)]
+    return sorted(columns, key=lambda c: (not re.search(r"month", c, re.IGNORECASE), c))[0] if columns else None
+
+
+def _explicit_axis(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]], ref: str) -> dict[str, Any] | None:
+    """The time axis the caller named, as 'Table'[Column]: on the fact itself, or on a table the fact relates to."""
+    match = re.fullmatch(r"\s*(?:'((?:[^']|'')+)'|([^\[\]']+?))\s*\[([^\]]+)\]\s*", str(ref))
+    if not match:
+        return None
+    owner = (match.group(1) or "").replace("''", "'") or (match.group(2) or "").strip()
+    column = match.group(3)
+    lowered = {t.casefold(): t for t in schema.tables}
+    owner = lowered.get(owner.casefold(), owner)
+    if column not in schema.tables.get(owner, ()) or not _TIME_TYPE.search(schema.column_type(owner, column)):
+        return None  # not a date column: the caller's choice cannot date the fact, discovery takes over
+    if owner == table:
+        return {"kind": "date", "table": table, "column": column}
+    via = next((c for (t, c), (dim, _k) in joins.items() if t == table and dim == owner), None)
+    # one fact column can relate to two date tables; the joins map keeps one, the schema keeps both
+    via = via or next((c for t, c, dim, _k in schema.relationships if t == table and dim == owner), None)
+    return {"kind": "date", "table": owner, "column": column, "via": via} if via else None
 
 
 def _dax_axis(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], tuple[str, str]]) -> dict[str, Any] | None:
@@ -955,13 +1017,16 @@ def _dax_axis(schema: SourceSchema, table: str, joins: Mapping[tuple[str, str], 
         target = joins.get((table, column))
         if target is not None:
             dim, _key = target
-            day = _day_column(schema, dim)
+            day = _day_column(schema, dim) or _any_date_column(schema, dim)
             if day:
                 candidates.append((score + 4, order, {"kind": "date", "table": dim, "column": day, "via": column}))
                 continue
             year = next((c for c in schema.tables[dim] if _YEAR_COLUMN.match(c)), None)
             if year:
-                candidates.append((score + 3, order, {"kind": "parts", "table": dim, "year": year, "month": next((c for c in schema.tables[dim] if _MONTH_COLUMN.match(c)), None), "via": column}))
+                months = [c for c in schema.tables[dim] if _MONTH_COLUMN.match(c) and not _TIME_TYPE.search(schema.column_type(dim, c))]
+                month = sorted(months, key=lambda c: (not re.search(r"(no|num|number|of ?year)$", c, re.IGNORECASE), c))[0] if months else None
+                text = any(_TEXT_TYPE.search(schema.column_type(dim, c) or "") for c in (year, month) if c)
+                candidates.append((score + 3, order, {"kind": "parts", "table": dim, "year": year, "month": month, "via": column, **({"text": True} if text else {})}))
                 continue
         if _TIME_TYPE.search(schema.column_type(table, column)):
             candidates.append((score, order, {"kind": "date", "table": table, "column": column}))
@@ -1022,7 +1087,13 @@ class _Dax:
             return f"{ref} >= DATE({year},1,1) && {ref} < DATE({year + 1},1,1)"
         year_ref = _dax_ref(dt["table"], dt["year"])
         if month and dt.get("month"):
-            return "TREATAS({(" + f"{year}, {int(month)}" + ")}, " + f"{year_ref}, {_dax_ref(dt['table'], dt['month'])})"
+            month_ref = _dax_ref(dt["table"], dt["month"])
+            if dt.get("text"):  # parts stored as text ("2014", "2" or "02", next to rows like "Unknown"): compare as text
+                m = int(month)
+                return f'FILTER(ALL({year_ref}, {month_ref}), {year_ref} = "{year}" && {month_ref} IN {{"{m}", "{m:02d}"}})'
+            return "TREATAS({(" + f"{year}, {int(month)}" + ")}, " + f"{year_ref}, {month_ref})"
+        if dt.get("text"):
+            return f'FILTER(ALL({year_ref}), {year_ref} = "{year}")'
         return "TREATAS({" + str(year) + "}, " + year_ref + ")"
 
     def _span(self, fact: Mapping[str, Any], years: Sequence[int]) -> str:
@@ -1031,6 +1102,9 @@ class _Dax:
         if dt["kind"] == "date":
             ref = _dax_ref(dt["table"], dt["column"])
             return f"{ref} >= DATE({first},1,1) && {ref} < DATE({last + 1},1,1)"
+        if dt.get("text"):
+            ref = _dax_ref(dt["table"], dt["year"])
+            return f"FILTER(ALL({ref}), {ref} IN {{" + ", ".join(f'"{int(y)}"' for y in years) + "})"
         return "TREATAS({" + ", ".join(str(int(y)) for y in years) + "}, " + _dax_ref(dt["table"], dt["year"]) + ")"
 
     def _ref(self, fact: Mapping[str, Any], path: Mapping[str, Any]) -> str:
@@ -1075,6 +1149,9 @@ class _Dax:
         narrow = [self._filter(fact, p, v) for p, v in filters]
         if dt["kind"] == "date" and dt["table"] == fact["table"]:
             ref = _dax_ref(fact["table"], dt["column"])
+            if any(_is_model_measure(m) for m in measures):  # a measure cannot be summed row by row: evaluate it per day, months() adds the days up
+                values = ", ".join(f'"v{i}", {self._sum(fact, m)}' for i, m in enumerate(measures))
+                return f'EVALUATE SELECTCOLUMNS(SUMMARIZECOLUMNS({ref}{"".join(", " + f for f in narrow)}, "n", {self._rows(fact)}, {values}), "day", {ref}, "n", [n], {picked}) ORDER BY [day]'
             sums = ", ".join(f'"v{i}", {self._groupx(fact, m)}' for i, m in enumerate(measures))
             table = f"CALCULATETABLE('{fact['table']}', {', '.join(narrow)})" if narrow else f"'{fact['table']}'"
             return f'EVALUATE SELECTCOLUMNS(GROUPBY(ADDCOLUMNS({table}, "__y", YEAR({ref}), "__m", MONTH({ref})), [__y], [__m], "n", COUNTX(CURRENTGROUP(), 1), {sums}), "year", [__y], "month", [__m], "n", [n], {picked}) ORDER BY [year], [month]'
@@ -1094,6 +1171,9 @@ class _Dax:
             values = ", ".join(f'"v{i}", {self._sum(fact, m)}' for i, m in enumerate(measures))
             return f'EVALUATE SELECTCOLUMNS(SUMMARIZECOLUMNS({ref}{"".join(", " + f for f in narrow)}, "n", {self._rows(fact)}, {values}), "day", {ref}, "n", [n], {picked}) ORDER BY [day]'
         ref = _dax_ref(fact["table"], dt["column"])
+        if any(_is_model_measure(m) for m in measures):
+            values = ", ".join(f'"v{i}", {self._sum(fact, m)}' for i, m in enumerate(measures))
+            return f'EVALUATE SELECTCOLUMNS(SUMMARIZECOLUMNS({ref}{"".join(", " + f for f in narrow)}, "n", {self._rows(fact)}, {values}), "day", {ref}, "n", [n], {picked}) ORDER BY [day]'
         table = f"CALCULATETABLE('{fact['table']}', {', '.join(narrow)})" if narrow else f"'{fact['table']}'"
         sums = ", ".join(f'"v{i}", {self._groupx(fact, m)}' for i, m in enumerate(measures))
         return f'EVALUATE SELECTCOLUMNS(GROUPBY(ADDCOLUMNS({table}, "__d", DATE(YEAR({ref}), MONTH({ref}), DAY({ref}))), [__d], "n", COUNTX(CURRENTGROUP(), 1), {sums}), "day", [__d], "n", [n], {picked}) ORDER BY [day]'
@@ -1132,6 +1212,10 @@ class _Dax:
         dt = fact["date"]
         ref = self._ref(fact, path)
         narrow = [self._filter(fact, p, v) for p, v in filters]
+        if dt["kind"] == "date" and dt["table"] == fact["table"] and _is_model_measure(fact["measure"]):
+            date_ref = _dax_ref(fact["table"], dt["column"])
+            inner = f'SUMMARIZECOLUMNS({date_ref}, {ref}, {self._members(ref, values)}{"".join(", " + f for f in narrow)}, "n", {self._calc(self._rows(fact), self._span(fact, years))}, "v0", {self._calc(self._sum(fact, fact["measure"]), self._span(fact, years))})'
+            return f'EVALUATE SELECTCOLUMNS({inner}, "day", {date_ref}, "label", {ref}, "n", [n], "v0", [v0]) ORDER BY [day]'
         if dt["kind"] == "date" and dt["table"] == fact["table"]:
             date_ref = _dax_ref(fact["table"], dt["column"])
             table = f"CALCULATETABLE('{fact['table']}', {', '.join([self._members(ref, values), self._span(fact, years), *narrow])})"
@@ -1150,6 +1234,16 @@ class _Dax:
             return f'EVALUATE ROW("value", {self._calc(f"MAX({ref})", *narrow)})'
         latest = f"MAXX(SUMMARIZE('{fact['table']}', {ref}), {ref})"
         return f'EVALUATE ROW("value", {self._calc(latest, *narrow)})'
+
+    def days_after_first(self, fact: Mapping[str, Any], filters: _Filters = ()) -> str:
+        """How many of the fact's dates fall after the 1st of their month; none means monthly snapshots."""
+        dt = fact["date"]
+        if dt["kind"] != "date":
+            return 'EVALUATE ROW("value", 1)'
+        ref = _dax_ref(dt["table"], dt["column"])
+        narrow = [self._filter(fact, p, v) for p, v in filters]
+        dates = f"VALUES({ref})" if dt["table"] == fact["table"] else f"SUMMARIZE('{fact['table']}', {ref})"
+        return f'EVALUATE ROW("value", {self._calc(f"COUNTROWS(FILTER({dates}, DAY({ref}) > 1))", *narrow)})'
 
     def movement(self, fact: Mapping[str, Any], comparison: Comparison, filters: _Filters) -> str:
         narrow = [self._filter(fact, p, v) for p, v in filters]
@@ -1309,7 +1403,8 @@ class SemanticModelProbe:
         types: dict[str, dict[str, str]] = {}
         for row in frames["columns"]:
             table, column = str(_first(row, "table_name", "table") or ""), str(_first(row, "column_name", "name") or "")
-            if not table or not column or table in hidden or _AUTO_DATE_TABLE.match(table) or column.startswith("RowNumber-"):
+            # Hidden tables stay: fact tables are commonly hidden behind measures. Only auto date tables go.
+            if not table or not column or _AUTO_DATE_TABLE.match(table) or column.startswith("RowNumber-"):
                 continue
             tables.setdefault(table, []).append(column)
             types.setdefault(table, {})[column] = str(_first(row, "data_type", "type") or "")
@@ -1376,6 +1471,9 @@ def what_moved(
     verify: bool = True,
     timeout: float = 600.0,
     name: str | None = None,
+    time_column: str | None = None,
+    filters: Mapping[str, Any] | None = None,
+    as_of: Any = None,
 ) -> Sweep:
     """What moved in a lakehouse or a semantic model, measured by the source and recomputed.
 
@@ -1389,10 +1487,18 @@ def what_moved(
     (``"month"``, ``"same_month_prior_year"``, ``"year"``) or supplies
     :class:`Comparison` objects; ``budget`` bounds the queries. ``verify``
     recomputes every reported figure with an independent query afterwards.
+    ``time_column`` names the time axis of a semantic model as 'Table'[Column] when
+    discovery would pick the wrong one or none. ``filters`` narrows every figure to
+    rows of named groups, as {"'Scenario'[Scenario]": "Actual"} or a list of values;
+    a fact that cannot reach a filter column is left out with a note. ``paths`` may
+    name groupings as 'Table'[Column]. ``as_of`` is the date the data can be trusted
+    through (today when omitted): the month containing it, and anything later, is not
+    compared, so a source whose event dates stop early is not read as a collapse.
     """
     probe = _probe_for(source, timeout=timeout, name=name)
+    pairs = [({"hops": [{"table": table}], "column": column}, value) for (table, column), value in ((_split_ref(k), v) for k, v in (filters or {}).items())]
     started = time.monotonic()
-    result = sweep(probe, years, instructions=instructions, scope=scope, facts=facts, measures=measures, paths=paths, comparisons=comparisons, budget=budget, min_pct=min_pct, top=top, depth=depth)
+    result = sweep(probe, years, instructions=instructions, scope=scope, facts=facts, measures=measures, paths=paths, comparisons=comparisons, budget=budget, min_pct=min_pct, top=top, depth=depth, time_column=time_column, filters=pairs, as_of=as_of)
     if verify:
         result = verify_sweep(result, probe)
     return replace(result, elapsed=round(time.monotonic() - started, 1))
@@ -1413,8 +1519,12 @@ def sweep(
     top: int = 5,
     depth: int = 2,
     filters: _Filters = (),
+    time_column: str | None = None,
+    as_of: Any = None,
 ) -> Sweep:
     """The sweep over a probe: phase one measures every movement, phase two decomposes the material ones until the budget is spent.
+
+    ``time_column`` names the time axis as 'Table'[Column] (semantic models): a date column on the fact, or on a date table it relates to.
 
     ``filters`` narrows every query to the rows of the named groups: (grouping path, value) pairs, a value being one member or a list of members.
     """
@@ -1448,8 +1558,19 @@ def sweep(
         fact_names = list(probe.facts(text))[:facts]
     else:
         lowered = {t.casefold(): t for t in schema.tables}
+        facts = [str(f).strip().strip("'").replace("''", "'") for f in facts]
         fact_names = [lowered[str(f).casefold()] for f in facts if str(f).casefold() in lowered]
-    if not fact_names:
+        for f in facts:
+            if str(f).casefold() not in lowered:
+                notes.append(f"{f!r} is not a table in the source, so it was not swept; tables: {', '.join(sorted(schema.tables)[:20])}")
+    if not isinstance(measures, int):
+        known = {m.casefold() for m in schema.measures}
+        measures = [_bare_measure(m, known) for m in measures]
+        for m in measures:
+            text = str(m).strip()
+            if text.startswith("[") and text.endswith("]") and text[1:-1].casefold() not in known:
+                notes.append(f"measure {text} is not in the model, so it was not measured")
+    if not fact_names and not any("is not a table" in n for n in notes):
         notes.append("no fact table recognised, nothing to sweep")
 
     totals: list[tuple[Movement, dict[str, Any], list[Mapping[str, Any]], tuple[str, ...]]] = []
@@ -1458,7 +1579,16 @@ def sweep(
     try:
         for table in fact_names:
             try:
-                axis = dialect.axis(table)
+                if time_column and getattr(dialect, "kind", "") == "semantic_model":
+                    axis = _explicit_axis(schema, table, joins, time_column)
+                    if axis is None:
+                        axis = dialect.axis(table)
+                        found = f"; the discovered axis {_axis_phrase(axis)} was used instead" if axis else ", and no other time axis was found, so it was not swept"
+                        notes.append(f"{table}: the time column {time_column} is not a date column on it or on a date table it relates to{found}")
+                        if axis is None:
+                            continue
+                else:
+                    axis = dialect.axis(table)
                 candidates = _measure_candidates(schema, table, measures)
                 if not axis or not candidates:
                     notes.append(f"{table}: no time axis or no measure, not swept")
@@ -1470,7 +1600,20 @@ def sweep(
                 words[table] = vocabulary.table(table)
                 base = {"table": table, "date": axis, "measure": candidates[0], "aggregate": _aggregate_of(candidates[0], summed, schema.tables[table])}
                 months = dialect.months(run(dialect.series(base, candidates, fact_filters)))
-                fact_years = [int(y) for y in years] if years else _complete_years(months)
+                months, blank = _measured_months(months, candidates)
+                if blank:
+                    notes.append(
+                        f"{vocabulary.table(table)}: {blank} month(s) have rows but no value for the measures (another scenario or "
+                        "version, or rows the measures exclude); periods are judged by the measures, so those months are left out"
+                    )
+                cutoff = _dt.date.fromisoformat(str(as_of)[:10]) if as_of else None
+                months, ahead = _before_today(months, _as_of_boundary(cutoff) if cutoff else None)
+                if ahead:
+                    notes.append(
+                        f"{vocabulary.table(table)}: {ahead} month(s) from {'the data-as-of month ' + str(cutoff) if cutoff else 'the current one'} on hold data "
+                        "(a month in progress, or forward-dated or planned values); they are set aside rather than compared"
+                    )
+                fact_years = [int(y) for y in years] if years else [y for y in _complete_years(months) if y < (cutoff or _today()).year]
                 if not years_used:
                     years_used = list(fact_years)
                 wanted_comparisons = _wanted_comparisons(months, fact_years, comparisons)
@@ -1488,6 +1631,15 @@ def sweep(
                     raise
                 except Exception:  # noqa: BLE001 - only the incomplete-month flag needs it
                     max_date = None
+                if max_date and str(max_date).endswith("-01") and hasattr(dialect, "days_after_first"):
+                    try:
+                        later = run(dialect.days_after_first(base, fact_filters))
+                        if not later or not later[0].get("value"):
+                            max_date = None  # every date is a month start: a monthly snapshot, complete when it is present
+                    except _Budget:
+                        raise
+                    except Exception:  # noqa: BLE001
+                        pass
                 chosen = _choose_paths(schema, table, joins, excluded, terms, paths)
                 if fact_filters:
                     chosen = [p for p in chosen if not any(_same_path(p, narrowed, table) for narrowed, _v in fact_filters)]  # a grouping the request fixed has one group left
@@ -1591,13 +1743,32 @@ def _choose_paths(schema: SourceSchema, table: str, joins: Mapping[tuple[str, st
         if not _LOCAL_EXCLUDED.search(str(p["column"]))  # a code, a SKU or a number is a label, not a grouping
         and not _FREE_TEXT.search(str(p["column"]))
         and not _IDENTITY.search(str(p["column"]))
+        and not re.search(r"(sort|sort ?order|sortkey)$", str(p["column"]), re.IGNORECASE)  # a sort helper orders another column, it is not a grouping
         and not (_MEASUREMENT.search(str(p["column"])) and _NUMERIC_TYPE.search(schema.column_type(_path_table(p, table), str(p["column"]))))  # a numeric length or weight is a quantity, not a grouping
     ]
     if not isinstance(paths, int):
+        # A grouping the caller named is used even when the heuristics above would skip it (a name
+        # column that is also the join key, a code): the caller chose it.
+        every = list(attribute_paths(schema, table, joins, excluded))
         chosen_named: list[Mapping[str, Any]] = []
         for name in paths:
-            wanted = str(name).casefold()
-            match = next((p for p in all_paths if str(p["column"]).casefold() == wanted or humanize_column(str(p["column"])).casefold() == wanted), None)
+            owner, column = _split_ref(name)
+            wanted = column.casefold()
+
+            def fits(p: Mapping[str, Any]) -> bool:
+                named = str(p["column"]).casefold() == wanted or humanize_column(str(p["column"])).casefold() == wanted
+                return named and (not owner or _path_table(p, table).casefold() == owner.casefold())
+
+            match = next((p for p in all_paths if fits(p)), None) or next((p for p in every if fits(p)), None)
+            if match is None and owner:
+                # the named column is the key a fact column joins to: group by the fact's own key column
+                via = next((c for (t_, c), (dim, key) in joins.items() if t_ == table and dim.casefold() == owner.casefold() and key.casefold() == wanted), None)
+                if via is not None:
+                    match = {"hops": [], "column": via, "alias": column}
+                elif owner.casefold() == table.casefold() and column in schema.tables.get(table, ()):
+                    match = {"hops": [], "column": column, "alias": column}
+            if match is None and not owner and column in schema.tables.get(table, ()):
+                match = {"hops": [], "column": column, "alias": column}
             if match is not None and all(match is not c for c in chosen_named):
                 chosen_named.append(match)
         return chosen_named
@@ -1627,6 +1798,46 @@ def _same_figures(a: Sequence[Movement], b: Sequence[Movement], tolerance: float
         return abs(x - y) <= tolerance * max(1.0, abs(y))
 
     return len(a) == len(b) and all(near(x.before_value, y.before_value) and near(x.after_value, y.after_value) for x, y in zip(a, b))
+
+
+def _today() -> _dt.date:
+    """Today, as one function so tests can move it."""
+    return _dt.date.today()
+
+
+def _as_of_boundary(as_of: _dt.date) -> _dt.date:
+    """The date whose month is the first one not compared: the as-of month itself when as_of falls mid-month,
+    the next month when as_of is the 1st (a monthly snapshot's label) or the last day of its month (complete)."""
+    nxt = _dt.date(as_of.year + (as_of.month == 12), 1 if as_of.month == 12 else as_of.month + 1, 1)
+    last_day = (nxt - _dt.timedelta(days=1)).day
+    return nxt if as_of.day in (1, last_day) else as_of
+
+
+def _measured_months(months: Sequence[Mapping[str, Any]], candidates: Sequence[str]) -> tuple[list[Mapping[str, Any]], int]:
+    """With governed measures, a month has data when a measure has a value there, not when the fact has rows.
+
+    A sales table that also holds plan rows a year past the actuals has rows in months where [Sales] is blank;
+    counting those months made the plan year look current and the last actual year look partial."""
+    if not candidates or not all(_is_model_measure(m) for m in candidates):
+        return list(months), 0
+    measured = [m for m in months if any(m.get(f"v{i}") not in (None, 0, 0.0) for i in range(len(candidates)))]
+    if not measured:
+        return list(months), 0
+    return measured, len(months) - len(measured)
+
+
+def _before_today(months: Sequence[Mapping[str, Any]], as_of: _dt.date | None = None) -> tuple[list[Mapping[str, Any]], int]:
+    """The months before the current one (or the one containing ``as_of``), and how many were dropped: that month and anything after it."""
+    now = as_of or _today()
+    kept: list[Mapping[str, Any]] = []
+    dropped = 0
+    for row in months:
+        year, month = row.get("year"), row.get("month")
+        if year is not None and (int(year), int(month or 1)) >= (now.year, now.month) and (month is not None or int(year) > now.year):
+            dropped += 1
+            continue
+        kept.append(row)
+    return kept, dropped
 
 
 def _complete_years(months: Sequence[Mapping[str, Any]]) -> list[int]:

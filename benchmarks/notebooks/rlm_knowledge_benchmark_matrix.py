@@ -91,7 +91,7 @@ persist_run_log("running", phase="bootstrap")
 
 # CELL ********************
 
-%pip install -q "fabric-rlm==0.6.6" "duckdb>=1.1" "deltalake>=1.0"
+%pip install -q "fabric-rlm==0.6.7" "duckdb>=1.1" "deltalake>=1.0"
 
 # METADATA ********************
 

@@ -406,7 +406,7 @@ def _date_candidates(columns: Sequence[str]) -> list[str]:
     )
 
 
-_TIME_COLUMN = re.compile(r"(date|timestamp|datetime|_at|_time|_on)(key)?$", re.IGNORECASE)
+_TIME_COLUMN = re.compile(r"(date[ _]?(key|id)|(date|timestamp|datetime|_at|_time|_on)([ _]?key)?)$", re.IGNORECASE)
 _PERIOD_COLUMN = re.compile(r"(?:^|[_ ])(?:quarter|year_?quarter|fiscal_quarter|period|fiscal_period|year_?month|month)$", re.IGNORECASE)  # 2024/Q1, 2024-03: a period written as text
 _TIME_TYPE = re.compile(r"(timestamp|datetime|date)", re.IGNORECASE)  # Delta names, SQL names or arrow ``DataType<Timestamp(...)>`` and ``Date32``
 _NUMERIC_TYPE = re.compile(r"(int|long|double|float|decimal|numeric|real|number|short|byte)", re.IGNORECASE)
@@ -794,7 +794,7 @@ def build_vocabulary(snapshot: AgentSnapshot, schema: SourceSchema, context: Rev
 # Attribute paths: how a fact reaches its groupings through the joins
 # --------------------------------------------------------------------------- #
 
-_MONTH_COLUMN = re.compile(r"^(month|monthnumber|monthnumberofyear|calendarmonth|month_number|monthofyear)$", re.IGNORECASE)
+_MONTH_COLUMN = re.compile(r"^(month|monthnumber|monthnumberofyear|calendarmonth|month_number|monthofyear|monthno|month_no|month no|monthnum)$", re.IGNORECASE)
 _QUARTER_COLUMN = re.compile(r"^(quarter|calendarquarter|quarter_number|quarterofyear)$", re.IGNORECASE)
 _ENTITY_HINT = re.compile(r"(reseller|customer|vendor|supplier|account|store|client|dealer|partner|employee|company|organization|franchise|merchant|brand|manufacturer|seller)[_ ]?name$|^name$", re.IGNORECASE)
 _PRODUCT_HINT = re.compile(r"(product|item|sku)[_ ]?name$|^(product|item|sku|plan|plan_name|feature)$", re.IGNORECASE)

@@ -1,22 +1,52 @@
 # Changelog
 
-## Unreleased
+## 0.6.7 - 2026-09-25 - what_moved on real semantic models, and period and claims checks for semantic-model runs
 
-### Changed
+Everything here came from pointing the library at real semantic models it had never seen.
 
-- `result.inspect()` labels a turn Slow only when it took more than 60 seconds (was 10),
-  and the label shows the time, for example `Slow · 74s`. Most RLM turns take 10 to 40
-  seconds, so at 10 seconds nearly every turn was marked slow and the label said nothing.
-  Pass `slow_turn_seconds=` to change it.
-- Each turn in `result.inspect()` is titled with the model's own statement of what the step
-  is for: the first comment line of its code, such as `Step 3: find the latest complete
-  month`. In 486 turns over 13 semantic models, 460 opened with one. The title used to be
-  guessed from the first method call ("Queried the semantic model", "Executed Python
-  code"), which said what the step touched, not why. Turns without such a line keep the
-  old guess. Hover over a title to read it in full.
+### Fixed
+
+- `what_moved` on semantic models it had never seen. Over 18 real models its figures always
+  recomputed, but it found nothing on most of them, and 8 of 11 still failed when the fact,
+  measures and years were named. The causes were all in discovery:
+  - Hidden tables are kept. Hiding fact tables behind measures is standard Power BI practice,
+    and five sample models did it.
+  - Date keys named `Order Date Key`, `order_date_key` or `InvoiceDateID` are recognised.
+  - A calendar whose `Month` column holds dates is used as a monthly date axis, not read as
+    a month number.
+  - A calendar stored as text (`Year` = "2014", `MonthNo` = "2", with an "Unknown" row) is
+    filtered as text, and a month-number column is preferred over month names.
+  - Monthly snapshots dated on the 1st are no longer flagged as incomplete months.
+  - The month in progress and anything dated after it (forward-dated or planned values) are
+    set aside with a note instead of compared; a model with rows through 2030 no longer leads
+    with 2029 against 2030.
+  - A named fact or measure that does not exist is reported instead of silently dropped.
+  - A date table called "Calendar" keeps its day column: "Calendar Date" was rejected as an
+    end date because "Calendar" contains "end", so fiscal-month begin dates were used instead.
+    Day-column checks now match whole words.
+  - A time-of-day key (`DIM_TimeId`) is not a date key, and sort-helper columns
+    (`CE Segment Sort`) are not offered as groupings.
+  - A model measure over a date column on the fact itself no longer writes invalid DAX.
+  - With governed measures, a month counts as data when a measure has a value there, not when
+    the fact has rows. A sales table that also held plan rows a year past the actuals made the
+    plan year look current, so actual sales were reported as falling to 0.
+  - A date column on the fact that relates to two date tables no longer loses one of them, so
+    `time_column=` can name either.
+  - Measures named with their table (`'Sales'[Total Revenue]`, `Sales[Total Revenue]`) are
+    taken as the model measure.
+- `period_coverage` recognises as-of measures written with underscores (`Msr_ARR_As_Of_Date`).
 
 ### Added
 
+- `what_moved(..., time_column="'Date'[Date]")` names the time axis when discovery would pick
+  the wrong one or none; a named column that is not a date falls back to discovery with a note.
+- `what_moved(..., filters={"'Scenario'[Scenario]": "Actual"})` narrows every figure, and
+  `as_of="2014-12-07"` says how far the data can be trusted: the month it falls in is set aside
+  when it falls mid-month. Groupings can be named as `'Table'[Column]`, including a column the
+  fact joins on. These are what a planning step (a person or a model) hands the engine: with
+  plans written by GPT-5.1 or Luna at high reasoning effort, the engine filtered to actuals,
+  drilled to the product behind a drop and set aside a month whose event dates stopped early,
+  three traps it fell into on its own.
 - `SemanticModel.period_coverage(measure, grain="month")` counts the dates with data
   in each period for a measure and marks each period complete, partial, in progress,
   future, empty or low coverage against the typical earlier period. It also names the
@@ -32,11 +62,29 @@
 - The `semantic_model` skill tells the model to check period coverage before it calls
   a period latest or current.
 
-Why: on semantic models the runs had never seen, the most common way a report misled
-was its headline period. Examples were a 9-day month, a month four years ahead from
-forward-dated rows, and a January-to-May "year". In the first two cases the run had
-already written the problem into its own caveats. A question-answering run also lost a
-year filter inside SUMMARIZECOLUMNS and reported an all-years share as 2017's.
+Why the semantic-model checks: on semantic models the runs had never seen, the most common
+way a report misled was its headline period. Examples were a 9-day month, a month four years
+ahead from forward-dated rows, and a January-to-May "year". In the first two cases the run had
+already written the problem into its own caveats. A question-answering run also lost a year
+filter inside SUMMARIZECOLUMNS and reported an all-years share as 2017's.
+
+With these, `what_moved` produced verified findings on 11 of 11 models when given the fact,
+the governed measures and the years, up from 3, and on 13 of 18 with no details at all, up
+from 7. Without details it still picks measures by rule and sometimes sums a column that is
+not a business measure; naming the measures avoids that.
+
+### Changed
+
+- `result.inspect()` labels a turn Slow only when it took more than 60 seconds (was 10),
+  and the label shows the time, for example `Slow · 74s`. Most RLM turns take 10 to 40
+  seconds, so at 10 seconds nearly every turn was marked slow and the label said nothing.
+  Pass `slow_turn_seconds=` to change it.
+- Each turn in `result.inspect()` is titled with the model's own statement of what the step
+  is for: the first comment line of its code, such as `Step 3: find the latest complete
+  month`. In 486 turns over 13 semantic models, 460 opened with one. The title used to be
+  guessed from the first method call ("Queried the semantic model", "Executed Python
+  code"), which said what the step touched, not why. Turns without such a line keep the
+  old guess. Hover over a title to read it in full.
 
 ## 0.6.6 - 2026-09-20 - a run cannot finish on a file that does not open, and the IMF example is reliable
 
