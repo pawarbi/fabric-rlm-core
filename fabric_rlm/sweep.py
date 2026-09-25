@@ -1591,6 +1591,12 @@ def sweep(
                 words[table] = vocabulary.table(table)
                 base = {"table": table, "date": axis, "measure": candidates[0], "aggregate": _aggregate_of(candidates[0], summed, schema.tables[table])}
                 months = dialect.months(run(dialect.series(base, candidates, fact_filters)))
+                months, blank = _measured_months(months, candidates)
+                if blank:
+                    notes.append(
+                        f"{vocabulary.table(table)}: {blank} month(s) have rows but no value for the measures (another scenario or "
+                        "version, or rows the measures exclude); periods are judged by the measures, so those months are left out"
+                    )
                 cutoff = _dt.date.fromisoformat(str(as_of)[:10]) if as_of else None
                 months, ahead = _before_today(months, _as_of_boundary(cutoff) if cutoff else None)
                 if ahead:
@@ -1796,6 +1802,19 @@ def _as_of_boundary(as_of: _dt.date) -> _dt.date:
     nxt = _dt.date(as_of.year + (as_of.month == 12), 1 if as_of.month == 12 else as_of.month + 1, 1)
     last_day = (nxt - _dt.timedelta(days=1)).day
     return nxt if as_of.day in (1, last_day) else as_of
+
+
+def _measured_months(months: Sequence[Mapping[str, Any]], candidates: Sequence[str]) -> tuple[list[Mapping[str, Any]], int]:
+    """With governed measures, a month has data when a measure has a value there, not when the fact has rows.
+
+    A sales table that also holds plan rows a year past the actuals has rows in months where [Sales] is blank;
+    counting those months made the plan year look current and the last actual year look partial."""
+    if not candidates or not all(_is_model_measure(m) for m in candidates):
+        return list(months), 0
+    measured = [m for m in months if any(m.get(f"v{i}") not in (None, 0, 0.0) for i in range(len(candidates)))]
+    if not measured:
+        return list(months), 0
+    return measured, len(months) - len(measured)
 
 
 def _before_today(months: Sequence[Mapping[str, Any]], as_of: _dt.date | None = None) -> tuple[list[Mapping[str, Any]], int]:

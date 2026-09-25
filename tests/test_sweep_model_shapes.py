@@ -186,3 +186,13 @@ def test_a_quoted_fact_and_an_unusable_time_column_are_handled():
     notes = " ".join(result.notes)
     assert "is not a table" not in notes
     assert "the time column 'Sales'[Code] is not a date column" in notes and "no other time axis was found" in notes
+
+
+def test_months_are_judged_by_the_governed_measures_not_by_rows():
+    from fabric_rlm.sweep import _measured_months
+    months = [{"year": 2023, "month": 10, "v0": 35.3, "v1": 10.6}, {"year": 2023, "month": 11, "v0": 28.8, "v1": None},
+              {"year": 2024, "month": 1, "v0": None, "v1": None}, {"year": 2024, "month": 11, "v0": 0, "v1": 0.0}]
+    kept, blank = _measured_months(months, ["[Sales]", "[Margin]"])
+    assert [(m["year"], m["month"]) for m in kept] == [(2023, 10), (2023, 11)] and blank == 2
+    assert _measured_months(months, ["Amount"]) == (months, 0)                       # a raw column: rows are the data
+    assert _measured_months(months[2:], ["[Sales]", "[Margin]"]) == (months[2:], 0)  # nothing measured: leave it to the caller

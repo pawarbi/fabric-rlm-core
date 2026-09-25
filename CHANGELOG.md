@@ -25,6 +25,9 @@
   - A time-of-day key (`DIM_TimeId`) is not a date key, and sort-helper columns
     (`CE Segment Sort`) are not offered as groupings.
   - A model measure over a date column on the fact itself no longer writes invalid DAX.
+  - With governed measures, a month counts as data when a measure has a value there, not when
+    the fact has rows. A sales table that also held plan rows a year past the actuals made the
+    plan year look current, so actual sales were reported as falling to 0.
 - `period_coverage` recognises as-of measures written with underscores (`Msr_ARR_As_Of_Date`).
 
 ### Added
