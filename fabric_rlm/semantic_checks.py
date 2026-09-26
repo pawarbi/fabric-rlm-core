@@ -42,6 +42,7 @@ GRAINS = ("month", "quarter", "year", "week")
 # count of 1 and is never partial by this rule; a weekday-only business has a
 # typical count near 21 and a full month of it is complete.
 PARTIAL_SHARE = 0.8
+THIN_SHARE = 0.5  # a trailing 7-day mean below this share of the typical day means the data is thinning out
 BASELINE_PERIODS = 6
 
 _COLUMN_REF = re.compile(r"^\s*(?:'((?:[^']|'')+)'|([A-Za-z_][\w ]*?))\s*\[([^\]]+)\]\s*$")
@@ -140,6 +141,40 @@ def period_bounds(key: str) -> tuple[_dt.date, _dt.date, str]:
     )
 
 
+def _trusted_through(days: list[_dt.date], daily: Mapping[_dt.date, float]) -> tuple[_dt.date | None, str]:
+    """The last date the data holds up to, and why.
+
+    Only for daily data (dates with data on at least a third of the calendar days): the last date with data,
+    or, when the trailing 7-day mean of the measure falls below half the typical day of the eight weeks
+    before, the last date before that thinning began. Loads that stop arriving leave a tail like this."""
+    if len(days) < 56 or len(days) < ((days[-1] - days[0]).days + 1) / 3:
+        return None, ""
+    last = days[-1]
+    one = _dt.timedelta(days=1)
+    typical = statistics.median(daily.get(last - one * k, 0.0) for k in range(14, 70))
+    if typical <= 0:
+        return last, "the last date with data"
+
+    def mean7(day: _dt.date) -> float:
+        return sum(daily.get(day - one * k, 0.0) for k in range(7)) / 7
+
+    day = last
+    while day > last - one * 60 and mean7(day) < THIN_SHARE * typical:
+        day -= one
+    if (last - day).days <= 2:
+        return last, "the last date with data"
+    year_ago = last - one * 364
+    if days[0] <= year_ago - one * 70:
+        typical_then = statistics.median(daily.get(year_ago - one * k, 0.0) for k in range(14, 70))
+        if typical_then > 0 and mean7(year_ago) < THIN_SHARE * typical_then:
+            return last, "the last date with data (the same week a year earlier was as quiet)"
+    def num(x: float) -> str:
+        return f"{x:,.0f}" if abs(x) >= 100 else f"{x:,.3g}"
+
+    return day, (f"the data thins out after {day}: the 7 days to {last} average {num(mean7(last))} a day "
+                 f"against a typical {num(typical)}")
+
+
 def _frame_rows(frame: Any) -> list[list[Any]]:
     values = getattr(frame, "values", None)
     if values is not None and hasattr(values, "tolist"):
@@ -234,6 +269,8 @@ class PeriodCoverage:
     first_data: _dt.date | None
     last_data: _dt.date | None
     future_periods_with_data: int
+    trusted_through: _dt.date | None = None
+    trusted_through_reason: str = ""
     as_of_measures: list[dict[str, Any]] = field(default_factory=list)
 
     def status(self, period: str) -> str:
@@ -255,6 +292,8 @@ class PeriodCoverage:
             f"As of {self.as_of} ({self.as_of_source}). Data from {self.first_data} to {self.last_data}.",
             f"Latest complete {self.grain}: {self.latest_complete or 'none'}; latest with data: {self.latest_with_data or 'none'}.",
         ]
+        if self.trusted_through and self.last_data and self.trusted_through < self.last_data:
+            lines.append(f"Trust the data only through {self.trusted_through}: {self.trusted_through_reason}.")
         current = [p for p in self.periods if p["status"] != "future"]
         data_idx = [i for i, p in enumerate(current) if p["days_with_data"]]
         stale = len(current) - 1 - data_idx[-1] if data_idx else 0
@@ -336,7 +375,17 @@ def period_coverage(
     frame = model.dax(
         f'EVALUATE FILTER(ADDCOLUMNS(VALUES({col}), "v", {expr}), NOT ISBLANK([v]))'
     )
-    days = sorted({d for d in (_as_date(r[0]) for r in _frame_rows(frame)) if d is not None})
+    daily: dict[_dt.date, float] = {}
+    for r in _frame_rows(frame):
+        d = _as_date(r[0])
+        if d is None:
+            continue
+        try:
+            daily[d] = daily.get(d, 0.0) + float(r[1]) if len(r) > 1 and r[1] is not None else daily.get(d, 0.0)
+        except (TypeError, ValueError):
+            daily.setdefault(d, 0.0)
+    days = sorted(daily)
+    trusted, trusted_why = _trusted_through(days, daily)
     counts: dict[str, int] = {}
     for d in days:
         k = period_key(d, grain)
@@ -372,8 +421,13 @@ def period_coverage(
                 status = "partial" if k in (first_k, last_k) else "low coverage"
             else:
                 status = "complete"
+            note = ""
+            if trusted is not None and n and status in {"complete", "unknown", "low coverage"}:
+                slack = max(_dt.timedelta(days=2), (end - start) / 10)
+                if end - _dt.timedelta(days=1) > trusted + slack:
+                    status, note = "partial", f"data holds up only to {trusted}: {trusted_why}"
             rows.append({"period": k, "start": start.isoformat(), "end": (end - _dt.timedelta(days=1)).isoformat(),
-                         "days_with_data": n, "typical_days": typical, "status": status})
+                         "days_with_data": n, "typical_days": typical, "status": status, **({"note": note} if note else {})})
             if n and status in {"complete", "unknown"}:
                 history.append(n)
     complete = [r["period"] for r in rows if r["status"] == "complete"]
@@ -392,6 +446,8 @@ def period_coverage(
         first_data=days[0] if days else None,
         last_data=days[-1] if days else None,
         future_periods_with_data=future_with_data,
+        trusted_through=trusted,
+        trusted_through_reason=trusted_why,
         as_of_measures=as_of_candidates(model) if (as_of is None and find_as_of) else [],
     )
 
@@ -516,6 +572,8 @@ class SemanticModelChecks:
             return []
         detail = next((p for p in cov.periods if p["period"] == key), None)
         held = f" It has data on {detail['days_with_data']} dates against a typical {detail['typical_days']}." if detail and detail.get("typical_days") else ""
+        if detail and detail.get("note"):
+            held += f" The {detail['note']}."
         return [
             f"headline_period {key} is {status} for [{measure}] (dated by {cov.date_column}, as of {cov.as_of}).{held} "
             f"The latest complete {grain} is {cov.latest_complete or 'not available'}. Lead with a complete period, "

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- `period_coverage` marks a period partial when the data stops or thins out inside it. On the
+  ecommerce (Olist) model the data ends on 3 September 2018 and thins out from 27 August, yet
+  2018 passed as a complete year (the typical year was the median of a four-month 2016 and a full
+  2017) and August passed as a complete month (it has data on 29 of 31 days, but its last week
+  holds a fifth of the usual orders). Runs then compared eight months of 2018 with all of 2017, and
+  reported August revenue down 5.2% when the same days of August were up 43% on July. For daily
+  data, the coverage now records the date the data holds up to (`trusted_through`, with the reason)
+  and marks any period ending well after it partial; the validator's message says why. A dip the
+  same week a year earlier also had, such as a quiet Christmas week, is not thinning. Monthly
+  snapshots and weekday-only data are unchanged.
+
 ## 0.6.7 - 2026-09-25 - what_moved on real semantic models, and period and claims checks for semantic-model runs
 
 Everything here came from pointing the library at real semantic models it had never seen.
