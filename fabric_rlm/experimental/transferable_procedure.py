@@ -100,7 +100,10 @@ def bind_csv(
     numbers = [name for name, meta in schema.items() if meta.get("type") in {"integer", "number", "float"}]
     coarse = [name for name in categories if _matches(name, before) and _matches(name, after)]
     detail = [name for name in categories if _matches(name, after) and name not in coarse]
-    measure = [name for name in numbers if _matches(name, question)]
+    question_words = _words(question)
+    scored = [(len(_words(name) & question_words), name) for name in numbers]
+    best_score = max((score for score, _ in scored), default=0)
+    measure = [name for score, name in scored if score == best_score and score > 0]
     if len(numbers) == 1 and not measure:
         measure = numbers
     if len(coarse) != 1 or len(detail) != 1 or len(measure) != 1:
