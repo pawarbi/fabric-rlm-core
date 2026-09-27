@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import csv
 from pathlib import Path
 
 from fabric_rlm import RLM
 from fabric_rlm.experimental.transferable_procedure import bind_csv, extract_procedure
 from fabric_rlm.knowledge import EvidenceRecord
 from fabric_rlm.knowledge_lessons import promote_lessons
+from behavior.hard_csv_case import QUESTION as HARD_QUESTION, write_hard_csv
 
 
 TARGET = Path(__file__).parent / "fixtures" / "no_customer_production.csv"
@@ -86,3 +88,24 @@ def test_binding_refuses_missing_ambiguous_and_unrelated_questions(tmp_path: Pat
         assert bind_csv(procedure, target, question) is None
     assert bind_csv(procedure, replace(target, diagnostics={"snapshot_exact": False}),
                     "Which region has the most units? Within that region, which machine leads?") is None
+
+
+def test_binding_picks_net_measure_among_numeric_distractors(tmp_path: Path) -> None:
+    procedure, _ = _learned_procedure(tmp_path)
+    hard = tmp_path / "hard.csv"
+    write_hard_csv(hard)
+    with hard.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert max(rows, key=lambda row: int(row["net_units"]))["site"] == "Mesa"
+    assert sum(int(row["gross_units"]) for row in rows if row["site"] == "Mesa") > sum(
+        int(row["gross_units"]) for row in rows if row["site"] == "Harbor"
+    )
+    assert sum(int(row["net_units"]) for row in rows if row["station"] == "M9") > 2000
+    target = RLM.learn(sources={"operations": hard}).package.sources[0]
+    plan = bind_csv(procedure, target, HARD_QUESTION)
+    assert plan is not None
+    assert (plan.coarse, plan.detail, plan.measure) == ("site", "station", "net_units")
+    assert bind_csv(
+        procedure, target,
+        "Which site has the most units? Within that site, which station leads?",
+    ) is None
