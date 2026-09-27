@@ -22,6 +22,7 @@ from fabric_rlm.knowledge import EvidenceRecord
 from fabric_rlm.knowledge_lessons import promote_lessons
 from .test_behavior_baseline import _PRIMARY_MODEL
 from .runner import make_lm
+from .hard_csv_case import ANSWER as HARD_ANSWER, QUESTION as HARD_QUESTION, write_hard_csv
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,3 +131,50 @@ def test_model_infers_csv_fields_and_executes(
         "turns": len(result.turns),
     }, default=str))
     assert result.submitted and result.payload == {"answer": expected}, result.failure_reason
+
+
+@pytest.mark.parametrize("repetition", range(3))
+@pytest.mark.parametrize("with_transfer", [False, True], ids=["cold", "transferred_procedure"])
+def test_hard_csv_with_distractor_measures(
+    tmp_path: Path, with_transfer: bool, repetition: int
+) -> None:
+    if not os.getenv("OPENROUTER_API_KEY"):
+        if os.getenv("BEHAVIOR_CI_REQUIRED") == "1":
+            pytest.fail("OPENROUTER_API_KEY is required for the live hard CSV test")
+        pytest.skip("Live model run needs OPENROUTER_API_KEY")
+    path = tmp_path / "hard_operations.csv"
+    write_hard_csv(path)
+    assert "customer" not in path.read_text(encoding="utf-8").lower()
+    assert _expected(path, "site", "station", "net_units") == HARD_ANSWER
+
+    plan = None
+    if with_transfer:
+        procedure = _training_procedure(tmp_path)
+        assert procedure is not None
+        profile = RLM.learn(sources={"target": path}).package.sources[0]
+        plan = bind_csv(procedure, profile, HARD_QUESTION)
+        assert plan is not None
+        assert (plan.coarse, plan.detail, plan.measure) == ("site", "station", "net_units")
+
+    def validate(payload: dict) -> None:
+        assert payload.get("answer") == HARD_ANSWER, f"Expected {HARD_ANSWER}, got {payload.get('answer')}"
+
+    result = RLM.task(
+        HARD_QUESTION + " Return answer as group, group_total, detail, detail_total."
+        + ("\n" + plan.guidance() if plan else ""),
+        inputs={"source": path},
+        outputs={"answer": dict},
+        lm=make_lm(_PRIMARY_MODEL),
+        output_validator=validate,
+        max_turns=10,
+        timeout=120,
+    ).run()
+    print(json.dumps({
+        "case": "hard_csv", "repetition": repetition,
+        "arm": "transferred_procedure" if with_transfer else "cold",
+        "binding": {"group": plan.coarse, "detail": plan.detail, "measure": plan.measure} if plan else None,
+        "expected": HARD_ANSWER, "submitted": result.submitted,
+        "payload": result.payload, "failure_reason": result.failure_reason,
+        "turns": len(result.turns),
+    }, default=str))
+    assert result.submitted and result.payload == {"answer": HARD_ANSWER}, result.failure_reason
