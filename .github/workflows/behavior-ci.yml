@@ -53,7 +53,7 @@ jobs:
         run: |
           pytest -q tests/behavior/test_behavior_baseline.py -m primary \
             --behavior-results=behavior-primary.json
-      - name: Test CSV skill generalization
+      - name: Test learned procedure transfer on CSV
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           BEHAVIOR_CI_REQUIRED: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
