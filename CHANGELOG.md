@@ -28,6 +28,10 @@
 
 ### Added
 
+- Output contracts accept `list[...]` and `dict[..., ...]`, such as `dict[str, float]` or
+  `list[dict]`, checked element by element; the repair message names the first wrong
+  key, value or item, and the prompt shows the full type (#120).
+
 - Semantic-model telemetry can say where a number came from (#121). `read_table` now
   leaves a record (table, requested rows, returned rows and columns), and a `dax`
   record lists the measures, `Table[Column]` columns and tables the query references,
@@ -47,6 +51,13 @@
   its message, and whether the result is verified (#122).
 
 ### Changed
+
+- An empty list or dict now fails any required output field, not only `output`,
+  `answer`, `result` and `report` (#120). A semantic-model run that could not find its
+  columns submitted `{}` for `sales_by_region` and came back as a success. Name the
+  fields where empty is a valid answer: `allow_empty={"anomalies"}` (or
+  `allow_empty=True` for every field but the core names). A typo in `allow_empty` is an
+  error when the run starts, and a rejected empty field logs how to allow it, once per run.
 
 - A validator's rejection reads "rejected by the output validator" and names the
   output fields its message mentions. It used to say "output-format validator" and

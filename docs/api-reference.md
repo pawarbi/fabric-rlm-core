@@ -84,7 +84,7 @@ RLM(
     reserve_finalize_turns=0, recover_worker_timeouts=1, skills_as_cards=False,
     block_network=False, max_prompt_tokens=None, digest_after_turn=None,
     output_validator=None, output_validator_context=None,
-    validator_errors="reject", validator_timeout=None,
+    validator_errors="reject", validator_timeout=None, allow_empty=False,
     analytical_integrity=True, halve_max_iter_on_retry=True, engine="auto",
     adaptive=None, inner_engine="v6-custom", stuck_loop_threshold=3,
     tools=None, security=None, max_submit_bytes=67108864,
@@ -158,6 +158,7 @@ See the [skills guide](skills-guide.md) for skill loading, presentation, and rou
 | `output_validator_context` | `None` | Host callable `(payload, context) -> None`, after payload validator passes. Same outcomes as `output_validator`. Default-engine context keys: `inputs`, `state`, `turn`, `trajectory`; DSPy keys: `inputs`, `attempt`, `prediction`, `trajectory`. State is a serialized snapshot, not live worker objects; DSPy trajectory is not yet populated with the current prediction's events at this hook. No built-in `source`/`source_frames` context keys: access your aliases through `context["inputs"]`. | Use when checking against original inputs, e.g. compare a count with `len(context["inputs"]["rows"])` for a supplied list. Leave unset for payload-only rules; branch explicitly for engine-specific context. |
 | `validator_errors` | `"reject"` | What happens when `output_validator` or `output_validator_context` cannot check an answer (it raises something other than `AssertionError`, or times out). `"reject"`: the answer is not accepted, and two failures in a row stop the run. `"accept"`: the answer is accepted with a warning and `result.verified` is `False` (the behaviour before 0.6.8). | Keep `"reject"`. Use `"accept"` only for an advisory check whose failure should not block an answer. |
 | `validator_timeout` | `None` | Seconds a user validator may run; past it, the check counts as not run (see `validator_errors`). The validator runs on a daemon thread, so a hung reference query cannot block the process. | Set it when a validator queries a source that can hang, such as a reference DAX query. |
+| `allow_empty` | `False` | Output fields that may be submitted as an empty list or dict, as a collection of names, or `True` for every field except `output`, `answer`, `result` and `report` (name those explicitly). Otherwise an empty container fails a required field. Names are checked against the declared outputs when the run starts. | Name a field when "nothing found" is a valid answer for it, e.g. `allow_empty={"anomalies"}`. |
 | `analytical_integrity` | `True` | `True`/`"repair"` runs heuristic checks with at most two rejections, then may accept unresolved findings; `"strict"` keeps rejecting detected issues within the engine's retry budget; `False`/`"off"` disables. Normalization also accepts `None` as repair and case-insensitive boolean-like strings. `FABRIC_RLM_ANALYTICAL_INTEGRITY` can disable or force strict. Screens do not prove correctness, may fail open on internal exceptions, and have less trace evidence during DSPy validation. | Keep enabled; use `"strict"` when detected unresolved issues should keep triggering repair even at the risk of no answer. Disable only for an understood false positive or controlled comparison. |
 | `security` | `None` | `SecurityPolicy` instance; `None` selects **`SecurityPolicy.default()`**, not disabled protection. Default-on AST restrictions and worker environment scrubbing; `SecurityPolicy.disabled()` opts out. Policy collection fields are tuples; violation modes are `"feedback"`/`"raise"`. This is defense in depth, not an OS sandbox, filesystem isolation, or a guarantee that an exception escapes every engine wrapper. Trusted host tools/validators remain privileged. | Leave `None` to retain protection. Customize a policy for a reviewed restriction/allowance; do not disable it merely to make generated code pass. Use OS isolation for stronger containment. |
 | `block_network` | `False` | Opt-in Python socket-connect guard in the default execution worker and DSPy skill-verifier worker. The current DSPy execution interpreter does **not** receive this flag. Loopback remains allowed; parent LM calls/host tools are outside it. Explicit `sub_lm` plus `True` raises even on DSPy; implicitly inherited specs do not raise but default-worker remote calls can fail. Not an OS firewall: native extensions/direct low-level sockets and already-local data are not contained. | Enable as an extra guard for default-engine analysis of already-local data that needs no remote worker calls. Leave default when remote source/helper access is required; never treat it as task-wide network isolation. |
@@ -173,18 +174,21 @@ See the [skills guide](skills-guide.md) for skill loading, presentation, and rou
 ### Output Contracts
 
 Both ordinary engines validate declared fields: missing values, `None`, blank
-strings, and blank bytes fail. Empty containers fail for names `output`, `answer`,
-`result`, and `report` (case-insensitive); specific fields such as `items` may
-legitimately be empty. Name-only outputs do not enforce types or business rules.
+strings, blank bytes and empty containers fail. A field where an empty list or
+dict is a valid answer ("no anomalies found") must be named in `allow_empty`.
+Name-only outputs do not enforce types or business rules.
 
-Typed mappings accept concrete classes, not parameterized generics such as
-`list[str]` or union annotations. For `bool`, `bytes`, `dict`, `float`, `int`,
+Typed mappings accept concrete classes and `list[...]` / `dict[..., ...]` of
+them, such as `dict[str, float]` or `list[dict]`, checked element by element
+(the first wrong key, value or item is named in the repair message). Unions,
+`Optional`, `tuple[...]` and `set[...]` are not supported: the payload crosses
+the worker boundary as JSON, where tuples and sets arrive as lists. For `bool`, `bytes`, `dict`, `float`, `int`,
 `list`, `set`, `str`, and `tuple`, checking is **exact type identity**, not
 `isinstance`: `True` fails an `int` contract, `1` fails a `float` contract, and
 subclasses fail a built-in contract. Other classes use `isinstance`.
 Checks apply to the received payload: serialization can turn tuples/sets into
 lists, bytes into hex strings, and custom objects into markers. Declaring a class
-does not add transport support or recursively validate container members.
+does not add transport support.
 
 Assertion rejection produces repair feedback, not guaranteed repair. Inspect
 `result.submitted`, `result.failure_reason`, `result.payload`, and
@@ -195,7 +199,7 @@ before publishing or taking side effects.
 
 ### Experimental Adaptive
 
-The nested `adaptive` dictionary is separate from the 37-name public inventory.
+The nested `adaptive` dictionary is separate from the 40-name public inventory.
 Current wiring recognizes policy/budget objects and options such as `strong_lm`,
 `parallel_rollouts`, `feedback_injection`, `skip_more_turns_when_submitted`,
 `max_attempts`, `max_total_turns`, `max_parallel`, `max_wall_seconds`, `validator`,

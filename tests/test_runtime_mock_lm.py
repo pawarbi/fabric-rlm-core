@@ -130,12 +130,16 @@ def verify(payload):
     assert history[-1]["turn"] == 1
 
 
-def test_submit_validation_allows_empty_specific_collection_outputs() -> None:
+def test_submit_validation_allows_empty_collections_only_where_declared() -> None:
+    # An empty container fails a required field unless the caller allows it (#120).
     lm = ScriptedLM(["```python\nSUBMIT(citations=[])\n```"])
     rlm = RLM.from_task("Return citations, possibly empty.", outputs=["citations"], lm=lm, max_turns=1, timeout=5)
+    assert not rlm.run().submitted
 
+    lm = ScriptedLM(["```python\nSUBMIT(citations=[])\n```"])
+    rlm = RLM.from_task("Return citations, possibly empty.", outputs=["citations"], lm=lm, max_turns=1, timeout=5,
+                        allow_empty={"citations"})
     result = rlm.run()
-
     assert result.submitted
     assert result.payload == {"citations": []}
 

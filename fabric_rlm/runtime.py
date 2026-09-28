@@ -14,6 +14,7 @@ import uuid
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+import typing
 from typing import TYPE_CHECKING, Any
 
 from .interpreter import ExecResult, Interpreter, WorkerProtocolError, WorkerTimeout
@@ -1132,6 +1133,7 @@ class RLM:
         output_validator_context: Callable[[Mapping[str, Any], Mapping[str, Any]], None] | None = None,
         validator_errors: str = "reject",
         validator_timeout: float | None = None,
+        allow_empty: bool | Iterable[str] = False,
         analytical_integrity: bool | str = True,
         halve_max_iter_on_retry: bool = True,
         engine: str = "auto",
@@ -1162,6 +1164,19 @@ class RLM:
         self.validator_errors = validator_errors
         self.validator_timeout = float(validator_timeout) if validator_timeout is not None else None
         self._validator_error_streaks: dict[str, int] = {}
+        # Empty containers fail every required output unless the caller says an
+        # empty answer is valid for that field ("no anomalies found").
+        if isinstance(allow_empty, bool):
+            self.allow_empty: bool | frozenset[str] = allow_empty
+        elif isinstance(allow_empty, str):
+            self.allow_empty = frozenset({allow_empty})
+        else:
+            try:
+                self.allow_empty = frozenset(str(name) for name in allow_empty)
+            except TypeError:
+                raise ValueError(
+                    f"allow_empty must be True, False or a collection of output field names, got {allow_empty!r}"
+                ) from None
         # ---- engine validation (early, before any heavy resolution) ---------
         # Resolve aliases ('default' -> 'v6-custom', 'dspy' -> 'v7-dspy')
         # before any further engine-based logic so internal switches keep
@@ -1343,6 +1358,7 @@ class RLM:
                 output_validator_context=output_validator_context,
                 validator_errors=validator_errors,
                 validator_timeout=validator_timeout,
+                allow_empty=allow_empty,
                 analytical_integrity=analytical_integrity,
                 halve_max_iter_on_retry=halve_max_iter_on_retry,
                 stuck_loop_threshold=stuck_loop_threshold,
@@ -2308,6 +2324,14 @@ class RLM:
             )
 
         required_output_fields = _required_output_fields(self.signature, self._inline_task, self._inline_outputs)
+        allowed = getattr(self, "allow_empty", False)
+        if isinstance(allowed, frozenset):
+            unknown = sorted(allowed - set(required_output_fields))
+            if unknown:
+                raise ValueError(
+                    f"allow_empty names {unknown}, which are not output fields of this task "
+                    f"({list(required_output_fields)})."
+                )
 
         if self.engine == "v7-dspy":
             return self._attach_knowledge_metadata(
@@ -2465,6 +2489,7 @@ class RLM:
             verifier_repair_history: list[dict[str, Any]] = []
             self._repair_counts = {}
             self._validator_error_streaks = {}
+            self._empty_hinted = set()
             self._integrity_rejections = 0
             timeout_recoveries = 0
 
@@ -2769,10 +2794,13 @@ class RLM:
                         result.submit_payload,
                         required_output_fields,
                         self._inline_output_types,
+                        allow_empty=getattr(self, "allow_empty", False),
                     )
                     if result.submitted
                     else OutputValidationResult()
                 )
+                if result.submitted:
+                    self._hint_rejected_empties(result.submit_payload, validation)
 
                 trajectory.append(
                     TurnRecord(
@@ -3234,6 +3262,28 @@ class RLM:
             self._log_verifier(f"skill:{skill.name}", "error", "verifier raised")
         return None
 
+    def _hint_rejected_empties(self, payload: Mapping[str, Any] | None, validation: OutputValidationResult) -> None:
+        """Tell the developer, once per field per run, how to allow a valid empty answer."""
+        if validation.ok or not isinstance(payload, Mapping):
+            return
+        hinted = getattr(self, "_empty_hinted", None)
+        if hinted is None:
+            hinted = self._empty_hinted = set()
+        for name, value in payload.items():
+            if (
+                name not in hinted
+                and isinstance(value, (Mapping, list, tuple, set, frozenset))
+                and not value
+                and any(f"{name!r} is an empty" in error for error in validation.errors)
+            ):
+                hinted.add(name)
+                logger.warning(
+                    "Output field %r was submitted empty and rejected. If an empty value is a valid answer "
+                    "for it (for example, nothing was found), pass allow_empty={%r}.",
+                    name,
+                    name,
+                )
+
     def _call_user_validator(self, validator: Callable[..., Any], *args: Any) -> tuple[str, str]:
         """Run a user validator and classify the outcome as passed, rejected or error.
 
@@ -3691,6 +3741,7 @@ class RLM:
         MAX_VERIFIER_RETRIES = 2
         verifier_repair_history: list[dict[str, Any]] = []
         self._validator_error_streaks = {}
+        self._empty_hinted = set()
         current_inputs = dict(bound_inputs)
         max_iter = self.max_turns
         prediction = None
@@ -3766,7 +3817,9 @@ class RLM:
                 payload,
                 required_output_fields,
                 self._inline_output_types,
+                allow_empty=getattr(self, "allow_empty", False),
             )
+            self._hint_rejected_empties(payload, validation)
             if not validation.ok:
                 last_failure_reason = "; ".join(validation.errors)
                 if attempt < MAX_VERIFIER_RETRIES:
@@ -4215,15 +4268,19 @@ def _select_execution(text: str) -> tuple[str | None, list[str]]:
 def validate_submit_payload(
     payload: Mapping[str, Any] | None,
     required_fields: Iterable[str],
-    required_types: Mapping[str, type] | None = None,
+    required_types: Mapping[str, Any] | None = None,
+    *,
+    allow_empty: bool | Iterable[str] = False,
 ) -> OutputValidationResult:
     """Validate declared SUBMIT outputs before accepting success.
 
-    Declared output fields are required. ``None`` is invalid for every declared
-    field, blank strings/bytes are invalid, and empty containers are invalid for
-    core final-output names (``output``, ``answer``, ``result``, ``report``).
-    Empty lists/dicts on more specific fields are allowed so tasks can validly
-    return "no items found" without inventing placeholder content.
+    Declared output fields are required. ``None`` and blank strings/bytes are
+    invalid for every field, and so are empty containers, unless the field is
+    named in ``allow_empty`` (or ``allow_empty=True``, which allows every field
+    except the core final-output names ``output``, ``answer``, ``result`` and
+    ``report``; name those explicitly to allow them). Types may be concrete
+    classes or ``list[...]`` / ``dict[..., ...]`` of them, checked element by
+    element.
     """
 
     fields = _normalize_required_fields(required_fields)
@@ -4241,28 +4298,42 @@ def validate_submit_payload(
             errors.append(f"Missing required output field {name!r}.")
             continue
         value = payload[name]
-        error = _validate_required_value(name, value)
+        error = _validate_required_value(name, value, _empty_allowed(name, allow_empty))
         if error:
             errors.append(error)
             continue
         expected_type = types.get(name)
-        if expected_type is not None and not _matches_output_type(value, expected_type):
-            errors.append(
-                f"Required output field {name!r} must be "
-                f"{expected_type.__name__}, got {type(value).__name__}."
-            )
+        if expected_type is not None:
+            problem = _output_type_problem(value, expected_type)
+            if problem:
+                errors.append(f"Required output field {name!r} must be {output_type_label(expected_type)}, {problem}.")
     return OutputValidationResult(tuple(errors))
 
 
-def _validate_required_value(name: str, value: Any) -> str | None:
+def _empty_allowed(name: str, allow_empty: bool | Iterable[str]) -> bool:
+    if allow_empty is True:
+        return not _is_core_final_output_field(name)
+    if not allow_empty:
+        return False
+    if isinstance(allow_empty, str):
+        return name == allow_empty
+    return name in set(allow_empty)
+
+
+def _validate_required_value(name: str, value: Any, empty_allowed: bool = False) -> str | None:
     if value is None:
         return f"Required output field {name!r} is None."
     if isinstance(value, str) and not value.strip():
         return f"Required output field {name!r} is a blank string."
     if isinstance(value, bytes) and not value.strip():
         return f"Required output field {name!r} is blank bytes."
-    if _is_core_final_output_field(name) and isinstance(value, (Mapping, list, tuple, set, frozenset)) and not value:
-        return f"Required core output field {name!r} is an empty {type(value).__name__}."
+    if isinstance(value, (Mapping, list, tuple, set, frozenset)) and not value and not empty_allowed:
+        if _is_core_final_output_field(name):
+            return f"Required core output field {name!r} is an empty {type(value).__name__}."
+        return (
+            f"Required output field {name!r} is an empty {type(value).__name__}. "
+            "Fill it from the data; an empty value is not accepted for this field."
+        )
     return None
 
 
@@ -4270,11 +4341,58 @@ def _is_core_final_output_field(name: str) -> bool:
     return name.strip().lower() in CORE_FINAL_OUTPUT_FIELDS
 
 
-def _matches_output_type(value: Any, expected_type: type) -> bool:
-    strict_builtins = {bool, bytes, dict, float, int, list, set, str, tuple}
-    if expected_type in strict_builtins:
-        return type(value) is expected_type
-    return isinstance(value, expected_type)
+_STRICT_BUILTINS = frozenset({bool, bytes, dict, float, int, list, set, str, tuple})
+
+
+def output_type_label(expected_type: Any) -> str:
+    """How an output type reads in prompts and messages: ``float``, ``dict[str, float]``."""
+    if typing.get_origin(expected_type) is not None:
+        args = ", ".join(output_type_label(arg) for arg in typing.get_args(expected_type))
+        return f"{typing.get_origin(expected_type).__name__}[{args}]"
+    return getattr(expected_type, "__name__", str(expected_type))
+
+
+def _output_type_problem(value: Any, expected_type: Any) -> str | None:
+    """What is wrong with ``value`` for ``expected_type``, or None. Checks list/dict elements."""
+    origin = typing.get_origin(expected_type)
+    if origin is None:
+        ok = type(value) is expected_type if expected_type in _STRICT_BUILTINS else isinstance(value, expected_type)
+        return None if ok else f"got {type(value).__name__}"
+    if type(value) is not origin:
+        return f"got {type(value).__name__}"
+    args = typing.get_args(expected_type)
+    if origin is list:
+        for index, item in enumerate(value):
+            problem = _output_type_problem(item, args[0])
+            if problem:
+                return f"item {index} {problem}"
+        return None
+    key_type, value_type = args
+    for key, item in value.items():
+        problem = _output_type_problem(key, key_type)
+        if problem:
+            return f"key {key!r} {problem}"
+        problem = _output_type_problem(item, value_type)
+        if problem:
+            return f"value for key {key!r} {problem}"
+    return None
+
+
+def _matches_output_type(value: Any, expected_type: Any) -> bool:
+    return _output_type_problem(value, expected_type) is None
+
+
+def _supported_output_type(expected_type: Any) -> bool:
+    """A concrete class, or list[T] / dict[K, V] of supported types."""
+    origin = typing.get_origin(expected_type)
+    if origin is None:
+        return isinstance(expected_type, type)
+    args = typing.get_args(expected_type)
+    if origin is list:
+        return len(args) == 1 and _supported_output_type(args[0])
+    if origin is dict:
+        return len(args) == 2 and all(_supported_output_type(arg) for arg in args)
+    return False
 
 
 def _normalize_required_fields(required_fields: Iterable[str]) -> tuple[str, ...]:
@@ -4289,19 +4407,19 @@ def _normalize_required_fields(required_fields: Iterable[str]) -> tuple[str, ...
 
 
 def _normalize_inline_outputs(
-    outputs: list[str] | Mapping[str, type] | None,
-) -> tuple[list[str], dict[str, type]]:
+    outputs: list[str] | Mapping[str, Any] | None,
+) -> tuple[list[str], dict[str, Any]]:
     if outputs is None:
         return [], {}
     if isinstance(outputs, Mapping):
         fields = list(_normalize_required_fields(outputs))
         types: dict[str, type] = {}
         for name, expected_type in outputs.items():
-            if not isinstance(expected_type, type):
+            if not _supported_output_type(expected_type):
                 raise TypeError(
-                    f"Output type for {name!r} must be a Python type "
-                    "(a concrete class; parameterized generics and unions are not supported), "
-                    f"got {type(expected_type).__name__}."
+                    f"Output type for {name!r} must be a Python type: a concrete class such as float, or list[...] / "
+                    "dict[..., ...] of them, e.g. dict[str, float] or list[dict]. Unions, Optional, "
+                    f"tuple[...] and set[...] are not supported; got {expected_type!r}."
                 )
             types[name] = expected_type
         return fields, types

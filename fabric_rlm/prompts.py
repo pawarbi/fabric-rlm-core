@@ -72,7 +72,7 @@ turns. Build your answer incrementally.
 
 {output_listing}
 
-Submit every listed field. Required fields may not be None or blank strings. Fields named output, answer, result, or report may not be empty containers.
+Submit every listed field. Required fields may not be None, blank strings or empty containers unless the task says an empty value is allowed.
 
 ## Answering rules
 
@@ -85,6 +85,17 @@ Submit every listed field. Required fields may not be None or blank strings. Fie
 Begin. Write your first code block.
 """
 
+
+
+
+def _type_label(expected_type: Any) -> str:
+    """``float``, or ``dict[str, float]`` for a parameterized type."""
+    import typing
+
+    origin = typing.get_origin(expected_type)
+    if origin is not None:
+        return f"{origin.__name__}[{', '.join(_type_label(a) for a in typing.get_args(expected_type))}]"
+    return getattr(expected_type, "__name__", str(expected_type))
 
 def build_system_prompt(
     *,
@@ -105,7 +116,7 @@ def build_system_prompt(
     input_listing = "\n".join(f"  {name}: {_describe_value(value)}" for name, value in inputs.items())
     output_types = inline_output_types or {}
     output_listing = "\n".join(
-        f"  - {name}: {output_types[name].__name__}" if name in output_types else f"  - {name}"
+        f"  - {name}: {_type_label(output_types[name])}" if name in output_types else f"  - {name}"
         for name in outputs
     )
     # Learned guidance (retrieved lessons from a knowledge package) sits
