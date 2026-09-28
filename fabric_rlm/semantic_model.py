@@ -222,6 +222,87 @@ def _query_fingerprint(query: Any) -> str:
     return sha256(str(query).encode("utf-8")).hexdigest()[:16]
 
 
+_DAX_COMMENT = re.compile(r"//[^\n]*|--[^\n]*|/\*.*?\*/", re.S)
+_DAX_STRING = re.compile(r'"(?:[^"]|"")*"')
+_DAX_BRACKET = r"\[((?:[^\]]|\]\])+)\]"
+_DAX_QUALIFIED = re.compile(r"(?:'((?:[^']|'')+)'|\b([A-Za-z_][A-Za-z0-9_]*))" + _DAX_BRACKET)
+_DAX_UNQUALIFIED = re.compile(_DAX_BRACKET)
+_DAX_DEFINED_MEASURE = re.compile(
+    r"\bMEASURE\s+(?:'((?:[^']|'')+)'|([A-Za-z_][A-Za-z0-9_]*))\s*" + _DAX_BRACKET, re.IGNORECASE
+)
+_DAX_QUOTED_TABLE = re.compile(r"'((?:[^']|'')+)'")
+_DAX_IDENTIFIER = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+
+
+def dax_references(query: str, catalog: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The model names a DAX query refers to: measures, ``Table[Column]`` columns and tables.
+
+    Names only, never values: comments and string literals (filter values,
+    column aliases such as ``"Revenue"``) are removed before parsing.
+    ``Table[Column]`` and ``'Table'[Column]`` are columns. A bare
+    ``[Name]`` is a measure, unless it names an alias the query defines. With
+    the model's name catalog, names are resolved to their canonical spelling,
+    and bare names that are not model measures (a measure the query defines,
+    a column in row context) are listed under ``other_refs`` instead;
+    ``names_resolved`` says which happened.
+    """
+    text = _DAX_COMMENT.sub(" ", str(query))
+    aliases = {m.group(0)[1:-1].replace('""', '"').casefold() for m in _DAX_STRING.finditer(text)}
+    text = _DAX_STRING.sub(" ", text)
+
+    # DEFINE MEASURE Sales[Margin %] = ... defines a query-scoped measure: not a column,
+    # and later bare [Margin %] references are not model measures either.
+    defined: dict[str, str] = {}
+    for match in _DAX_DEFINED_MEASURE.finditer(text):
+        name = match.group(3).replace("]]", "]")
+        defined.setdefault(name.casefold(), name)
+    text = _DAX_DEFINED_MEASURE.sub(" ", text)
+
+    columns: dict[str, tuple[str, str]] = {}
+    tables: dict[str, str] = {}
+    for match in _DAX_QUALIFIED.finditer(text):
+        table = (match.group(1) or "").replace("''", "'") or match.group(2)
+        column = match.group(3).replace("]]", "]")
+        columns.setdefault(f"{table}[{column}]".casefold(), (table, column))
+        tables.setdefault(table.casefold(), table)
+    rest = _DAX_QUALIFIED.sub(" ", text)
+    bare: dict[str, str] = {}
+    for match in _DAX_UNQUALIFIED.finditer(rest):
+        name = match.group(1).replace("]]", "]")
+        if name.casefold() not in aliases and name.casefold() not in defined:
+            bare.setdefault(name.casefold(), name)
+    for match in _DAX_QUOTED_TABLE.finditer(rest):
+        name = match.group(1).replace("''", "'")
+        tables.setdefault(name.casefold(), name)
+
+    resolved = bool(catalog) and isinstance(catalog.get("measures"), Mapping)
+    other: list[str] = list(defined.values())
+    if resolved:
+        known_measures = catalog["measures"]
+        known_columns = catalog.get("columns") or {}
+        known_tables = {table.casefold(): table for table, _column in known_columns.values()}
+        measures = []
+        for key, name in bare.items():
+            if key in known_measures:
+                measures.append(known_measures[key])
+            else:
+                other.append(name)
+        columns = {key: known_columns.get(key, value) for key, value in columns.items()}
+        tables = {key: known_tables.get(key, value) for key, value in tables.items()}
+        for word in _DAX_IDENTIFIER.findall(rest):
+            if word.casefold() in known_tables:
+                tables.setdefault(word.casefold(), known_tables[word.casefold()])
+    else:
+        measures = list(bare.values())
+    return {
+        "measures": sorted(set(measures), key=str.casefold),
+        "columns": sorted({f"{table}[{column}]" for table, column in columns.values()}, key=str.casefold),
+        "tables": sorted(set(tables.values()), key=str.casefold),
+        "other_refs": sorted(set(other), key=str.casefold),
+        "names_resolved": resolved,
+    }
+
+
 def _measure_observations(frame: Any, plan: "_AggregatePlan") -> dict[str, Any]:
     """Value-free facts about the measures in an aggregate result.
 
@@ -893,6 +974,13 @@ class SemanticModel:
             "query_chars": len(str(query)),
             "executed": True,
         }
+        # Names, never values: which measures, columns and tables the query used,
+        # so a provenance check can tell [Net Sales] from SUM(Sales[Amount]).
+        # Telemetry must never break a query, so any failure here is swallowed.
+        try:
+            record.update(dax_references(query, self._catalog_for_telemetry()))
+        except Exception as exc:  # noqa: BLE001 - telemetry is best effort
+            _log.debug("could not extract DAX references: %s", exc)
         try:
             result = self._evaluate(query)
         except Exception as exc:
@@ -1048,7 +1136,32 @@ class SemanticModel:
         kwargs: dict[str, Any] = dict(self._kw)
         if num_rows is not None:
             kwargs["num_rows"] = num_rows
-        return self._fabric.read_table(self.dataset, table, **kwargs)
+        started = time.monotonic()
+        record: dict[str, Any] = {
+            "query_type": "read_table",
+            "table": str(table),
+            "num_rows": num_rows,
+            "executed": True,
+        }
+        try:
+            result = self._fabric.read_table(self.dataset, table, **kwargs)
+        except Exception as exc:
+            record.update(
+                execution_seconds=round(time.monotonic() - started, 3),
+                reason="execution_error",
+                error=f"{type(exc).__name__}: {exc}"[:300],
+            )
+            self._record_query(record)
+            raise
+        elapsed = round(time.monotonic() - started, 3)
+        record.update(
+            execution_seconds=elapsed,
+            total_seconds=elapsed,
+            returned_rows=_row_count(result),
+            column_count=len(list(getattr(result, "columns", []))),
+        )
+        self._record_query(record)
+        return result
 
     # -- bounded aggregation ------------------------------------------------
 
@@ -1193,12 +1306,16 @@ class SemanticModel:
 
     @property
     def query_telemetry(self) -> tuple[dict[str, Any], ...]:
-        """Per-query records from :meth:`aggregate`, oldest first.
+        """Per-query records from :meth:`aggregate`, :meth:`measure`, :meth:`dax` and :meth:`read_table`, oldest first.
 
-        Each record carries the grouping/measure counts, the estimated group
-        count, preflight and execution seconds, whether the query executed
-        and, when it did not, the reason (``cardinality_limit``,
-        ``preflight_timeout``, ``validation``).
+        Every record has ``query_type``, whether it ``executed``, timings,
+        ``returned_rows`` and, when it did not run or failed, the ``reason``
+        (``cardinality_limit``, ``preflight_timeout``, ``validation``,
+        ``execution_error``). ``aggregate`` and ``measure`` records carry the
+        measures, groupings and filter columns; ``dax`` records carry the
+        measures, columns and tables the query references (see
+        :func:`dax_references`); ``read_table`` records carry the table and the
+        row and column counts. Names only, never values.
         """
         log = getattr(self, "_query_telemetry", None)
         return tuple(dict(item) for item in (log or ()))
@@ -1220,6 +1337,15 @@ class SemanticModel:
         return _env_positive_int(MAX_GROUPS_ENV, DEFAULT_MAX_GROUPS)
 
     # -- name resolution --------------------------------------------------
+
+    def _catalog_for_telemetry(self) -> dict[str, dict[str, Any]] | None:
+        """The name catalog if a name lookup already loaded it, else None.
+
+        Telemetry is observational: it never fetches the catalog itself, so a
+        ``dax`` call makes exactly the engine calls it made before, and a model
+        whose measure list needs extra permissions behaves the same.
+        """
+        return getattr(self, "_catalog", None)
 
     def _catalog_names(self) -> dict[str, dict[str, Any]]:
         """Case-insensitive lookups for measure names and Table[Column] refs.

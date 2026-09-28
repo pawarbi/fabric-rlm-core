@@ -812,6 +812,26 @@ raises the ceiling for a model that handles wide grains well, and
 `arr.query_telemetry` records the estimate, timing, and outcome of each call.
 `arr.dax(...)` is unchanged and runs whatever it is given.
 
+Every data call on the handle leaves a record, names only and never values:
+`aggregate` and `measure` record the measures, groupings and filter columns;
+`dax` records the measures, `Table[Column]` columns and tables its query
+references; `read_table` records the table and the row and column counts. In a
+run, each turn's records are on `result.turns[i].source_calls`, so an
+`output_validator_context` can check where a number came from:
+
+```python
+def used_net_sales(payload, context):
+    calls = [c for t in context["trajectory"].turns for c in (t.source_calls or [])]
+    assert any("Net Sales" in (c.get("measures") or []) for c in calls), (
+        "net_sales must come from the [Net Sales] measure, not a sum of a raw column")
+```
+
+A bare `[Name]` in DAX is taken as a measure unless the query defines it as an
+alias or a query-scoped measure. Once `aggregate` has loaded the model's name
+catalog, names are resolved to their canonical spelling and bare names that are
+not model measures are listed under `other_refs`; `names_resolved` says which.
+Telemetry never makes an extra call to the model.
+
 `order_by` names one requested measure or groupby column. Besides a string it
 accepts the forms generated code tends to write: `("ARR $", "desc")`,
 `["ARR $"]` and `[("ARR $", "desc")]`. Several sort keys are refused with a
