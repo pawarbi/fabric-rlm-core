@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.6.8 - 2026-09-28 - validators fail closed, empty outputs are re-checked, and semantic-model numbers say where they came from
+
+Everything here came from issues #119 to #122, each reproduced live on a semantic model before it was fixed.
+A validator that crashed or returned False used to let a wrong answer through; it now rejects it.
 
 ### Fixed
 
