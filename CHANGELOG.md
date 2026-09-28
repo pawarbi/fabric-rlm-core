@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- A run stopped by a validator that could not check the answer now sets
+  `result.failure_reason = "validator_error"`, like every other way a run stops; it
+  was `None`, with the reason only in `trajectory.metadata["stopped_reason"]`.
+
 - Validators fail closed (#119). An `output_validator` or `output_validator_context`
   that raised anything other than `AssertionError` was logged and the answer accepted,
   and one that returned `False` was ignored, so the answer was recorded as verified.
@@ -28,6 +32,15 @@
 
 ### Added
 
+- `result.empty_outputs`: the output fields that came back as an empty list or dict,
+  however they were accepted, also shown in `inspect()`. An author often cannot know
+  in advance whether a field will be empty (was there any 2019 data?); this is where
+  the run says so.
+
+- Output contracts accept `list[...]` and `dict[..., ...]`, such as `dict[str, float]` or
+  `list[dict]`, checked element by element; the repair message names the first wrong
+  key, value or item, and the prompt shows the full type (#120).
+
 - Semantic-model telemetry can say where a number came from (#121). `read_table` now
   leaves a record (table, requested rows, returned rows and columns), and a `dax`
   record lists the measures, `Table[Column]` columns and tables the query references,
@@ -47,6 +60,17 @@
   its message, and whether the result is verified (#122).
 
 ### Changed
+
+- An empty list or dict in a required output field is re-checked instead of accepted
+  silently (#120). A semantic-model run that could not find its columns submitted `{}`
+  for `sales_by_region` and came back as a success. Now the run is asked to check the
+  query that should fill the field and told not to invent values; the same empty value
+  again is accepted and listed in `trajectory.metadata["empty_outputs_confirmed"]`, with
+  a warning. Refusing empties outright was tried and was worse: live, GPT-5.1 correctly
+  submitted `{}` for 2019 revenue (there is no 2019 data), was told to fill it, and then
+  submitted other years' revenue, in 2 of 2 runs. `allow_empty` names fields where empty
+  is expected (accepted at once), `True` allows every field but the core names, and
+  `False` never accepts an empty value. A typo in `allow_empty` is an error at run start.
 
 - A validator's rejection reads "rejected by the output validator" and names the
   output fields its message mentions. It used to say "output-format validator" and

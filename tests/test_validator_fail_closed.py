@@ -96,6 +96,7 @@ def test_a_crashing_validator_never_lets_an_answer_through(orders):
     result, lm = run(orders, turns=(GROSS, GROSS, GROSS, GROSS), output_validator=assumes_nested)
     assert result.submitted is False and result.payload is None
     assert result.verified is False
+    assert result.failure_reason == "validator_error"
     assert result.trajectory.metadata["stopped_reason"] == "validator_error"
     assert "TypeError" in result.trajectory.metadata["validator_error"]
     assert len(result.turns) == 2   # stopped after two failures, not after max_turns
