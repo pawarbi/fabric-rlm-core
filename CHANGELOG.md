@@ -10,7 +10,7 @@
   Checked live on a semantic model with GPT-5.1: with a validator that crashed or
   returned `False`, a wrong answer (canceled orders included) came back as a success
   in 4 of 4 runs, twice marked verified. Now a `False` return rejects like an
-  assertion, and a crash or timeout rejects because the check did not run. Two such
+  assertion (and warns once, since the model is not told why), and a crash or timeout rejects because the check did not run. Two such
   failures in a row stop the run without an answer (`stopped_reason="validator_error"`)
   rather than spending the remaining turns on a check the model cannot fix.
   `validator_errors="accept"` restores the old behaviour, with a warning.

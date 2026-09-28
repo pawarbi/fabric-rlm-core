@@ -73,8 +73,11 @@ def is_net(payload):
     assert payload["net_sales"] == TRUTH, "net_sales must exclude returned orders"
 
 
-def test_a_false_return_rejects_and_the_right_answer_is_verified(orders):
-    result, lm = run(orders, output_validator=returns_false)
+def test_a_false_return_rejects_and_the_right_answer_is_verified(orders, caplog):
+    with caplog.at_level(logging.WARNING, logger="fabric_rlm.runtime"):
+        result, lm = run(orders, output_validator=returns_false)
+    warnings = [r.message for r in caplog.records if "returned False" in r.message]
+    assert len(warnings) == 1 and "Raise AssertionError with a message" in warnings[0]
     assert result.submitted and result.payload == {"net_sales": TRUTH}
     assert result.verified is True
     assert any("returned False" in prompt for prompt in lm.prompts)

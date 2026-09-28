@@ -3311,6 +3311,13 @@ class RLM:
             text = f"could not check this answer ({message})"
         else:
             streaks[key] = 0
+            if not message and not streaks.get(f"{key}:warned_false"):
+                streaks[f"{key}:warned_false"] = 1
+                logger.warning(
+                    "The %s returned False. The answer is rejected, but the model is not told why, so it "
+                    "can only guess. Raise AssertionError with a message that says what is wrong instead.",
+                    label,
+                )
             text = message or f"the {label} returned False without saying why"
             self._log_verifier(key, "rejected", text)
             detail = f"AssertionError: {message}" if message else (
