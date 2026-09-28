@@ -428,6 +428,7 @@ class RunInspector:
         metrics = (
             ("Status", status),
             ("Verified", "yes" if verified else "no"),
+            ("Empty outputs", ", ".join(getattr(self.result, "empty_outputs", []) or []) or "none"),
             ("Turns", facts.get("turns")),
             ("Errors", facts.get("errors")),
             ("LM time", _format_number(facts.get("lm_seconds"), suffix="s")),

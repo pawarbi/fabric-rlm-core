@@ -32,6 +32,11 @@
 
 ### Added
 
+- `result.empty_outputs`: the output fields that came back as an empty list or dict,
+  however they were accepted, also shown in `inspect()`. An author often cannot know
+  in advance whether a field will be empty (was there any 2019 data?); this is where
+  the run says so.
+
 - Output contracts accept `list[...]` and `dict[..., ...]`, such as `dict[str, float]` or
   `list[dict]`, checked element by element; the repair message names the first wrong
   key, value or item, and the prompt shows the full type (#120).

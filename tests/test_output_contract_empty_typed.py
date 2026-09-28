@@ -96,6 +96,7 @@ def test_an_empty_submission_is_rechecked_and_a_filled_one_accepted():
     assert result.submitted and result.payload == {"sales_by_region": {"North": 10.0}}
     assert any("is an empty dict" in prompt and "do not invent any" in prompt for prompt in lm.prompts)
     assert "empty_outputs_confirmed" not in result.trajectory.metadata
+    assert result.empty_outputs == []
 
 
 def test_a_confirmed_empty_is_accepted_and_recorded(caplog):
@@ -105,6 +106,8 @@ def test_a_confirmed_empty_is_accepted_and_recorded(caplog):
                           max_turns=3, timeout=60).run()
     assert result.submitted and result.payload == {"sales_by_region": {}}
     assert result.trajectory.metadata["empty_outputs_confirmed"] == ["sales_by_region"]
+    assert result.empty_outputs == ["sales_by_region"]
+    assert "Empty outputs" in result.inspect().to_html() and "sales_by_region" in result.inspect().to_html()
     assert sum("accepted empty after the run re-checked it" in r.message for r in caplog.records) == 1
 
 
@@ -124,6 +127,7 @@ def test_allow_empty_accepts_a_valid_empty_answer():
     result = RLM.task("List anomalies.", inputs={}, outputs={"anomalies": list}, lm=lm, max_turns=2,
                       timeout=60, allow_empty={"anomalies"}).run()
     assert result.submitted and result.payload == {"anomalies": []}
+    assert result.empty_outputs == ["anomalies"]   # allowed at once, still reported
 
 
 def test_a_typo_in_allow_empty_is_an_error_not_a_silent_no_op():

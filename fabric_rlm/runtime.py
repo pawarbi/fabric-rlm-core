@@ -625,6 +625,23 @@ class RLMResult:
         return not self.integrity_problems
 
     @property
+    def empty_outputs(self) -> list[str]:
+        """Output fields submitted as an empty list or dict, however they were accepted.
+
+        An empty field is accepted after the run re-checked it (listed in
+        ``trajectory.metadata["empty_outputs_confirmed"]``), or at once when
+        ``allow_empty`` names it. Either way it is an answer of "nothing", and a
+        caller should decide what that means before using the result.
+        """
+        if not self.submitted or not isinstance(self.payload, Mapping):
+            return []
+        return sorted(
+            str(name)
+            for name, value in self.payload.items()
+            if isinstance(value, (Mapping, list, tuple, set, frozenset)) and not value
+        )
+
+    @property
     def verified(self) -> bool:
         """True when the answer was submitted and checked.
 
