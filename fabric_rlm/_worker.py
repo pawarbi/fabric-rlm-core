@@ -218,6 +218,7 @@ def _install_runtime_api() -> None:
             "ABSTAIN": ABSTAIN,
             "predict": predict,
             "predict_sync": predict_sync,
+            "llm_map": llm_map,
             "load_skill": load_skill,
             "activate_skill": activate_skill,
             "list_skills": list_skills,
@@ -240,6 +241,7 @@ _SANDBOX_PUBLIC_NAMES: tuple[str, ...] = (
     "ABSTAIN",
     "predict",
     "predict_sync",
+    "llm_map",
     "load_skill",
     "activate_skill",
     "list_skills",
@@ -415,6 +417,111 @@ def predict_sync(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()
+
+
+class LLMMapResult(list):
+    """``llm_map`` output: a list aligned with the input items.
+
+    Each element is a dict of the requested output fields, or ``None`` for an
+    item that never produced a valid answer. ``errors`` lists those items as
+    ``{"index", "error"}``; ``stats`` has the counts, retries and seconds.
+    """
+
+    errors: list[dict[str, Any]]
+    stats: dict[str, Any]
+
+    def to_frame(self, items: Any = None) -> Any:
+        """The results as a DataFrame; pass the input DataFrame to join them onto it."""
+        import pandas as pd
+
+        fields = list(self.stats.get("output_fields") or [])
+        rows = [row if row is not None else {} for row in self]
+        frame = pd.DataFrame(rows)
+        for name in fields:
+            if name not in frame.columns:
+                frame[name] = None
+        if items is not None and isinstance(items, pd.DataFrame):
+            frame.index = items.index
+            return items.join(frame, rsuffix="_llm")
+        return frame
+
+
+_LLM_MAP_TYPE_NAMES = {str: "str", int: "int", float: "float", bool: "bool"}
+
+
+def _llm_map_output_spec(output: Any) -> dict[str, Any]:
+    if not isinstance(output, dict) or not output:
+        raise TypeError(
+            "llm_map output must be a dict of field -> type, e.g. "
+            "{'theme': ['Billing', 'Outage', 'Other'], 'urgent': bool, 'summary': str}"
+        )
+    spec: dict[str, Any] = {}
+    for name, kind in output.items():
+        if isinstance(kind, (list, tuple, set)) and kind and all(isinstance(c, str) for c in kind):
+            spec[name] = {"choices": list(kind)}
+        elif isinstance(kind, type) and kind in _LLM_MAP_TYPE_NAMES:
+            spec[name] = _LLM_MAP_TYPE_NAMES[kind]
+        elif isinstance(kind, str) and kind in _LLM_MAP_TYPE_NAMES.values():
+            spec[name] = kind
+        else:
+            raise TypeError(
+                f"llm_map output {name!r} must be str, int, float, bool or a list of allowed strings; got {kind!r}"
+            )
+    return spec
+
+
+def _llm_map_items(items: Any, columns: Any) -> list[Any]:
+    try:
+        import pandas as pd
+    except ImportError:  # pragma: no cover - pandas ships with the analytics extra
+        pd = None
+    if pd is not None and isinstance(items, pd.DataFrame):
+        frame = items[list(columns)] if columns else items
+        records = frame.to_dict(orient="records")
+        return [json.loads(json.dumps(r, default=str)) for r in records]
+    if pd is not None and isinstance(items, pd.Series):
+        return [v if isinstance(v, (str, int, float, bool)) or v is None else str(v) for v in items.tolist()]
+    if isinstance(items, (list, tuple)):
+        return [json.loads(json.dumps(v, default=str)) if isinstance(v, (dict, list, tuple)) else v for v in items]
+    raise TypeError("llm_map items must be a list, a pandas Series, or a pandas DataFrame")
+
+
+def llm_map(
+    items: Any,
+    instructions: str,
+    output: dict[str, Any],
+    *,
+    columns: list[str] | None = None,
+    concurrency: int = 8,
+    retries: int = 2,
+    batch_size: int = 1,
+) -> LLMMapResult:
+    """Apply one instruction to every item with an LM, in parallel, and validate each answer.
+
+    Runs on the host: the host handles concurrency, retries and validation, so
+    write ONE call instead of a batching loop. ``output`` maps field names to
+    ``str``, ``int``, ``float``, ``bool`` or a list of allowed strings.
+    ``batch_size`` > 1 sends that many items per LM call (cheaper for short
+    items); an item the batch answer misses or gets wrong is retried alone.
+    Returns a list aligned with ``items`` (``None`` where an item failed after
+    retries) with ``.errors``, ``.stats`` and ``.to_frame()``.
+    """
+
+    payload = {
+        "items": _llm_map_items(items, columns),
+        "instructions": instructions,
+        "output": _llm_map_output_spec(output),
+        "concurrency": concurrency,
+        "retries": retries,
+        "batch_size": batch_size,
+    }
+    value = _make_tool_stub("__fabric_rlm_llm_map__")(**payload)
+    data = json.loads(value) if isinstance(value, str) else value
+    result = LLMMapResult(data.get("results") or [])
+    result.errors = list(data.get("errors") or [])
+    result.stats = dict(data.get("stats") or {})
+    result.stats["output_fields"] = list(payload["output"])
+    return result
 
 
 def _build_dspy_signature(

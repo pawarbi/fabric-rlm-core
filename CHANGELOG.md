@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added
+
+- `llm_map(items, instructions, output, ...)` in the worker: applies one instruction to every item
+  (list, Series or DataFrame rows) with an LM and validates each answer against a typed `output`
+  spec (`str`, `int`, `float`, `bool`, or a list of allowed choices). The map runs on the host with
+  concurrency, per-item retries and optional `batch_size` batching, and returns a list aligned with
+  the items plus `.errors`, `.stats` and `.to_frame()`. Configure it with `map_lm=` (defaults to the
+  `sub_lm` spec, else the main `lm`).
+- `DecisionLM("typesafe/jev-1.13")` (or another decision model on OpenRouter's decisions endpoint)
+  as a cheap `map_lm` for choice and `bool` fields; it adds `<field>_confidence` / `<field>_p`.
+- System-prompt guidance for finding the pages a task depends on in a long document: screen pages
+  with `llm_map` before keyword search, one narrow field per rule (plus one per input column that
+  could change the result, amendments, and a catch-all), then read every flagged page (and, with a
+  decision model, each field's top 3 by probability). On 8 long-PDF + CSV tasks (90 to 220 pages,
+  2 of them real documents, 2 held out from tuning) with Jev as `map_lm`, the model chose `llm_map`
+  unprompted in 24/24 runs and cited every deciding page in 24/24, against 0/16 and 11/16 without it.
+
 ### Fixed
 
 - Validators fail closed (#119). An `output_validator` or `output_validator_context`

@@ -113,6 +113,18 @@ def _parse_protocol_line(line: str) -> dict[str, Any] | None:
 
 _LAKEHOUSE_QUERY_TOOL = "__fabric_rlm_lakehouse_query__"
 _FILE_PUBLISH_TOOL = "__fabric_rlm_file_publish__"
+_LLM_MAP_TOOL = "__fabric_rlm_llm_map__"
+
+
+def _run_host_llm_map(map_lm: Any, kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    if map_lm is None:
+        raise RuntimeError(
+            "llm_map is not available in this run: no LM is configured on the host for it. "
+            "Do this step in Python instead. (Host: pass map_lm=... to RLM.)"
+        )
+    from .llm_map import run_llm_map
+
+    return run_llm_map(map_lm, kwargs)
 
 
 def _collect_lakehouse_sources(value: Any) -> list[LakehouseSource]:
@@ -310,6 +322,9 @@ class Interpreter:
         self._stderr_thread: threading.Thread | None = None
         self._lakehouse_sources: list[LakehouseSource] = []
         self._file_destinations: list[FileDestination] = []
+        # Host-side LM for llm_map(). Never sent to the worker: the map runs
+        # in this process, so it can be a live object and needs no egress.
+        self.map_lm: Any = None
 
     @property
     def is_running(self) -> bool:
@@ -491,6 +506,18 @@ class Interpreter:
                     self._file_destinations,
                     kwargs,
                 )
+            elif name == _LLM_MAP_TOOL:
+                started = time.monotonic()
+                try:
+                    result, record = _run_host_llm_map(self.map_lm, kwargs)
+                except Exception as exc:
+                    self._pending_source_calls.append({
+                        "query_type": "llm_map", "executed": False, "reason": "execution_error",
+                        "error": f"{type(exc).__name__}: {exc}"[:300],
+                        "execution_seconds": round(time.monotonic() - started, 3),
+                    })
+                    raise
+                self._pending_source_calls.append(record)
             else:
                 raise WorkerProtocolError(f"Unknown internal worker tool: {name}")
             response = {
@@ -715,6 +742,7 @@ class SubprocessPythonInterpreter:
         self.tools: dict[str, Callable[..., Any]] = dict(tools) if tools else {}
         self.output_fields = output_fields
         self.timeout = timeout
+        self.map_lm: Any = None
         # Startup self-test timeout. Defaults generously (60s) because a cold
         # CPython spawn on a loaded machine (AV scan, CI runner contention)
         # can legitimately take tens of seconds; a genuinely broken install
@@ -1037,6 +1065,8 @@ class SubprocessPythonInterpreter:
                     self._file_destinations,
                     kwargs,
                 )
+            elif name == _LLM_MAP_TOOL:
+                result, _record = _run_host_llm_map(getattr(self, "map_lm", None), kwargs)
             elif name not in self.tools:
                 raise CodeInterpreterError(f"Unknown tool: {name}")
             else:

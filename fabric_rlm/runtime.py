@@ -1110,6 +1110,7 @@ class RLM:
         *,
         lm: Any,
         sub_lm: Any | None = None,
+        map_lm: Any | None = None,
         max_turns: int = 20,
         timeout: float = 300.0,
         verbose: bool = False,
@@ -1162,6 +1163,9 @@ class RLM:
         self.validator_errors = validator_errors
         self.validator_timeout = float(validator_timeout) if validator_timeout is not None else None
         self._validator_error_streaks: dict[str, int] = {}
+        # LM for llm_map(). It runs on the host, so a live object is fine and
+        # block_network does not apply. None means: the sub-LM, else the main LM.
+        self.map_lm = map_lm
         # ---- engine validation (early, before any heavy resolution) ---------
         # Resolve aliases ('default' -> 'v6-custom', 'dspy' -> 'v7-dspy')
         # before any further engine-based logic so internal switches keep
@@ -1322,6 +1326,7 @@ class RLM:
                 signature=signature,
                 lm=lm,
                 sub_lm=sub_lm,
+                map_lm=map_lm,
                 timeout=timeout,
                 verbose=verbose,
                 skills=list(skills or []),
@@ -2412,6 +2417,8 @@ class RLM:
                     router_active=self.enable_router,
                     learned_guidance=learned_guidance,
                     sub_lm_available=self.sub_lm_spec is not None,
+                    llm_map_available=True,
+                    llm_map_decision_model=bool(getattr(self.map_lm, "is_decision_model", False)),
                 ),
             },
             {"role": "user", "content": build_initial_user_message(bound_inputs)},
@@ -2431,6 +2438,7 @@ class RLM:
             max_submit_bytes=self.max_submit_bytes,
             block_network=self.block_network,
         ) as interpreter:
+            interpreter.map_lm = self._resolve_map_lm()
             if self.sub_lm_spec is not None:
                 interpreter.configure_lm(self.sub_lm_spec)
             if bound_inputs:
@@ -3012,6 +3020,27 @@ class RLM:
             ),
             **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
         )
+
+    def _resolve_map_lm(self) -> Any:
+        """The host-side LM for llm_map(): map_lm, else the sub-LM, else the main LM."""
+        cached = getattr(self, "_map_lm_resolved", None)
+        if cached is not None:
+            return cached
+        chosen = getattr(self, "map_lm", None)
+        try:
+            if chosen is not None and getattr(chosen, "is_decision_model", False):
+                resolved = chosen
+            elif chosen is not None:
+                resolved = resolve_lm(chosen)
+            elif getattr(self, "sub_lm_spec", None) is not None:
+                resolved = resolve_lm(self.sub_lm_spec)
+            else:
+                resolved = getattr(self, "outer_lm", None)
+        except Exception as exc:  # noqa: BLE001 - a bad map LM should fail the call, not the run
+            logger.warning("Could not resolve the LM for llm_map (%s); llm_map is unavailable.", exc)
+            resolved = None
+        self._map_lm_resolved = resolved
+        return resolved
 
     def _repair_nudge_suffix(self, key: str) -> str:
         """Return the diversity-nudge text to append to a repair message.
@@ -3713,6 +3742,7 @@ class RLM:
                 security=self._security,
                 max_submit_bytes=self.max_submit_bytes,
             )
+            interpreter.map_lm = self._resolve_map_lm()
             t0 = time.time()
             try:
                 with dspy.context(lm=outer_lm):

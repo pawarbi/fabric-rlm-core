@@ -21,6 +21,29 @@ _PREDICT_UNAVAILABLE = (
     "`predict` and `predict_sync` are not available in this run: no sub-LM is configured. "
     "Where a skill suggests them, do that step yourself: print the text you need and read it, or use Python.\n"
 )
+# llm_map runs on the host, so it is available whenever the host has an LM.
+# The point of advertising it is to stop the model writing batching loops
+# around predict(): the host already does concurrency, validation and retries.
+_LLM_MAP_AVAILABLE = """`llm_map(items, instructions, output, columns=None, concurrency=8, retries=2, batch_size=1)` applies one instruction to EVERY item with an LM and validates each answer.
+Use it for any per-item judgement over many items (classify, extract fields, score, match, find relevant pages or passages); do not write your own loop or batches around predict().
+`items` is a list, a pandas Series, or a DataFrame (`columns=` picks the columns each item sees). `output` maps field names to `str`, `int`, `float`, `bool`, or a list of allowed strings,
+e.g. `llm_map(df, "Classify the complaint.", {"theme": ["Brakes", "Steering", "Other"], "safety_critical": bool}, columns=["summary"])`.
+It returns a list aligned with `items` (None where an item failed after retries), plus `.errors`, `.stats` and `.to_frame(df)`. Check `.stats["failed"]` before aggregating.
+Cost and speed: for many short items (under ~2,000 characters each) pass `batch_size=10` to `20` so one LM call answers several items, and raise `concurrency` (up to 64) for thousands of items. Keep `batch_size=1` for long items or subtle judgements.
+Keep the item text as short as the judgement needs; filter first, then map. For a long document, split it into pages or chunks and map over those.
+Finding the pages a task depends on in a long document (roughly 30+ pages): screen the pages with llm_map before relying on keyword search. Search only finds rules worded the way you guess, and a missed exception, override or amendment silently breaks the answer; screening a few hundred pages with llm_map takes seconds.
+Do not map one broad `relevant` field (nearly every page of a long document looks relevant to a broad question). Map one narrow `bool` field per rule, one idea per field (never "X or Y"), named for what the page would do. Include:
+a field for each input column or attribute that could change the result ("<result>_depends_on_<column>", e.g. shipping_fee_depends_on_region, premium_depends_on_age), one for each rule the task names, one for amendments or updates to earlier terms, and a catch-all "other_exception_or_adjustment_to_<result>",
+e.g. `{"sets_refund_window": bool, "refund_depends_on_plan_type": bool, "refund_depends_on_usage": bool, "charges_cancellation_fee": bool, "amends_earlier_terms": bool, "other_exception_or_adjustment_to_refund": bool}`.
+Describe each rule by its effect, since the document may use different words from the task.
+Then print and read the full text of EVERY page flagged for any field (not a subset you pick), and confirm each rule in the text before relying on it.
+"""
+_LLM_MAP_DECISION_MODEL = """In this run llm_map is backed by a decision model: it answers ONLY a list of choices or `bool` (no str/int/float fields; bucket numbers into choice ranges instead).
+Each choice field also returns `<field>_confidence` and each bool returns `<field>_p` (probability of true). Items are answered one per fast call, so `batch_size` has no effect; use `concurrency=32` or more.
+Ask one narrow question per field, and use the confidence to set aside uncertain items (e.g. confidence < 0.6) for a closer look instead of trusting every answer.
+When screening pages, the page a rule is on usually scores highest for that field even when its probability is below 0.5, so read every flagged page plus each field's top 3 by `<field>_p`:
+`to_read = sorted({i for f in fields for i in range(len(pages)) if screen[i] and screen[i][f]} | {i for f in fields for i in sorted(range(len(pages)), key=lambda i: -(screen[i] or {}).get(f + "_p", 0))[:3]})`.
+"""
 
 SYSTEM_PROMPT_TEMPLATE = """You are an RLM (Recursive Language Model) running in a Python REPL.
 
@@ -99,6 +122,8 @@ def build_system_prompt(
     router_active: bool = False,
     learned_guidance: str | None = None,
     sub_lm_available: bool = True,
+    llm_map_available: bool = False,
+    llm_map_decision_model: bool = False,
 ) -> str:
     inputs = inputs or {}
     task_description, outputs = _task_and_outputs(signature, inline_task, inline_outputs)
@@ -120,7 +145,9 @@ def build_system_prompt(
             skill_index, preloaded_skills, skill_cards=skill_cards, router_active=router_active
         ),
         cross_source_section=_cross_source_section(inputs),
-        predict_section=_PREDICT_AVAILABLE if sub_lm_available else _PREDICT_UNAVAILABLE,
+        predict_section=(_PREDICT_AVAILABLE if sub_lm_available else _PREDICT_UNAVAILABLE)
+        + (_LLM_MAP_AVAILABLE if llm_map_available else "")
+        + (_LLM_MAP_DECISION_MODEL if llm_map_available and llm_map_decision_model else ""),
         learned_guidance_section=f"\n{guidance}\n" if guidance else "",
     )
 
