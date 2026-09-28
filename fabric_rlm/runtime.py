@@ -2471,6 +2471,7 @@ class RLM:
                     router_active=self.enable_router,
                     learned_guidance=learned_guidance,
                     sub_lm_available=self.sub_lm_spec is not None,
+                    validator_rules=self._validator_rules_text(),
                 ),
             },
             {"role": "user", "content": build_initial_user_message(bound_inputs)},
@@ -3324,6 +3325,29 @@ class RLM:
                     name,
                 )
 
+    def _validator_rules_text(self) -> str:
+        """The rules the configured validators state about themselves, for the prompt.
+
+        A validator (function or object) can carry the rule it checks as an
+        ``instructions`` string, as ``semantic_model_checks`` does. Each is
+        shown under the task, so the first answer can follow it instead of
+        spending a rejection to learn it. Text the task already contains is
+        not repeated.
+        """
+        task_text, _ = _task_and_outputs(self.signature, self._inline_task, self._inline_outputs)
+        seen = " ".join(str(task_text or "").split())
+        rules: list[str] = []
+        for validator in (self.output_validator, self.output_validator_context):
+            text = getattr(validator, "instructions", None) if validator is not None else None
+            if not isinstance(text, str) or not text.strip():
+                continue
+            if " ".join(text.split()) in seen or text.strip() in rules:
+                continue
+            rules.append(text.strip())
+        if not rules:
+            return ""
+        return "The answer is checked after SUBMIT against these rules:\n\n" + "\n\n".join(rules)
+
     def _call_user_validator(self, validator: Callable[..., Any], *args: Any) -> tuple[str, str]:
         """Run a user validator and classify the outcome as passed, rejected or error.
 
@@ -3758,8 +3782,10 @@ class RLM:
         self._loaded_skills = list(active_skill_objects) if self.enable_verifier else []
         self._activated_skills = {sk.name for sk in active_skill_objects}
 
+        rules = self._validator_rules_text()
         signature = self._build_dspy_signature(
-            required_output_fields, extra_instructions=skill_instructions
+            required_output_fields,
+            extra_instructions="\n\n".join(part for part in (skill_instructions, rules) if part),
         )
 
         outer_lm = self.outer_lm
