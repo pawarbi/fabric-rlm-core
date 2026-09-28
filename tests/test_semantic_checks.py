@@ -62,7 +62,8 @@ class FakeModel:
     def dax(self, query):
         self.queries.append(query)
         if "ADDCOLUMNS(VALUES(" in query:
-            return pd.DataFrame({"[Date]": [pd.Timestamp(d) for d in self.dates], "[v]": [1.0] * len(self.dates)})
+            daily = getattr(self, "daily", None) or {}
+            return pd.DataFrame({"[Date]": [pd.Timestamp(d) for d in self.dates], "[v]": [daily.get(d, 1.0) for d in self.dates]})
         if query.startswith('EVALUATE ROW("v", '):
             expr = query[len('EVALUATE ROW("v", '):-1]
             if expr not in self.values:
@@ -186,3 +187,54 @@ def test_semantic_model_exposes_period_coverage(monkeypatch):
         monkeypatch.setattr(SemanticModel, name, lambda self, *a, _f=getattr(fake, name), **k: _f(*a, **k))
     cov = sm.period_coverage("Total Sales")
     assert cov.date_column == "'Date'[Date]" and cov.periods
+
+
+def olist_like():
+    """Daily orders from Sep 2016 to Aug 2018 that thin out over the last week, then one order on 3 Sep."""
+    dates = days(dt.date(2016, 9, 4), dt.date(2018, 8, 29)) + [dt.date(2018, 9, 3)]
+    tail = {dt.date(2018, 8, 22): 186, dt.date(2018, 8, 23): 142, dt.date(2018, 8, 24): 98, dt.date(2018, 8, 25): 69,
+            dt.date(2018, 8, 26): 73, dt.date(2018, 8, 27): 66, dt.date(2018, 8, 28): 39, dt.date(2018, 8, 29): 11,
+            dt.date(2018, 9, 3): 1}
+    model = FakeModel(dates)
+    model.daily = {d: float(tail.get(d, 250)) for d in dates}
+    return model
+
+
+def test_a_year_the_data_stops_in_is_partial_even_after_a_short_first_year():
+    cov = period_coverage(olist_like(), "Total Orders", grain="year", today=TODAY)
+    s = status_map(cov)
+    assert s["2018"] == "partial" and s["2017"] == "complete" and cov.latest_complete == "2017"
+    assert "2018-08" in next(p["note"] for p in cov.periods if p["period"] == "2018")
+
+
+def test_a_month_whose_last_week_thins_out_is_partial():
+    cov = period_coverage(olist_like(), "Total Orders", today=TODAY)
+    s = status_map(cov)
+    assert s["2018-08"] == "partial" and s["2018-09"] == "partial" and s["2018-07"] == "complete"
+    assert cov.latest_complete == "2018-07"
+    assert cov.trusted_through < dt.date(2018, 8, 29) and "thins out" in cov.trusted_through_reason
+    assert "Trust the data only through" in cov.summary()
+
+
+def test_the_validator_names_the_thinning_when_it_sends_a_month_back():
+    checks = semantic_model_checks(olist_like(), today=TODAY)
+    with pytest.raises(AssertionError, match="thins out"):
+        checks({"headline_measure": "Total Orders", "headline_period": "2018-08", "period_to_date": False, "claims": [
+            {"measure": "Total Orders", "aggregate": "sum", "period": "2018-08", "value": 1}]})
+
+
+def test_a_steady_series_and_a_weekday_business_are_not_thinned():
+    steady = FakeModel(days(dt.date(2024, 1, 1), dt.date(2026, 8, 31)))
+    steady.daily = {d: 100.0 + (d.day % 7) * 10 for d in steady.dates}
+    assert period_coverage(steady, "Total Sales", today=TODAY).latest_complete == "2026-08"
+    weekdays = FakeModel(days(dt.date(2024, 1, 1), dt.date(2026, 8, 28), weekdays_only=True))
+    weekdays.daily = {d: 200.0 for d in weekdays.dates}
+    cov = period_coverage(weekdays, "Total Sales", today=TODAY)
+    assert cov.latest_complete == "2026-08" and cov.trusted_through == dt.date(2026, 8, 28)
+
+
+def test_a_quiet_holiday_week_the_year_before_also_had_is_not_thinning():
+    model = FakeModel(days(dt.date(2023, 1, 1), dt.date(2025, 12, 31)))
+    model.daily = {d: (40.0 if d.month == 12 and d.day >= 24 else 200.0) for d in model.dates}
+    cov = period_coverage(model, "Total Sales", today=TODAY)
+    assert status_map(cov)["2025-12"] == "complete" and cov.trusted_through == dt.date(2025, 12, 31)
