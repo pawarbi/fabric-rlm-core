@@ -1128,6 +1128,7 @@ class RLM:
         *,
         lm: Any,
         sub_lm: Any | None = None,
+        ask_each: Any = None,
         max_turns: int = 20,
         timeout: float = 300.0,
         verbose: bool = False,
@@ -1181,6 +1182,13 @@ class RLM:
         self.validator_errors = validator_errors
         self.validator_timeout = float(validator_timeout) if validator_timeout is not None else None
         self._validator_error_streaks: dict[str, int] = {}
+        # ask_each is off unless asked for. When on, it runs on the host with
+        # its own LM (the main LM when none is given); records feed metadata.
+        from .ask_each import normalize_ask_each
+
+        self.ask_each = normalize_ask_each(ask_each)
+        self._ask_each_records: list[dict[str, Any]] = []
+        self._ask_each_lm_resolved: Any = None
         # An empty list or dict in a required output is re-checked by default: the
         # run is asked to confirm it, and the same empty value again is accepted
         # and recorded. Forbidding it outright made models invent content.
@@ -1357,6 +1365,7 @@ class RLM:
                 signature=signature,
                 lm=lm,
                 sub_lm=sub_lm,
+                ask_each=ask_each,
                 timeout=timeout,
                 verbose=verbose,
                 skills=list(skills or []),
@@ -2171,6 +2180,13 @@ class RLM:
             return result
         from .knowledge_evidence import harvest_evidence, source_call_summary
 
+        records = getattr(self, "_ask_each_records", None)
+        if records:
+            from .ask_each import summarize_records
+
+            trajectory.metadata["ask_each"] = summarize_records(records)
+            records.clear()
+
         if any(getattr(turn, "source_calls", None) for turn in turns):
             trajectory.metadata["source_call_summary"] = source_call_summary(turns)
         # Whether a check existed for this run, and, separately, what
@@ -2472,6 +2488,7 @@ class RLM:
                     learned_guidance=learned_guidance,
                     sub_lm_available=self.sub_lm_spec is not None,
                     validator_rules=self._validator_rules_text(),
+                    ask_each=self._ask_each_prompt(bound_inputs),
                 ),
             },
             {"role": "user", "content": build_initial_user_message(bound_inputs)},
@@ -2493,6 +2510,8 @@ class RLM:
         ) as interpreter:
             if self.sub_lm_spec is not None:
                 interpreter.configure_lm(self.sub_lm_spec)
+            if self.ask_each is not None:
+                interpreter.enable_ask_each(self._resolve_ask_each_lm(), self.ask_each, self._ask_each_records)
             if bound_inputs:
                 interpreter.set_inputs(bound_inputs)
 
@@ -2691,6 +2710,8 @@ class RLM:
                             interpreter.start()
                             if self.sub_lm_spec is not None:
                                 interpreter.configure_lm(self.sub_lm_spec)
+                            if self.ask_each is not None:
+                                interpreter.enable_ask_each(self._resolve_ask_each_lm(), self.ask_each, self._ask_each_records)
                             if bound_inputs:
                                 interpreter.set_inputs(bound_inputs)
                             interpreter.warmup()
@@ -3348,6 +3369,35 @@ class RLM:
             return ""
         return "The answer is checked after SUBMIT against these rules:\n\n" + "\n\n".join(rules)
 
+    def _resolve_ask_each_lm(self) -> Any:
+        """The host-side LM for ask_each: the configured one, else the main LM."""
+        if self._ask_each_lm_resolved is not None:
+            return self._ask_each_lm_resolved
+        from .ask_each import is_decision_model
+
+        chosen = self.ask_each.lm if self.ask_each is not None else None
+        if chosen is None:
+            resolved = self.outer_lm
+        elif is_decision_model(chosen):
+            resolved = chosen
+        else:
+            resolved = resolve_lm(chosen)
+        self._ask_each_lm_resolved = resolved
+        return resolved
+
+    def _ask_each_prompt(self, inputs: Mapping[str, Any] | None) -> str:
+        """What the model is told about ask_each: nothing when it is off."""
+        if self.ask_each is None:
+            return ""
+        from .ask_each import is_decision_model
+        from .prompts import ask_each_section
+
+        chosen = self.ask_each.lm
+        return ask_each_section(
+            decision_model=chosen is not None and is_decision_model(chosen),
+            documents=_has_document_input(inputs or {}),
+        )
+
     def _call_user_validator(self, validator: Callable[..., Any], *args: Any) -> tuple[str, str]:
         """Run a user validator and classify the outcome as passed, rejected or error.
 
@@ -3783,9 +3833,10 @@ class RLM:
         self._activated_skills = {sk.name for sk in active_skill_objects}
 
         rules = self._validator_rules_text()
+        ask_each_text = self._ask_each_prompt(self._inline_inputs).strip()
         signature = self._build_dspy_signature(
             required_output_fields,
-            extra_instructions="\n\n".join(part for part in (skill_instructions, rules) if part),
+            extra_instructions="\n\n".join(part for part in (skill_instructions, rules, ask_each_text) if part),
         )
 
         outer_lm = self.outer_lm
@@ -3831,6 +3882,10 @@ class RLM:
                 security=self._security,
                 max_submit_bytes=self.max_submit_bytes,
             )
+            if self.ask_each is not None:
+                interpreter.ask_each_lm = self._resolve_ask_each_lm()
+                interpreter.ask_each_config = self.ask_each
+                interpreter.ask_each_records = self._ask_each_records
             t0 = time.time()
             try:
                 with dspy.context(lm=outer_lm):
@@ -4589,6 +4644,26 @@ def _call_lm_with_meta(
 
     return _response_to_text(response), response, elapsed
 
+
+
+_DOCUMENT_SUFFIXES = {".pdf", ".docx", ".doc", ".txt", ".md", ".html", ".htm", ".rtf", ".pptx", ".odt"}
+
+
+def _has_document_input(inputs: Mapping[str, Any]) -> bool:
+    """Whether a document file is among the inputs, so page-screening guidance applies."""
+    from .artifacts import File
+
+    def is_document(value: Any) -> bool:
+        return isinstance(value, File) and str(getattr(value, "suffix", "")).lower() in _DOCUMENT_SUFFIXES
+
+    for value in inputs.values():
+        if is_document(value):
+            return True
+        if isinstance(value, (list, tuple)) and any(is_document(v) for v in value):
+            return True
+        if isinstance(value, Mapping) and any(is_document(v) for v in value.values()):
+            return True
+    return False
 
 
 def _reject_block_network_with_sub_lm(block_network: Any, sub_lm: Any) -> None:

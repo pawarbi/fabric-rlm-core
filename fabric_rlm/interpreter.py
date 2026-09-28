@@ -113,6 +113,23 @@ def _parse_protocol_line(line: str) -> dict[str, Any] | None:
 
 _LAKEHOUSE_QUERY_TOOL = "__fabric_rlm_lakehouse_query__"
 _FILE_PUBLISH_TOOL = "__fabric_rlm_file_publish__"
+_ASK_EACH_TOOL = "__fabric_rlm_ask_each__"
+
+
+def _run_host_ask_each(owner: Any, kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run an ask_each request from the worker with the host's LM, and keep its record."""
+    if getattr(owner, "ask_each_lm", None) is None:
+        raise RuntimeError(
+            "ask_each is not turned on in this run. Do this step in Python instead. "
+            "(Host: pass ask_each=True, or an LM, to RLM.)"
+        )
+    from .ask_each import run_ask_each
+
+    result, record = run_ask_each(owner.ask_each_lm, kwargs, owner.ask_each_config)
+    records = getattr(owner, "ask_each_records", None)
+    if isinstance(records, list):
+        records.append(record)
+    return result, record
 
 
 def _collect_lakehouse_sources(value: Any) -> list[LakehouseSource]:
@@ -310,6 +327,11 @@ class Interpreter:
         self._stderr_thread: threading.Thread | None = None
         self._lakehouse_sources: list[LakehouseSource] = []
         self._file_destinations: list[FileDestination] = []
+        # ask_each runs on the host with these; set by the runtime only when
+        # the caller turned ask_each on. Never sent to the worker.
+        self.ask_each_lm: Any = None
+        self.ask_each_config: Any = None
+        self.ask_each_records: list[dict[str, Any]] = []
 
     @property
     def is_running(self) -> bool:
@@ -424,6 +446,13 @@ class Interpreter:
     def configure_lm(self, spec: Any) -> dict[str, Any]:
         return self._request({"op": "configure_lm", "spec": encode_for_worker(spec)})
 
+    def enable_ask_each(self, lm: Any, config: Any, records: list[dict[str, Any]]) -> dict[str, Any]:
+        """Turn on ask_each in the worker; calls run here with ``lm`` and append to ``records``."""
+        self.ask_each_lm = lm
+        self.ask_each_config = config
+        self.ask_each_records = records
+        return self._request({"op": "enable_ask_each", "enabled": True})
+
     def set_inputs(self, inputs: dict[str, Any]) -> dict[str, Any]:
         self._lakehouse_sources = _collect_lakehouse_sources(inputs)
         self._file_destinations = _collect_file_destinations(inputs)
@@ -491,6 +520,18 @@ class Interpreter:
                     self._file_destinations,
                     kwargs,
                 )
+            elif name == _ASK_EACH_TOOL:
+                started = time.monotonic()
+                try:
+                    result, record = _run_host_ask_each(self, kwargs)
+                except Exception as exc:
+                    self._pending_source_calls.append({
+                        "query_type": "ask_each", "executed": False, "reason": "execution_error",
+                        "error": f"{type(exc).__name__}: {exc}"[:300],
+                        "execution_seconds": round(time.monotonic() - started, 3),
+                    })
+                    raise
+                self._pending_source_calls.append(record)
             else:
                 raise WorkerProtocolError(f"Unknown internal worker tool: {name}")
             response = {
@@ -744,6 +785,11 @@ class SubprocessPythonInterpreter:
         self._request_id = 0
         self._lakehouse_sources: list[LakehouseSource] = []
         self._file_destinations: list[FileDestination] = []
+        # ask_each runs on the host with these; set by the runtime only when
+        # the caller turned ask_each on. Never sent to the worker.
+        self.ask_each_lm: Any = None
+        self.ask_each_config: Any = None
+        self.ask_each_records: list[dict[str, Any]] = []
 
         # Diagnostics populated by start():
         self._spawn_cmd: list[str] | None = None
@@ -1009,6 +1055,8 @@ class SubprocessPythonInterpreter:
             params["tools"] = [{"name": name} for name in self.tools]
         if self.output_fields:
             params["outputs"] = self.output_fields
+        if getattr(self, "ask_each_lm", None) is not None:
+            params["ask_each"] = True
         if not params:
             self._tools_registered = True
             return
@@ -1037,6 +1085,8 @@ class SubprocessPythonInterpreter:
                     self._file_destinations,
                     kwargs,
                 )
+            elif name == _ASK_EACH_TOOL:
+                result, _record = _run_host_ask_each(self, kwargs)
             elif name not in self.tools:
                 raise CodeInterpreterError(f"Unknown tool: {name}")
             else:

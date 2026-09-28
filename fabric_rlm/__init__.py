@@ -44,6 +44,7 @@ from .knowledge_sources import ProfileLimits
 from .knowledge_evidence import harvest_evidence
 from .knowledge_retrieval import retrieve_lessons
 from .lm import AnthropicLM, FabricLM, OpenAILM, register_backend, resolve_lm
+from .ask_each import AskEach, DecisionLM
 from .metrics import ValidationCheck, ValidationReport
 from .replay_lm import (
     DivergenceError,
@@ -86,6 +87,8 @@ __all__ = [
     "ExcelCellValue",
     "ExcelTargetRange",
     "FabricLM",
+    "AskEach",
+    "DecisionLM",
     "File",
     "FileDestination",
     "Interpreter",

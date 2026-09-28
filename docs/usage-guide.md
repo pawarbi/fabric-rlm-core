@@ -1016,6 +1016,60 @@ rlm = RLM.task(task, inputs=inputs, outputs=outputs,
                lm=FabricLM("gpt-5.1"), sub_lm="fabric/gpt-5-mini")
 ```
 
+### Asking about many items
+
+`ask_each` lets a run ask one question about every item in a list, a Series or
+a DataFrame, with an LM, in one call. It is off unless you turn it on:
+
+```python
+rlm = RLM.task(task, inputs=inputs, outputs=outputs,
+               lm=FabricLM("gpt-5.1"),
+               ask_each="openrouter/openai/gpt-5-mini")   # or True for the main LM
+```
+
+The run then writes, for example:
+
+```python
+r = ask_each(complaints, "Classify the complaint.",
+             {"theme": ["Brakes", "Steering", "Other"], "safety_critical": bool},
+             columns=["summary"])
+```
+
+Each answer is checked against the declared output (`str`, `int`, `float`,
+`bool`, or a list of allowed strings). An invalid answer is asked again with
+the reason, and one that never validates comes back as `None` with its error,
+never as a guess. The result is a list aligned with the items, with `.errors`,
+`.stats` and `.to_frame(df)`.
+
+The calls run in the notebook process, not in the worker, so the host handles
+concurrency, retries and rate limits: a throttled call waits and the map runs
+fewer calls at once until calls succeed again. Items not answered within the
+time limit come back as `None` and are counted in `stats["unfinished"]`.
+`AskEach` sets the limits:
+
+```python
+from fabric_rlm import AskEach
+
+ask_each=AskEach(lm="openrouter/openai/gpt-5-mini", max_seconds=600, max_concurrency=32)
+```
+
+The model is anything that works as `lm=`: `FabricLM(...)`, a provider string,
+a spec dictionary (an Azure AI Foundry deployment, for example), or a
+callable. Many parallel calls to the built-in Fabric endpoint count against
+the capacity and can be throttled, so for large jobs a separate endpoint is
+usually faster. A `DecisionLM("typesafe/jev-1.13")` answers choice and `bool`
+questions only, with a probability for each answer, at a fraction of the cost
+of a text model.
+
+Turning `ask_each` on is also permission for the items the run passes to leave
+the notebook for that model. With `block_network=True` the worker still has no
+network access; the items go out from the notebook process instead.
+
+When a document is among the inputs, the run is also told how to screen a long
+document page by page before relying on keyword search. The run's
+`trajectory.metadata["ask_each"]` holds the totals: calls, items, failures,
+unfinished items, throttling, tokens and cost where the model reports them.
+
 ## Engines
 
 `RLM` ships with three stable engines, plus the experimental `adaptive`:

@@ -209,6 +209,25 @@ from fabric_rlm.analytical_integrity import (  # noqa: E402
 )
 
 
+# ask_each is opt-in: the host turns it on (RLM(ask_each=...)); otherwise the
+# name does not exist in the worker.
+_ask_each_enabled = False
+
+
+def _set_ask_each(enabled: bool) -> None:
+    global _ask_each_enabled
+    _ask_each_enabled = bool(enabled)
+    if _ask_each_enabled:
+        _namespace["ask_each"] = globals()["ask_each"]
+    else:
+        _namespace.pop("ask_each", None)
+    _install_sandbox_shim()
+
+
+def _sandbox_public_names() -> tuple[str, ...]:
+    return _SANDBOX_PUBLIC_NAMES + (("ask_each",) if _ask_each_enabled else ())
+
+
 def _install_runtime_api() -> None:
     _namespace.clear()
     _namespace.update(
@@ -226,6 +245,8 @@ def _install_runtime_api() -> None:
             "validate_analysis_integrity": validate_analysis_integrity,
         }
     )
+    if _ask_each_enabled:
+        _namespace["ask_each"] = globals()["ask_each"]
     _install_sandbox_shim()
 
 
@@ -302,7 +323,8 @@ def _install_sandbox_shim() -> None:
         sys.modules["sandbox"] = module
 
     current = globals()
-    for name in _SANDBOX_PUBLIC_NAMES:
+    public = _sandbox_public_names()
+    for name in public:
         setattr(module, name, current[name])
     # Drop any attributes from a previous install that aren't part of the
     # curated surface (defensive: keeps `dir(sandbox)` clean across reinstalls).
@@ -311,7 +333,7 @@ def _install_sandbox_shim() -> None:
     for attr in list(vars(module)):
         if attr.startswith("_"):
             continue
-        if attr not in _SANDBOX_PUBLIC_NAMES:
+        if attr not in public:
             delattr(module, attr)
 
 
@@ -415,6 +437,113 @@ def predict_sync(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()
+
+
+class AskEachResult(list):
+    """``ask_each`` output: a list aligned with the input items.
+
+    Each element is a dict of the requested output fields, or ``None`` for an
+    item with no valid answer (it failed after retries, or the time limit ran
+    out). ``errors`` lists those items as ``{"index", "error"}``; ``stats`` has
+    the counts, retries, seconds and usage.
+    """
+
+    errors: list[dict[str, Any]]
+    stats: dict[str, Any]
+
+    def to_frame(self, items: Any = None) -> Any:
+        """The results as a DataFrame; pass the input DataFrame to join them onto it."""
+        import pandas as pd
+
+        fields = list(self.stats.get("output_fields") or [])
+        frame = pd.DataFrame([row if row is not None else {} for row in self])
+        for name in fields:
+            if name not in frame.columns:
+                frame[name] = None
+        if items is not None and isinstance(items, pd.DataFrame):
+            frame.index = items.index
+            return items.join(frame, rsuffix="_answer")
+        return frame
+
+
+_ASK_EACH_TYPE_NAMES = {str: "str", int: "int", float: "float", bool: "bool"}
+
+
+def _ask_each_output_spec(output: Any) -> dict[str, Any]:
+    if not isinstance(output, dict) or not output:
+        raise TypeError(
+            "ask_each output must be a dict of field -> type, e.g. "
+            "{'theme': ['Billing', 'Outage', 'Other'], 'urgent': bool, 'summary': str}"
+        )
+    spec: dict[str, Any] = {}
+    for name, kind in output.items():
+        if isinstance(kind, (list, tuple, set)) and kind and all(isinstance(c, str) for c in kind):
+            spec[name] = {"choices": list(kind)}
+        elif isinstance(kind, type) and kind in _ASK_EACH_TYPE_NAMES:
+            spec[name] = _ASK_EACH_TYPE_NAMES[kind]
+        elif isinstance(kind, str) and kind in _ASK_EACH_TYPE_NAMES.values():
+            spec[name] = kind
+        else:
+            raise TypeError(
+                f"ask_each output {name!r} must be str, int, float, bool or a list of allowed strings; got {kind!r}"
+            )
+    return spec
+
+
+def _ask_each_items(items: Any, columns: Any) -> list[Any]:
+    try:
+        import pandas as pd
+    except ImportError:  # pragma: no cover - pandas ships with the analytics extra
+        pd = None
+    if pd is not None and isinstance(items, pd.DataFrame):
+        frame = items[list(columns)] if columns else items
+        return [json.loads(json.dumps(r, default=str)) for r in frame.to_dict(orient="records")]
+    if pd is not None and isinstance(items, pd.Series):
+        return [v if isinstance(v, (str, int, float, bool)) or v is None else str(v) for v in items.tolist()]
+    if isinstance(items, (list, tuple)):
+        return [json.loads(json.dumps(v, default=str)) if isinstance(v, (dict, list, tuple)) else v for v in items]
+    raise TypeError("ask_each items must be a list, a pandas Series, or a pandas DataFrame")
+
+
+def ask_each(
+    items: Any,
+    question: str,
+    output: dict[str, Any],
+    *,
+    columns: list[str] | None = None,
+    concurrency: int = 8,
+    retries: int = 2,
+    batch_size: int = 1,
+    max_seconds: float | None = None,
+) -> AskEachResult:
+    """Ask one question about every item with an LM, in parallel, and validate each answer.
+
+    Runs on the host: the host handles concurrency, throttling, retries and
+    validation, so write ONE call instead of a loop. ``output`` maps field
+    names to ``str``, ``int``, ``float``, ``bool`` or a list of allowed
+    strings. ``batch_size`` > 1 sends that many items per LM call (cheaper for
+    short items); an item the batch answer misses or gets wrong is retried
+    alone. Returns a list aligned with ``items`` (``None`` where an item
+    failed or the time limit ran out) with ``.errors``, ``.stats`` and
+    ``.to_frame()``.
+    """
+
+    payload = {
+        "items": _ask_each_items(items, columns),
+        "question": question,
+        "output": _ask_each_output_spec(output),
+        "concurrency": concurrency,
+        "retries": retries,
+        "batch_size": batch_size,
+        "max_seconds": max_seconds,
+    }
+    value = _make_tool_stub("__fabric_rlm_ask_each__")(**payload)
+    data = json.loads(value) if isinstance(value, str) else value
+    result = AskEachResult(data.get("results") or [])
+    result.errors = list(data.get("errors") or [])
+    result.stats = dict(data.get("stats") or {})
+    result.stats["output_fields"] = list(payload["output"])
+    return result
 
 
 def _build_dspy_signature(
@@ -849,6 +978,9 @@ def _handle_message(message: dict[str, Any]) -> dict[str, Any] | None:
     if op == "configure_lm":
         _set_lm_spec(message.get("spec"))
         return {"ok": True}
+    if op == "enable_ask_each":
+        _set_ask_each(bool(message.get("enabled", True)))
+        return {"ok": True}
     if op == "reset":
         _install_runtime_api()
         return {"ok": True, "state": _state()}
@@ -1011,6 +1143,8 @@ def _jsonrpc_register(params: dict[str, Any]) -> dict[str, Any]:
 
     outputs = params.get("outputs") or []
     _registered_output_fields = [o["name"] for o in outputs if "name" in o]
+    if "ask_each" in params:
+        _set_ask_each(bool(params["ask_each"]))
 
     return {
         "ok": True,

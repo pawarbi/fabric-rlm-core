@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Added
+
+- `ask_each(items, question, output)` in the worker, turned on with `RLM(ask_each=...)`:
+  asks one question about every item of a list, Series or DataFrame with an LM, and
+  checks each answer against a typed output (`str`, `int`, `float`, `bool`, or a list of
+  allowed strings). An invalid answer is asked again with the reason; one that never
+  validates is `None` with its error, not a guess. The calls run in the host process with
+  concurrency, retries, optional batching, back-off and lower concurrency when the model
+  throttles, and a time limit (`AskEach(max_seconds=...)`); items left unanswered are
+  counted in `stats["unfinished"]`. The model is anything `lm=` accepts, so an OpenRouter
+  or Azure AI Foundry model can take large jobs off the Fabric capacity. Off by default:
+  the prompt and the worker are unchanged unless it is turned on, and turning it on is the
+  permission for item text to reach that model (the worker keeps `block_network`). Totals,
+  including tokens and cost where the model reports them, are in
+  `trajectory.metadata["ask_each"]`.
+- `DecisionLM("typesafe/jev-1.13")` for decision models on OpenRouter's decisions endpoint:
+  answers choice and `bool` fields with `<field>_confidence` / `<field>_p`. A key read from
+  the environment is only sent to the host it belongs to.
+- With `ask_each` on and a document among the inputs, the run is told how to find the pages
+  a task depends on: screen pages with one narrow field per rule (plus one per input column
+  that could change the result, amendments, and a catch-all), then read every flagged page.
+  On 8 long-PDF + CSV tasks (90 to 220 pages, 2 of them real documents, 2 held out from
+  tuning) with Jev answering, the run used the screen unprompted in 24 of 24 runs and cited
+  every deciding page in 24 of 24, against 11 of 16 without it.
+
 ## 0.6.8 - 2026-09-28 - validators fail closed, empty outputs are re-checked, and semantic-model numbers say where they came from
 
 Everything here came from issues #119 to #122, each reproduced live on a semantic model before it was fixed.
