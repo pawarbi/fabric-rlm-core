@@ -347,9 +347,19 @@ class RunInspector:
             return sum(value or 0.0 for value in parts)
         return turn.duration_s
 
+    def _rejections(self, turn: "TurnRecord") -> list[dict[str, Any]]:
+        """Validator and verifier rejections of this turn's SUBMIT, from the run's repair history."""
+        metadata = getattr(getattr(self.result, "trajectory", None), "metadata", None) or {}
+        return [
+            entry
+            for entry in metadata.get("verifier_repair_history") or []
+            if isinstance(entry, dict) and entry.get("turn") == turn.turn
+        ]
+
     def _turn_html(self, turn: "TurnRecord", *, recovered: bool = False) -> str:
         elapsed = self._elapsed(turn)
         summary = _turn_summary(turn, recovered=recovered)
+        rejections = self._rejections(turn)
         badges: list[str] = []
         if turn.error:
             badges.append('<span class="frlm-badge frlm-bad">Error</span>')
@@ -364,7 +374,9 @@ class RunInspector:
                 f'<span class="frlm-badge frlm-warn" title="over {self.slow_turn_seconds:g}s">'
                 f"Slow · {elapsed:.0f}s</span>"
             )
-        if turn.submitted:
+        if rejections:
+            badges.append('<span class="frlm-badge frlm-bad">Rejected</span>')
+        elif turn.submitted:
             badges.append('<span class="frlm-badge frlm-good">Submitted</span>')
         if not badges:
             badges.append('<span class="frlm-badge frlm-neutral">Completed</span>')
@@ -386,6 +398,14 @@ class RunInspector:
             self._section("Stderr", turn.stderr),
             self._section("Error", turn.error, open_by_default=True),
             self._section("Validator feedback", turn.validation_errors, open_by_default=True),
+            *(
+                self._section(
+                    f"Rejected by {entry.get('skill', 'a check')}",
+                    entry.get("assertion") or "(no message)",
+                    open_by_default=True,
+                )
+                for entry in rejections
+            ),
             self._section("Submitted payload", turn.submit_payload, open_by_default=True),
             self._section("Metrics", metrics),
         ]
@@ -404,8 +424,10 @@ class RunInspector:
         facts = self.result.report(as_dict=True)
         status = "SUBMITTED" if self.result.submitted else "NOT SUBMITTED"
         status_class = "frlm-good" if self.result.submitted else "frlm-bad"
+        verified = bool(getattr(self.result, "verified", False))
         metrics = (
             ("Status", status),
+            ("Verified", "yes" if verified else "no"),
             ("Turns", facts.get("turns")),
             ("Errors", facts.get("errors")),
             ("LM time", _format_number(facts.get("lm_seconds"), suffix="s")),

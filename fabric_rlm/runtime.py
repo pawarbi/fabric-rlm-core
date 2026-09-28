@@ -572,6 +572,14 @@ class OutputValidationResult:
         return not self.errors
 
 
+_VALIDATOR_LABELS = {
+    "output_validator": "output validator",
+    "output_validator_context": "context-aware output validator",
+}
+# The same user validator failing to run this many times in a row stops the run.
+_VALIDATOR_ERROR_LIMIT = 2
+
+
 @dataclass
 class RLMResult:
     submitted: bool
@@ -614,6 +622,19 @@ class RLMResult:
     def integrity_ok(self) -> bool:
         """False when the answer was accepted with unresolved integrity findings."""
         return not self.integrity_problems
+
+    @property
+    def verified(self) -> bool:
+        """True when the answer was submitted and checked.
+
+        At least one check (an output validator or a skill verifier) ran and
+        accepted the submitted answer, and none was skipped, timed out, crashed
+        or rejected it. A run with no checks is not verified.
+        """
+        if not self.submitted:
+            return False
+        metadata = getattr(self.trajectory, "metadata", None) or {}
+        return bool((metadata.get("verifier_execution") or {}).get("verified"))
 
     @property
     def turns(self) -> list[TurnRecord]:
@@ -1109,6 +1130,8 @@ class RLM:
         digest_after_turn: int | None = None,
         output_validator: Callable[[Mapping[str, Any]], None] | None = None,
         output_validator_context: Callable[[Mapping[str, Any], Mapping[str, Any]], None] | None = None,
+        validator_errors: str = "reject",
+        validator_timeout: float | None = None,
         analytical_integrity: bool | str = True,
         halve_max_iter_on_retry: bool = True,
         engine: str = "auto",
@@ -1125,6 +1148,20 @@ class RLM:
         # carries typed EvidenceRecords harvested from the run's telemetry.
         # Prompts, execution and the answer are the same either way.
         self.capture_evidence = bool(capture_evidence)
+        # A validator that cannot check an answer has not checked it. By default
+        # a crash, a False return or a timeout rejects the answer; "accept" keeps
+        # the old graceful degrade for callers who want it.
+        if validator_errors not in ("reject", "accept"):
+            raise ValueError(f"validator_errors must be 'reject' or 'accept', got {validator_errors!r}")
+        if validator_timeout is not None and (
+            isinstance(validator_timeout, bool)
+            or not isinstance(validator_timeout, (int, float))
+            or validator_timeout <= 0
+        ):
+            raise ValueError(f"validator_timeout must be a positive number of seconds, got {validator_timeout!r}")
+        self.validator_errors = validator_errors
+        self.validator_timeout = float(validator_timeout) if validator_timeout is not None else None
+        self._validator_error_streaks: dict[str, int] = {}
         # ---- engine validation (early, before any heavy resolution) ---------
         # Resolve aliases ('default' -> 'v6-custom', 'dspy' -> 'v7-dspy')
         # before any further engine-based logic so internal switches keep
@@ -1304,6 +1341,8 @@ class RLM:
                 digest_after_turn=digest_after_turn,
                 output_validator=output_validator,
                 output_validator_context=output_validator_context,
+                validator_errors=validator_errors,
+                validator_timeout=validator_timeout,
                 analytical_integrity=analytical_integrity,
                 halve_max_iter_on_retry=halve_max_iter_on_retry,
                 stuck_loop_threshold=stuck_loop_threshold,
@@ -2114,6 +2153,16 @@ class RLM:
             trajectory.metadata.setdefault(
                 "verifier_execution", self._verifier_execution_summary()
             )
+            unchecked = [
+                name
+                for name in trajectory.metadata["verifier_execution"].get("degraded", [])
+                if name in _VALIDATOR_LABELS
+            ]
+            if unchecked:
+                logger.warning(
+                    "The answer was accepted although %s could not check it; result.verified is False.",
+                    " and ".join(_VALIDATOR_LABELS[name] for name in unchecked),
+                )
         # One id per execution. Two runs that executed the same code are two
         # observations; harvesting the same result twice is one.
         trajectory.metadata.setdefault("run_id", uuid.uuid4().hex)
@@ -2415,6 +2464,7 @@ class RLM:
             reached_max = False
             verifier_repair_history: list[dict[str, Any]] = []
             self._repair_counts = {}
+            self._validator_error_streaks = {}
             self._integrity_rejections = 0
             timeout_recoveries = 0
 
@@ -2847,6 +2897,30 @@ class RLM:
                         if history_entry is not None:
                             history_entry["turn"] = turn_counter
                             verifier_repair_history.append(history_entry)
+                        if (
+                            history_entry is not None
+                            and history_entry.get("validator_error_streak", 0) >= _VALIDATOR_ERROR_LIMIT
+                        ):
+                            # The check itself is broken; the model cannot repair it.
+                            trajectory.metadata["verifier_repair_history"] = verifier_repair_history
+                            trajectory.metadata["stopped_reason"] = "validator_error"
+                            trajectory.metadata["validator_error"] = history_entry.get("assertion")
+                            logger.error(
+                                "The %s could not check the answer %d times in a row (%s). The run stops "
+                                "without an answer. Fix the validator, or pass validator_errors='accept' "
+                                "to accept answers a validator cannot check.",
+                                _VALIDATOR_LABELS.get(history_entry.get("skill"), "validator"),
+                                history_entry["validator_error_streak"],
+                                history_entry.get("assertion"),
+                            )
+                            return RLMResult(
+                                submitted=False,
+                                payload=None,
+                                trajectory=trajectory,
+                                final_state=result.state,
+                                max_turns=self.max_turns,
+                                **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
+                            )
                         messages.append({"role": "assistant", "content": response_text})
                         messages.append({"role": "user", "content": feedback_text})
                         next_turn_type = "verifier_repair"
@@ -3160,51 +3234,137 @@ class RLM:
             self._log_verifier(f"skill:{skill.name}", "error", "verifier raised")
         return None
 
+    def _call_user_validator(self, validator: Callable[..., Any], *args: Any) -> tuple[str, str]:
+        """Run a user validator and classify the outcome as passed, rejected or error.
+
+        AssertionError rejects with its message. A ``False`` return rejects
+        (validators should raise; returning False is the common mistake). Any
+        other exception, or running past ``validator_timeout``, is an error: the
+        check did not happen. The validator runs on a daemon thread when a
+        timeout is set, so a hung reference query cannot block the process.
+        """
+        box: dict[str, Any] = {}
+
+        def call() -> None:
+            try:
+                box["value"] = validator(*args)
+            except BaseException as exc:  # noqa: BLE001 - classified below
+                box["error"] = exc
+
+        timeout = getattr(self, "validator_timeout", None)
+        if timeout:
+            import threading
+
+            worker = threading.Thread(target=call, name="fabric-rlm-validator", daemon=True)
+            worker.start()
+            worker.join(timeout)
+            if worker.is_alive():
+                return "error", f"timed out after {timeout:g} s"
+        else:
+            call()
+        error = box.get("error")
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            raise error
+        if isinstance(error, AssertionError):
+            return "rejected", str(error)
+        if error is not None:
+            return "error", f"{type(error).__name__}: {error}"
+        if box.get("value") is False:
+            return "rejected", ""
+        return "passed", ""
+
+    def _user_validator_feedback(
+        self,
+        key: str,
+        outcome: str,
+        message: str,
+        payload: Mapping[str, Any] | None,
+        *,
+        extra: str = "",
+        history: Mapping[str, Any] | None = None,
+    ) -> tuple[str, dict[str, Any] | None] | None:
+        """Turn a user validator's outcome into repair feedback, or None when it passed."""
+        label = _VALIDATOR_LABELS[key]
+        streaks = getattr(self, "_validator_error_streaks", None)
+        if streaks is None:
+            streaks = self._validator_error_streaks = {}
+        if outcome == "passed":
+            streaks[key] = 0
+            self._log_verifier(key, "passed")
+            return None
+        if outcome == "error" and getattr(self, "validator_errors", "reject") == "accept":
+            logger.warning(
+                "The %s could not check this answer (%s); accepting it because "
+                "validator_errors='accept'. result.verified is False.",
+                label,
+                message,
+            )
+            self._log_verifier(key, "error", message)
+            return None
+        if outcome == "error":
+            streaks[key] = streaks.get(key, 0) + 1
+            self._log_verifier(key, "error", message)
+            detail = (
+                f"The {label} could not check this answer ({message}), so it is not accepted. "
+                "Submit again; if the check keeps failing, the run stops."
+            )
+            text = f"could not check this answer ({message})"
+        else:
+            streaks[key] = 0
+            if not message and not streaks.get(f"{key}:warned_false"):
+                streaks[f"{key}:warned_false"] = 1
+                logger.warning(
+                    "The %s returned False. The answer is rejected, but the model is not told why, so it "
+                    "can only guess. Raise AssertionError with a message that says what is wrong instead.",
+                    label,
+                )
+            text = message or f"the {label} returned False without saying why"
+            self._log_verifier(key, "rejected", text)
+            detail = f"AssertionError: {message}" if message else (
+                f"The {label} returned False. Check the answer against the task and the data, then submit again."
+            )
+        fields = [
+            str(name)
+            for name in (payload or {})
+            if re.search(rf"(?<![\w]){re.escape(str(name))}(?![\w])", message or "")
+        ]
+        target = (
+            "Fix " + ", ".join(f"`{name}`" for name in fields) + " as described above"
+            if fields
+            else "Fix the problem described above"
+        )
+        feedback = (
+            f"Your SUBMIT was rejected by the {label}:\n\n{detail}\n\n"
+            f"Submitted payload preview: {_preview_payload(payload)}\n"
+            f"{extra}{target} and call SUBMIT(...) again."
+            + self._repair_nudge_suffix(key)
+        )
+        history_entry: dict[str, Any] = {
+            "skill": key,
+            "rejected_payload": dict(payload) if isinstance(payload, Mapping) else payload,
+            "assertion": text,
+            "outcome": outcome,
+            **dict(history or {}),
+        }
+        if outcome == "error":
+            history_entry["validator_error"] = True
+            history_entry["validator_error_streak"] = streaks[key]
+        return feedback, history_entry
+
     def _run_output_validator(
         self, payload: Mapping[str, Any] | None
     ) -> tuple[str, dict[str, Any] | None] | None:
-        """Run the configured global output validator on a SUBMIT payload.
+        """Run the configured output validator on a SUBMIT payload.
 
-        The validator is a callable (typically a host contract verifier)
-        that raises :class:`AssertionError` on contract violation. Returns
-        ``None`` when no validator is configured, the validator passes, or
-        the validator itself misbehaves (graceful degrade — never block a
-        valid SUBMIT behind a buggy host-side validator). Returns a
-        ``(feedback, history_entry)`` tuple when the validator raises an
-        ``AssertionError`` so the caller can drive a verifier-repair turn.
+        Returns ``None`` when no validator is configured or it accepted the
+        payload, and ``(feedback, history_entry)`` when it rejected the payload
+        or could not check it (unless ``validator_errors='accept'``).
         """
 
         if self.output_validator is None:
             return None
-        try:
-            self.output_validator(payload or {})
-        except AssertionError as exc:
-            message = str(exc) or "output validator rejected the SUBMIT payload."
-            self._log_verifier("output_validator", "rejected", message)
-            feedback = (
-                "Your SUBMIT was rejected by the output-format validator:\n\n"
-                f"AssertionError: {message}\n\n"
-                f"Submitted payload preview: {_preview_payload(payload)}\n"
-                "Repair the `output` field and call SUBMIT(...) again."
-                + self._repair_nudge_suffix("output_validator")
-            )
-            history_entry: dict[str, Any] = {
-                "skill": "output_validator",
-                "rejected_payload": dict(payload) if isinstance(payload, Mapping) else payload,
-                "assertion": message,
-            }
-            return feedback, history_entry
-        except Exception as exc:  # noqa: BLE001 - graceful degrade for buggy validators
-            logger.warning(
-                "Output validator raised non-AssertionError %s: %s; "
-                "accepting payload (graceful degrade).",
-                type(exc).__name__,
-                exc,
-            )
-            self._log_verifier("output_validator", "error", type(exc).__name__)
-            return None
-        self._log_verifier("output_validator", "passed")
-        return None
+        outcome, message = self._call_user_validator(self.output_validator, payload or {})
+        return self._user_validator_feedback("output_validator", outcome, message, payload)
 
     # Two rejections per run is the repair budget for the heuristic screens
     # below; "strict" mode has no budget and keeps rejecting until the run
@@ -3393,42 +3553,21 @@ class RLM:
         ``output_validator`` is intentionally payload-only for simple answer
         contracts. Artifact tasks often need to verify side effects (saved
         files, database rows, interpreter state), so this opt-in hook receives
-        the same payload plus non-serialized runtime context.
+        the same payload plus non-serialized runtime context. Its outcomes are
+        classified like ``output_validator``'s.
         """
 
         if self.output_validator_context is None:
             return None
-        try:
-            self.output_validator_context(payload or {}, context)
-        except AssertionError as exc:
-            message = str(exc) or "context validator rejected the submitted artifact/state."
-            self._log_verifier("output_validator_context", "rejected", message)
-            feedback = (
-                "Your SUBMIT was rejected by the context-aware output validator:\n\n"
-                f"AssertionError: {message}\n\n"
-                f"Submitted payload preview: {_preview_payload(payload)}\n"
-                f"Context keys: {', '.join(context.keys()) or '(none)'}\n"
-                "Inspect the artifact/state, fix the issue, and call SUBMIT(...) again."
-                + self._repair_nudge_suffix("output_validator_context")
-            )
-            history_entry: dict[str, Any] = {
-                "skill": "output_validator_context",
-                "rejected_payload": dict(payload) if isinstance(payload, Mapping) else payload,
-                "assertion": message,
-                "context_keys": list(context.keys()),
-            }
-            return feedback, history_entry
-        except Exception as exc:  # noqa: BLE001 - graceful degrade for buggy validators
-            logger.warning(
-                "Context-aware output validator raised non-AssertionError %s: %s; "
-                "accepting payload (graceful degrade).",
-                type(exc).__name__,
-                exc,
-            )
-            self._log_verifier("output_validator_context", "error", type(exc).__name__)
-            return None
-        self._log_verifier("output_validator_context", "passed")
-        return None
+        outcome, message = self._call_user_validator(self.output_validator_context, payload or {}, context)
+        return self._user_validator_feedback(
+            "output_validator_context",
+            outcome,
+            message,
+            payload,
+            extra=f"Context keys: {', '.join(context.keys()) or '(none)'}\n",
+            history={"context_keys": list(context.keys())},
+        )
 
     def _format_feedback(
         self,
@@ -3551,6 +3690,7 @@ class RLM:
         # ---- Slice 3: bounded verifier-wrapper retry loop
         MAX_VERIFIER_RETRIES = 2
         verifier_repair_history: list[dict[str, Any]] = []
+        self._validator_error_streaks = {}
         current_inputs = dict(bound_inputs)
         max_iter = self.max_turns
         prediction = None
