@@ -1,9 +1,13 @@
-"""The output contract rejects empty containers and checks list/dict element types (issue #120).
+"""The output contract re-checks empty containers and checks list/dict element types (issue #120).
 
 A semantic-model run that fought column names for ten turns submitted {} for
-sales_by_region and came back submitted=True. An empty container now fails any
-required field unless the caller allows it (allow_empty), and dict[str, float]
-or list[dict] can be declared and are checked element by element.
+sales_by_region and came back submitted=True. Forbidding empties outright was
+worse: live, GPT-5.1 correctly submitted {} for 2019 revenue (there is no 2019
+data), was told to fill it, and submitted other years' revenue, 2 of 2. So an
+empty field is sent back once for a re-check, the same empty value again is
+accepted and recorded, allow_empty names fields where empty is expected, and
+allow_empty=False forbids it. dict[str, float] or list[dict] can be declared and
+are checked element by element.
 """
 
 from __future__ import annotations
@@ -35,10 +39,19 @@ def code(text):
 
 # -- the rules -----------------------------------------------------------------------------------------
 
-def test_an_empty_container_fails_any_required_field_by_default():
+def test_an_empty_container_is_sent_back_for_a_recheck_then_accepted():
     for value in ({}, [], ()):
-        errors = validate_submit_payload({"sales_by_region": value}, ["sales_by_region"]).errors
-        assert errors and "empty" in errors[0]
+        (error,) = validate_submit_payload({"sales_by_region": value}, ["sales_by_region"]).errors
+        assert "is an empty" in error and "do not invent any" in error
+        assert validate_submit_payload({"sales_by_region": value}, ["sales_by_region"],
+                                       confirmed_empty={"sales_by_region"}).ok
+
+
+def test_allow_empty_false_never_accepts_an_empty_container():
+    for confirmed in ((), {"sales_by_region"}):
+        (error,) = validate_submit_payload({"sales_by_region": {}}, ["sales_by_region"], allow_empty=False,
+                                           confirmed_empty=confirmed).errors
+        assert "not accepted" in error and "Do not invent values" in error
 
 
 def test_allow_empty_by_name_or_for_every_non_core_field():
@@ -76,14 +89,34 @@ def test_the_prompt_shows_the_parameterized_type():
 
 # -- in a run -----------------------------------------------------------------------------------------
 
-def test_an_empty_submission_is_sent_back_and_the_filled_one_accepted(caplog):
+def test_an_empty_submission_is_rechecked_and_a_filled_one_accepted():
     lm = ScriptedLM([code("SUBMIT(sales_by_region={})"), code("SUBMIT(sales_by_region={'North': 10.0})")])
-    with caplog.at_level(logging.WARNING, logger="fabric_rlm.runtime"):
-        result = RLM.task("Sales by region.", inputs={}, outputs={"sales_by_region": dict[str, float]},
-                          lm=lm, max_turns=3, timeout=60).run()
+    result = RLM.task("Sales by region.", inputs={}, outputs={"sales_by_region": dict[str, float]},
+                      lm=lm, max_turns=3, timeout=60).run()
     assert result.submitted and result.payload == {"sales_by_region": {"North": 10.0}}
-    assert any("is an empty dict" in prompt for prompt in lm.prompts)
-    assert any("allow_empty" in record.message for record in caplog.records)
+    assert any("is an empty dict" in prompt and "do not invent any" in prompt for prompt in lm.prompts)
+    assert "empty_outputs_confirmed" not in result.trajectory.metadata
+
+
+def test_a_confirmed_empty_is_accepted_and_recorded(caplog):
+    lm = ScriptedLM([code("SUBMIT(sales_by_region={})"), code("SUBMIT(sales_by_region={})")])
+    with caplog.at_level(logging.WARNING, logger="fabric_rlm.runtime"):
+        result = RLM.task("Sales by region.", inputs={}, outputs={"sales_by_region": dict}, lm=lm,
+                          max_turns=3, timeout=60).run()
+    assert result.submitted and result.payload == {"sales_by_region": {}}
+    assert result.trajectory.metadata["empty_outputs_confirmed"] == ["sales_by_region"]
+    assert sum("accepted empty after the run re-checked it" in r.message for r in caplog.records) == 1
+
+
+def test_allow_empty_false_fails_closed_and_hints_once_per_run(caplog):
+    for _ in range(2):
+        lm = ScriptedLM([code("SUBMIT(sales_by_region={})")] * 3)
+        with caplog.at_level(logging.WARNING, logger="fabric_rlm.runtime"):
+            caplog.clear()
+            result = RLM.task("Sales by region.", inputs={}, outputs={"sales_by_region": dict}, lm=lm, max_turns=3,
+                              timeout=60, allow_empty=False).run()
+        assert result.submitted is False
+        assert sum("pass allow_empty" in r.message for r in caplog.records) == 1
 
 
 def test_allow_empty_accepts_a_valid_empty_answer():
@@ -106,12 +139,3 @@ def test_a_wrongly_typed_element_is_sent_back():
                       lm=lm, max_turns=3, timeout=60).run()
     assert result.submitted and result.payload == {"sales_by_region": {"North": 10.0}}
     assert any("value for key 'North' got str" in prompt for prompt in lm.prompts)
-
-
-def test_the_hint_is_given_again_in_a_later_run(caplog):
-    for _ in range(2):
-        lm = ScriptedLM([code("SUBMIT(sales_by_region={})"), code("SUBMIT(sales_by_region={'North': 10.0})")])
-        with caplog.at_level(logging.WARNING, logger="fabric_rlm.runtime"):
-            caplog.clear()
-            RLM.task("Sales by region.", inputs={}, outputs={"sales_by_region": dict}, lm=lm, max_turns=3, timeout=60).run()
-        assert sum("allow_empty" in record.message for record in caplog.records) == 1

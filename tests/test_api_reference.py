@@ -63,6 +63,7 @@ def test_api_parameter_tables_match_signatures_and_defaults(heading, expected_co
         "engine": '"auto"',
         "inner_engine": '"v6-custom"',
         "validator_errors": '"reject"',
+        "allow_empty": '"confirm"',
         "reconcile_guidance": "_RECONCILE_GUIDANCE",
     }
     for name, cell in rows:
@@ -70,7 +71,7 @@ def test_api_parameter_tables_match_signatures_and_defaults(heading, expected_co
         if name == "reconcile_guidance":
             assert default is verify._RECONCILE_GUIDANCE
         elif name in display_defaults:
-            assert default == {"engine": "auto", "inner_engine": "v6-custom", "validator_errors": "reject"}[name]
+            assert default == {"engine": "auto", "inner_engine": "v6-custom", "validator_errors": "reject", "allow_empty": "confirm"}[name]
         expected = display_defaults.get(name, repr(default))
         if default is inspect.Parameter.empty:
             expected = "required"

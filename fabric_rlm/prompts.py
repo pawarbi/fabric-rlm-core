@@ -72,7 +72,7 @@ turns. Build your answer incrementally.
 
 {output_listing}
 
-Submit every listed field. Required fields may not be None, blank strings or empty containers unless the task says an empty value is allowed.
+Submit every listed field. Required fields may not be None or blank strings. Never invent values to fill a field: if the data has nothing for a list or dict field, submit it empty and confirm it when asked.
 
 ## Answering rules
 

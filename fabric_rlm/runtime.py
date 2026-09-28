@@ -1133,7 +1133,7 @@ class RLM:
         output_validator_context: Callable[[Mapping[str, Any], Mapping[str, Any]], None] | None = None,
         validator_errors: str = "reject",
         validator_timeout: float | None = None,
-        allow_empty: bool | Iterable[str] = False,
+        allow_empty: bool | str | Iterable[str] = "confirm",
         analytical_integrity: bool | str = True,
         halve_max_iter_on_retry: bool = True,
         engine: str = "auto",
@@ -1164,10 +1164,12 @@ class RLM:
         self.validator_errors = validator_errors
         self.validator_timeout = float(validator_timeout) if validator_timeout is not None else None
         self._validator_error_streaks: dict[str, int] = {}
-        # Empty containers fail every required output unless the caller says an
-        # empty answer is valid for that field ("no anomalies found").
-        if isinstance(allow_empty, bool):
-            self.allow_empty: bool | frozenset[str] = allow_empty
+        # An empty list or dict in a required output is re-checked by default: the
+        # run is asked to confirm it, and the same empty value again is accepted
+        # and recorded. Forbidding it outright made models invent content.
+        self.allow_empty: bool | str | frozenset[str]
+        if isinstance(allow_empty, bool) or allow_empty == "confirm":
+            self.allow_empty = allow_empty
         elif isinstance(allow_empty, str):
             self.allow_empty = frozenset({allow_empty})
         else:
@@ -1175,7 +1177,8 @@ class RLM:
                 self.allow_empty = frozenset(str(name) for name in allow_empty)
             except TypeError:
                 raise ValueError(
-                    f"allow_empty must be True, False or a collection of output field names, got {allow_empty!r}"
+                    "allow_empty must be 'confirm', True, False or a collection of output field names, "
+                    f"got {allow_empty!r}"
                 ) from None
         # ---- engine validation (early, before any heavy resolution) ---------
         # Resolve aliases ('default' -> 'v6-custom', 'dspy' -> 'v7-dspy')
@@ -2169,6 +2172,21 @@ class RLM:
             trajectory.metadata.setdefault(
                 "verifier_execution", self._verifier_execution_summary()
             )
+            confirmed = sorted(
+                name
+                for name, value in (result.payload or {}).items()
+                if name in (getattr(self, "_empty_rechecked", None) or ())
+                and isinstance(value, (Mapping, list, tuple, set, frozenset))
+                and not value
+            )
+            if confirmed:
+                trajectory.metadata["empty_outputs_confirmed"] = confirmed
+                logger.warning(
+                    "Output %s was accepted empty after the run re-checked it. If empty is an expected answer, "
+                    "pass allow_empty=%r to skip the re-check; otherwise the run found no data for it.",
+                    ", ".join(repr(name) for name in confirmed),
+                    set(confirmed),
+                )
             unchecked = [
                 name
                 for name in trajectory.metadata["verifier_execution"].get("degraded", [])
@@ -2490,6 +2508,7 @@ class RLM:
             self._repair_counts = {}
             self._validator_error_streaks = {}
             self._empty_hinted = set()
+            self._empty_rechecked = set()
             self._integrity_rejections = 0
             timeout_recoveries = 0
 
@@ -2794,13 +2813,14 @@ class RLM:
                         result.submit_payload,
                         required_output_fields,
                         self._inline_output_types,
-                        allow_empty=getattr(self, "allow_empty", False),
+                        allow_empty=getattr(self, "allow_empty", "confirm"),
+                        confirmed_empty=getattr(self, "_empty_rechecked", ()),
                     )
                     if result.submitted
                     else OutputValidationResult()
                 )
                 if result.submitted:
-                    self._hint_rejected_empties(result.submit_payload, validation)
+                    self._note_empty_outputs(result.submit_payload, validation)
 
                 trajectory.append(
                     TurnRecord(
@@ -2947,6 +2967,7 @@ class RLM:
                                 trajectory=trajectory,
                                 final_state=result.state,
                                 max_turns=self.max_turns,
+                                failure_reason="validator_error",
                                 **_aggregate_trajectory_metrics(trajectory, unbilled_calls),
                             )
                         messages.append({"role": "assistant", "content": response_text})
@@ -3262,24 +3283,26 @@ class RLM:
             self._log_verifier(f"skill:{skill.name}", "error", "verifier raised")
         return None
 
-    def _hint_rejected_empties(self, payload: Mapping[str, Any] | None, validation: OutputValidationResult) -> None:
-        """Tell the developer, once per field per run, how to allow a valid empty answer."""
+    def _note_empty_outputs(self, payload: Mapping[str, Any] | None, validation: OutputValidationResult) -> None:
+        """Remember fields sent back for an empty re-check; tell the developer how to allow a strict empty."""
         if validation.ok or not isinstance(payload, Mapping):
             return
+        rechecked = getattr(self, "_empty_rechecked", None)
+        if rechecked is None:
+            rechecked = self._empty_rechecked = set()
         hinted = getattr(self, "_empty_hinted", None)
         if hinted is None:
             hinted = self._empty_hinted = set()
-        for name, value in payload.items():
-            if (
-                name not in hinted
-                and isinstance(value, (Mapping, list, tuple, set, frozenset))
-                and not value
-                and any(f"{name!r} is an empty" in error for error in validation.errors)
+        for name in payload:
+            if any(f"{name!r} is an empty" in error and "submit the same empty value again and it will be accepted as empty" in error for error in validation.errors):
+                rechecked.add(name)
+            elif name not in hinted and any(
+                f"{name!r} is an empty" in error and "an empty value is not accepted for this field" in error for error in validation.errors
             ):
                 hinted.add(name)
                 logger.warning(
-                    "Output field %r was submitted empty and rejected. If an empty value is a valid answer "
-                    "for it (for example, nothing was found), pass allow_empty={%r}.",
+                    "Output field %r was submitted empty and rejected (allow_empty=False). If an empty value is a "
+                    "valid answer for it, pass allow_empty={%r}.",
                     name,
                     name,
                 )
@@ -3742,6 +3765,7 @@ class RLM:
         verifier_repair_history: list[dict[str, Any]] = []
         self._validator_error_streaks = {}
         self._empty_hinted = set()
+        self._empty_rechecked = set()
         current_inputs = dict(bound_inputs)
         max_iter = self.max_turns
         prediction = None
@@ -3817,9 +3841,10 @@ class RLM:
                 payload,
                 required_output_fields,
                 self._inline_output_types,
-                allow_empty=getattr(self, "allow_empty", False),
+                allow_empty=getattr(self, "allow_empty", "confirm"),
+                confirmed_empty=getattr(self, "_empty_rechecked", ()),
             )
-            self._hint_rejected_empties(payload, validation)
+            self._note_empty_outputs(payload, validation)
             if not validation.ok:
                 last_failure_reason = "; ".join(validation.errors)
                 if attempt < MAX_VERIFIER_RETRIES:
@@ -4270,17 +4295,19 @@ def validate_submit_payload(
     required_fields: Iterable[str],
     required_types: Mapping[str, Any] | None = None,
     *,
-    allow_empty: bool | Iterable[str] = False,
+    allow_empty: bool | str | Iterable[str] = "confirm",
+    confirmed_empty: Iterable[str] = (),
 ) -> OutputValidationResult:
     """Validate declared SUBMIT outputs before accepting success.
 
     Declared output fields are required. ``None`` and blank strings/bytes are
-    invalid for every field, and so are empty containers, unless the field is
-    named in ``allow_empty`` (or ``allow_empty=True``, which allows every field
-    except the core final-output names ``output``, ``answer``, ``result`` and
-    ``report``; name those explicitly to allow them). Types may be concrete
-    classes or ``list[...]`` / ``dict[..., ...]`` of them, checked element by
-    element.
+    invalid for every field. An empty list or dict depends on ``allow_empty``:
+    ``"confirm"`` (the default) sends it back once for a re-check and accepts
+    it for a field in ``confirmed_empty``; a field named in ``allow_empty``, or
+    any field under ``allow_empty=True``, accepts it; ``False`` never does. The
+    core final-output names ``output``, ``answer``, ``result`` and ``report``
+    never accept it unless named. Types may be concrete classes or
+    ``list[...]`` / ``dict[..., ...]`` of them, checked element by element.
     """
 
     fields = _normalize_required_fields(required_fields)
@@ -4298,7 +4325,7 @@ def validate_submit_payload(
             errors.append(f"Missing required output field {name!r}.")
             continue
         value = payload[name]
-        error = _validate_required_value(name, value, _empty_allowed(name, allow_empty))
+        error = _validate_required_value(name, value, _empty_policy(name, allow_empty, confirmed_empty))
         if error:
             errors.append(error)
             continue
@@ -4310,30 +4337,40 @@ def validate_submit_payload(
     return OutputValidationResult(tuple(errors))
 
 
-def _empty_allowed(name: str, allow_empty: bool | Iterable[str]) -> bool:
+def _empty_policy(name: str, allow_empty: Any, confirmed_empty: Iterable[str] = ()) -> str:
+    """What an empty container in ``name`` gets: "allow", "confirm" (send back for a re-check) or "reject"."""
+    named = isinstance(allow_empty, (frozenset, set, list, tuple)) and name in set(allow_empty)
+    if isinstance(allow_empty, str) and allow_empty != "confirm":
+        named = name == allow_empty
+    if named:
+        return "allow"
+    if _is_core_final_output_field(name):
+        return "reject"
     if allow_empty is True:
-        return not _is_core_final_output_field(name)
-    if not allow_empty:
-        return False
-    if isinstance(allow_empty, str):
-        return name == allow_empty
-    return name in set(allow_empty)
+        return "allow"
+    if allow_empty is False:
+        return "reject"
+    return "allow" if name in set(confirmed_empty or ()) else "confirm"
 
 
-def _validate_required_value(name: str, value: Any, empty_allowed: bool = False) -> str | None:
+def _validate_required_value(name: str, value: Any, empty_policy: str = "reject") -> str | None:
     if value is None:
         return f"Required output field {name!r} is None."
     if isinstance(value, str) and not value.strip():
         return f"Required output field {name!r} is a blank string."
     if isinstance(value, bytes) and not value.strip():
         return f"Required output field {name!r} is blank bytes."
-    if isinstance(value, (Mapping, list, tuple, set, frozenset)) and not value and not empty_allowed:
+    if isinstance(value, (Mapping, list, tuple, set, frozenset)) and not value and empty_policy != "allow":
+        kind = type(value).__name__
         if _is_core_final_output_field(name):
-            return f"Required core output field {name!r} is an empty {type(value).__name__}."
-        return (
-            f"Required output field {name!r} is an empty {type(value).__name__}. "
-            "Fill it from the data; an empty value is not accepted for this field."
-        )
+            return f"Required core output field {name!r} is an empty {kind}."
+        if empty_policy == "confirm":
+            return (
+                f"Required output field {name!r} is an empty {kind}. Check the query that should fill it: the "
+                "period, the filters and the column names. If the data has values for it, fill them in. If it "
+                "really has none, do not invent any: submit the same empty value again and it will be accepted as empty."
+            )
+        return f"Required output field {name!r} is an empty {kind}, and an empty value is not accepted for this field. Do not invent values to fill it."
     return None
 
 
