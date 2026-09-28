@@ -32,6 +32,15 @@
 
 ### Added
 
+- A validator can state the rule it checks, and the model sees it before the first
+  answer (#122). Set `instructions` on an `output_validator` or
+  `output_validator_context` (a function attribute or an object attribute) and it is
+  shown under the task in both engines; text the task already contains is not
+  repeated. `semantic_model_checks(...)` already has one, so it no longer needs to be
+  added to the task by hand. Live, with a rule known only to the validator, the first
+  answer was right in 0 of 7 runs and each run spent turns learning the rule from
+  rejections.
+
 - `result.empty_outputs`: the output fields that came back as an empty list or dict,
   however they were accepted, also shown in `inspect()`. An author often cannot know
   in advance whether a field will be empty (was there any 2019 data?); this is where

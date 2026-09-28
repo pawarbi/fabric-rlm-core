@@ -883,7 +883,7 @@ from fabric_rlm import semantic_model_checks
 model = SemanticModel("Sales Model")
 checks = semantic_model_checks(model, name="model")
 RLM.task(
-    task=my_task + "\n\n" + checks.instructions,
+    task=my_task,
     inputs={"model": model},
     outputs={**my_outputs, **checks.outputs},
     output_validator=checks,
@@ -895,6 +895,8 @@ When the run submits:
 
 - A headline period that is partial, in progress or in the future goes back for repair, unless the run labels it period-to-date.
 - Each claim is recomputed with DAX the harness writes itself. A claim is a measure, an aggregate over a column, or a ratio of two, with filters and a period. A number whose own query dropped a filter is caught this way, which re-running that query cannot do.
+
+`checks.instructions`, which says what the checks expect, is shown to the model with the task, so the first answer can follow it. Code that also adds it to the task text does not get it twice.
 
 The validator allows three rejections per run by default (`max_rejections`) and records every check in `checks.log`.
 

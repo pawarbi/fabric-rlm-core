@@ -624,7 +624,7 @@ class SemanticModelChecks:
 def semantic_model_checks(model: Any, *, name: str = "model", **options: Any) -> SemanticModelChecks:
     """Build the checks for a run over ``model`` (bound into the run as ``name``).
 
-    Pass ``output_validator=checks``, add ``checks.outputs`` to the run's
-    outputs and ``checks.instructions`` to the task text.
+    Pass ``output_validator=checks`` and add ``checks.outputs`` to the run's
+    outputs. ``checks.instructions`` is shown to the model with the task.
     """
     return SemanticModelChecks(model=model, name=name, **options)

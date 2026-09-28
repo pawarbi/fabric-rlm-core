@@ -63,7 +63,7 @@ turns. Build your answer incrementally.
 ## Task
 
 {task_description}
-
+{validator_rules_section}
 ## Inputs available in namespace
 
 {input_listing}
@@ -110,6 +110,7 @@ def build_system_prompt(
     router_active: bool = False,
     learned_guidance: str | None = None,
     sub_lm_available: bool = True,
+    validator_rules: str | None = None,
 ) -> str:
     inputs = inputs or {}
     task_description, outputs = _task_and_outputs(signature, inline_task, inline_outputs)
@@ -133,6 +134,9 @@ def build_system_prompt(
         cross_source_section=_cross_source_section(inputs),
         predict_section=_PREDICT_AVAILABLE if sub_lm_available else _PREDICT_UNAVAILABLE,
         learned_guidance_section=f"\n{guidance}\n" if guidance else "",
+        # The rules the configured validators check, stated up front so the
+        # first answer can follow them. Absent, the prompt is unchanged.
+        validator_rules_section=f"\n{validator_rules.strip()}\n" if (validator_rules or "").strip() else "",
     )
 
 
