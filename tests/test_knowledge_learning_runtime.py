@@ -615,12 +615,15 @@ def test_verifier_status_records_what_ran_not_what_was_configured(tmp_path: Path
     assert execution["passed"] == ["output_validator"] and execution["verified"] is True
     assert passed.evidence[0].verifier_status == "passed"
 
-    # a validator that crashed: the runtime accepts the answer (graceful
-    # degrade) but nothing verified it
+    # a validator that crashed: by default the answer is not accepted
     def broken(payload):
         raise RuntimeError("validator bug")
 
-    degraded = _checked_run(tmp_path, output_validator=broken)
+    refused = _checked_run(tmp_path, output_validator=broken)
+    assert refused.submitted is False and refused.verified is False
+
+    # with validator_errors="accept" the answer is accepted, and nothing verified it
+    degraded = _checked_run(tmp_path, output_validator=broken, validator_errors="accept")
     assert degraded.submitted and degraded.payload == {"answer": "orders.csv"}
     execution = degraded.trajectory.metadata["verifier_execution"]
     assert execution["degraded"] == ["output_validator"] and execution["verified"] is False

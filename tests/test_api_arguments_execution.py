@@ -189,15 +189,18 @@ def test_output_validator_known_source_contract_and_false_caveat(sales_csv, mode
     ).run()
 
     assert result.submitted, result.failure_reason
-    expected = 50 if mode in {"returns_none", "asserts"} else 51
+    expected = 51 if mode == "no_validator" else 50
     assert result.payload == {"total": expected}
     assert result.integrity_ok
-    if mode == "asserts":
+    if mode in {"asserts", "returns_false"}:
+        # A False return rejects like an assertion; it just cannot say why.
         assert seen == [{"total": 51}, {"total": 50}]
         assert len(lm.messages) == 2
         history = result.trajectory.metadata["verifier_repair_history"]
         assert history[0]["skill"] == "output_validator"
-        assert "must equal 50" in lm.messages[1][-1]["content"]
+        reason = "must equal 50" if mode == "asserts" else "returned False"
+        assert reason in lm.messages[1][-1]["content"]
+        assert result.verified
     else:
         assert len(lm.messages) == 1
         assert seen == ([] if mode == "no_validator" else [{"total": expected}])

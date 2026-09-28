@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- Validators fail closed (#119). An `output_validator` or `output_validator_context`
+  that raised anything other than `AssertionError` was logged and the answer accepted,
+  and one that returned `False` was ignored, so the answer was recorded as verified.
+  Checked live on a semantic model with GPT-5.1: with a validator that crashed or
+  returned `False`, a wrong answer (canceled orders included) came back as a success
+  in 4 of 4 runs, twice marked verified. Now a `False` return rejects like an
+  assertion, and a crash or timeout rejects because the check did not run. Two such
+  failures in a row stop the run without an answer (`stopped_reason="validator_error"`)
+  rather than spending the remaining turns on a check the model cannot fix.
+  `validator_errors="accept"` restores the old behaviour, with a warning.
+
 - `period_coverage` marks a period partial when the data stops or thins out inside it. On the
   ecommerce (Olist) model the data ends on 3 September 2018 and thins out from 27 August, yet
   2018 passed as a complete year (the typical year was the median of a four-month 2016 and a full
@@ -14,6 +25,21 @@
   and marks any period ending well after it partial; the validator's message says why. A dip the
   same week a year earlier also had, such as a quiet Christmas week, is not thinning. Monthly
   snapshots and weekday-only data are unchanged.
+
+### Added
+
+- `result.verified`: the answer was submitted and at least one check ran and accepted
+  it, with none skipped, crashed or timed out. A run with no checks is not verified.
+- `validator_timeout=` (seconds) for user validators, such as one that runs a
+  reference query that can hang (#122).
+- `result.inspect()` shows each validator rejection under the turn it rejected, with
+  its message, and whether the result is verified (#122).
+
+### Changed
+
+- A validator's rejection reads "rejected by the output validator" and names the
+  output fields its message mentions. It used to say "output-format validator" and
+  "repair the `output` field" whatever the rule and the field were (#122).
 
 ## 0.6.7 - 2026-09-25 - what_moved on real semantic models, and period and claims checks for semantic-model runs
 
