@@ -28,6 +28,17 @@
 
 ### Added
 
+- Semantic-model telemetry can say where a number came from (#121). `read_table` now
+  leaves a record (table, requested rows, returned rows and columns), and a `dax`
+  record lists the measures, `Table[Column]` columns and tables the query references,
+  not only a fingerprint. Names only, never values: comments and string literals
+  (filter values, aliases) are removed before parsing. So a provenance check can tell
+  `[Total Price]` from `SUM(Sales[Price])`. Live on the ecommerce model, a run's
+  `read_table` call had left no record and its DAX query only a fingerprint. Parsed
+  without error across 128 Data Agent DAX queries from about 30 models. Telemetry
+  makes no extra call to the model: names are resolved to their canonical spelling
+  only when `aggregate` has already loaded the name catalog. `dax_references(query)`
+  is importable from `fabric_rlm.semantic_model`.
 - `result.verified`: the answer was submitted and at least one check ran and accepted
   it, with none skipped, crashed or timed out. A run with no checks is not verified.
 - `validator_timeout=` (seconds) for user validators, such as one that runs a
