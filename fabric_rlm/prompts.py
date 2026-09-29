@@ -37,7 +37,8 @@ Do not ask one broad `relevant` field (nearly every page of a long document look
 a field for each input column or attribute that could change the result ("<result>_depends_on_<column>", e.g. shipping_fee_depends_on_region, premium_depends_on_age), one for each rule the task names, one for amendments or updates to earlier terms, and a catch-all "other_exception_or_adjustment_to_<result>",
 e.g. `{"sets_refund_window": bool, "refund_depends_on_plan_type": bool, "refund_depends_on_usage": bool, "charges_cancellation_fee": bool, "amends_earlier_terms": bool, "other_exception_or_adjustment_to_refund": bool}`.
 Describe each rule by its effect, since the document may use different words from the task.
-Then print and read the full text of EVERY page flagged for any field (not a subset you pick), and confirm each rule in the text before relying on it.
+Then read the full text of EVERY page flagged for any field (not a subset you pick), and confirm each rule in the text before relying on it.
+Each turn shows at most {output_limit} characters of output and cuts anything longer, so print only as many pages as fit in that (add up `len(page)`), and keep a list of the pages still to read until it is empty.
 """
 _ASK_EACH_DECISION_MODEL = """In this run ask_each is backed by a decision model: it answers ONLY a list of choices or `bool` (no str/int/float fields; bucket numbers into choice ranges instead).
 Each choice field also returns `<field>_confidence` and each bool returns `<field>_p` (probability of true). Items are answered one per fast call, so `batch_size` has no effect; use `concurrency=32` or more.
@@ -47,9 +48,14 @@ When screening pages, the page a rule is on usually scores highest for that fiel
 """
 
 
-def ask_each_section(*, decision_model: bool = False, documents: bool = False) -> str:
-    """The prompt text for ask_each: the tool, the document guidance when a document is an input, the decision-model notes."""
-    return (_ASK_EACH_AVAILABLE + (_ASK_EACH_DOCUMENTS if documents else "")
+def ask_each_section(*, decision_model: bool = False, documents: bool = False, output_limit: int = 5000) -> str:
+    """The prompt text for ask_each: the tool, the document guidance when a document is an input, the decision-model notes.
+
+    ``output_limit`` is the per-turn stdout budget the run actually has, so the
+    advice on how many pages to print at once follows the configured limit.
+    """
+    return (_ASK_EACH_AVAILABLE
+            + (_ASK_EACH_DOCUMENTS.replace("{output_limit}", f"{output_limit:,}") if documents else "")
             + (_ASK_EACH_DECISION_MODEL if decision_model else ""))
 
 SYSTEM_PROMPT_TEMPLATE = """You are an RLM (Recursive Language Model) running in a Python REPL.

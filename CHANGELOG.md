@@ -22,10 +22,31 @@
   the environment is only sent to the host it belongs to.
 - With `ask_each` on and a document among the inputs, the run is told how to find the pages
   a task depends on: screen pages with one narrow field per rule (plus one per input column
-  that could change the result, amendments, and a catch-all), then read every flagged page.
-  On 8 long-PDF + CSV tasks (90 to 220 pages, 2 of them real documents, 2 held out from
-  tuning) with Jev answering, the run used the screen unprompted in 24 of 24 runs and cited
-  every deciding page in 24 of 24, against 11 of 16 without it.
+  that could change the result, amendments, and a catch-all), then read every flagged page,
+  printing only as many pages per turn as fit in the configured output limit
+  (`FABRIC_RLM_STDOUT_LIMIT`, 5,000 characters by default) and keeping a list of pages still
+  to read. Measured on long-PDF + CSV tasks (90 to 220 pages, 2 of them real documents) with
+  Luna as the main model and Jev answering `ask_each`, `max_turns=40`:
+  - Screening at all: with the guidance the run screened unprompted in 23 of 24 runs across 8
+    tasks and cited every deciding page in 21 of 24; without it (the plain tool description),
+    keyword search cited every deciding page in 11 of 16.
+  - Reading in pieces: the 3 of 24 misses above were runs that printed 15 to 30 flagged pages
+    in one turn, so the middle was cut and a page Jev had ranked in its top 3 was never read.
+    Same setup, run side by side, on tasks not used to tune the guidance plus the one that
+    exposed the problem: every row correct in 13 of 15 runs with the page-budget sentence,
+    10 of 15 without (tariff 5/5 vs 4/5, scholarship 4/4 vs 2/4, contract 3/3 vs 3/3, Pub 17
+    1/3 vs 1/3, where both arms misread the same rule). Small samples: a direction, not a
+    measured rate.
+  - Turns: runs used 15 to 40 turns, so pass `max_turns=40` for document tasks; the default
+    of 20 is often not enough. The default is unchanged.
+
+### Changed
+
+- When a turn prints more than the output limit, the feedback now always says so in one
+  line: how much was printed, the limit, that the middle (or, with
+  `FABRIC_RLM_STDOUT_TAIL_RATIO=0`, the end) was dropped, and to print less and continue with
+  what was cut. Before, the cut was silent unless the longer opt-in hint
+  (`FABRIC_RLM_TRUNCATION_HINT=on`) was set; that hint is unchanged.
 
 ## 0.6.8 - 2026-09-28 - validators fail closed, empty outputs are re-checked, and semantic-model numbers say where they came from
 

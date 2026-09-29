@@ -354,6 +354,22 @@ def _build_truncation_hint(full_len: int, limit: int) -> str:
     )
 
 
+# Always-on, one line, only when a turn's output was actually cut. A run that
+# printed 20 flagged pages at once lost the middle ones without noticing and
+# answered from the pages it did see; saying what was dropped, and what to do,
+# lets it re-print that part in smaller pieces.
+_OUTPUT_CUT_MARKER = "Output cut:"
+
+
+def _build_output_cut_notice(full_len: int, limit: int, tail_ratio: float) -> str:
+    dropped = "the middle was dropped where it says 'chars omitted'" if tail_ratio > 0 else "the end was dropped"
+    return (
+        f"\n{_OUTPUT_CUT_MARKER} this turn printed {full_len:,} characters and each turn shows at most "
+        f"{limit:,}, so {dropped}; you have not seen that part. Print less per turn (fewer items, "
+        "or a summary) and continue with what was cut."
+    )
+
+
 def _truncate_for_feedback(text: str, limit: int, *, tail_ratio: float = 0.0) -> str:
     """Trim ``text`` to ``limit`` characters for LM feedback.
 
@@ -3396,6 +3412,7 @@ class RLM:
         return ask_each_section(
             decision_model=chosen is not None and is_decision_model(chosen),
             documents=_has_document_input(inputs or {}),
+            output_limit=STDOUT_FEEDBACK_LIMIT,
         )
 
     def _call_user_validator(self, validator: Callable[..., Any], *args: Any) -> tuple[str, str]:
@@ -3741,12 +3758,11 @@ class RLM:
         is_final_turn: bool = False,
         protocol_notes: Sequence[str] | None = None,
     ) -> str:
-        stdout_text = _truncate_for_feedback(
-            result.stdout,
-            STDOUT_FEEDBACK_LIMIT,
-            tail_ratio=_tail_ratio("FABRIC_RLM_STDOUT_TAIL_RATIO", _STDOUT_TAIL_RATIO_DEFAULT),
-        )
+        stdout_ratio = _tail_ratio("FABRIC_RLM_STDOUT_TAIL_RATIO", _STDOUT_TAIL_RATIO_DEFAULT)
+        stdout_text = _truncate_for_feedback(result.stdout, STDOUT_FEEDBACK_LIMIT, tail_ratio=stdout_ratio)
         parts = [f"REPL output from turn {turn}:\n```\n{stdout_text}\n```"]
+        if result.stdout and len(result.stdout) > STDOUT_FEEDBACK_LIMIT:
+            parts.append(_build_output_cut_notice(len(result.stdout), STDOUT_FEEDBACK_LIMIT, stdout_ratio))
         for note in protocol_notes or ():
             parts.append(f"\nProtocol note: {note}")
         if len(result.stdout) > STDOUT_FEEDBACK_LIMIT and _truncation_hint_enabled():

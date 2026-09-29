@@ -1066,7 +1066,11 @@ the notebook for that model. With `block_network=True` the worker still has no
 network access; the items go out from the notebook process instead.
 
 When a document is among the inputs, the run is also told how to screen a long
-document page by page before relying on keyword search. The run's
+document page by page before relying on keyword search, and how many characters
+of output each turn shows, so it reads the flagged pages a few at a time. That
+reading takes turns: on long-PDF + CSV tasks (90 to 220 pages) runs used 15 to
+40 turns, so pass `max_turns=40` for document tasks; the default of 20 is often
+not enough. The run's
 `trajectory.metadata["ask_each"]` holds the totals: calls, items, failures,
 unfinished items, throttling, tokens and cost where the model reports them.
 

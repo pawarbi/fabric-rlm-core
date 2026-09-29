@@ -324,6 +324,19 @@ def test_document_guidance_only_with_a_document_input_and_decision_notes_only_wi
     assert "backed by a decision model" not in rlm._ask_each_prompt({})
 
 
+def test_document_guidance_states_the_configured_output_limit(tmp_path: Path, monkeypatch):
+    import fabric_rlm.runtime as runtime_module
+
+    pdf = tmp_path / "policy.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    rlm = RLM.task("t", outputs={"x": int}, lm=CallableLM(lambda t, a, m: {}), ask_each=True)
+    monkeypatch.setattr(runtime_module, "STDOUT_FEEDBACK_LIMIT", 12345)
+    text = rlm._ask_each_prompt({"doc": File(pdf)})
+    assert "at most 12,345 characters of output" in text
+    assert "{output_limit}" not in text
+    assert '"sets_refund_window": bool' in text  # literal braces in the example survive
+
+
 @pytest.mark.parametrize("bad", [dict(max_seconds=0), dict(max_concurrency=0), dict(max_items=0), dict(max_concurrency=True)])
 def test_config_limits_are_checked(bad):
     with pytest.raises(ValueError):
