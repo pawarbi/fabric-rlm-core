@@ -424,8 +424,8 @@ def _model_with_measures(n_filler=300):
 
 
 def _fake_ask(calls):
-    def ask(items, question, output, columns=None):
-        calls.append((len(items), question, output, columns))
+    def ask(items, question, output, columns=None, **kwargs):
+        calls.append((len(items), question, output, columns, kwargs))
         out = _Answers()
         for _, row in items.iterrows():
             name = row["measure_name"]
@@ -441,14 +441,14 @@ def test_find_measures_screens_every_measure_and_ranks_exact_first():
     result = _model_with_measures().find_measures("average price per unit at the register", ask=_fake_ask(calls))
     assert calls[0][0] == 302                          # every measure was screened, none filtered first
     assert "average price per unit" in calls[0][1] and calls[0][2] == {"fit": ["exact", "close", "no"]}
-    assert "measure_expression" in calls[0][3]
+    assert "measure_expression" in calls[0][3] and calls[0][4] == {"batch_size": 25, "concurrency": 16}
     assert list(result["measure_name"]) == ["Avg Unit Retail Price", "Avg Unit Retail Price YA"]
     assert list(result["fit"]) == ["exact", "close"] and "DIVIDE" in result["measure_expression"].iloc[0]
     assert result.attrs["screened"] == {"measures": 302, "flagged": 2, "returned": 2, "failed": 0, "unfinished": 0}
 
 
 def test_find_measures_orders_by_decision_model_confidence_and_caps_the_list():
-    def ask(items, question, output, columns=None):
+    def ask(items, question, output, columns=None, **kwargs):
         out = _Answers({"fit": "close", "fit_confidence": (i % 7) / 10} for i in range(len(items)))
         out.stats = {}
         return out

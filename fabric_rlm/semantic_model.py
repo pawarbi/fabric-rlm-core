@@ -873,7 +873,8 @@ class SemanticModel:
         return self._fabric.list_measures(self.dataset, **self._kw)
 
     def find_measures(self, question: str, *, top: int = 10, ask: Any = None,
-                      max_expression_chars: int = 1200) -> Any:
+                      max_expression_chars: int = 1200, batch_size: int = 25,
+                      concurrency: int = 16) -> Any:
         """Screen EVERY measure against a question and return the best candidates.
 
         Each measure (table, name, description, DAX expression) is one item for
@@ -915,7 +916,11 @@ class SemanticModel:
             "variant (another period, a rate instead of an amount or the reverse, per store or per day), or "
             "it needs a filter to answer it. no: anything else."
         )
-        answers = ask(items, prompt, {"fit": ["exact", "close", "no"]}, columns=cols)
+        # Measures are short, so a text model answers ``batch_size`` per call
+        # (one call per measure took 6.6 minutes on 4,800); a decision model
+        # ignores batching and answers each quickly.
+        answers = ask(items, prompt, {"fit": ["exact", "close", "no"]}, columns=cols,
+                      batch_size=batch_size, concurrency=concurrency)
         rows = []
         for position, answer in enumerate(answers):
             if not answer or answer.get("fit") == "no":
