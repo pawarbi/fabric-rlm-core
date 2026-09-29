@@ -44,12 +44,14 @@
   text model set, the run reads flagged pages as quotes: the text model copies the rule
   sentences from each flagged page, the run checks each passage is on its page, and opens a
   full page only when a quote is missing, fails that check, or points elsewhere. Without
-  `text_lm` the prompt is unchanged. Same 8 tasks, 3 runs each, run side by side (Luna main
-  model, Jev screening, gpt-5.4-mini quoting, `max_turns=40`): every row correct in 22 of 24
-  runs with quotes against 16 of 24 reading whole pages; 23 against 32 turns on average;
-  314k against 515k main-model prompt tokens; about $0.09 more per run for the quotes. Most
-  whole-page failures were runs that reached 39 to 40 turns. One quote run had the qualifying
-  sentence in its quote and still applied it wrongly: quotes save reading, not reasoning.
+  `text_lm` the prompt is unchanged. Same 8 tasks, 3 runs each, run side by side (Jev
+  screening, gpt-5.4-mini quoting, `max_turns=40`): quotes took about 8 fewer turns (22-23
+  against 30-32) and about 40% fewer main-model prompt tokens (280-314k against 459-515k) with
+  Luna at medium and at high reasoning, for about $0.09 more per run. Accuracy was about the
+  same: every row correct in 22/24 with quotes against 16/24 whole pages at high, but 20/23
+  against 21/24 at medium, so the gap at high looks like run-to-run noise. Use it to save turns
+  and tokens, not for accuracy. Luna at medium matched high on accuracy with about 40% fewer
+  output tokens.
 
 ### Changed
 
