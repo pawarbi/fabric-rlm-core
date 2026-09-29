@@ -666,6 +666,13 @@ inside the worker as `File(...)` handles with `.path`, `.read_text()`,
 `.read_bytes()`, and `.exists()`, so a Lakehouse path or a local path is just a
 file path.
 
+`.pages()` returns a document as a list of pages, each a `str` with `.label` to
+cite and `.number`: one per page of a PDF (needs the `pdf` extra, or pypdf); for
+text or markdown one per `<!-- page N -->` marker or form feed; otherwise chunks
+of about 2,000 characters split at headings, labelled like "chunk 12 · Article
+14". Page numbers are only needed to cite pages: markdown without markers works
+the same, and the run cites chunk labels instead.
+
 ### Lakehouses
 
 `LakehouseSource` builds a metadata catalog in the parent Fabric notebook, then

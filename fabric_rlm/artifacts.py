@@ -48,6 +48,102 @@ def _configure_host_file_transport(
     _HOST_FILE_TRANSPORT = transport
 
 
+class Page(str):
+    """One page (or chunk) of a document: the text, plus where it came from.
+
+    A ``str``, so it prints, searches and goes into ``ask_each`` like any text.
+    ``number`` is the 1-based page number when the document has pages (a PDF, or
+    text with page markers), else ``None``; ``label`` is what to cite: "page 57",
+    or "chunk 12 · Article 14 Consideration" for text without page markers.
+    """
+
+    number: int | None
+    label: str
+
+    def __new__(cls, text: str, label: str, number: int | None = None) -> "Page":
+        page = super().__new__(cls, text)
+        page.number = number
+        page.label = label
+        return page
+
+
+_PAGE_MARKER = r"<!--\s*page[\s:#-]*(\d+)\s*-->"
+_TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".text", ".rst"}
+
+
+def _pdf_pages(path: str) -> list[str]:
+    try:
+        import fitz  # PyMuPDF, the `pdf` extra
+
+        with fitz.open(path) as doc:
+            return [page.get_text() or "" for page in doc]
+    except ImportError:
+        pass
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise ImportError("File.pages() needs a PDF library: pip install 'fabric-rlm[pdf]' (or pypdf).") from exc
+    return [page.extract_text() or "" for page in PdfReader(path).pages]
+
+
+def _chunk_text(text: str, max_chars: int) -> list[tuple[str, str]]:
+    """Split text without page markers at headings and blank lines into ~max_chars chunks."""
+    import re
+
+    blocks = [b for b in re.split(r"\n\s*\n", text) if b.strip()]
+    heading_re = re.compile(r"^\s*(#{1,6}\s+.+|[A-Z][A-Z0-9 ,&'()/-]{6,}|(ARTICLE|SECTION|PART|CHAPTER|SCHEDULE)\b.*)$")
+    chunks: list[tuple[str, str]] = []
+    current: list[str] = []
+    size = 0
+    heading = ""
+    chunk_heading = ""
+    for block in blocks:
+        first = block.strip().splitlines()[0].strip()
+        is_heading = bool(heading_re.match(first)) and len(first) < 120
+        if current and (size + len(block) > max_chars or (is_heading and size > max_chars // 2)):
+            chunks.append(("\n\n".join(current), chunk_heading))
+            current, size = [], 0
+        if is_heading:
+            heading = first.lstrip("#").strip()
+        if not current:
+            chunk_heading = heading
+        current.append(block)
+        size += len(block) + 2
+    if current:
+        chunks.append(("\n\n".join(current), chunk_heading))
+    return chunks
+
+
+def document_pages(path: str, max_chars: int = 2000) -> list[Page]:
+    """Split a document into pages: PDF pages, text split on page markers, else labelled chunks."""
+    import re
+
+    suffix = Path(path).suffix.lower()
+    if suffix == ".pdf":
+        return [Page(t, f"page {i}", i) for i, t in enumerate(_pdf_pages(path), 1)]
+    if suffix == ".docx":
+        try:
+            import docx  # python-docx
+        except ImportError as exc:
+            raise ImportError("File.pages() on .docx needs python-docx: pip install python-docx.") from exc
+        text = "\n\n".join(
+            (("# " + p.text) if p.style is not None and str(p.style.name).lower().startswith("heading") else p.text)
+            for p in docx.Document(path).paragraphs if p.text.strip()
+        )
+    else:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    if "\f" in text:
+        return [Page(t, f"page {i}", i) for i, t in enumerate(text.split("\f"), 1)]
+    parts = re.split(_PAGE_MARKER, text, flags=re.IGNORECASE)
+    if len(parts) > 1:
+        pages = [Page(parts[0], "before page 1", None)] if parts[0].strip() else []
+        for number, body in zip(parts[1::2], parts[2::2]):
+            pages.append(Page(body, f"page {int(number)}", int(number)))
+        return pages
+    return [Page(t, f"chunk {i}" + (f" · {h}" if h else ""), None)
+            for i, (t, h) in enumerate(_chunk_text(text, max_chars), 1)]
+
+
 @dataclass(frozen=True)
 class File:
     """Lightweight file wrapper exposed inside the RLM worker namespace."""
@@ -59,6 +155,14 @@ class File:
 
     def __init__(self, path: str | Path):
         object.__setattr__(self, "path", str(Path(path).expanduser()))
+
+    def pages(self, max_chars: int = 2000) -> list[Page]:
+        """The document as a list of pages, each a ``str`` with ``.label`` (what to cite) and ``.number``.
+
+        A PDF gives one item per page; text or markdown is split on form feeds or
+        ``<!-- page N -->`` markers, else into ~``max_chars`` chunks at headings.
+        """
+        return document_pages(self.path, max_chars)
 
     @property
     def name(self) -> str:

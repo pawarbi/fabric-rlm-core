@@ -52,6 +52,19 @@
   against 21/24 at medium, so the gap at high looks like run-to-run noise. Use it to save turns
   and tokens, not for accuracy. Luna at medium matched high on accuracy with about 40% fewer
   output tokens.
+- `File.pages()`: a document as a list of pages, each a `str` with `.label` and `.number`. PDF
+  pages; text or markdown split on `<!-- page N -->` markers or form feeds, else ~2,000-character
+  chunks at headings labelled like "chunk 12 · Article 14". With a document input the run is
+  told to use it instead of opening the file itself: in 18 of 24 runs the first attempt passed
+  the `File` handle to a PDF reader that wanted a path, and the run spent about 4 turns getting
+  the text out. With quotes, the run now also skips pages whose quote is empty and, for a
+  clause a quote refers to, prints just that passage rather than whole pages. Same 8 tasks,
+  3 runs each, Luna at medium: quote runs went from 22 to 17 turns and 280k to 226k main-model
+  prompt tokens (whole-page runs from 30 to 24 turns), accuracy unchanged (21/24 fully correct
+  each way). The same documents as markdown with page markers: 15.6 turns, 23/24; as markdown
+  with no page information: 17.3 turns, 21/24, citing chunk labels. Telling the run to rely on
+  a verified quote without re-reading its page saved under a turn and had 3 badly wrong runs of
+  24, so it is not included.
 
 ### Changed
 
