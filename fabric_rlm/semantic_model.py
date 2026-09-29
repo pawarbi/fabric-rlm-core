@@ -872,6 +872,68 @@ class SemanticModel:
         """Measures, with their DAX expressions and descriptions."""
         return self._fabric.list_measures(self.dataset, **self._kw)
 
+    def find_measures(self, question: str, *, top: int = 10, ask: Any = None,
+                      max_expression_chars: int = 1200) -> Any:
+        """Screen EVERY measure against a question and return the best candidates.
+
+        Each measure (table, name, description, DAX expression) is one item for
+        ``ask_each``, which asks whether it computes what the question asks:
+        "exact", "close" (the right quantity but a variant: another period, a
+        rate instead of an amount, or it needs a filter) or "no". The result is
+        a DataFrame of at most ``top`` candidates, exact before close, with the
+        DAX to read before choosing. Screening every measure matters: narrowing
+        by keyword first is how the right measure gets dropped in a model with
+        thousands of them.
+
+        ``ask`` defaults to the run's ``ask_each`` (turned on with
+        ``RLM(ask_each=...)``); outside a run pass any function with the same
+        signature. ``result.attrs["screened"]`` records how many measures were
+        screened and how many could not be answered.
+        """
+        import pandas as pd
+
+        from .ask_each import WORKER_ASK_EACH
+
+        ask = ask or WORKER_ASK_EACH
+        if ask is None:
+            raise RuntimeError(
+                "find_measures needs ask_each, which is not turned on in this run. "
+                "Read the measures with model.measures() instead."
+            )
+        frame = _plain_frame(self.measures(), _METADATA_COLUMNS["measures"])
+        if frame is None or len(frame) == 0:
+            return pd.DataFrame(columns=["table_name", "measure_name", "fit", "confidence", "measure_description", "measure_expression"])
+        cols = [c for c in ("table_name", "measure_name", "measure_description", "measure_expression") if c in frame.columns]
+        items = frame[cols].copy()
+        if "measure_expression" in items.columns:
+            items["measure_expression"] = items["measure_expression"].fillna("").astype(str).str.slice(0, max_expression_chars)
+        items = items.fillna("")
+        prompt = (
+            f"Question: {question}\n"
+            "Decide whether this measure computes what the question asks, judging by its DAX expression, "
+            "description and name. exact: it answers the question as it is. close: the right quantity but a "
+            "variant (another period, a rate instead of an amount or the reverse, per store or per day), or "
+            "it needs a filter to answer it. no: anything else."
+        )
+        answers = ask(items, prompt, {"fit": ["exact", "close", "no"]}, columns=cols)
+        rows = []
+        for position, answer in enumerate(answers):
+            if not answer or answer.get("fit") == "no":
+                continue
+            row = frame.iloc[position].to_dict()
+            row["fit"] = answer["fit"]
+            confidence = answer.get("fit_confidence")
+            row["confidence"] = float(confidence) if confidence is not None else None
+            rows.append(row)
+        rank = {"exact": 0, "close": 1}
+        rows.sort(key=lambda r: (rank[r["fit"]], -(r["confidence"] if r["confidence"] is not None else 1.0)))
+        keep = ["table_name", "measure_name", "fit", "confidence", "measure_description", "measure_expression"]
+        result = pd.DataFrame(rows[:top], columns=[c for c in keep if c in (list(frame.columns) + ["fit", "confidence"])])
+        stats = dict(getattr(answers, "stats", {}) or {})
+        result.attrs["screened"] = {"measures": len(frame), "flagged": len(rows), "returned": len(result),
+                                    "failed": stats.get("failed", 0), "unfinished": stats.get("unfinished", 0)}
+        return result
+
     def relationships(self) -> Any:
         """Relationships between tables, as a DataFrame."""
         return self._fabric.list_relationships(self.dataset, **self._kw)

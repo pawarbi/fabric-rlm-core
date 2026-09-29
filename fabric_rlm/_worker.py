@@ -217,10 +217,14 @@ _ask_each_enabled = False
 def _set_ask_each(enabled: bool) -> None:
     global _ask_each_enabled
     _ask_each_enabled = bool(enabled)
+    import fabric_rlm.ask_each as ask_each_module
+
     if _ask_each_enabled:
         _namespace["ask_each"] = globals()["ask_each"]
+        ask_each_module.WORKER_ASK_EACH = globals()["ask_each"]
     else:
         _namespace.pop("ask_each", None)
+        ask_each_module.WORKER_ASK_EACH = None
     _install_sandbox_shim()
 
 

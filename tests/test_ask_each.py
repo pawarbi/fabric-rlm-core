@@ -399,3 +399,74 @@ def test_second_engine_interpreter_exposes_ask_each_only_when_turned_on():
     with SubprocessPythonInterpreter(timeout=60) as interp:
         out = interp.execute("print('ask_each' in globals())")
     assert "False" in str(out)
+
+
+# ----------------------------------------------------------------- SemanticModel.find_measures
+class _Answers(list):
+    stats: dict = {}
+
+
+def _model_with_measures(n_filler=300):
+    import pandas as pd
+    from fabric_rlm.semantic_model import SemanticModel
+
+    rows = [{"Table Name": "M", "Measure Name": f"Filler {i}", "Measure Expression": f"SUM(T[c{i}])",
+             "Measure Description": ""} for i in range(n_filler)]
+    rows += [
+        {"Table Name": "M", "Measure Name": "Avg Unit Retail Price", "Measure Expression": "DIVIDE([POS $ Sales],[POS Unit Sales])",
+         "Measure Description": "POS dollars per unit"},
+        {"Table Name": "M", "Measure Name": "Avg Unit Retail Price YA", "Measure Expression": "CALCULATE([Avg Unit Retail Price], SAMEPERIODLASTYEAR(D[Date]))",
+         "Measure Description": "a year ago"},
+    ]
+    model = SemanticModel("m", validate=False)
+    object.__setattr__(model, "measures", lambda: pd.DataFrame(rows))
+    return model
+
+
+def _fake_ask(calls):
+    def ask(items, question, output, columns=None):
+        calls.append((len(items), question, output, columns))
+        out = _Answers()
+        for _, row in items.iterrows():
+            name = row["measure_name"]
+            fit = "exact" if name == "Avg Unit Retail Price" else ("close" if name.startswith("Avg Unit Retail Price") else "no")
+            out.append({"fit": fit})
+        out.stats = {"failed": 0, "unfinished": 0}
+        return out
+    return ask
+
+
+def test_find_measures_screens_every_measure_and_ranks_exact_first():
+    calls = []
+    result = _model_with_measures().find_measures("average price per unit at the register", ask=_fake_ask(calls))
+    assert calls[0][0] == 302                          # every measure was screened, none filtered first
+    assert "average price per unit" in calls[0][1] and calls[0][2] == {"fit": ["exact", "close", "no"]}
+    assert "measure_expression" in calls[0][3]
+    assert list(result["measure_name"]) == ["Avg Unit Retail Price", "Avg Unit Retail Price YA"]
+    assert list(result["fit"]) == ["exact", "close"] and "DIVIDE" in result["measure_expression"].iloc[0]
+    assert result.attrs["screened"] == {"measures": 302, "flagged": 2, "returned": 2, "failed": 0, "unfinished": 0}
+
+
+def test_find_measures_orders_by_decision_model_confidence_and_caps_the_list():
+    def ask(items, question, output, columns=None):
+        out = _Answers({"fit": "close", "fit_confidence": (i % 7) / 10} for i in range(len(items)))
+        out.stats = {}
+        return out
+
+    result = _model_with_measures(20).find_measures("q", ask=ask, top=5)
+    assert len(result) == 5 and list(result["confidence"]) == sorted(result["confidence"], reverse=True)
+
+
+def test_find_measures_without_ask_each_says_what_to_do():
+    with pytest.raises(RuntimeError, match="not turned on"):
+        _model_with_measures(3).find_measures("q")
+
+
+def test_worker_publishes_ask_each_for_helpers_only_when_turned_on():
+    mapper = CallableLM(lambda text, attempt, m: classify(text))
+    code = "import fabric_rlm.ask_each as a\nprint('HOOK', a.WORKER_ASK_EACH is not None)"
+    with SubprocessPythonInterpreter(timeout=60) as interp:
+        interp.ask_each_lm, interp.ask_each_config, interp.ask_each_records = mapper, AskEach(), []
+        assert "HOOK True" in str(interp.execute(code))
+    with SubprocessPythonInterpreter(timeout=60) as interp:
+        assert "HOOK False" in str(interp.execute(code))

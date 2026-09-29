@@ -40,6 +40,9 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 ASK_EACH_TOOL = "__fabric_rlm_ask_each__"
+# Set inside the worker when the host turns ask_each on, so helpers that run in
+# the worker (SemanticModel.find_measures) can use it. None everywhere else.
+WORKER_ASK_EACH: Any = None
 
 DEFAULT_CONCURRENCY = 8
 DEFAULT_RETRIES = 2
