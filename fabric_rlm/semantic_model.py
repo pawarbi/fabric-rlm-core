@@ -975,7 +975,26 @@ class SemanticModel:
                 return
             keep = [c for c in cols if c in getattr(df, "columns", [])]
             view = df[keep] if keep else df
-            out.append(view.to_string()[:max_chars])
+            text = view.to_string()
+            if len(text) <= max_chars:
+                out.append(text)
+                return
+            # Cut at a row boundary and say so: a silent cut left a run
+            # choosing among the ~20 measures it could see out of 4,800.
+            lines = text[:max_chars].splitlines()[:-1]
+            shown = max(len(lines) - 1, 0)
+            out.append("\n".join(lines))
+            note = f"... showing {shown} of {len(view)} {title.lower()}; the listing is cut here."
+            if title == "Measures":
+                from .ask_each import WORKER_ASK_EACH
+
+                if WORKER_ASK_EACH is not None:
+                    note += (" Do not choose from this partial list: call model.find_measures(\"<the question>\"),"
+                             " which screens every measure and returns the best candidates with their DAX.")
+                else:
+                    note += (" Do not choose from this partial list: search model.measures() (columns"
+                             " 'Measure Name', 'Measure Description', 'Measure Expression') for the idea you need.")
+            out.append(note)
 
         section("Tables", self.tables, ("Name", "Description"))
         # sempy names this column "Measure Description", not "Description".

@@ -470,3 +470,15 @@ def test_worker_publishes_ask_each_for_helpers_only_when_turned_on():
         assert "HOOK True" in str(interp.execute(code))
     with SubprocessPythonInterpreter(timeout=60) as interp:
         assert "HOOK False" in str(interp.execute(code))
+
+
+def test_schema_says_when_the_measure_list_is_cut_and_where_to_look(monkeypatch):
+    import fabric_rlm.ask_each as ask_each_mod
+
+    model = _model_with_measures(300)
+    text = model.schema()
+    assert "of 302 measures; the listing is cut here" in text and "search model.measures()" in text
+    monkeypatch.setattr(ask_each_mod, "WORKER_ASK_EACH", lambda *a, **k: None)
+    assert "call model.find_measures(" in model.schema()
+    small = _model_with_measures(3).schema()
+    assert "listing is cut" not in small and "Avg Unit Retail Price" in small
