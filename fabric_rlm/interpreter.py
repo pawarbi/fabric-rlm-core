@@ -123,9 +123,30 @@ def _run_host_ask_each(owner: Any, kwargs: dict[str, Any]) -> tuple[dict[str, An
             "ask_each is not turned on in this run. Do this step in Python instead. "
             "(Host: pass ask_each=True, or an LM, to RLM.)"
         )
-    from .ask_each import run_ask_each
+    from .ask_each import AskEachError, run_ask_each
 
-    result, record = run_ask_each(owner.ask_each_lm, kwargs, owner.ask_each_config)
+    kwargs = dict(kwargs)
+    which = kwargs.pop("model", None) or "default"
+    if which == "default":
+        lm = owner.ask_each_lm
+    elif which == "text":
+        text_spec = getattr(owner.ask_each_config, "text_lm", None)
+        if text_spec is None:
+            raise AskEachError('ask_each model="text" is not available in this run; leave model at its default.')
+        lm = getattr(owner, "_ask_each_text_lm", None)
+        if lm is None:
+            from .lm import resolve_lm
+
+            lm = owner._ask_each_text_lm = resolve_lm(text_spec)
+    else:
+        raise AskEachError(f'ask_each model must be "default" or "text", got {which!r}.')
+    try:
+        result, record = run_ask_each(lm, kwargs, owner.ask_each_config)
+    except AskEachError as exc:
+        if which == "default" and getattr(owner.ask_each_config, "text_lm", None) is not None and "decision model" in str(exc):
+            raise AskEachError(f'{exc} This run has a text model for that: pass model="text".') from exc
+        raise
+    record["model_choice"] = which
     records = getattr(owner, "ask_each_records", None)
     if isinstance(records, list):
         records.append(record)

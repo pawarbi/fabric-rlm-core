@@ -39,6 +39,17 @@
     measured rate.
   - Turns: runs used 15 to 40 turns, so pass `max_turns=40` for document tasks; the default
     of 20 is often not enough. The default is unchanged.
+- `AskEach(text_lm=...)`: an optional second model the run picks per call with
+  `ask_each(..., model="text")`. With a document input, a decision model screening pages and a
+  text model set, the run reads flagged pages as quotes: the text model copies the rule
+  sentences from each flagged page, the run checks each passage is on its page, and opens a
+  full page only when a quote is missing, fails that check, or points elsewhere. Without
+  `text_lm` the prompt is unchanged. Same 8 tasks, 3 runs each, run side by side (Luna main
+  model, Jev screening, gpt-5.4-mini quoting, `max_turns=40`): every row correct in 22 of 24
+  runs with quotes against 16 of 24 reading whole pages; 23 against 32 turns on average;
+  314k against 515k main-model prompt tokens; about $0.09 more per run for the quotes. Most
+  whole-page failures were runs that reached 39 to 40 turns. One quote run had the qualifying
+  sentence in its quote and still applied it wrongly: quotes save reading, not reasoning.
 
 ### Changed
 

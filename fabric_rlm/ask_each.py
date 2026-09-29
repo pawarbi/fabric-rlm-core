@@ -77,12 +77,17 @@ class AskEach:
     back as ``None`` with a time-limit error, and ``stats["unfinished"]`` counts
     them. ``max_concurrency`` caps the calls in flight (the model may ask for
     fewer). ``max_items`` caps the items in one call.
+
+    ``text_lm`` (optional) is a second model the run can pick per call with
+    ``ask_each(..., model="text")``, e.g. a cheap text model to pull quotes from
+    pages after a decision model has screened them.
     """
 
     lm: Any = None
     max_seconds: float = 900.0
     max_concurrency: int = 16
     max_items: int = 100_000
+    text_lm: Any = None
 
     def __post_init__(self) -> None:
         if isinstance(self.max_seconds, bool) or not isinstance(self.max_seconds, (int, float)) or self.max_seconds <= 0:

@@ -37,8 +37,15 @@ Do not ask one broad `relevant` field (nearly every page of a long document look
 a field for each input column or attribute that could change the result ("<result>_depends_on_<column>", e.g. shipping_fee_depends_on_region, premium_depends_on_age), one for each rule the task names, one for amendments or updates to earlier terms, and a catch-all "other_exception_or_adjustment_to_<result>",
 e.g. `{"sets_refund_window": bool, "refund_depends_on_plan_type": bool, "refund_depends_on_usage": bool, "charges_cancellation_fee": bool, "amends_earlier_terms": bool, "other_exception_or_adjustment_to_refund": bool}`.
 Describe each rule by its effect, since the document may use different words from the task.
-Then read the full text of EVERY page flagged for any field (not a subset you pick), and confirm each rule in the text before relying on it.
+"""
+# How to read the flagged pages: whole pages (default) or, with a text model, verified quotes.
+_ASK_EACH_READ_PAGES = """Then read the full text of EVERY page flagged for any field (not a subset you pick), and confirm each rule in the text before relying on it.
 Each turn shows at most {output_limit} characters of output and cuts anything longer, so print only as many pages as fit in that (add up `len(page)`), and keep a list of the pages still to read until it is empty.
+"""
+_ASK_EACH_READ_QUOTES = """Then, instead of printing whole pages, have the text model copy the rule text out of EVERY page flagged for any field (not a subset you pick) in one call:
+`quotes = ask_each([pages[i] for i in to_read], "Copy word for word every sentence or table row on this page that sets, changes, limits or makes an exception to a rule about: <the rules you screened for>, plus any definition or cross-reference on this page that those sentences depend on. Separate passages with ' || '. Empty if none.", {"quote": str}, model="text")`.
+Check each passage is really on its page (compare with whitespace collapsed, e.g. `" ".join(p.split()) in " ".join(page.split())`), then print the quotes with their page numbers and read them. Print a full page only when a passage fails that check, a flagged page returns no quote, or a quote refers to text elsewhere (a definition, another clause, a schedule or table); confirm each rule before relying on it.
+Each turn shows at most {output_limit} characters of output and cuts anything longer, so print only as much as fits.
 """
 _ASK_EACH_DECISION_MODEL = """In this run ask_each is backed by a decision model: it answers ONLY a list of choices or `bool` (no str/int/float fields; bucket numbers into choice ranges instead).
 Each choice field also returns `<field>_confidence` and each bool returns `<field>_p` (probability of true). Items are answered one per fast call, so `batch_size` has no effect; use `concurrency=32` or more.
@@ -46,17 +53,32 @@ Ask one narrow question per field, and use the confidence to set aside uncertain
 When screening pages, the page a rule is on usually scores highest for that field even when its probability is below 0.5, so read every flagged page plus each field's top 3 by `<field>_p`:
 `to_read = sorted({i for f in fields for i in range(len(pages)) if screen[i] and screen[i][f]} | {i for f in fields for i in sorted(range(len(pages)), key=lambda i: -(screen[i] or {}).get(f + "_p", 0))[:3]})`.
 """
+_ASK_EACH_TEXT_MODEL = """This run also has a text model for ask_each: pass `model="text"` to use it for `str`, `int` or `float` fields (the default decision model rejects them), e.g. `ask_each(items, question, {"quote": str}, model="text")`.
+"""
 
 
-def ask_each_section(*, decision_model: bool = False, documents: bool = False, output_limit: int = 5000) -> str:
+def ask_each_section(*, decision_model: bool = False, documents: bool = False, output_limit: int = 5000,
+                     text_model: bool = False) -> str:
     """The prompt text for ask_each: the tool, the document guidance when a document is an input, the decision-model notes.
 
     ``output_limit`` is the per-turn stdout budget the run actually has, so the
     advice on how many pages to print at once follows the configured limit.
+    ``text_model`` means ``AskEach(text_lm=...)`` is set: flagged pages are read
+    as verified quotes pulled by that model instead of whole pages.
     """
+    reading = _ASK_EACH_READ_QUOTES if text_model else _ASK_EACH_READ_PAGES
+    documents_text = (_ASK_EACH_DOCUMENTS + reading).replace("{output_limit}", f"{output_limit:,}")
+    if not text_model:
+        return (_ASK_EACH_AVAILABLE
+                + (documents_text if documents else "")
+                + (_ASK_EACH_DECISION_MODEL if decision_model else ""))
+    # With a text model the reading step is quotes, so the decision-model notes
+    # (which say which pages to read) come before it and must not say "read".
+    decision = _ASK_EACH_DECISION_MODEL.replace("so read every flagged page plus", "so the pages to read are every flagged page plus")
     return (_ASK_EACH_AVAILABLE
-            + (_ASK_EACH_DOCUMENTS.replace("{output_limit}", f"{output_limit:,}") if documents else "")
-            + (_ASK_EACH_DECISION_MODEL if decision_model else ""))
+            + (decision if decision_model else "")
+            + _ASK_EACH_TEXT_MODEL
+            + (documents_text if documents else ""))
 
 SYSTEM_PROMPT_TEMPLATE = """You are an RLM (Recursive Language Model) running in a Python REPL.
 

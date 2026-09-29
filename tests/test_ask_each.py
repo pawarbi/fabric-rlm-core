@@ -337,6 +337,55 @@ def test_document_guidance_states_the_configured_output_limit(tmp_path: Path, mo
     assert '"sets_refund_window": bool' in text  # literal braces in the example survive
 
 
+# ----------------------------------------------------------------- second, text model (AskEach(text_lm=...))
+def _host(text_lm=None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(ask_each_lm=FakeDecision(), ask_each_config=AskEach(text_lm=text_lm), ask_each_records=[])
+
+
+def test_model_text_routes_to_the_text_lm():
+    from fabric_rlm.interpreter import _run_host_ask_each
+
+    text = CallableLM(lambda t, a, m: {"quote": t.upper()})
+    host = _host(text)
+    result, record = _run_host_ask_each(host, {"items": ["a rule", "b rule"], "question": "Quote it.",
+                                               "output": {"quote": "str"}, "model": "text"})
+    assert [r["quote"] for r in result["results"]] == ["A RULE", "B RULE"]
+    assert record["model_choice"] == "text" and len(text.prompts) == 2
+    assert host.ask_each_lm.history == []  # the decision model was not called
+
+
+def test_text_field_on_the_decision_model_points_to_model_text():
+    from fabric_rlm.interpreter import _run_host_ask_each
+
+    with pytest.raises(AskEachError, match='pass model="text"'):
+        _run_host_ask_each(_host(CallableLM(lambda t, a, m: {})), {"items": ["x"], "question": "q", "output": {"quote": "str"}})
+    with pytest.raises(AskEachError) as info:
+        _run_host_ask_each(_host(None), {"items": ["x"], "question": "q", "output": {"quote": "str"}})
+    assert 'model="text"' not in str(info.value)
+
+
+@pytest.mark.parametrize("model, match", [("text", "not available"), ("fast", 'must be "default" or "text"')])
+def test_model_choice_is_checked(model, match):
+    from fabric_rlm.interpreter import _run_host_ask_each
+
+    with pytest.raises(AskEachError, match=match):
+        _run_host_ask_each(_host(None), {"items": ["x"], "question": "q", "output": {"ok": "bool"}, "model": model})
+
+
+def test_text_lm_switches_document_reading_to_verified_quotes(tmp_path: Path):
+    pdf = tmp_path / "policy.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    pages = RLM.task("t", outputs={"x": int}, lm=CallableLM(lambda t, a, m: {}),
+                     ask_each=AskEach(lm=FakeDecision()))._ask_each_prompt({"doc": File(pdf)})
+    quotes = RLM.task("t", outputs={"x": int}, lm=CallableLM(lambda t, a, m: {}),
+                      ask_each=AskEach(lm=FakeDecision(), text_lm="openrouter/openai/gpt-5-mini"))._ask_each_prompt({"doc": File(pdf)})
+    assert "read the full text of EVERY page" in pages and 'model="text"' not in pages
+    assert 'model="text"' in quotes and "Separate passages with ' || '" in quotes
+    assert "read the full text of EVERY page" not in quotes and "so read every flagged page" not in quotes
+
+
 @pytest.mark.parametrize("bad", [dict(max_seconds=0), dict(max_concurrency=0), dict(max_items=0), dict(max_concurrency=True)])
 def test_config_limits_are_checked(bad):
     with pytest.raises(ValueError):

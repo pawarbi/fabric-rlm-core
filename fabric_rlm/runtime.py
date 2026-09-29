@@ -3413,6 +3413,7 @@ class RLM:
             decision_model=chosen is not None and is_decision_model(chosen),
             documents=_has_document_input(inputs or {}),
             output_limit=STDOUT_FEEDBACK_LIMIT,
+            text_model=self.ask_each.text_lm is not None,
         )
 
     def _call_user_validator(self, validator: Callable[..., Any], *args: Any) -> tuple[str, str]:

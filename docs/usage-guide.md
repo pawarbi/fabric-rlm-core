@@ -1074,6 +1074,19 @@ not enough. The run's
 `trajectory.metadata["ask_each"]` holds the totals: calls, items, failures,
 unfinished items, throttling, tokens and cost where the model reports them.
 
+With a decision model screening pages, add a cheap text model to read them.
+The run then has the text model copy the rule sentences out of each flagged
+page, checks each passage is really on its page, and reads those short quotes
+instead of whole pages, opening a full page only when a quote is missing, fails
+that check, or refers to text elsewhere:
+
+```python
+ask_each=AskEach(lm=DecisionLM("typesafe/jev-1.13"),
+                 text_lm="openrouter/openai/gpt-5.4-mini")
+```
+
+The run picks the text model per call with `ask_each(..., model="text")`.
+
 ## Engines
 
 `RLM` ships with three stable engines, plus the experimental `adaptive`:

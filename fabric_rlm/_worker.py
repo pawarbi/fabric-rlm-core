@@ -519,6 +519,7 @@ def ask_each(
     retries: int = 2,
     batch_size: int = 1,
     max_seconds: float | None = None,
+    model: str = "default",
 ) -> AskEachResult:
     """Ask one question about every item with an LM, in parallel, and validate each answer.
 
@@ -527,7 +528,8 @@ def ask_each(
     names to ``str``, ``int``, ``float``, ``bool`` or a list of allowed
     strings. ``batch_size`` > 1 sends that many items per LM call (cheaper for
     short items); an item the batch answer misses or gets wrong is retried
-    alone. Returns a list aligned with ``items`` (``None`` where an item
+    alone. ``model="text"`` uses the run's second, text model when the host
+    configured one. Returns a list aligned with ``items`` (``None`` where an item
     failed or the time limit ran out) with ``.errors``, ``.stats`` and
     ``.to_frame()``.
     """
@@ -540,6 +542,7 @@ def ask_each(
         "retries": retries,
         "batch_size": batch_size,
         "max_seconds": max_seconds,
+        "model": model,
     }
     value = _make_tool_stub("__fabric_rlm_ask_each__")(**payload)
     data = json.loads(value) if isinstance(value, str) else value
