@@ -95,6 +95,10 @@
   against +265 from labelling every complaint separately. It adds about $0.06 and 1-3 minutes per
   run. On a spike made of exact duplicate texts (Equifax debt collection, April 2025) runs still
   counted duplicates in code and made no extra calls (2 runs).
+- The `ask_each` text-model guidance adds: keep choice and bool fields on the default (decision)
+  model, and use `model="text"` for them only to re-check items it was unsure about. Before, the
+  run sometimes sent a choice question to the text model (1 of 4 complaint-report runs, $0.50 of
+  labelling instead of about $0.03); with the sentence, 0 of 12 runs did.
 
 ### Added (sub-runs, opt-in)
 

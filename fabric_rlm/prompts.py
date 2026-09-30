@@ -60,7 +60,7 @@ Ask one narrow question per field, and use the confidence to set aside uncertain
 When screening pages, the page a rule is on usually scores highest for that field even when its probability is below 0.5, so read every flagged page plus each field's top 3 by `<field>_p`:
 `to_read = sorted({i for f in fields for i in range(len(pages)) if screen[i] and screen[i][f]} | {i for f in fields for i in sorted(range(len(pages)), key=lambda i: -(screen[i] or {}).get(f + "_p", 0))[:3]})`.
 """
-_ASK_EACH_TEXT_MODEL = """This run also has a text model for ask_each: pass `model="text"` to use it for `str`, `int` or `float` fields (the default decision model rejects them), e.g. `ask_each(items, question, {"quote": str}, model="text")`.
+_ASK_EACH_TEXT_MODEL = """This run also has a text model for ask_each: pass `model="text"` to use it for `str`, `int` or `float` fields (the default decision model rejects them), e.g. `ask_each(items, question, {"quote": str}, model="text")`. Keep choice and bool fields on the default model; use `model="text"` for them only to re-check items the default model was unsure about.
 """
 
 
