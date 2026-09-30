@@ -86,6 +86,15 @@
 - Analytical integrity checks no longer reject an answer submitted on the run's last turn (except
   with `analytical_integrity="strict"`). With no turn left to repair, a rejection returned no answer
   at all; the answer is now accepted and the findings stay on `result.integrity_problems`.
+- The `ask_each` guidance adds one sentence: when a number counts items by what their free text
+  means (a theme, cause or complaint type), label every relevant item with `ask_each` rather than
+  counting keyword or regex matches, which miss paraphrases and redacted words. Tested on
+  explaining a spike in CFPB complaints (Nelnet, March 2025, +371). Without the sentence, 2 of 3
+  runs used keyword search and put the main driver, a wave of privacy and data-access complaints,
+  at +154 and +160; with it, 3 of 3 labelled every complaint and put it at +241, +268 and +277,
+  against +265 from labelling every complaint separately. It adds about $0.06 and 1-3 minutes per
+  run. On a spike made of exact duplicate texts (Equifax debt collection, April 2025) runs still
+  counted duplicates in code and made no extra calls (2 runs).
 
 ### Added (sub-runs, opt-in)
 
