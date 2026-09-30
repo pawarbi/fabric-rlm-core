@@ -67,7 +67,7 @@ def test_starter_setup_and_python_cells(name):
 
 
 def _run_cells(name, tmp_path, monkeypatch, codes):
-    lm = _ScriptedLM(codes)
+    lm = _TourLM(codes)
     monkeypatch.setattr(fabric_rlm, "FabricLM", lambda *args, **kwargs: lm)
     namespace = {}
     for index, source in enumerate(_cells(name)[1:], start=1):
@@ -76,6 +76,19 @@ def _run_cells(name, tmp_path, monkeypatch, codes):
         exec(compile(source, f"{name}:cell {index}", "exec"), namespace)
     assert not lm.codes, "Some notebook recipes did not run"
     return namespace
+
+
+class _TourLM(_ScriptedLM):
+    """Scripted run turns, plus deterministic answers to ask_each's one-item questions."""
+
+    def __call__(self, prompt=None, messages=None, **kwargs):
+        user = (messages or [{}])[-1].get("content", "") if messages else ""
+        if "\nItem:\n" not in user:
+            return super().__call__(prompt=prompt, messages=messages, **kwargs)
+        item = user.split("\nItem:\n", 1)[1].lower()
+        label = ("billing" if re.search(r"charged|billed|invoice|refund", item)
+                 else "outage" if re.search(r"down|500|error", item) else "question")
+        return [json.dumps({"label": label, "reply_today": label == "outage"})]
 
 
 def test_api_tour_runs_with_real_worker_and_typed_repair(tmp_path, monkeypatch):
@@ -93,7 +106,15 @@ def test_api_tour_runs_with_real_worker_and_typed_repair(tmp_path, monkeypatch):
         "SUBMIT(top_region=max(totals, key=totals.get), total_revenue=float(sum(totals.values())))",
         "import csv, io\n"
         "SUBMIT(row_count=len(list(csv.DictReader(io.StringIO(sales_file.read_text())))))",
+        "r = ask_each(tickets, 'Label the support ticket.', "
+        "{'label': ['billing', 'outage', 'question'], 'reply_today': bool})\n"
+        "counts = {}\n"
+        "for x in r:\n"
+        "    counts[x['label']] = counts.get(x['label'], 0) + 1\n"
+        "SUBMIT(counts=counts, reply_today=[i for i, x in enumerate(r) if x['reply_today']])",
     ])
+    assert ns["triage"].outputs == {"counts": {"billing": 2, "outage": 2, "question": 2}, "reply_today": [1, 4]}
+    assert ns["triage"].trajectory.metadata["ask_each"]["items"] == 6
     assert ns["result"].outputs == {"largest": 240, "average": 125.0}
     assert type(ns["result"].outputs["largest"]) is int
     assert type(ns["result"].outputs["average"]) is float

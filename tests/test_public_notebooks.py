@@ -223,6 +223,7 @@ def test_api_tour_covers_the_practical_public_surface():
         "SecurityPolicy.default()",
         "block_network=True",
         "recover_worker_timeouts=1",
+        "ask_each=True",
     ]
 
     missing = [example for example in expected_examples if example not in source]
