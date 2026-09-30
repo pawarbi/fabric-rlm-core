@@ -143,6 +143,7 @@ from .analytical_integrity import (
     check_submitted_paths_exist,
     check_truncated_source_reads,
     check_written_files_open,
+    check_written_tables_complete,
     check_zero_change_items,
     infer_requested_ranking,
     task_asks_about_change,
@@ -3597,6 +3598,11 @@ class RLM:
                 payload, context.get("inputs"), getattr(self, "_run_started_wall", None)
             )
         )
+        problems.extend(
+            check_written_tables_complete(
+                payload, context.get("inputs"), getattr(self, "_run_started_wall", None)
+            )
+        )
         # The ranking checks are about a written answer: does it name the metric,
         # and did the ranking it presents come from that metric. A payload of
         # numbers, labels and a file path has no prose to read, and there "sorted
@@ -3709,6 +3715,11 @@ class RLM:
             # rejected for. Cleared again when a later submission passes.
             trajectory.metadata["analytical_integrity_unresolved"] = list(problems)
         if mode != "strict" and self._integrity_rejections >= self._ANALYTICAL_INTEGRITY_MAX_REJECTIONS:
+            return None
+        turn = context.get("turn")
+        if mode != "strict" and isinstance(turn, int) and turn >= self.max_turns:
+            # No turn is left to repair in: rejecting now would return no answer at all.
+            # Accept it; the findings stay on the result as integrity_problems.
             return None
         self._integrity_rejections += 1
         message = "\n".join(f"- {p}" for p in problems)

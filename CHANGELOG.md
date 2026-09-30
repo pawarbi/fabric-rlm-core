@@ -73,6 +73,19 @@
   `FABRIC_RLM_STDOUT_TAIL_RATIO=0`, the end) was dropped, and to print less and continue with
   what was cut. Before, the cut was silent unless the longer opt-in hint
   (`FABRIC_RLM_TRUNCATION_HINT=on`) was set; that hint is unchanged.
+- A CSV, TSV or XLSX table the run wrote with empty cells is sent back once, as part of the
+  analytical integrity checks: the run is told how many cells are empty and in which columns,
+  and to fill them or write `n/a` or `not found: <why>`, so a gap is never silent. Only tables
+  at a path the task gave or the run returned, written during the run, are checked. On a
+  10-agreement benchmarking request, runs had submitted tables with up to a third of the cells
+  empty; with the check, 0 blank cells in 9 of 9 runs. No change on single-document tasks
+  (8 tasks, 3 runs each: 22/24 fully correct, 17.2 turns, against 21/24 and 17.3 turns before).
+- The document guidance for `ask_each` adds one sentence: before relying on a clause, check for
+  text that narrows or overrides it ("notwithstanding", "provided, however", exceptions that have
+  their own exceptions, later amendments, definitions of the terms it uses).
+- Analytical integrity checks no longer reject an answer submitted on the run's last turn (except
+  with `analytical_integrity="strict"`). With no turn left to repair, a rejection returned no answer
+  at all; the answer is now accepted and the findings stay on `result.integrity_problems`.
 
 ## 0.6.8 - 2026-09-28 - validators fail closed, empty outputs are re-checked, and semantic-model numbers say where they came from
 

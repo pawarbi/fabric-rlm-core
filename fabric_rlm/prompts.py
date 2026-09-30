@@ -38,6 +38,7 @@ Do not ask one broad `relevant` field (nearly every page of a long document look
 a field for each input column or attribute that could change the result ("<result>_depends_on_<column>", e.g. shipping_fee_depends_on_region, premium_depends_on_age), one for each rule the task names, one for amendments or updates to earlier terms, and a catch-all "other_exception_or_adjustment_to_<result>",
 e.g. `{"sets_refund_window": bool, "refund_depends_on_plan_type": bool, "refund_depends_on_usage": bool, "charges_cancellation_fee": bool, "amends_earlier_terms": bool, "other_exception_or_adjustment_to_refund": bool}`.
 Describe each rule by its effect, since the document may use different words from the task.
+Before relying on a clause, check whether other text narrows or overrides it: "notwithstanding", "provided, however", "except" or "excluding" (an exception can itself have an exception), a later amendment, or the definition of a term it uses; search `pages` for the clause's number and its defined terms.
 """
 # How to read the flagged pages: whole pages (default) or, with a text model, verified quotes.
 _ASK_EACH_READ_PAGES = """Then read the full text of EVERY page flagged for any field (not a subset you pick), and confirm each rule in the text before relying on it.

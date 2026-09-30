@@ -1061,6 +1061,85 @@ def check_written_files_open(
     return problems
 
 
+_TABLE_SUFFIXES = {".csv", ".tsv", ".xlsx"}
+_TABLE_MAX_ROWS = 50_000
+
+
+def _empty_cells(path: str) -> tuple[int, int, dict[str, int]] | None:
+    """(empty cells, total cells, empties per column) for a written table, or None if it cannot be read."""
+
+    import os
+
+    try:
+        import pandas as pd
+    except ImportError:  # pragma: no cover - pandas ships with the analytics extra
+        return None
+    suffix = os.path.splitext(path)[1].lower()
+    try:
+        if suffix == ".xlsx":
+            frame = pd.read_excel(path, dtype=str, nrows=_TABLE_MAX_ROWS)
+        else:
+            frame = pd.read_csv(path, dtype=str, keep_default_na=False, nrows=_TABLE_MAX_ROWS,
+                                sep="\t" if suffix == ".tsv" else ",")
+    except Exception:  # noqa: BLE001 - an unreadable table is judged elsewhere, not here
+        return None
+    if frame.empty or not len(frame.columns):
+        return None
+    blank = frame.isna() | frame.apply(lambda col: col.astype(str).str.strip().isin(["", "nan", "None"]))
+    per_column = {str(c): int(n) for c, n in blank.sum().items() if n}
+    return int(blank.to_numpy().sum()), int(blank.size), per_column
+
+
+def check_written_tables_complete(
+    payload: Mapping[str, Any] | None,
+    inputs: Mapping[str, Any] | None,
+    started_at: float | None = None,
+) -> list[str]:
+    """A CSV/TSV/XLSX table this run wrote that still has empty cells.
+
+    Runs over many documents submitted tables with a third of the cells empty
+    and a summary that said the work was preliminary; nothing told the caller.
+    An empty cell is ambiguous: not applicable, not found, or not done. The fix
+    asked for is to fill it, or say which: ``n/a`` or ``not found: <reason>``,
+    so a gap is never a guess and never silent. Same file discovery as
+    ``check_written_files_open``: only a path the task gave as a string or the
+    run returned, written during this run.
+    """
+
+    import os
+
+    candidates: dict[str, str] = {}
+    for source in (payload, inputs):
+        if not isinstance(source, Mapping):
+            continue
+        for field, value in source.items():
+            if not isinstance(value, str) or "://" in value or not ("/" in value or "\\" in value):
+                continue
+            if os.path.splitext(value)[1].lower() in _TABLE_SUFFIXES:
+                candidates.setdefault(value, str(field))
+    problems: list[str] = []
+    for path, field in candidates.items():
+        try:
+            if not os.path.isfile(path):
+                continue
+            if started_at is not None and os.path.getmtime(path) < started_at - _WRITTEN_DURING_RUN_SLACK_S:
+                continue
+        except OSError:
+            continue
+        counted = _empty_cells(path)
+        if not counted or not counted[0]:
+            continue
+        empty, total, per_column = counted
+        columns = ", ".join(f"{name} ({n})" for name, n in sorted(per_column.items(), key=lambda kv: -kv[1])[:8])
+        problems.append(
+            f"{field} ({path}) has {empty} empty cells out of {total} (columns: {columns}). An empty cell does not say "
+            "whether the value does not apply, was not found, or was not worked out. Work out the missing values from "
+            "the sources; where one really does not apply write `n/a`, and where the sources do not give it write "
+            "`not found: <why>`. Save the table again, then SUBMIT."
+        )
+    return problems
+
+
 def _is_empty_result(value: Any) -> bool:
     """Zero, NaN, None, or a collection that is empty or holds only such values."""
 
