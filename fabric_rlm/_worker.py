@@ -214,9 +214,10 @@ from fabric_rlm.analytical_integrity import (  # noqa: E402
 _ask_each_enabled = False
 
 
-def _set_ask_each(enabled: bool) -> None:
-    global _ask_each_enabled
+def _set_ask_each(enabled: bool, sub_runs: bool = False) -> None:
+    global _ask_each_enabled, _run_each_enabled
     _ask_each_enabled = bool(enabled)
+    _run_each_enabled = bool(enabled and sub_runs)
     import fabric_rlm.ask_each as ask_each_module
 
     if _ask_each_enabled:
@@ -225,11 +226,16 @@ def _set_ask_each(enabled: bool) -> None:
     else:
         _namespace.pop("ask_each", None)
         ask_each_module.WORKER_ASK_EACH = None
+    if _run_each_enabled:
+        _namespace["run_each"] = globals()["run_each"]
+    else:
+        _namespace.pop("run_each", None)
     _install_sandbox_shim()
 
 
 def _sandbox_public_names() -> tuple[str, ...]:
-    return _SANDBOX_PUBLIC_NAMES + (("ask_each",) if _ask_each_enabled else ())
+    return (_SANDBOX_PUBLIC_NAMES + (("ask_each",) if _ask_each_enabled else ())
+            + (("run_each",) if _run_each_enabled else ()))
 
 
 def _install_runtime_api() -> None:
@@ -251,6 +257,8 @@ def _install_runtime_api() -> None:
     )
     if _ask_each_enabled:
         _namespace["ask_each"] = globals()["ask_each"]
+    if _run_each_enabled:
+        _namespace["run_each"] = globals()["run_each"]
     _install_sandbox_shim()
 
 
@@ -550,6 +558,44 @@ def ask_each(
     result.errors = list(data.get("errors") or [])
     result.stats = dict(data.get("stats") or {})
     result.stats["output_fields"] = list(payload["output"])
+    return result
+
+
+_run_each_enabled = False
+
+
+def run_each(items: Any, task: str, outputs: dict[str, Any], *, context: dict[str, Any] | None = None) -> AskEachResult:
+    """Run one full child run per item (e.g. one document each), in parallel on the host.
+
+    Each child gets ``item`` (a ``File`` or a value) plus any shared ``context``
+    as its inputs, the same LM, skills and ask_each settings, and its own turn
+    budget, so every item gets full attention instead of one long run spreading
+    itself thin. ``outputs`` maps field names to types (str, int, float, bool,
+    list, dict). Returns a list aligned with ``items``: each child's submitted
+    fields, or ``None`` where it did not submit (see ``.errors``).
+    """
+
+    from fabric_rlm.artifacts import encode_for_worker
+
+    if not isinstance(items, (list, tuple)):
+        raise TypeError("run_each items must be a list (e.g. [agreements[k] for k in agreements]).")
+    if not isinstance(outputs, dict) or not outputs:
+        raise TypeError("run_each outputs must be a dict of field -> type, e.g. {'fee_usd': float, 'source': str}.")
+    kinds = {}
+    for name, kind in outputs.items():
+        kind_name = kind.__name__ if isinstance(kind, type) else str(kind)
+        if kind_name not in ("str", "int", "float", "bool", "list", "dict"):
+            raise TypeError(f"run_each output {name!r} must be str, int, float, bool, list or dict; got {kind!r}")
+        kinds[name] = kind_name
+    value = _make_tool_stub("__fabric_rlm_run_each__")(
+        items=[encode_for_worker(i) for i in items], task=str(task), outputs=kinds,
+        context=encode_for_worker(dict(context or {})),
+    )
+    data = json.loads(value) if isinstance(value, str) else value
+    result = AskEachResult(data.get("results") or [])
+    result.errors = list(data.get("errors") or [])
+    result.stats = dict(data.get("stats") or {})
+    result.stats["output_fields"] = list(kinds)
     return result
 
 
@@ -986,7 +1032,7 @@ def _handle_message(message: dict[str, Any]) -> dict[str, Any] | None:
         _set_lm_spec(message.get("spec"))
         return {"ok": True}
     if op == "enable_ask_each":
-        _set_ask_each(bool(message.get("enabled", True)))
+        _set_ask_each(bool(message.get("enabled", True)), bool(message.get("sub_runs", False)))
         return {"ok": True}
     if op == "reset":
         _install_runtime_api()
@@ -1151,7 +1197,7 @@ def _jsonrpc_register(params: dict[str, Any]) -> dict[str, Any]:
     outputs = params.get("outputs") or []
     _registered_output_fields = [o["name"] for o in outputs if "name" in o]
     if "ask_each" in params:
-        _set_ask_each(bool(params["ask_each"]))
+        _set_ask_each(bool(params["ask_each"]), bool(params.get("sub_runs", False)))
 
     return {
         "ok": True,

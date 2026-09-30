@@ -81,6 +81,11 @@ class AskEach:
     ``text_lm`` (optional) is a second model the run can pick per call with
     ``ask_each(..., model="text")``, e.g. a cheap text model to pull quotes from
     pages after a decision model has screened them.
+
+    ``sub_runs=True`` also gives the run ``run_each(items, task, outputs)``: one
+    child run per item (typically one document each), with the same LM, the same
+    ask_each settings and skills, at most ``sub_run_turns`` turns each, run in
+    parallel up to ``sub_run_concurrency``. Child runs cannot start their own.
     """
 
     lm: Any = None
@@ -88,6 +93,9 @@ class AskEach:
     max_concurrency: int = 16
     max_items: int = 100_000
     text_lm: Any = None
+    sub_runs: bool = False
+    sub_run_turns: int = 20
+    sub_run_concurrency: int = 4
 
     def __post_init__(self) -> None:
         if isinstance(self.max_seconds, bool) or not isinstance(self.max_seconds, (int, float)) or self.max_seconds <= 0:
@@ -96,6 +104,10 @@ class AskEach:
             raise ValueError(f"AskEach max_concurrency must be an integer from 1 to 256, got {self.max_concurrency!r}.")
         if isinstance(self.max_items, bool) or not isinstance(self.max_items, int) or self.max_items < 1:
             raise ValueError(f"AskEach max_items must be a positive integer, got {self.max_items!r}.")
+        if isinstance(self.sub_run_turns, bool) or not isinstance(self.sub_run_turns, int) or not 2 <= self.sub_run_turns <= 100:
+            raise ValueError(f"AskEach sub_run_turns must be an integer from 2 to 100, got {self.sub_run_turns!r}.")
+        if isinstance(self.sub_run_concurrency, bool) or not isinstance(self.sub_run_concurrency, int) or not 1 <= self.sub_run_concurrency <= 32:
+            raise ValueError(f"AskEach sub_run_concurrency must be an integer from 1 to 32, got {self.sub_run_concurrency!r}.")
 
 
 def normalize_ask_each(value: Any) -> AskEach | None:

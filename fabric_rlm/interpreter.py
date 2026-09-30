@@ -114,6 +114,7 @@ def _parse_protocol_line(line: str) -> dict[str, Any] | None:
 _LAKEHOUSE_QUERY_TOOL = "__fabric_rlm_lakehouse_query__"
 _FILE_PUBLISH_TOOL = "__fabric_rlm_file_publish__"
 _ASK_EACH_TOOL = "__fabric_rlm_ask_each__"
+_RUN_EACH_TOOL = "__fabric_rlm_run_each__"
 
 
 def _run_host_ask_each(owner: Any, kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -151,6 +152,95 @@ def _run_host_ask_each(owner: Any, kwargs: dict[str, Any]) -> tuple[dict[str, An
     if isinstance(records, list):
         records.append(record)
     return result, record
+
+
+def _run_host_run_each(owner: Any, kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run one child RLM per item on the host, a few at a time, and return their payloads."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .artifacts import decode_from_worker_wire
+
+    run_child = getattr(owner, "run_child", None)
+    config = getattr(owner, "ask_each_config", None)
+    if run_child is None or not getattr(config, "sub_runs", False):
+        raise RuntimeError("run_each is not turned on in this run (host: AskEach(sub_runs=True)).")
+    items = [decode_from_worker_wire(i) for i in kwargs.get("items") or []]
+    if not items:
+        raise ValueError("run_each received no items.")
+    task = str(kwargs.get("task") or "").strip()
+    if not task:
+        raise ValueError("run_each needs a task: what each child run should work out for its item.")
+    outputs = {str(k): {"str": str, "int": int, "float": float, "bool": bool, "list": list, "dict": dict}[v]
+               for k, v in (kwargs.get("outputs") or {}).items()}
+    context = decode_from_worker_wire(kwargs.get("context") or {})
+    started = time.monotonic()
+
+    def one(item: Any) -> Any:
+        return run_child({"item": item, **context}, task, outputs)
+
+    with ThreadPoolExecutor(max_workers=max(1, min(int(config.sub_run_concurrency), len(items)))) as pool:
+        outcomes = list(pool.map(lambda i: _safe_call(one, i), items))
+    results: list[Any] = []
+    errors: list[dict[str, Any]] = []
+    turns = partial = 0
+    for index, (child, exc) in enumerate(outcomes):
+        if exc is not None:
+            results.append(None)
+            errors.append({"index": index, "error": f"{type(exc).__name__}: {exc}"[:300]})
+            continue
+        turns += len(getattr(child, "trajectory", None) or [])
+        if child.submitted and child.payload is not None:
+            results.append(_coerce_child_payload(child.payload, outputs))
+            continue
+        # A child that ran out of turns still has its last SUBMIT: an answer that failed a
+        # check is worth more to the parent than nothing, as long as it is marked.
+        last = next((t.submit_payload for t in reversed(getattr(child, "turns", None) or [])
+                     if isinstance(getattr(t, "submit_payload", None), dict)), None)
+        reason = child.failure_reason or "unknown"
+        if last:
+            partial += 1
+            results.append(_coerce_child_payload(last, outputs))
+            errors.append({"index": index, "partial": True,
+                           "error": f"child run did not finish ({reason}); this is its last submitted answer, unchecked"})
+        else:
+            results.append(None)
+            errors.append({"index": index, "error": f"child run did not submit ({reason})"})
+    stats = {"items": len(items), "ok": len(items) - len(errors), "partial": partial,
+             "failed": len(errors) - partial, "child_turns": turns, "seconds": round(time.monotonic() - started, 3)}
+    record = {"query_type": "run_each", "executed": True, **stats, "errors": errors[:20]}
+    return {"results": results, "errors": errors, "stats": stats}, record
+
+
+def _coerce_child_payload(payload: dict[str, Any], outputs: dict[str, type]) -> dict[str, Any]:
+    """Convert a child's fields to the requested types where that is lossless; keep the value otherwise.
+
+    A child that wrote "$48,701,040" for a float field has answered; dropping it over the format
+    would throw away a correct answer, so the parent gets the number when it parses, else the text.
+    """
+    out = dict(payload)
+    for name, kind in outputs.items():
+        value = out.get(name)
+        if value is None or isinstance(value, kind) and not (kind is int and isinstance(value, bool)):
+            continue
+        try:
+            if kind in (int, float) and isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                text = str(value).replace(",", "").replace("$", "").strip()
+                number = float(text)
+                out[name] = int(number) if kind is int and number.is_integer() else number
+            elif kind is bool and isinstance(value, str) and value.strip().lower() in ("yes", "no", "true", "false"):
+                out[name] = value.strip().lower() in ("yes", "true")
+            elif kind is str and isinstance(value, (int, float, bool)):
+                out[name] = str(value)
+        except (ValueError, TypeError):
+            pass
+    return out
+
+
+def _safe_call(fn: Any, arg: Any) -> tuple[Any, BaseException | None]:
+    try:
+        return fn(arg), None
+    except Exception as exc:  # noqa: BLE001 - reported per item
+        return None, exc
 
 
 def _collect_lakehouse_sources(value: Any) -> list[LakehouseSource]:
@@ -353,6 +443,7 @@ class Interpreter:
         self.ask_each_lm: Any = None
         self.ask_each_config: Any = None
         self.ask_each_records: list[dict[str, Any]] = []
+        self.run_child: Any = None
 
     @property
     def is_running(self) -> bool:
@@ -467,12 +558,18 @@ class Interpreter:
     def configure_lm(self, spec: Any) -> dict[str, Any]:
         return self._request({"op": "configure_lm", "spec": encode_for_worker(spec)})
 
-    def enable_ask_each(self, lm: Any, config: Any, records: list[dict[str, Any]]) -> dict[str, Any]:
-        """Turn on ask_each in the worker; calls run here with ``lm`` and append to ``records``."""
+    def enable_ask_each(self, lm: Any, config: Any, records: list[dict[str, Any]], run_child: Any = None) -> dict[str, Any]:
+        """Turn on ask_each in the worker; calls run here with ``lm`` and append to ``records``.
+
+        ``run_child(inputs, task, outputs) -> RLMResult`` runs one child run;
+        given only when ``config.sub_runs`` is on, it turns on ``run_each``.
+        """
         self.ask_each_lm = lm
         self.ask_each_config = config
         self.ask_each_records = records
-        return self._request({"op": "enable_ask_each", "enabled": True})
+        self.run_child = run_child
+        sub_runs = bool(getattr(config, "sub_runs", False) and run_child is not None)
+        return self._request({"op": "enable_ask_each", "enabled": True, "sub_runs": sub_runs})
 
     def set_inputs(self, inputs: dict[str, Any]) -> dict[str, Any]:
         self._lakehouse_sources = _collect_lakehouse_sources(inputs)
@@ -552,6 +649,9 @@ class Interpreter:
                         "execution_seconds": round(time.monotonic() - started, 3),
                     })
                     raise
+                self._pending_source_calls.append(record)
+            elif name == _RUN_EACH_TOOL:
+                result, record = _run_host_run_each(self, kwargs)
                 self._pending_source_calls.append(record)
             else:
                 raise WorkerProtocolError(f"Unknown internal worker tool: {name}")
@@ -811,6 +911,7 @@ class SubprocessPythonInterpreter:
         self.ask_each_lm: Any = None
         self.ask_each_config: Any = None
         self.ask_each_records: list[dict[str, Any]] = []
+        self.run_child: Any = None
 
         # Diagnostics populated by start():
         self._spawn_cmd: list[str] | None = None
@@ -1078,6 +1179,8 @@ class SubprocessPythonInterpreter:
             params["outputs"] = self.output_fields
         if getattr(self, "ask_each_lm", None) is not None:
             params["ask_each"] = True
+            if getattr(self, "run_child", None) is not None and getattr(self.ask_each_config, "sub_runs", False):
+                params["sub_runs"] = True
         if not params:
             self._tools_registered = True
             return
@@ -1108,6 +1211,8 @@ class SubprocessPythonInterpreter:
                 )
             elif name == _ASK_EACH_TOOL:
                 result, _record = _run_host_ask_each(self, kwargs)
+            elif name == _RUN_EACH_TOOL:
+                result, _record = _run_host_run_each(self, kwargs)
             elif name not in self.tools:
                 raise CodeInterpreterError(f"Unknown tool: {name}")
             else:

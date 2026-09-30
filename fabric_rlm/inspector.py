@@ -418,14 +418,15 @@ class RunInspector:
             f'</summary><div class="frlm-body">{"".join(sections)}</div></details>'
         )
 
-    def to_html(self) -> str:
+    def to_html(self, *, _nested: bool = False) -> str:
         """Return a safe HTML fragment suitable for notebook display."""
 
         facts = self.result.report(as_dict=True)
         status = "SUBMITTED" if self.result.submitted else "NOT SUBMITTED"
         status_class = "frlm-good" if self.result.submitted else "frlm-bad"
         verified = bool(getattr(self.result, "verified", False))
-        metrics = (
+        metadata = getattr(getattr(self.result, "trajectory", None), "metadata", None) or {}
+        metrics = [
             ("Status", status),
             ("Verified", "yes" if verified else "no"),
             ("Empty outputs", ", ".join(getattr(self.result, "empty_outputs", []) or []) or "none"),
@@ -435,7 +436,20 @@ class RunInspector:
             ("Worker time", _format_number(facts.get("worker_seconds"), suffix="s")),
             ("Prompt tokens", facts.get("prompt_tokens")),
             ("Reasoning tokens", facts.get("reasoning_tokens")),
-        )
+        ]
+        # Shown only when they apply, so a plain run's summary is unchanged.
+        if facts.get("cache_share") is not None:
+            metrics.append(("Cached prompt", f"{facts['cache_share']:.0%}"))
+        ask = metadata.get("ask_each") or {}
+        if ask:
+            cost = ask.get("cost")
+            metrics.append(("ask_each items", f"{ask.get('items', 0):,}" + (f" · ${cost:.2f}" if cost is not None else "")))
+        runs = metadata.get("run_each") or {}
+        if runs:
+            metrics.append(("Child runs", f"{runs.get('runs', 0)} · {runs.get('turns', 0)} turns"))
+        unresolved = list(getattr(self.result, "integrity_problems", []) or [])
+        if unresolved:
+            metrics.append(("Unresolved checks", len(unresolved)))
         cards = "".join(
             f'<div class="frlm-metric"><strong class="{status_class if label == "Status" else ""}">'
             f'{escape(_format_number(value))}</strong><span>{escape(label)}</span></div>'
@@ -455,9 +469,23 @@ class RunInspector:
             )
         else:
             turns = '<div class="frlm-empty">No executable turns were recorded.</div>'
+        extras = self._section("Unresolved checks (answer accepted with these)", "\n\n".join(unresolved), open_by_default=True)
+        children = list(getattr(self.result, "child_runs", ()) or ())
+        if children:
+            rows = []
+            for label, child in children:
+                child_status = "submitted" if getattr(child, "submitted", False) else f"not submitted ({getattr(child, 'failure_reason', None) or 'unknown'})"
+                nested = RunInspector(child, max_chars=self.max_chars, slow_turn_seconds=self.slow_turn_seconds,
+                                      expanded=False, visible_turns=self.visible_turns).to_html(_nested=True)
+                rows.append(
+                    f'<details class="frlm-section"><summary>{escape(str(label))} · {escape(child_status)} · '
+                    f"{getattr(child, 'n_turns', 0)} turns</summary>{nested}</details>"
+                )
+            extras += (f'<details class="frlm-section"><summary>Child runs ({len(children)})</summary>'
+                       f'{"".join(rows)}</details>')
         opened = " open" if self.expanded else ""
         return (
-            f'{_STYLES}<details class="frlm-inspector"{opened}>'
+            f'{"" if _nested else _STYLES}<details class="frlm-inspector"{opened}>'
             '<summary class="frlm-inspector-summary">'
             '<span class="frlm-inspector-title">RLM run inspector</span>'
             f'<span class="frlm-badge {status_class}">{escape(status)}</span>'
@@ -469,7 +497,7 @@ class RunInspector:
             f'<div class="frlm-summary">{cards}</div>'
             f'<div class="frlm-turns" role="region" aria-label="Run turns" '
             f'tabindex="0" style="--frlm-visible-turns: {self.visible_turns}">'
-            f"{turns}</div></div></details>"
+            f"{turns}</div>{extras}</div></details>"
         )
 
     def _repr_html_(self) -> str:

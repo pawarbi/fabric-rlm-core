@@ -87,6 +87,32 @@
   with `analytical_integrity="strict"`). With no turn left to repair, a rejection returned no answer
   at all; the answer is now accepted and the findings stay on `result.integrity_problems`.
 
+### Added (sub-runs, opt-in)
+
+- `AskEach(sub_runs=True)` adds `run_each(items, task, outputs, context=None)`: one child run per
+  item (typically one document), with the same LM, skills and ask_each settings, `sub_run_turns`
+  turns each (default 20), `sub_run_concurrency` at a time (default 4). Children cannot start
+  children. A child that runs out of turns returns its last answer, marked partial; values are
+  converted to the requested types where that is lossless. Child tokens are part of the run's
+  totals and `trajectory.metadata["run_each"]`; `result.child_runs` holds each child's result.
+  Works in both engines. Off by default because the effect depends on the task, measured with
+  Luna at medium, Jev screening and gpt-5.4-mini quoting:
+  - 10 merger agreements, a 10-column deal-terms table (87 graded cells, lawyer labels), with a
+    short deal-points skill: 81% correct with sub-runs against 68% without, 6 runs each, $1.32 per
+    request either way (91-97% of prompt tokens cached), 10-23 against 12-19 minutes.
+  - 8 property policies (60-120 pages, each worded differently), 320 claims to price, 3 runs each:
+    99.6% of payouts correct without sub-runs for $0.49 and 4-8 minutes; 88.5% with sub-runs for
+    $1.99 and 7-16 minutes. Children given their policy and its claims still missed reworded storm
+    clauses and exceptions to a waiver that the single screen of all 735 pages caught.
+  With several documents and sub-runs on, the run is also told to split only when each document
+  needs its own full review. That sentence does not reliably decide it: on the policies task the
+  run still split in 3 of 3 runs (95.3% correct, $0.88-3.08), while the deal-terms task held at
+  86%. Turn sub-runs on only for per-document reviews; leave them off for checking one data file
+  against several documents.
+- `inspect()` shows, when they apply: the cached share of prompt tokens, ask_each items and cost,
+  child runs with their turns, and checks the answer was accepted with; each child run appears as
+  its own collapsed inspector. A plain run's view is unchanged.
+
 ## 0.6.8 - 2026-09-28 - validators fail closed, empty outputs are re-checked, and semantic-model numbers say where they came from
 
 Everything here came from issues #119 to #122, each reproduced live on a semantic model before it was fixed.

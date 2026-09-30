@@ -40,6 +40,10 @@ e.g. `{"sets_refund_window": bool, "refund_depends_on_plan_type": bool, "refund_
 Describe each rule by its effect, since the document may use different words from the task.
 Before relying on a clause, check whether other text narrows or overrides it: "notwithstanding", "provided, however", "except" or "excluding" (an exception can itself have an exception), a later amendment, or the definition of a term it uses; search `pages` for the clause's number and its defined terms.
 """
+# Only with AskEach(sub_runs=True) and more than one document input.
+_RUN_EACH_DOCUMENTS = """Several documents: when each document needs its own full review (many fields to work out per document), give each one its own child run with `run_each(items, task, outputs, context=None)`, e.g. `rows = run_each([docs[k] for k in keys], "<what to work out for this document, in full>", {"field": str, "source": str})`. Each child gets the document as `item` (plus any `context` dict you pass), the same tools and guidance, and its own turn budget, and returns its submitted fields (None where it did not finish; see `.errors`). Write one complete per-document task, then check and combine the rows.
+When instead one data file is checked against the rules in several documents (e.g. many records, each governed by one of the documents), keep it in this run: screen all the documents' pages together and apply the rules in one calculation; splitting it gives each child a separate chance to miss a rule.
+"""
 # How to read the flagged pages: whole pages (default) or, with a text model, verified quotes.
 _ASK_EACH_READ_PAGES = """Then read the full text of EVERY page flagged for any field (not a subset you pick), and confirm each rule in the text before relying on it.
 Each turn shows at most {output_limit} characters of output and cuts anything longer, so print only as many pages as fit in that (add up `len(page)`), and keep a list of the pages still to read until it is empty.
@@ -60,16 +64,20 @@ _ASK_EACH_TEXT_MODEL = """This run also has a text model for ask_each: pass `mod
 
 
 def ask_each_section(*, decision_model: bool = False, documents: bool = False, output_limit: int = 5000,
-                     text_model: bool = False) -> str:
+                     text_model: bool = False, several_documents: bool = False) -> str:
     """The prompt text for ask_each: the tool, the document guidance when a document is an input, the decision-model notes.
 
     ``output_limit`` is the per-turn stdout budget the run actually has, so the
     advice on how many pages to print at once follows the configured limit.
     ``text_model`` means ``AskEach(text_lm=...)`` is set: flagged pages are read
     as verified quotes pulled by that model instead of whole pages.
+    ``several_documents`` means ``AskEach(sub_runs=True)`` and more than one
+    document input: the run is told to give each document its own child run.
     """
     reading = _ASK_EACH_READ_QUOTES if text_model else _ASK_EACH_READ_PAGES
     documents_text = (_ASK_EACH_DOCUMENTS + reading).replace("{output_limit}", f"{output_limit:,}")
+    if several_documents:
+        documents_text = _RUN_EACH_DOCUMENTS + documents_text
     if not text_model:
         return (_ASK_EACH_AVAILABLE
                 + (documents_text if documents else "")

@@ -990,6 +990,11 @@ turn collapsed, and the turn list scrolls after 15 rows. Use
 `result.inspect(visible_turns=10)` to change the viewport or
 `result.inspect(expanded=False)` when the whole inspector should start collapsed.
 
+When they apply, the summary also shows the share of prompt tokens that were
+cached, `ask_each` items and cost, child runs from `run_each` with their turns,
+and checks the answer was accepted with (`result.integrity_problems`). Each child
+run appears below the turns as its own collapsed inspector.
+
 The inspector is dependency-free and escapes trajectory content before
 rendering. Save the same view as a standalone file when you need to share or
 archive it:
@@ -1093,6 +1098,32 @@ ask_each=AskEach(lm=DecisionLM("typesafe/jev-1.13"),
 ```
 
 The run picks the text model per call with `ask_each(..., model="text")`.
+
+With several documents, give each its own child run. `AskEach(sub_runs=True)`
+adds `run_each(items, task, outputs, context=None)` to the run, and when more
+than one document is among the inputs the run is told to use it:
+
+```python
+ask_each=AskEach(lm=DecisionLM("typesafe/jev-1.13"),
+                 text_lm="openrouter/openai/gpt-5.4-mini",
+                 sub_runs=True)            # sub_run_turns=20, sub_run_concurrency=4
+```
+
+The run writes one complete per-document task; each child gets its document as
+`item`, the same LM, skills and `ask_each` settings, and its own turn budget,
+and returns its submitted fields. A child that runs out of turns returns its
+last answer, marked partial in `.errors`. Children cannot start children. Their
+tokens are included in the run's totals and in `trajectory.metadata["run_each"]`,
+and `result.child_runs` holds each child's result.
+
+Sub-runs are off by default because they help one kind of task and hurt another.
+On a request to fill a 10-column deal-terms table from 10 merger agreements (each
+document reviewed on its own), they raised correct cells from 68% to 81% at the
+same cost. On a request to compute 320 claim payouts, each under one of 8
+property policies, one run screening all the policies together got 99.6% right
+for $0.49; with sub-runs, 88.5% for $1.99, because each child had its own chance
+to miss a rule. Turn them on for per-document reviews, not for checking one data
+file against several documents.
 
 ## Engines
 

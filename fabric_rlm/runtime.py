@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 import warnings
@@ -623,6 +624,9 @@ class RLMResult:
     # RLM was built with ``capture_evidence=True``; empty otherwise. Feed it
     # to ``RLM.enrich`` to turn it into lessons.
     evidence: tuple[Any, ...] = ()
+    # Child runs started by ``run_each`` (AskEach(sub_runs=True)), as (label, RLMResult)
+    # pairs in the order they finished; shown by ``inspect()``. Empty otherwise.
+    child_runs: tuple[Any, ...] = ()
 
     @property
     def integrity_problems(self) -> list[str]:
@@ -1206,6 +1210,9 @@ class RLM:
         self.ask_each = normalize_ask_each(ask_each)
         self._ask_each_records: list[dict[str, Any]] = []
         self._ask_each_lm_resolved: Any = None
+        self._child_usage: list[dict[str, Any]] = []
+        self._child_results: list[tuple[str, Any]] = []
+        self._child_usage_lock = threading.Lock()
         # An empty list or dict in a required output is re-checked by default: the
         # run is asked to confirm it, and the same empty value again is accepted
         # and recorded. Forbidding it outright made models invent content.
@@ -2204,6 +2211,23 @@ class RLM:
             trajectory.metadata["ask_each"] = summarize_records(records)
             records.clear()
 
+        children = getattr(self, "_child_usage", None)
+        if children:
+            # Child runs (run_each) bill the same LM; their tokens are part of this run's cost.
+            summary = {"runs": len(children)}
+            for key in ("total_prompt_tokens", "total_completion_tokens", "total_cached_tokens", "total_reasoning_tokens"):
+                known = [c[key] for c in children if c.get(key) is not None]
+                if known:
+                    summary[key] = sum(known)
+                    setattr(result, key, (getattr(result, key) or 0) + summary[key])
+            summary["turns"] = sum(c.get("turns", 0) for c in children)
+            trajectory.metadata["run_each"] = summary
+            children.clear()
+        child_results = getattr(self, "_child_results", None)
+        if child_results:
+            result.child_runs = tuple(child_results)
+            child_results.clear()
+
         if any(getattr(turn, "source_calls", None) for turn in turns):
             trajectory.metadata["source_call_summary"] = source_call_summary(turns)
         # Whether a check existed for this run, and, separately, what
@@ -2528,7 +2552,7 @@ class RLM:
             if self.sub_lm_spec is not None:
                 interpreter.configure_lm(self.sub_lm_spec)
             if self.ask_each is not None:
-                interpreter.enable_ask_each(self._resolve_ask_each_lm(), self.ask_each, self._ask_each_records)
+                interpreter.enable_ask_each(self._resolve_ask_each_lm(), self.ask_each, self._ask_each_records, self._run_child_hook())
             if bound_inputs:
                 interpreter.set_inputs(bound_inputs)
 
@@ -2728,7 +2752,7 @@ class RLM:
                             if self.sub_lm_spec is not None:
                                 interpreter.configure_lm(self.sub_lm_spec)
                             if self.ask_each is not None:
-                                interpreter.enable_ask_each(self._resolve_ask_each_lm(), self.ask_each, self._ask_each_records)
+                                interpreter.enable_ask_each(self._resolve_ask_each_lm(), self.ask_each, self._ask_each_records, self._run_child_hook())
                             if bound_inputs:
                                 interpreter.set_inputs(bound_inputs)
                             interpreter.warmup()
@@ -3386,6 +3410,48 @@ class RLM:
             return ""
         return "The answer is checked after SUBMIT against these rules:\n\n" + "\n\n".join(rules)
 
+    def _run_child(self, inputs: dict[str, Any], task: str, outputs: dict[str, type]) -> "RLMResult":
+        """One child run for ``run_each``: same LM, skills and ask_each settings, no further sub-runs.
+
+        The child shares this run's LM objects, so its tokens land in this
+        run's totals; its ask_each calls are added to this run's records.
+        """
+        from dataclasses import replace
+
+        config = replace(self.ask_each, sub_runs=False) if self.ask_each is not None else None
+        child = RLM.task(
+            task, inputs=inputs, outputs=outputs, lm=self.outer_lm, ask_each=config,
+            max_turns=self.ask_each.sub_run_turns if self.ask_each is not None else 20,
+            timeout=self.timeout, skills=list(self.skills), skill_loader=self.skill_loader,
+            enable_verifier=self.enable_verifier, block_network=self.block_network,
+            analytical_integrity=self.analytical_integrity, security=self._security,
+        )
+        child._ask_each_lm_resolved = self._ask_each_lm_resolved
+        result = child.run()
+        usage = {key: getattr(result, key, None) for key in
+                 ("total_prompt_tokens", "total_completion_tokens", "total_cached_tokens", "total_reasoning_tokens")}
+        usage["turns"] = len(getattr(result, "trajectory", None) or [])
+        meta = getattr(getattr(result, "trajectory", None), "metadata", None) or {}
+        summary = meta.get("ask_each")
+        if summary:
+            # The child folds its ask_each calls into its own metadata; carry the totals up as one record.
+            self._ask_each_records.append({
+                "query_type": "ask_each_child_summary", "items": summary.get("items"), "ok": summary.get("ok"),
+                "failed": summary.get("failed"), "unfinished": summary.get("unfinished"), "calls": summary.get("lm_calls"),
+                "throttled": summary.get("throttled"), "prompt_tokens": summary.get("prompt_tokens"),
+                "completion_tokens": summary.get("completion_tokens"), "cost": summary.get("cost"),
+                "execution_seconds": summary.get("seconds"), "model": "; ".join(summary.get("models") or []) or None,
+            })
+        with self._child_usage_lock:
+            self._child_usage.append(usage)
+            item = inputs.get("item")
+            label = getattr(item, "name", None) or (str(item)[:80] if item is not None else f"child {len(self._child_results) + 1}")
+            self._child_results.append((label, result))
+        return result
+
+    def _run_child_hook(self) -> Any:
+        return self._run_child if self.ask_each is not None and self.ask_each.sub_runs else None
+
     def _resolve_ask_each_lm(self) -> Any:
         """The host-side LM for ask_each: the configured one, else the main LM."""
         if self._ask_each_lm_resolved is not None:
@@ -3415,6 +3481,7 @@ class RLM:
             documents=_has_document_input(inputs or {}),
             output_limit=STDOUT_FEEDBACK_LIMIT,
             text_model=self.ask_each.text_lm is not None,
+            several_documents=self.ask_each.sub_runs and _count_document_inputs(inputs or {}) > 1,
         )
 
     def _call_user_validator(self, validator: Callable[..., Any], *args: Any) -> tuple[str, str]:
@@ -3914,6 +3981,7 @@ class RLM:
                 interpreter.ask_each_lm = self._resolve_ask_each_lm()
                 interpreter.ask_each_config = self.ask_each
                 interpreter.ask_each_records = self._ask_each_records
+                interpreter.run_child = self._run_child_hook()
             t0 = time.time()
             try:
                 with dspy.context(lm=outer_lm):
@@ -4679,19 +4747,25 @@ _DOCUMENT_SUFFIXES = {".pdf", ".docx", ".doc", ".txt", ".md", ".html", ".htm", "
 
 def _has_document_input(inputs: Mapping[str, Any]) -> bool:
     """Whether a document file is among the inputs, so page-screening guidance applies."""
+    return _count_document_inputs(inputs) > 0
+
+
+def _count_document_inputs(inputs: Mapping[str, Any]) -> int:
+    """How many document files the inputs hold, looking one level into lists and dicts."""
     from .artifacts import File
 
     def is_document(value: Any) -> bool:
         return isinstance(value, File) and str(getattr(value, "suffix", "")).lower() in _DOCUMENT_SUFFIXES
 
+    count = 0
     for value in inputs.values():
         if is_document(value):
-            return True
-        if isinstance(value, (list, tuple)) and any(is_document(v) for v in value):
-            return True
-        if isinstance(value, Mapping) and any(is_document(v) for v in value.values()):
-            return True
-    return False
+            count += 1
+        elif isinstance(value, (list, tuple)):
+            count += sum(is_document(v) for v in value)
+        elif isinstance(value, Mapping):
+            count += sum(is_document(v) for v in value.values())
+    return count
 
 
 def _reject_block_network_with_sub_lm(block_network: Any, sub_lm: Any) -> None:
