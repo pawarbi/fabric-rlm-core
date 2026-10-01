@@ -79,8 +79,15 @@ class AskEach:
 
     ``max_seconds`` caps one ``ask_each`` call: items not answered in time come
     back as ``None`` with a time-limit error, and ``stats["unfinished"]`` counts
-    them. ``max_concurrency`` caps the calls in flight (the model may ask for
-    fewer). ``max_items`` caps the items in one call.
+    them. Calls still in flight then are abandoned, not waited for, and counted
+    in ``stats["abandoned_calls"]``; their usage never arrives, so tokens and
+    cost are then a floor (``stats["usage_complete"]`` is False). An abandoned
+    call keeps its thread until the HTTP request ends, which can hold the
+    process open at exit: set an HTTP timeout on the LM itself (e.g.
+    ``dspy.LM(..., timeout=60)`` or ``DecisionLM(..., timeout=60)``), as the
+    ``lm`` row of docs/api-reference.md advises. ``max_concurrency`` caps the
+    calls in flight (the model may ask for fewer). ``max_items`` caps the items
+    in one call.
 
     ``text_lm`` (optional) is a second model the run can pick per call with
     ``ask_each(..., model="text")``, e.g. a cheap text model to pull quotes from
@@ -547,7 +554,7 @@ def run_ask_each(lm: Any, kwargs: Mapping[str, Any], config: AskEach | None = No
     items = request["items"]
     limiter = _Limiter(request["concurrency"], deadline)
     lock = threading.Lock()
-    counters = {"calls": 0, "retried": 0, "lm_errors": 0, "batches": 0, "batch_fallbacks": 0}
+    counters = {"calls": 0, "retried": 0, "lm_errors": 0, "batches": 0, "batch_fallbacks": 0, "in_flight": 0}
     responses: list[Any] = []
     history_start = _history_len(lm)
 
@@ -560,7 +567,12 @@ def run_ask_each(lm: Any, kwargs: Mapping[str, Any], config: AskEach | None = No
             try:
                 with lock:
                     counters["calls"] += 1
-                response = _call_lm(lm, messages)
+                    counters["in_flight"] += 1
+                try:
+                    response = _call_lm(lm, messages)
+                finally:
+                    with lock:
+                        counters["in_flight"] -= 1
             except Exception as exc:  # noqa: BLE001 - classified below
                 limiter.release(success=False)
                 if is_throttle_error(exc):
@@ -643,13 +655,15 @@ def run_ask_each(lm: Any, kwargs: Mapping[str, Any], config: AskEach | None = No
         if error is not None:
             errors.append({"index": index, "error": error})
     errors.sort(key=lambda e: e["index"])
+    with lock:
+        abandoned = counters["in_flight"]
     if history_start is not None:
         usage = _sum_usage(list(getattr(lm, "history", [])[history_start:]))
     else:
         usage = _sum_usage(responses)
     extra = {"retried": counters["retried"], "lm_errors": counters["lm_errors"], "batches": counters["batches"],
              "batch_fallbacks": counters["batch_fallbacks"], "throttled": limiter.throttles,
-             "lowest_concurrency": limiter.lowest}
+             "lowest_concurrency": limiter.lowest, "abandoned_calls": abandoned}
     return _finish(lm, request, started, results, errors, counters["calls"], usage, extra)
 
 
@@ -692,10 +706,13 @@ def _finish(lm: Any, request: Mapping[str, Any], started: float, results: list[A
             calls: int, usage: Mapping[str, Any], extra: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     seconds = round(time.monotonic() - started, 3)
     unfinished = sum(1 for e in errors if str(e.get("error", "")).startswith(_NOT_ANSWERED))
+    # Calls abandoned at the time limit were sent (and may be billed) but their
+    # usage never arrived, so tokens and cost are then a floor, not a total.
+    usage_complete = not extra.get("abandoned_calls")
     stats = {"items": len(results), "ok": len(results) - len(errors), "failed": len(errors) - unfinished,
              "unfinished": unfinished, "calls": calls, "batch_size": request["batch_size"],
              "concurrency": request["concurrency"], "seconds": seconds, "model": _model_name(lm),
-             **extra, **usage}
+             **extra, **usage, "usage_complete": usage_complete}
     record = {"query_type": "ask_each", "executed": True, "output_fields": list(request["fields"]),
               "retries_allowed": request["retries"], "max_seconds": request["max_seconds"],
               "execution_seconds": seconds, "total_seconds": seconds, "returned_rows": stats["ok"],
@@ -807,7 +824,7 @@ def _run_decision_map(lm: Any, request: Mapping[str, Any], started: float, deadl
     questions = _decision_questions(request)
     threshold = float(getattr(lm, "bool_threshold", 0.5))
     lock = threading.Lock()
-    counters = {"calls": 0, "lm_errors": 0}
+    counters = {"calls": 0, "lm_errors": 0, "in_flight": 0}
     history_start = _history_len(lm)
 
     def one(index: int) -> tuple[int, dict[str, Any] | None, str | None]:
@@ -815,8 +832,14 @@ def _run_decision_map(lm: Any, request: Mapping[str, Any], started: float, deadl
             return index, None, _time_up(request)
         with lock:
             counters["calls"] += 1
+            counters["in_flight"] += 1
         try:
-            answers = (lm.decide(items[index], questions) or {}).get("answers") or {}
+            try:
+                decided = lm.decide(items[index], questions)
+            finally:
+                with lock:
+                    counters["in_flight"] -= 1
+            answers = (decided or {}).get("answers") or {}
             row: dict[str, Any] = {}
             for name, spec in request["fields"].items():
                 answer = answers.get(name) or {}
@@ -844,10 +867,13 @@ def _run_decision_map(lm: Any, request: Mapping[str, Any], started: float, deadl
         results[index] = value
         if error is not None:
             errors.append({"index": index, "error": error})
+    with lock:
+        abandoned = counters["in_flight"]
     history = getattr(lm, "history", [])
     usage = _sum_usage(list(history[history_start:])) if history_start is not None else _sum_usage([])
     extra = {"retried": 0, "lm_errors": counters["lm_errors"], "batches": 0, "batch_fallbacks": 0,
-             "throttled": 0, "lowest_concurrency": request["concurrency"], "decision_model": True}
+             "throttled": 0, "lowest_concurrency": request["concurrency"], "decision_model": True,
+             "abandoned_calls": abandoned}
     return _finish(lm, request, started, results, errors, counters["calls"], usage, extra)
 
 
@@ -859,10 +885,12 @@ def summarize_records(records: list[Mapping[str, Any]]) -> dict[str, Any]:
         return sum(known) if known else None
 
     cost = total("cost")
+    abandoned = total("abandoned_calls") or 0
     return {"calls": len(records), "items": total("items") or 0, "ok": total("ok") or 0,
             "failed": total("failed") or 0, "unfinished": total("unfinished") or 0,
             "lm_calls": total("calls") or 0, "throttled": total("throttled") or 0,
             "prompt_tokens": total("prompt_tokens"), "completion_tokens": total("completion_tokens"),
             "cost": round(cost, 6) if cost is not None else None,
+            "abandoned_calls": abandoned, "usage_complete": not abandoned,
             "seconds": round(total("execution_seconds") or 0.0, 3),
             "models": sorted({str(r.get("model")) for r in records if r.get("model")})}

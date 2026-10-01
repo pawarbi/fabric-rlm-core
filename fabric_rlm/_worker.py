@@ -49,7 +49,6 @@ from .artifacts import (
     _configure_host_file_transport,
     decode_from_worker_wire,
 )
-from .ask_each import AskEachResult
 from .lakehouse import _configure_host_query_transport
 from .serializers import (
     DEFAULT_INJECTED_NAMES,
@@ -522,17 +521,26 @@ def _ask_each_items(items: Any, columns: Any) -> list[Any]:
 _ask_each_max_items: int | None = None
 
 
-def _ask_each_texts(items: list[Any]) -> list[str]:
-    """Check the limits here, before the request is serialized for the host."""
-    from fabric_rlm.ask_each import AskEachError, item_texts
-
-    if not items:
+def _ask_each_check_count(items: Any) -> None:
+    """Refuse too many items from ``len()`` alone, before converting them to records."""
+    try:
+        count = len(items)
+    except TypeError:
+        return
+    if count == 0:
         raise ValueError("ask_each received no items.")
-    if _ask_each_max_items is not None and len(items) > _ask_each_max_items:
+    if _ask_each_max_items is not None and count > _ask_each_max_items:
         raise ValueError(
-            f"ask_each received {len(items):,} items; the limit is {_ask_each_max_items:,} per call. "
+            f"ask_each received {count:,} items; the limit is {_ask_each_max_items:,} per call. "
             "Filter or split the items first."
         )
+
+
+def _ask_each_texts(items: list[Any]) -> list[str]:
+    """Check the item and request sizes here, before the request is serialized for the host."""
+    from fabric_rlm.ask_each import AskEachError, item_texts
+
+    _ask_each_check_count(items)
     try:
         return item_texts(items)
     except AskEachError as exc:
@@ -550,7 +558,7 @@ def ask_each(
     batch_size: int = 1,
     max_seconds: float | None = None,
     model: str = "default",
-) -> AskEachResult:
+) -> list:
     """Ask one question about every item with an LM, in parallel, and validate each answer.
 
     Runs on the host: the host handles concurrency, throttling, retries and
@@ -559,11 +567,16 @@ def ask_each(
     strings. ``batch_size`` > 1 sends that many items per LM call (cheaper for
     short items); an item the batch answer misses or gets wrong is retried
     alone. ``model="text"`` uses the run's second, text model when the host
-    configured one. Returns a list aligned with ``items`` (``None`` where an item
-    failed or the time limit ran out) with ``.errors``, ``.stats`` and
-    ``.to_frame()``.
+    configured one. Returns an ``AskEachResult``: a list aligned with ``items``
+    (``None`` where an item failed or the time limit ran out) with ``.errors``,
+    ``.stats`` and ``.to_frame()``.
     """
 
+    # Imported here, not at module scope, so a reload of fabric_rlm.ask_each
+    # never leaves the worker holding a stale class.
+    from fabric_rlm.ask_each import ASK_EACH_TOOL, AskEachResult
+
+    _ask_each_check_count(items)
     payload = {
         "items": _ask_each_texts(_ask_each_items(items, columns)),
         "question": question,
@@ -574,8 +587,6 @@ def ask_each(
         "max_seconds": max_seconds,
         "model": model,
     }
-    from fabric_rlm.ask_each import ASK_EACH_TOOL
-
     value = _make_tool_stub(ASK_EACH_TOOL)(**payload)
     data = json.loads(value) if isinstance(value, str) else value
     result = AskEachResult(data.get("results") or [])
@@ -588,7 +599,7 @@ def ask_each(
 _run_each_enabled = False
 
 
-def run_each(items: Any, task: str, outputs: dict[str, Any], *, context: dict[str, Any] | None = None) -> AskEachResult:
+def run_each(items: Any, task: str, outputs: dict[str, Any], *, context: dict[str, Any] | None = None) -> list:
     """Run one full child run per item (e.g. one document each), in parallel on the host.
 
     Each child gets ``item`` (a ``File`` or a value) plus any shared ``context``
@@ -600,6 +611,7 @@ def run_each(items: Any, task: str, outputs: dict[str, Any], *, context: dict[st
     """
 
     from fabric_rlm.artifacts import encode_for_worker
+    from fabric_rlm.ask_each import AskEachResult
 
     if not isinstance(items, (list, tuple)):
         raise TypeError("run_each items must be a list (e.g. [agreements[k] for k in agreements]).")

@@ -121,18 +121,18 @@ def _run_recorded(owner: Any, name: str, kwargs: dict[str, Any], sink: list[dict
     """Run ask_each or run_each for the worker and add its source-call record to ``sink``.
 
     Both interpreters use this, so a turn's source calls are the same whichever
-    engine ran it. A refused or failed ask_each is recorded as not executed.
+    engine ran it. A refused or failed call is recorded as not executed.
     """
-    if name == _RUN_EACH_TOOL:
-        result, record = _run_host_run_each(owner, kwargs)
-        sink.append(record)
-        return result
+    query_type = "run_each" if name == _RUN_EACH_TOOL else "ask_each"
     started = time.monotonic()
     try:
-        result, record = _run_host_ask_each(owner, kwargs)
+        if query_type == "run_each":
+            result, record = _run_host_run_each(owner, kwargs)
+        else:
+            result, record = _run_host_ask_each(owner, kwargs)
     except Exception as exc:
         sink.append({
-            "query_type": "ask_each", "executed": False, "reason": "execution_error",
+            "query_type": query_type, "executed": False, "reason": "execution_error",
             "error": f"{type(exc).__name__}: {exc}"[:300],
             "execution_seconds": round(time.monotonic() - started, 3),
         })
@@ -1060,6 +1060,8 @@ class SubprocessPythonInterpreter:
     def execute(self, code: str, variables: dict[str, Any] | None = None) -> Any:
         # Host-side calls made while this code ran (ask_each, run_each), kept
         # with the code so the runtime can attach them to the matching turn.
+        # One buffer per interpreter: this assumes execute() calls do not
+        # overlap, which holds while dspy runs a turn at a time.
         self._exec_source_calls = []
         try:
             return self._execute(code, variables)

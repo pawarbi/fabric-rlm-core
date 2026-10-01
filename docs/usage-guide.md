@@ -1072,7 +1072,11 @@ The calls run in the notebook process, not in the worker, so the host handles
 concurrency, retries and rate limits: a throttled call waits and the map runs
 fewer calls at once until calls succeed again. Items not answered within the
 time limit come back as `None` and are counted in `stats["unfinished"]`; a call
-still in flight when the limit runs out is abandoned, not waited for.
+still in flight when the limit runs out is abandoned, not waited for, and counted
+in `stats["abandoned_calls"]`. Its usage never arrives, so tokens and cost are
+then a floor (`stats["usage_complete"]` is False). Its thread lives until the
+HTTP request ends, so also set an HTTP timeout on the LM (for example
+`dspy.LM(..., timeout=60)` or `DecisionLM(..., timeout=60)`).
 `AskEach` sets the limits:
 
 ```python

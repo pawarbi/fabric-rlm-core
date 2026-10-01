@@ -181,15 +181,57 @@ def test_a_stalled_call_does_not_hold_the_map_past_its_time_limit(batch_size):
     assert time.monotonic() - started < 3
     assert result["results"][3] is None and result["stats"]["unfinished"] >= 1
     assert any(e["index"] == 3 and e["error"].startswith("not answered") for e in result["errors"])
+    assert result["stats"]["abandoned_calls"] == 1 and result["stats"]["usage_complete"] is False
+    _wait_idle(lm)
+
+
+def _wait_idle(lm, seconds=5.0):
+    """Let abandoned calls finish so their threads do not outlive the test."""
+    end = time.monotonic() + seconds
+    while lm.active and time.monotonic() < end:
+        time.sleep(0.01)
+    assert lm.active == 0
+
+
+def test_tokens_and_cost_are_marked_a_floor_when_a_call_is_abandoned():
+    release = threading.Event()
+
+    class PricedLM(CallableLM):
+        def __init__(self):
+            super().__init__(lambda text, attempt, m: (release.wait(30) if "stall" in text else None, classify(text))[1])
+            self.history = []
+
+        def __call__(self, *, messages):
+            out = super().__call__(messages=messages)
+            with self.lock:
+                self.history.append({"usage": {"prompt_tokens": 1000, "completion_tokens": 10}, "cost": 0.01})
+            return out
+
+    lm = PricedLM()
+    try:
+        result, record = run_ask_each(lm, request(["brake", "stall"], concurrency=2, max_seconds=0.3))
+    finally:
+        release.set()
+    stats = result["stats"]
+    assert stats["calls"] == 2 and stats["abandoned_calls"] == 1 and stats["usage_complete"] is False
+    assert stats["prompt_tokens"] == 1000                     # the abandoned call's usage never arrived
+    assert record["abandoned_calls"] == 1
+    summary = ask_each_module.summarize_records([record])
+    assert summary["abandoned_calls"] == 1 and summary["usage_complete"] is False
+    _wait_idle(lm)
+    done, _ = run_ask_each(lm, request(["brake"]))
+    assert done["stats"]["abandoned_calls"] == 0 and done["stats"]["usage_complete"] is True
 
 
 def test_a_stalled_decision_call_does_not_hold_the_map_past_its_time_limit():
     release = threading.Event()
+    finished = threading.Event()
 
     class Stalling(FakeDecision):
         def decide(self, state, questions):
             if "stall" in state:
                 release.wait(30)
+                finished.set()
             return super().decide(state, questions)
 
     started = time.monotonic()
@@ -200,7 +242,8 @@ def test_a_stalled_decision_call_does_not_hold_the_map_past_its_time_limit():
         release.set()
     assert time.monotonic() - started < 3
     assert result["results"][0]["theme"] == "Brakes" and result["results"][1] is None
-    assert result["stats"]["unfinished"] == 1
+    assert result["stats"]["unfinished"] == 1 and result["stats"]["abandoned_calls"] == 1
+    assert finished.wait(5)
 
 
 def test_throttling_waits_and_slows_down_without_spending_retries(monkeypatch):
@@ -571,6 +614,31 @@ def test_oversized_requests_are_refused_in_the_worker_before_reaching_the_host(c
         out = str(interp.execute(code))
     assert "REFUSED" in out and message in out
     assert records == [] and interp.source_call_log == [] and mapper.prompts == []
+
+
+def test_too_many_rows_are_refused_before_the_frame_is_converted():
+    mapper = CallableLM(lambda text, attempt, m: {"a": "y"})
+    code = ("import pandas as pd\n"
+            "df = pd.DataFrame({'s': list('abcdef')})\n"
+            "def _boom(*a, **k):\n    raise RuntimeError('CONVERTED')\n"
+            "pd.DataFrame.to_dict = _boom\n"
+            "try:\n    ask_each(df, 'q', {'a': str})\nexcept Exception as exc:\n    print('REFUSED', exc)")
+    with SubprocessPythonInterpreter(timeout=60) as interp:
+        interp.ask_each_lm, interp.ask_each_config, interp.ask_each_records = mapper, AskEach(max_items=5), []
+        out = str(interp.execute(code))
+    assert "the limit is 5" in out and "CONVERTED" not in out
+
+
+def test_a_failed_run_each_is_recorded_as_a_source_call():
+    code = "try:\n    run_each([], 'task', {'a': str})\nexcept Exception as exc:\n    print('FAILED', exc)"
+    with SubprocessPythonInterpreter(timeout=60) as interp:
+        interp.ask_each_lm, interp.ask_each_config, interp.ask_each_records = (
+            CallableLM(lambda t, a, m: {}), AskEach(sub_runs=True), [])
+        interp.run_child = lambda inputs, task, outputs: None
+        out = str(interp.execute(code))
+        log = interp.source_call_log
+    assert "FAILED" in out and "no items" in out
+    assert len(log) == 1 and log[0][1][0]["query_type"] == "run_each" and log[0][1][0]["executed"] is False
 
 
 def test_missing_values_reach_the_model_as_empty_text():

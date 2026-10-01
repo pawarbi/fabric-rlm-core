@@ -107,13 +107,17 @@
   without a number is not used at all: each of its items is asked again on its own.
 - `max_seconds` is now a hard limit: calls still in flight when it runs out are abandoned, and
   their items come back `None` and counted in `stats["unfinished"]`, instead of the map waiting
-  for a stalled request.
+  for a stalled request. Abandoned calls are counted in `stats["abandoned_calls"]`; their usage
+  never arrives, so tokens and cost are then a floor and `stats["usage_complete"]` is False (also
+  in `trajectory.metadata["ask_each"]`). An abandoned call's thread lives until its HTTP request
+  ends and can hold the process open at exit, so set an HTTP timeout on the LM as well.
 - The item count, item length and a total of 100 million characters per call are checked in the
   worker before the request is sent to the host, so an oversized request is refused before it
   crosses the pipe.
 - `None`, `NaN` and `NaT` in items reach the model as empty text rather than `null` or `NaN`.
-- `ask_each` and `run_each` calls are recorded as the turn's source calls in the DSPy engine too,
-  so `trajectory.metadata["source_call_summary"]` is the same in both engines.
+- `ask_each` and `run_each` calls, including refused or failed ones, are recorded as the turn's
+  source calls in the DSPy engine too, so `trajectory.metadata["source_call_summary"]` is the same
+  in both engines.
 - `AskEachResult` (what `ask_each` and `run_each` return) and `AskEachError` are exported from
   `fabric_rlm`.
 - `find_measures` orders answers without a confidence after those with one.

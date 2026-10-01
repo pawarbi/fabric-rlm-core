@@ -4153,7 +4153,10 @@ class RLM:
         dspy_traj = (
             getattr(prediction, "trajectory", None) or [] if prediction is not None else []
         )
-        # ask_each / run_each records, matched to turns by the code that made them.
+        # ask_each / run_each records, matched to turns by the exact code that
+        # made them. If dspy reports a turn's code differently from what it ran
+        # (reformatted, trimmed), that turn finds no match and its records go
+        # on the last turn below: kept, but attributed to the wrong turn.
         call_log = list(getattr(interpreter, "source_call_log", None) or [])
         for idx, event in enumerate(dspy_traj):
             if not isinstance(event, dict):
@@ -4189,7 +4192,7 @@ class RLM:
                 )
             )
         if call_log and trajectory.turns:
-            # Code dspy did not report verbatim: keep the records on the last turn rather than drop them.
+            # The expected failure mode of matching by code: misattributed, never dropped.
             last = trajectory.turns[-1]
             last.source_calls = list(last.source_calls or []) + [c for _, calls in call_log for c in calls]
         if verifier_repair_history:
