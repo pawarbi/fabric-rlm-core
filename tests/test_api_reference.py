@@ -24,7 +24,7 @@ def _section(heading: str) -> str:
 
 @pytest.mark.parametrize(
     ("heading", "expected_count"),
-    [("## RLM.task and RLM", 40), ("## verified_task", 8)],
+    [("## RLM.task and RLM", 41), ("## verified_task", 8)],
 )
 def test_api_parameter_tables_match_signatures_and_defaults(heading, expected_count):
     # Other tests reload runtime; resolve the current class at test execution.

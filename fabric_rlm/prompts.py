@@ -22,6 +22,75 @@ _PREDICT_UNAVAILABLE = (
     "Where a skill suggests them, do that step yourself: print the text you need and read it, or use Python.\n"
 )
 
+# ask_each is opt-in (RLM(ask_each=...)); the model is told about it only then.
+_ASK_EACH_AVAILABLE = """`ask_each(items, question, output, columns=None, concurrency=8, retries=2, batch_size=1, max_seconds=None)` asks one question about EVERY item with an LM, in parallel on the host, and validates each answer.
+Use it for a judgement per item over many items; do not write your own loop or batches around an LM. `items` is a list, a pandas Series or a DataFrame (`columns=` picks the columns each item shows).
+`output` maps field names to `str`, `int`, `float`, `bool`, or a list of allowed strings; add an "unsure" choice where a forced answer would be a guess,
+e.g. `ask_each(df, "Classify the complaint.", {"theme": ["Brakes", "Steering", "Other"], "safety_critical": bool}, columns=["summary"])`.
+It returns a list aligned with `items` (None where an item failed or the time limit ran out) with `.errors`, `.stats` and `.to_frame(df)`. Check `.stats["failed"]` and `.stats["unfinished"]` before aggregating, and say in the answer how many items were left out.
+Good uses: classify or extract from free text once the analysis shows where it matters; match records across sources that share no key (build candidate pairs in Python first, ask about each pair, then keep at most one match per record); check each claim in a draft against the evidence it came from (claim and evidence in one item; recompute numbers in code rather than asking); map the columns of messy files to a known schema; find the measure a question needs in a semantic model with many measures: call `model.find_measures("<the question>")`, which screens EVERY measure (do not narrow by keyword first) and returns the best candidates with their DAX, then read those and choose.
+When a number in the answer counts items by what their free text means (a theme, cause or complaint type), keyword or regex matches miss paraphrases and redacted words and give only a floor: label every relevant item with ask_each and count those labels, using keywords only to find examples.
+Keep items short: filter first, then ask. For many short items (under ~2,000 characters) pass batch_size=10 to 20; keep batch_size=1 for long items or subtle judgements.
+"""
+# Only when a document is among the inputs: how to find the pages a task depends on.
+_ASK_EACH_DOCUMENTS = """Finding the pages a task depends on in a long document (roughly 30+ pages): screen its pages with ask_each before relying on keyword search. Search only finds rules worded the way you guess, and a missed exception, override or amendment silently breaks the answer.
+Get the pages with `pages = <document input>.pages()`: one item per PDF page, or for text and markdown one per page marker, else a chunk of about 2,000 characters at a heading. Each item is a `str` with `.label` ("page 57", or "chunk 12 · Article 14") to cite and `.number` (the page number, or None for a chunk); pass `pages` straight to ask_each.
+Do not ask one broad `relevant` field (nearly every page of a long document looks relevant to a broad question). Ask one narrow `bool` field per rule, one idea per field (never "X or Y"), named for what the page would do. Include:
+a field for each input column or attribute that could change the result ("<result>_depends_on_<column>", e.g. shipping_fee_depends_on_region, premium_depends_on_age), one for each rule the task names, one for amendments or updates to earlier terms, and a catch-all "other_exception_or_adjustment_to_<result>",
+e.g. `{"sets_refund_window": bool, "refund_depends_on_plan_type": bool, "refund_depends_on_usage": bool, "charges_cancellation_fee": bool, "amends_earlier_terms": bool, "other_exception_or_adjustment_to_refund": bool}`.
+Describe each rule by its effect, since the document may use different words from the task.
+Before relying on a clause, check whether other text narrows or overrides it: "notwithstanding", "provided, however", "except" or "excluding" (an exception can itself have an exception), a later amendment, or the definition of a term it uses; search `pages` for the clause's number and its defined terms.
+"""
+# Only with AskEach(sub_runs=True) and more than one document input.
+_RUN_EACH_DOCUMENTS = """Several documents: when each document needs its own full review (many fields to work out per document), give each one its own child run with `run_each(items, task, outputs, context=None)`, e.g. `rows = run_each([docs[k] for k in keys], "<what to work out for this document, in full>", {"field": str, "source": str})`. Each child gets the document as `item` (plus any `context` dict you pass), the same tools and guidance, and its own turn budget, and returns its submitted fields (None where it did not finish; see `.errors`). Write one complete per-document task, then check and combine the rows.
+When instead one data file is checked against the rules in several documents (e.g. many records, each governed by one of the documents), keep it in this run: screen all the documents' pages together and apply the rules in one calculation; splitting it gives each child a separate chance to miss a rule.
+"""
+# How to read the flagged pages: whole pages (default) or, with a text model, verified quotes.
+_ASK_EACH_READ_PAGES = """Then read the full text of EVERY page flagged for any field (not a subset you pick), and confirm each rule in the text before relying on it.
+Each turn shows at most {output_limit} characters of output and cuts anything longer, so print only as many pages as fit in that (add up `len(page)`), and keep a list of the pages still to read until it is empty.
+"""
+_ASK_EACH_READ_QUOTES = """Then, instead of printing whole pages, have the text model copy the rule text out of EVERY page flagged for any field (not a subset you pick) in one call:
+`quotes = ask_each([pages[i] for i in to_read], "Copy word for word every sentence or table row on this page that sets, changes, limits or makes an exception to a rule about: <the rules you screened for>, plus any definition or cross-reference on this page that those sentences depend on. Separate passages with ' || '. Empty if none.", {"quote": str}, model="text")`.
+Check each passage is really on its page (compare with whitespace collapsed, e.g. `" ".join(p.split()) in " ".join(page.split())`), then print the quotes with each page's `.label` and read them. An empty quote means the page has no rule: skip it (pages added only for their rank usually have none). Print a full page only when a passage fails that check, or a quote depends on text it does not include (a definition, another clause, a table); for another clause, search `pages` for its number or defined term and print just that passage. Confirm each rule before relying on it.
+Each turn shows at most {output_limit} characters of output and cuts anything longer, so print only as much as fits.
+"""
+_ASK_EACH_DECISION_MODEL = """In this run ask_each is backed by a decision model: it answers ONLY a list of choices or `bool` (no str/int/float fields; bucket numbers into choice ranges instead).
+Each choice field also returns `<field>_confidence` and each bool returns `<field>_p` (probability of true). Items are answered one per fast call, so `batch_size` has no effect; use `concurrency=32` or more.
+Ask one narrow question per field, and use the confidence to set aside uncertain items (e.g. confidence < 0.6) for a closer look instead of trusting every answer.
+When screening pages, the page a rule is on usually scores highest for that field even when its probability is below 0.5, so read every flagged page plus each field's top 3 by `<field>_p`:
+`to_read = sorted({i for f in fields for i in range(len(pages)) if screen[i] and screen[i][f]} | {i for f in fields for i in sorted(range(len(pages)), key=lambda i: -(screen[i] or {}).get(f + "_p", 0))[:3]})`.
+"""
+_ASK_EACH_TEXT_MODEL = """This run also has a text model for ask_each: pass `model="text"` to use it for `str`, `int` or `float` fields (the default decision model rejects them), e.g. `ask_each(items, question, {"quote": str}, model="text")`. Keep choice and bool fields on the default model; use `model="text"` for them only to re-check items the default model was unsure about.
+"""
+
+
+def ask_each_section(*, decision_model: bool = False, documents: bool = False, output_limit: int = 5000,
+                     text_model: bool = False, several_documents: bool = False) -> str:
+    """The prompt text for ask_each: the tool, the document guidance when a document is an input, the decision-model notes.
+
+    ``output_limit`` is the per-turn stdout budget the run actually has, so the
+    advice on how many pages to print at once follows the configured limit.
+    ``text_model`` means ``AskEach(text_lm=...)`` is set: flagged pages are read
+    as verified quotes pulled by that model instead of whole pages.
+    ``several_documents`` means ``AskEach(sub_runs=True)`` and more than one
+    document input: the run is told to give each document its own child run.
+    """
+    reading = _ASK_EACH_READ_QUOTES if text_model else _ASK_EACH_READ_PAGES
+    documents_text = (_ASK_EACH_DOCUMENTS + reading).replace("{output_limit}", f"{output_limit:,}")
+    if several_documents:
+        documents_text = _RUN_EACH_DOCUMENTS + documents_text
+    if not text_model:
+        return (_ASK_EACH_AVAILABLE
+                + (documents_text if documents else "")
+                + (_ASK_EACH_DECISION_MODEL if decision_model else ""))
+    # With a text model the reading step is quotes, so the decision-model notes
+    # (which say which pages to read) come before it and must not say "read".
+    decision = _ASK_EACH_DECISION_MODEL.replace("so read every flagged page plus", "so the pages to read are every flagged page plus")
+    return (_ASK_EACH_AVAILABLE
+            + (decision if decision_model else "")
+            + _ASK_EACH_TEXT_MODEL
+            + (documents_text if documents else ""))
+
 SYSTEM_PROMPT_TEMPLATE = """You are an RLM (Recursive Language Model) running in a Python REPL.
 
 You solve the task by writing Python code. Each block you write is executed in
@@ -111,6 +180,7 @@ def build_system_prompt(
     learned_guidance: str | None = None,
     sub_lm_available: bool = True,
     validator_rules: str | None = None,
+    ask_each: str | None = None,
 ) -> str:
     inputs = inputs or {}
     task_description, outputs = _task_and_outputs(signature, inline_task, inline_outputs)
@@ -132,7 +202,7 @@ def build_system_prompt(
             skill_index, preloaded_skills, skill_cards=skill_cards, router_active=router_active
         ),
         cross_source_section=_cross_source_section(inputs),
-        predict_section=_PREDICT_AVAILABLE if sub_lm_available else _PREDICT_UNAVAILABLE,
+        predict_section=(_PREDICT_AVAILABLE if sub_lm_available else _PREDICT_UNAVAILABLE) + (ask_each or ""),
         learned_guidance_section=f"\n{guidance}\n" if guidance else "",
         # The rules the configured validators check, stated up front so the
         # first answer can follow them. Absent, the prompt is unchanged.

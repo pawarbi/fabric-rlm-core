@@ -872,6 +872,73 @@ class SemanticModel:
         """Measures, with their DAX expressions and descriptions."""
         return self._fabric.list_measures(self.dataset, **self._kw)
 
+    def find_measures(self, question: str, *, top: int = 10, ask: Any = None,
+                      max_expression_chars: int = 1200, batch_size: int = 25,
+                      concurrency: int = 16) -> Any:
+        """Screen EVERY measure against a question and return the best candidates.
+
+        Each measure (table, name, description, DAX expression) is one item for
+        ``ask_each``, which asks whether it computes what the question asks:
+        "exact", "close" (the right quantity but a variant: another period, a
+        rate instead of an amount, or it needs a filter) or "no". The result is
+        a DataFrame of at most ``top`` candidates, exact before close, with the
+        DAX to read before choosing. Screening every measure matters: narrowing
+        by keyword first is how the right measure gets dropped in a model with
+        thousands of them.
+
+        ``ask`` defaults to the run's ``ask_each`` (turned on with
+        ``RLM(ask_each=...)``); outside a run pass any function with the same
+        signature. ``result.attrs["screened"]`` records how many measures were
+        screened and how many could not be answered.
+        """
+        import pandas as pd
+
+        from .ask_each import WORKER_ASK_EACH
+
+        ask = ask or WORKER_ASK_EACH
+        if ask is None:
+            raise RuntimeError(
+                "find_measures needs ask_each, which is not turned on in this run. "
+                "Read the measures with model.measures() instead."
+            )
+        frame = _plain_frame(self.measures(), _METADATA_COLUMNS["measures"])
+        if frame is None or len(frame) == 0:
+            return pd.DataFrame(columns=["table_name", "measure_name", "fit", "confidence", "measure_description", "measure_expression"])
+        cols = [c for c in ("table_name", "measure_name", "measure_description", "measure_expression") if c in frame.columns]
+        items = frame[cols].copy()
+        if "measure_expression" in items.columns:
+            items["measure_expression"] = items["measure_expression"].fillna("").astype(str).str.slice(0, max_expression_chars)
+        items = items.fillna("")
+        prompt = (
+            f"Question: {question}\n"
+            "Decide whether this measure computes what the question asks, judging by its DAX expression, "
+            "description and name. exact: it answers the question as it is. close: the right quantity but a "
+            "variant (another period, a rate instead of an amount or the reverse, per store or per day), or "
+            "it needs a filter to answer it. no: anything else."
+        )
+        # Measures are short, so a text model answers ``batch_size`` per call
+        # (one call per measure took 6.6 minutes on 4,800); a decision model
+        # ignores batching and answers each quickly.
+        answers = ask(items, prompt, {"fit": ["exact", "close", "no"]}, columns=cols,
+                      batch_size=batch_size, concurrency=concurrency)
+        rows = []
+        for position, answer in enumerate(answers):
+            if not answer or answer.get("fit") == "no":
+                continue
+            row = frame.iloc[position].to_dict()
+            row["fit"] = answer["fit"]
+            confidence = answer.get("fit_confidence")
+            row["confidence"] = float(confidence) if confidence is not None else None
+            rows.append(row)
+        rank = {"exact": 0, "close": 1}
+        rows.sort(key=lambda r: (rank[r["fit"]], -(r["confidence"] if r["confidence"] is not None else 1.0)))
+        keep = ["table_name", "measure_name", "fit", "confidence", "measure_description", "measure_expression"]
+        result = pd.DataFrame(rows[:top], columns=[c for c in keep if c in (list(frame.columns) + ["fit", "confidence"])])
+        stats = dict(getattr(answers, "stats", {}) or {})
+        result.attrs["screened"] = {"measures": len(frame), "flagged": len(rows), "returned": len(result),
+                                    "failed": stats.get("failed", 0), "unfinished": stats.get("unfinished", 0)}
+        return result
+
     def relationships(self) -> Any:
         """Relationships between tables, as a DataFrame."""
         return self._fabric.list_relationships(self.dataset, **self._kw)
@@ -913,7 +980,26 @@ class SemanticModel:
                 return
             keep = [c for c in cols if c in getattr(df, "columns", [])]
             view = df[keep] if keep else df
-            out.append(view.to_string()[:max_chars])
+            text = view.to_string()
+            if len(text) <= max_chars:
+                out.append(text)
+                return
+            # Cut at a row boundary and say so: a silent cut left a run
+            # choosing among the ~20 measures it could see out of 4,800.
+            lines = text[:max_chars].splitlines()[:-1]
+            shown = max(len(lines) - 1, 0)
+            out.append("\n".join(lines))
+            note = f"... showing {shown} of {len(view)} {title.lower()}; the listing is cut here."
+            if title == "Measures":
+                from .ask_each import WORKER_ASK_EACH
+
+                if WORKER_ASK_EACH is not None:
+                    note += (" Do not choose from this partial list: call model.find_measures(\"<the question>\"),"
+                             " which screens every measure and returns the best candidates with their DAX.")
+                else:
+                    note += (" Do not choose from this partial list: search model.measures() (columns"
+                             " 'Measure Name', 'Measure Description', 'Measure Expression') for the idea you need.")
+            out.append(note)
 
         section("Tables", self.tables, ("Name", "Description"))
         # sempy names this column "Measure Description", not "Description".

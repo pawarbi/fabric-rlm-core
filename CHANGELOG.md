@@ -2,6 +2,86 @@
 
 ## Unreleased
 
+### Added
+
+- `ask_each(items, question, output)` in the worker, turned on with `RLM(ask_each=...)`:
+  asks one question about every item of a list, Series or DataFrame with an LM, and
+  checks each answer against a typed output (`str`, `int`, `float`, `bool`, or a list of
+  allowed strings). An invalid answer is asked again with the reason; one that never
+  validates is `None` with its error, not a guess. The calls run in the host process with
+  concurrency, retries, optional batching, back-off and lower concurrency when the model
+  throttles, and a time limit (`AskEach(max_seconds=...)`); items left unanswered are
+  counted in `stats["unfinished"]`. The model is anything `lm=` accepts, so an OpenRouter
+  or Azure AI Foundry model can take large jobs off the Fabric capacity. Off by default:
+  the prompt and the worker are unchanged unless it is turned on, and turning it on is the
+  permission for item text to reach that model (the worker keeps `block_network`). Totals,
+  including tokens and cost where the model reports them, are in
+  `trajectory.metadata["ask_each"]`.
+- `DecisionLM("typesafe/jev-1.13")` for decision models on OpenRouter's decisions endpoint:
+  answers choice and `bool` fields with `<field>_confidence` / `<field>_p`. A key read from
+  the environment is only sent to the host it belongs to.
+- With `ask_each` on and a document among the inputs, the run is told how to find the pages
+  a task depends on: screen pages with one narrow field per rule (plus one per input column
+  that could change the result, amendments, and a catch-all), then read every flagged page,
+  printing only as many pages per turn as fit in the configured output limit
+  (`FABRIC_RLM_STDOUT_LIMIT`, 5,000 characters by default) and keeping a list of pages still
+  to read. Document tasks take more turns, so pass `max_turns=40` for them; the default of 20
+  is unchanged.
+- `AskEach(text_lm=...)`: an optional second model the run picks per call with
+  `ask_each(..., model="text")`. With a document input, a decision model screening pages and a
+  text model set, the run reads flagged pages as quotes: the text model copies the rule
+  sentences from each flagged page, the run checks each passage is on its page, and opens a
+  full page only when a quote is missing, fails that check, or points elsewhere. Without
+  `text_lm` the prompt is unchanged. Use it to save turns and tokens, not for accuracy.
+- `File.pages()`: a document as a list of pages, each a `str` with `.label` and `.number`. PDF
+  pages; text or markdown split on `<!-- page N -->` markers or form feeds, else ~2,000-character
+  chunks at headings labelled like "chunk 12 · Article 14". With a document input the run is
+  told to use it instead of opening the file itself, rather than passing the `File` handle to
+  a PDF reader that wants a path. With quotes, the run now also skips pages whose quote is
+  empty and, for a clause a quote refers to, prints just that passage rather than whole pages.
+
+### Changed
+
+- When a turn prints more than the output limit, the feedback now always says so in one
+  line: how much was printed, the limit, that the middle (or, with
+  `FABRIC_RLM_STDOUT_TAIL_RATIO=0`, the end) was dropped, and to print less and continue with
+  what was cut. Before, the cut was silent unless the longer opt-in hint
+  (`FABRIC_RLM_TRUNCATION_HINT=on`) was set; that hint is unchanged.
+- A CSV, TSV or XLSX table the run wrote with empty cells is sent back once, as part of the
+  analytical integrity checks: the run is told how many cells are empty and in which columns,
+  and to fill them or write `n/a` or `not found: <why>`, so a gap is never silent. Only tables
+  at a path the task gave or the run returned, written during the run, are checked.
+- The document guidance for `ask_each` adds one sentence: before relying on a clause, check for
+  text that narrows or overrides it ("notwithstanding", "provided, however", exceptions that have
+  their own exceptions, later amendments, definitions of the terms it uses).
+- Analytical integrity checks no longer reject an answer submitted on the run's last turn (except
+  with `analytical_integrity="strict"`). With no turn left to repair, a rejection returned no answer
+  at all; the answer is now accepted and the findings stay on `result.integrity_problems`.
+- The `ask_each` guidance adds one sentence: when a number counts items by what their free text
+  means (a theme, cause or complaint type), label every relevant item with `ask_each` rather than
+  counting keyword or regex matches, which miss paraphrases and redacted words. Exact duplicate
+  texts can still be counted in code.
+- The `ask_each` text-model guidance adds: keep choice and bool fields on the default (decision)
+  model, and use `model="text"` for them only to re-check items it was unsure about, since the
+  text model costs far more per item.
+
+### Added (sub-runs, opt-in)
+
+- `AskEach(sub_runs=True)` adds `run_each(items, task, outputs, context=None)`: one child run per
+  item (typically one document), with the same LM, skills and ask_each settings, `sub_run_turns`
+  turns each (default 20), `sub_run_concurrency` at a time (default 4). Children cannot start
+  children. A child that runs out of turns returns its last answer, marked partial; values are
+  converted to the requested types where that is lossless. Child tokens are part of the run's
+  totals and `trajectory.metadata["run_each"]`; `result.child_runs` holds each child's result.
+  Works in both engines. Off by default because the effect depends on the task: sub-runs help
+  when each document needs its own review, and can cost accuracy and money when one data set is
+  checked against several documents. With several documents and sub-runs on, the run is also
+  told to split only when each document needs its own full review; that sentence does not
+  reliably decide it, so turn sub-runs on only for per-document reviews.
+- `inspect()` shows, when they apply: the cached share of prompt tokens, ask_each items and cost,
+  child runs with their turns, and checks the answer was accepted with; each child run appears as
+  its own collapsed inspector. A plain run's view is unchanged.
+
 ## 0.6.8 - 2026-09-28 - validators fail closed, empty outputs are re-checked, and semantic-model numbers say where they came from
 
 Everything here came from issues #119 to #122, each reproduced live on a semantic model before it was fixed.

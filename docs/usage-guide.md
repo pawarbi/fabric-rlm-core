@@ -666,6 +666,13 @@ inside the worker as `File(...)` handles with `.path`, `.read_text()`,
 `.read_bytes()`, and `.exists()`, so a Lakehouse path or a local path is just a
 file path.
 
+`.pages()` returns a document as a list of pages, each a `str` with `.label` to
+cite and `.number`: one per page of a PDF (needs the `pdf` extra, or pypdf); for
+text or markdown one per `<!-- page N -->` marker or form feed; otherwise chunks
+of about 2,000 characters split at headings, labelled like "chunk 12 · Article
+14". Page numbers are only needed to cite pages: markdown without markers works
+the same, and the run cites chunk labels instead.
+
 ### Lakehouses
 
 `LakehouseSource` builds a metadata catalog in the parent Fabric notebook, then
@@ -983,6 +990,11 @@ turn collapsed, and the turn list scrolls after 15 rows. Use
 `result.inspect(visible_turns=10)` to change the viewport or
 `result.inspect(expanded=False)` when the whole inspector should start collapsed.
 
+When they apply, the summary also shows the share of prompt tokens that were
+cached, `ask_each` items and cost, child runs from `run_each` with their turns,
+and checks the answer was accepted with (`result.integrity_problems`). Each child
+run appears below the turns as its own collapsed inspector.
+
 The inspector is dependency-free and escapes trajectory content before
 rendering. Save the same view as a standalone file when you need to share or
 archive it:
@@ -1015,6 +1027,101 @@ gets its own token, so no key is involved:
 rlm = RLM.task(task, inputs=inputs, outputs=outputs,
                lm=FabricLM("gpt-5.1"), sub_lm="fabric/gpt-5-mini")
 ```
+
+### Asking about many items
+
+`ask_each` lets a run ask one question about every item in a list, a Series or
+a DataFrame, with an LM, in one call. It is off unless you turn it on:
+
+```python
+rlm = RLM.task(task, inputs=inputs, outputs=outputs,
+               lm=FabricLM("gpt-5.1"),
+               ask_each="openrouter/openai/gpt-5-mini")   # or True for the main LM
+```
+
+The run then writes, for example:
+
+```python
+r = ask_each(complaints, "Classify the complaint.",
+             {"theme": ["Brakes", "Steering", "Other"], "safety_critical": bool},
+             columns=["summary"])
+```
+
+Each answer is checked against the declared output (`str`, `int`, `float`,
+`bool`, or a list of allowed strings). An invalid answer is asked again with
+the reason, and one that never validates comes back as `None` with its error,
+never as a guess. The result is a list aligned with the items, with `.errors`,
+`.stats` and `.to_frame(df)`.
+
+The calls run in the notebook process, not in the worker, so the host handles
+concurrency, retries and rate limits: a throttled call waits and the map runs
+fewer calls at once until calls succeed again. Items not answered within the
+time limit come back as `None` and are counted in `stats["unfinished"]`.
+`AskEach` sets the limits:
+
+```python
+from fabric_rlm import AskEach
+
+ask_each=AskEach(lm="openrouter/openai/gpt-5-mini", max_seconds=600, max_concurrency=32)
+```
+
+The model is anything that works as `lm=`: `FabricLM(...)`, a provider string,
+a spec dictionary (an Azure AI Foundry deployment, for example), or a
+callable. Many parallel calls to the built-in Fabric endpoint count against
+the capacity and can be throttled, so for large jobs a separate endpoint is
+usually faster. A `DecisionLM("typesafe/jev-1.13")` answers choice and `bool`
+questions only, with a probability for each answer, at a fraction of the cost
+of a text model.
+
+Turning `ask_each` on is also permission for the items the run passes to leave
+the notebook for that model. With `block_network=True` the worker still has no
+network access; the items go out from the notebook process instead.
+
+When a document is among the inputs, the run is also told how to screen a long
+document page by page before relying on keyword search, and how many characters
+of output each turn shows, so it reads the flagged pages a few at a time. That
+reading takes turns, so pass `max_turns=40` for document tasks; the default of
+20 is often not enough. The run's
+`trajectory.metadata["ask_each"]` holds the totals: calls, items, failures,
+unfinished items, throttling, tokens and cost where the model reports them.
+
+With a decision model screening pages, add a cheap text model to read them.
+The run then has the text model copy the rule sentences out of each flagged
+page, checks each passage is really on its page, and reads those short quotes
+instead of whole pages, opening a full page only when a quote is missing, fails
+that check, or refers to text elsewhere:
+
+```python
+ask_each=AskEach(lm=DecisionLM("typesafe/jev-1.13"),
+                 text_lm="openrouter/openai/gpt-5.4-mini")
+```
+
+The run picks the text model per call with `ask_each(..., model="text")`.
+
+With several documents, give each its own child run. `AskEach(sub_runs=True)`
+adds `run_each(items, task, outputs, context=None)` to the run, and when more
+than one document is among the inputs the run is told to use it:
+
+```python
+ask_each=AskEach(lm=DecisionLM("typesafe/jev-1.13"),
+                 text_lm="openrouter/openai/gpt-5.4-mini",
+                 sub_runs=True)            # sub_run_turns=20, sub_run_concurrency=4
+```
+
+The run writes one complete per-document task; each child gets its document as
+`item`, the same LM, skills and `ask_each` settings, and its own turn budget,
+and returns its submitted fields. A child that runs out of turns returns its
+last answer, marked partial in `.errors`. Children cannot start children. Their
+tokens are included in the run's totals and in `trajectory.metadata["run_each"]`,
+and `result.child_runs` holds each child's result.
+
+Sub-runs are off by default because they help one kind of task and hurt another.
+When each document is reviewed on its own (one row of terms per contract), they
+tend to help. When one data set is checked against several documents (claims
+under their policies), one run screening all the documents together tends to be
+more accurate and cheaper, because each child has its own chance to miss a rule.
+Turn them on for per-document reviews, not for checking one data file against
+several documents.
 
 ## Engines
 

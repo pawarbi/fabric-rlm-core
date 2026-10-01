@@ -20,7 +20,7 @@ import pytest
 
 from fabric_rlm import RLM
 from fabric_rlm.interpreter import ExecResult
-from fabric_rlm.runtime import STDOUT_FEEDBACK_LIMIT, _TRUNCATION_HINT_MARKER
+from fabric_rlm.runtime import STDOUT_FEEDBACK_LIMIT, _OUTPUT_CUT_MARKER, _TRUNCATION_HINT_MARKER
 
 
 def _make_rlm() -> RLM:
@@ -89,4 +89,29 @@ def test_hint_also_fires_on_error_turn(monkeypatch):
     rlm = _make_rlm()
     fb = rlm._format_feedback(_result("e" * (STDOUT_FEEDBACK_LIMIT + 10), ok=False), turn=2)
     assert _TRUNCATION_HINT_MARKER in fb
+
+
+# The short output-cut notice is always on (independent of the opt-in hint above):
+# it says what was dropped and to print less and continue.
+def test_output_cut_notice_is_on_by_default_and_names_the_middle(monkeypatch):
+    monkeypatch.delenv("FABRIC_RLM_STDOUT_TAIL_RATIO", raising=False)
+    rlm = _make_rlm()
+    big = "w" * (STDOUT_FEEDBACK_LIMIT + 10)
+    fb = rlm._format_feedback(_result(big), turn=1)
+    assert _OUTPUT_CUT_MARKER in fb
+    assert f"{len(big):,}" in fb and f"{STDOUT_FEEDBACK_LIMIT:,}" in fb
+    assert "the middle was dropped" in fb and "Print less per turn" in fb
+    assert _TRUNCATION_HINT_MARKER not in fb
+
+
+def test_output_cut_notice_says_the_end_when_tail_is_off(monkeypatch):
+    monkeypatch.setenv("FABRIC_RLM_STDOUT_TAIL_RATIO", "0")
+    rlm = _make_rlm()
+    fb = rlm._format_feedback(_result("v" * (STDOUT_FEEDBACK_LIMIT + 10)), turn=1)
+    assert "the end was dropped" in fb
+
+
+def test_no_output_cut_notice_when_stdout_fits():
+    rlm = _make_rlm()
+    assert _OUTPUT_CUT_MARKER not in rlm._format_feedback(_result("short"), turn=1)
 
