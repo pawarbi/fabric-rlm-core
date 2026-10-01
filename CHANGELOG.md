@@ -25,46 +25,20 @@
   that could change the result, amendments, and a catch-all), then read every flagged page,
   printing only as many pages per turn as fit in the configured output limit
   (`FABRIC_RLM_STDOUT_LIMIT`, 5,000 characters by default) and keeping a list of pages still
-  to read. Measured on long-PDF + CSV tasks (90 to 220 pages, 2 of them real documents) with
-  Luna as the main model and Jev answering `ask_each`, `max_turns=40`:
-  - Screening at all: with the guidance the run screened unprompted in 23 of 24 runs across 8
-    tasks and cited every deciding page in 21 of 24; without it (the plain tool description),
-    keyword search cited every deciding page in 11 of 16.
-  - Reading in pieces: the 3 of 24 misses above were runs that printed 15 to 30 flagged pages
-    in one turn, so the middle was cut and a page Jev had ranked in its top 3 was never read.
-    Same setup, run side by side, on tasks not used to tune the guidance plus the one that
-    exposed the problem: every row correct in 13 of 15 runs with the page-budget sentence,
-    10 of 15 without (tariff 5/5 vs 4/5, scholarship 4/4 vs 2/4, contract 3/3 vs 3/3, Pub 17
-    1/3 vs 1/3, where both arms misread the same rule). Small samples: a direction, not a
-    measured rate.
-  - Turns: runs used 15 to 40 turns, so pass `max_turns=40` for document tasks; the default
-    of 20 is often not enough. The default is unchanged.
+  to read. Document tasks take more turns, so pass `max_turns=40` for them; the default of 20
+  is unchanged.
 - `AskEach(text_lm=...)`: an optional second model the run picks per call with
   `ask_each(..., model="text")`. With a document input, a decision model screening pages and a
   text model set, the run reads flagged pages as quotes: the text model copies the rule
   sentences from each flagged page, the run checks each passage is on its page, and opens a
   full page only when a quote is missing, fails that check, or points elsewhere. Without
-  `text_lm` the prompt is unchanged. Same 8 tasks, 3 runs each, run side by side (Jev
-  screening, gpt-5.4-mini quoting, `max_turns=40`): quotes took about 8 fewer turns (22-23
-  against 30-32) and about 40% fewer main-model prompt tokens (280-314k against 459-515k) with
-  Luna at medium and at high reasoning, for about $0.09 more per run. Accuracy was about the
-  same: every row correct in 22/24 with quotes against 16/24 whole pages at high, but 20/23
-  against 21/24 at medium, so the gap at high looks like run-to-run noise. Use it to save turns
-  and tokens, not for accuracy. Luna at medium matched high on accuracy with about 40% fewer
-  output tokens.
+  `text_lm` the prompt is unchanged. Use it to save turns and tokens, not for accuracy.
 - `File.pages()`: a document as a list of pages, each a `str` with `.label` and `.number`. PDF
   pages; text or markdown split on `<!-- page N -->` markers or form feeds, else ~2,000-character
   chunks at headings labelled like "chunk 12 · Article 14". With a document input the run is
-  told to use it instead of opening the file itself: in 18 of 24 runs the first attempt passed
-  the `File` handle to a PDF reader that wanted a path, and the run spent about 4 turns getting
-  the text out. With quotes, the run now also skips pages whose quote is empty and, for a
-  clause a quote refers to, prints just that passage rather than whole pages. Same 8 tasks,
-  3 runs each, Luna at medium: quote runs went from 22 to 17 turns and 280k to 226k main-model
-  prompt tokens (whole-page runs from 30 to 24 turns), accuracy unchanged (21/24 fully correct
-  each way). The same documents as markdown with page markers: 15.6 turns, 23/24; as markdown
-  with no page information: 17.3 turns, 21/24, citing chunk labels. Telling the run to rely on
-  a verified quote without re-reading its page saved under a turn and had 3 badly wrong runs of
-  24, so it is not included.
+  told to use it instead of opening the file itself, rather than passing the `File` handle to
+  a PDF reader that wants a path. With quotes, the run now also skips pages whose quote is
+  empty and, for a clause a quote refers to, prints just that passage rather than whole pages.
 
 ### Changed
 
@@ -76,10 +50,7 @@
 - A CSV, TSV or XLSX table the run wrote with empty cells is sent back once, as part of the
   analytical integrity checks: the run is told how many cells are empty and in which columns,
   and to fill them or write `n/a` or `not found: <why>`, so a gap is never silent. Only tables
-  at a path the task gave or the run returned, written during the run, are checked. On a
-  10-agreement benchmarking request, runs had submitted tables with up to a third of the cells
-  empty; with the check, 0 blank cells in 9 of 9 runs. No change on single-document tasks
-  (8 tasks, 3 runs each: 22/24 fully correct, 17.2 turns, against 21/24 and 17.3 turns before).
+  at a path the task gave or the run returned, written during the run, are checked.
 - The document guidance for `ask_each` adds one sentence: before relying on a clause, check for
   text that narrows or overrides it ("notwithstanding", "provided, however", exceptions that have
   their own exceptions, later amendments, definitions of the terms it uses).
@@ -88,17 +59,11 @@
   at all; the answer is now accepted and the findings stay on `result.integrity_problems`.
 - The `ask_each` guidance adds one sentence: when a number counts items by what their free text
   means (a theme, cause or complaint type), label every relevant item with `ask_each` rather than
-  counting keyword or regex matches, which miss paraphrases and redacted words. Tested on
-  explaining a spike in CFPB complaints (Nelnet, March 2025, +371). Without the sentence, 2 of 3
-  runs used keyword search and put the main driver, a wave of privacy and data-access complaints,
-  at +154 and +160; with it, 3 of 3 labelled every complaint and put it at +241, +268 and +277,
-  against +265 from labelling every complaint separately. It adds about $0.06 and 1-3 minutes per
-  run. On a spike made of exact duplicate texts (Equifax debt collection, April 2025) runs still
-  counted duplicates in code and made no extra calls (2 runs).
+  counting keyword or regex matches, which miss paraphrases and redacted words. Exact duplicate
+  texts can still be counted in code.
 - The `ask_each` text-model guidance adds: keep choice and bool fields on the default (decision)
-  model, and use `model="text"` for them only to re-check items it was unsure about. Before, the
-  run sometimes sent a choice question to the text model (1 of 4 complaint-report runs, $0.50 of
-  labelling instead of about $0.03); with the sentence, 0 of 12 runs did.
+  model, and use `model="text"` for them only to re-check items it was unsure about, since the
+  text model costs far more per item.
 
 ### Added (sub-runs, opt-in)
 
@@ -108,20 +73,11 @@
   children. A child that runs out of turns returns its last answer, marked partial; values are
   converted to the requested types where that is lossless. Child tokens are part of the run's
   totals and `trajectory.metadata["run_each"]`; `result.child_runs` holds each child's result.
-  Works in both engines. Off by default because the effect depends on the task, measured with
-  Luna at medium, Jev screening and gpt-5.4-mini quoting:
-  - 10 merger agreements, a 10-column deal-terms table (87 graded cells, lawyer labels), with a
-    short deal-points skill: 81% correct with sub-runs against 68% without, 6 runs each, $1.32 per
-    request either way (91-97% of prompt tokens cached), 10-23 against 12-19 minutes.
-  - 8 property policies (60-120 pages, each worded differently), 320 claims to price, 3 runs each:
-    99.6% of payouts correct without sub-runs for $0.49 and 4-8 minutes; 88.5% with sub-runs for
-    $1.99 and 7-16 minutes. Children given their policy and its claims still missed reworded storm
-    clauses and exceptions to a waiver that the single screen of all 735 pages caught.
-  With several documents and sub-runs on, the run is also told to split only when each document
-  needs its own full review. That sentence does not reliably decide it: on the policies task the
-  run still split in 3 of 3 runs (95.3% correct, $0.88-3.08), while the deal-terms task held at
-  86%. Turn sub-runs on only for per-document reviews; leave them off for checking one data file
-  against several documents.
+  Works in both engines. Off by default because the effect depends on the task: sub-runs help
+  when each document needs its own review, and can cost accuracy and money when one data set is
+  checked against several documents. With several documents and sub-runs on, the run is also
+  told to split only when each document needs its own full review; that sentence does not
+  reliably decide it, so turn sub-runs on only for per-document reviews.
 - `inspect()` shows, when they apply: the cached share of prompt tokens, ask_each items and cost,
   child runs with their turns, and checks the answer was accepted with; each child run appears as
   its own collapsed inspector. A plain run's view is unchanged.

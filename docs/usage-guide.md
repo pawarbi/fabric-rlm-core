@@ -1080,9 +1080,8 @@ network access; the items go out from the notebook process instead.
 When a document is among the inputs, the run is also told how to screen a long
 document page by page before relying on keyword search, and how many characters
 of output each turn shows, so it reads the flagged pages a few at a time. That
-reading takes turns: on long-PDF + CSV tasks (90 to 220 pages) runs used 15 to
-40 turns, so pass `max_turns=40` for document tasks; the default of 20 is often
-not enough. The run's
+reading takes turns, so pass `max_turns=40` for document tasks; the default of
+20 is often not enough. The run's
 `trajectory.metadata["ask_each"]` holds the totals: calls, items, failures,
 unfinished items, throttling, tokens and cost where the model reports them.
 
@@ -1117,13 +1116,12 @@ tokens are included in the run's totals and in `trajectory.metadata["run_each"]`
 and `result.child_runs` holds each child's result.
 
 Sub-runs are off by default because they help one kind of task and hurt another.
-On a request to fill a 10-column deal-terms table from 10 merger agreements (each
-document reviewed on its own), they raised correct cells from 68% to 81% at the
-same cost. On a request to compute 320 claim payouts, each under one of 8
-property policies, one run screening all the policies together got 99.6% right
-for $0.49; with sub-runs, 88.5% for $1.99, because each child had its own chance
-to miss a rule. Turn them on for per-document reviews, not for checking one data
-file against several documents.
+When each document is reviewed on its own (one row of terms per contract), they
+tend to help. When one data set is checked against several documents (claims
+under their policies), one run screening all the documents together tends to be
+more accurate and cheaper, because each child has its own chance to miss a rule.
+Turn them on for per-document reviews, not for checking one data file against
+several documents.
 
 ## Engines
 
