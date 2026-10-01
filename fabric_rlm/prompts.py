@@ -28,9 +28,12 @@ Use it for a judgement per item over many items; do not write your own loop or b
 `output` maps field names to `str`, `int`, `float`, `bool`, or a list of allowed strings; add an "unsure" choice where a forced answer would be a guess,
 e.g. `ask_each(df, "Classify the complaint.", {"theme": ["Brakes", "Steering", "Other"], "safety_critical": bool}, columns=["summary"])`.
 It returns a list aligned with `items` (None where an item failed or the time limit ran out) with `.errors`, `.stats` and `.to_frame(df)`. Check `.stats["failed"]` and `.stats["unfinished"]` before aggregating, and say in the answer how many items were left out.
-Good uses: classify or extract from free text once the analysis shows where it matters; match records across sources that share no key (build candidate pairs in Python first, ask about each pair, then keep at most one match per record); check each claim in a draft against the evidence it came from (claim and evidence in one item; recompute numbers in code rather than asking); map the columns of messy files to a known schema; find the measure a question needs in a semantic model with many measures: call `model.find_measures("<the question>")`, which screens EVERY measure (do not narrow by keyword first) and returns the best candidates with their DAX, then read those and choose.
+Good uses: classify or extract from free text once the analysis shows where it matters; match records across sources that share no key (build candidate pairs in Python first, ask about each pair, then keep at most one match per record); check each claim in a draft against the evidence it came from (claim and evidence in one item; recompute numbers in code rather than asking); map the columns of messy files to a known schema.
 When a number in the answer counts items by what their free text means (a theme, cause or complaint type), keyword or regex matches miss paraphrases and redacted words and give only a floor: label every relevant item with ask_each and count those labels, using keywords only to find examples.
 Keep items short: filter first, then ask. For many short items (under ~2,000 characters) pass batch_size=10 to 20; keep batch_size=1 for long items or subtle judgements.
+"""
+# Only when a semantic model is among the inputs.
+_ASK_EACH_SEMANTIC_MODEL = """To find the measure a question needs in a semantic model with many measures, call `model.find_measures("<the question>")`: it screens EVERY measure (do not narrow by keyword first) and returns the best candidates with their DAX; read those and choose.
 """
 # Only when a document is among the inputs: how to find the pages a task depends on.
 _ASK_EACH_DOCUMENTS = """Finding the pages a task depends on in a long document (roughly 30+ pages): screen its pages with ask_each before relying on keyword search. Search only finds rules worded the way you guess, and a missed exception, override or amendment silently breaks the answer.
@@ -65,7 +68,7 @@ _ASK_EACH_TEXT_MODEL = """This run also has a text model for ask_each: pass `mod
 
 
 def ask_each_section(*, decision_model: bool = False, documents: bool = False, output_limit: int = 5000,
-                     text_model: bool = False, several_documents: bool = False) -> str:
+                     text_model: bool = False, several_documents: bool = False, semantic_model: bool = False) -> str:
     """The prompt text for ask_each: the tool, the document guidance when a document is an input, the decision-model notes.
 
     ``output_limit`` is the per-turn stdout budget the run actually has, so the
@@ -74,19 +77,22 @@ def ask_each_section(*, decision_model: bool = False, documents: bool = False, o
     as verified quotes pulled by that model instead of whole pages.
     ``several_documents`` means ``AskEach(sub_runs=True)`` and more than one
     document input: the run is told to give each document its own child run.
+    ``semantic_model`` means a semantic model is an input: the run is told about
+    ``model.find_measures``.
     """
+    available = _ASK_EACH_AVAILABLE + (_ASK_EACH_SEMANTIC_MODEL if semantic_model else "")
     reading = _ASK_EACH_READ_QUOTES if text_model else _ASK_EACH_READ_PAGES
     documents_text = (_ASK_EACH_DOCUMENTS + reading).replace("{output_limit}", f"{output_limit:,}")
     if several_documents:
         documents_text = _RUN_EACH_DOCUMENTS + documents_text
     if not text_model:
-        return (_ASK_EACH_AVAILABLE
+        return (available
                 + (documents_text if documents else "")
                 + (_ASK_EACH_DECISION_MODEL if decision_model else ""))
     # With a text model the reading step is quotes, so the decision-model notes
     # (which say which pages to read) come before it and must not say "read".
     decision = _ASK_EACH_DECISION_MODEL.replace("so read every flagged page plus", "so the pages to read are every flagged page plus")
-    return (_ASK_EACH_AVAILABLE
+    return (available
             + (decision if decision_model else "")
             + _ASK_EACH_TEXT_MODEL
             + (documents_text if documents else ""))

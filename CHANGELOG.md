@@ -82,6 +82,42 @@
   child runs with their turns, and checks the answer was accepted with; each child run appears as
   its own collapsed inspector. A plain run's view is unchanged.
 
+### Added (semantic models)
+
+- `SemanticModel.find_measures(question, top=10)`: screens every measure (table, name,
+  description and DAX) against the question with `ask_each` and returns at most `top` candidates
+  as a DataFrame, exact matches before close variants, with their DAX. Needs `ask_each` on (or
+  `ask=` outside a run); raises if the measure list has no name and expression or description
+  columns. `result.attrs["screened"]` counts screened, flagged, failed and unfinished measures.
+  The run is told about it only when a semantic model is among the inputs.
+
+### Changed (semantic models)
+
+- `SemanticModel.schema()` now says when a listing is longer than `max_chars`: it cuts at a row
+  boundary and adds "showing N of M measures; the listing is cut here", with where to look
+  instead (`model.find_measures(...)` when `ask_each` is on, otherwise `model.measures()`). Before,
+  the listing was cut silently, mid-row. This changes the text every semantic-model run sees for
+  a large model.
+
+### Fixed (ask_each)
+
+- Batched answers could shift onto the wrong items: items were numbered from 0, and a model that
+  numbered its answers from 1 gave every item its neighbour's answer with no error. Items are now
+  numbered from 1, and a batch answer with a number out of range, a repeated number or a row
+  without a number is not used at all: each of its items is asked again on its own.
+- `max_seconds` is now a hard limit: calls still in flight when it runs out are abandoned, and
+  their items come back `None` and counted in `stats["unfinished"]`, instead of the map waiting
+  for a stalled request.
+- The item count, item length and a total of 100 million characters per call are checked in the
+  worker before the request is sent to the host, so an oversized request is refused before it
+  crosses the pipe.
+- `None`, `NaN` and `NaT` in items reach the model as empty text rather than `null` or `NaN`.
+- `ask_each` and `run_each` calls are recorded as the turn's source calls in the DSPy engine too,
+  so `trajectory.metadata["source_call_summary"]` is the same in both engines.
+- `AskEachResult` (what `ask_each` and `run_each` return) and `AskEachError` are exported from
+  `fabric_rlm`.
+- `find_measures` orders answers without a confidence after those with one.
+
 ## 0.6.8 - 2026-09-28 - validators fail closed, empty outputs are re-checked, and semantic-model numbers say where they came from
 
 Everything here came from issues #119 to #122, each reproduced live on a semantic model before it was fixed.

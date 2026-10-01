@@ -3482,6 +3482,7 @@ class RLM:
             output_limit=STDOUT_FEEDBACK_LIMIT,
             text_model=self.ask_each.text_lm is not None,
             several_documents=self.ask_each.sub_runs and _count_document_inputs(inputs or {}) > 1,
+            semantic_model=_has_semantic_model_input(inputs or {}),
         )
 
     def _call_user_validator(self, validator: Callable[..., Any], *args: Any) -> tuple[str, str]:
@@ -4152,6 +4153,8 @@ class RLM:
         dspy_traj = (
             getattr(prediction, "trajectory", None) or [] if prediction is not None else []
         )
+        # ask_each / run_each records, matched to turns by the code that made them.
+        call_log = list(getattr(interpreter, "source_call_log", None) or [])
         for idx, event in enumerate(dspy_traj):
             if not isinstance(event, dict):
                 continue
@@ -4166,10 +4169,15 @@ class RLM:
             # Heuristic: dspy puts errors as '[Error] ...' lines in the output.
             if not error_text and output_text.startswith("[Error]"):
                 error_text = output_text
+            event_code = str(event.get("code") or event.get("action") or "")
+            turn_calls: list[dict[str, Any]] = []
+            match = next((j for j, (code, _) in enumerate(call_log) if code.strip() == event_code.strip()), None)
+            if match is not None:
+                turn_calls = call_log.pop(match)[1]
             trajectory.turns.append(
                 TurnRecord(
                     turn=idx,
-                    code=str(event.get("code") or event.get("action") or ""),
+                    code=event_code,
                     stdout=output_text,
                     stderr="",
                     error=error_text,
@@ -4177,8 +4185,13 @@ class RLM:
                     state={},
                     response_text=str(event.get("reasoning") or ""),
                     turn_type=str(event.get("type") or "normal"),
+                    source_calls=turn_calls,
                 )
             )
+        if call_log and trajectory.turns:
+            # Code dspy did not report verbatim: keep the records on the last turn rather than drop them.
+            last = trajectory.turns[-1]
+            last.source_calls = list(last.source_calls or []) + [c for _, calls in call_log for c in calls]
         if verifier_repair_history:
             trajectory.metadata["verifier_repair_history"] = verifier_repair_history
 
@@ -4766,6 +4779,17 @@ def _count_document_inputs(inputs: Mapping[str, Any]) -> int:
         elif isinstance(value, Mapping):
             count += sum(is_document(v) for v in value.values())
     return count
+
+
+def _has_semantic_model_input(inputs: Mapping[str, Any]) -> bool:
+    """Whether a semantic model is among the inputs (one level into lists and dicts)."""
+    from .semantic_model import SemanticModel
+
+    for value in inputs.values():
+        values = value if isinstance(value, (list, tuple)) else (value.values() if isinstance(value, Mapping) else (value,))
+        if any(isinstance(v, SemanticModel) for v in values):
+            return True
+    return False
 
 
 def _reject_block_network_with_sub_lm(block_network: Any, sub_lm: Any) -> None:

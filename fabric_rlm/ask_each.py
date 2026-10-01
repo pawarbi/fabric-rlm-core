@@ -35,10 +35,11 @@ import os
 import random
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
+# The internal tool name the worker's ask_each calls; the interpreters dispatch on it.
 ASK_EACH_TOOL = "__fabric_rlm_ask_each__"
 # Set inside the worker when the host turns ask_each on, so helpers that run in
 # the worker (SemanticModel.find_measures) can use it. None everywhere else.
@@ -53,6 +54,9 @@ MAX_BATCH_SIZE = 100
 # long items never make one oversized prompt.
 MAX_BATCH_CHARS = 60_000
 MAX_ITEM_CHARS = 50_000
+# All items of one call together, checked in the worker before anything is sent
+# to the host, so a huge request is refused before it crosses the pipe.
+MAX_REQUEST_CHARS = 100_000_000
 _SCALAR_TYPES = ("str", "int", "float", "bool")
 _TRUE = {"true", "yes", "y", "1"}
 _FALSE = {"false", "no", "n", "0"}
@@ -126,6 +130,38 @@ class AskEachError(ValueError):
     """An ``ask_each`` request the host refuses to run, with a usable message."""
 
 
+class AskEachResult(list):
+    """``ask_each`` (and ``run_each``) output: a list aligned with the input items.
+
+    Each element is a dict of the requested output fields, or ``None`` for an
+    item with no valid answer (it failed after retries, or the time limit ran
+    out). ``errors`` lists those items as ``{"index", "error"}``; ``stats`` has
+    the counts, retries, seconds and usage.
+    """
+
+    errors: list[dict[str, Any]]
+    stats: dict[str, Any]
+
+    def __init__(self, results: Any = (), errors: Any = None, stats: Any = None) -> None:
+        super().__init__(results)
+        self.errors = list(errors or [])
+        self.stats = dict(stats or {})
+
+    def to_frame(self, items: Any = None) -> Any:
+        """The results as a DataFrame; pass the input DataFrame to join them onto it."""
+        import pandas as pd
+
+        fields = list(self.stats.get("output_fields") or [])
+        frame = pd.DataFrame([row if row is not None else {} for row in self])
+        for name in fields:
+            if name not in frame.columns:
+                frame[name] = None
+        if items is not None and isinstance(items, pd.DataFrame):
+            frame.index = items.index
+            return items.join(frame, rsuffix="_answer")
+        return frame
+
+
 # ----------------------------------------------------------------- request validation
 def normalize_request(kwargs: Mapping[str, Any], config: AskEach | None = None) -> dict[str, Any]:
     """Validate the JSON request sent by the worker and return a clean copy."""
@@ -147,8 +183,8 @@ def normalize_request(kwargs: Mapping[str, Any], config: AskEach | None = None) 
     output = kwargs.get("output")
     if not isinstance(output, dict) or not output:
         raise AskEachError(
-            "ask_each needs output: a dict of field name -> type (str, int, float, bool) "
-            "or a list of allowed strings."
+            'ask_each needs output: a dict of field name -> "str", "int", "float", "bool", '
+            'or {"choices": [allowed strings]}.'
         )
     fields: dict[str, dict[str, Any]] = {}
     for name, spec in output.items():
@@ -163,7 +199,8 @@ def normalize_request(kwargs: Mapping[str, Any], config: AskEach | None = None) 
             fields[name] = {"type": "choice", "choices": choices}
         else:
             raise AskEachError(
-                f"ask_each output {name!r} must be str, int, float, bool, or a list of allowed strings; got {spec!r}."
+                f'ask_each output {name!r} must be "str", "int", "float", "bool", or {{"choices": [allowed strings]}}; '
+                f"got {spec!r}."
             )
     concurrency = _bounded_int(kwargs.get("concurrency", DEFAULT_CONCURRENCY), "concurrency", 1, 256)
     concurrency = min(concurrency, config.max_concurrency)
@@ -175,7 +212,20 @@ def normalize_request(kwargs: Mapping[str, Any], config: AskEach | None = None) 
     elif isinstance(max_seconds, bool) or not isinstance(max_seconds, (int, float)) or max_seconds <= 0:
         raise AskEachError(f"ask_each max_seconds must be a positive number, got {max_seconds!r}.")
     max_seconds = min(float(max_seconds), float(config.max_seconds))
+    texts = item_texts(items)
+    return {"items": texts, "question": question.strip(), "fields": fields, "concurrency": concurrency,
+            "retries": retries, "batch_size": batch_size, "max_seconds": max_seconds}
+
+
+def item_texts(items: list[Any]) -> list[str]:
+    """The text each item is sent as, refusing an item or a request that is too long.
+
+    The worker calls this before sending, so the limits hold before anything
+    crosses to the host; the host calls it again on what it receives.
+    """
+
     texts: list[str] = []
+    total = 0
     for index, item in enumerate(items):
         text = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, default=str)
         if len(text) > MAX_ITEM_CHARS:
@@ -183,9 +233,14 @@ def normalize_request(kwargs: Mapping[str, Any], config: AskEach | None = None) 
                 f"ask_each item {index} is {len(text):,} characters; the limit is {MAX_ITEM_CHARS:,}. "
                 "Trim or chunk long items first."
             )
+        total += len(text)
+        if total > MAX_REQUEST_CHARS:
+            raise AskEachError(
+                f"ask_each items add up to more than {MAX_REQUEST_CHARS:,} characters. "
+                "Filter the items, keep only the columns the question needs, or split the call."
+            )
         texts.append(text)
-    return {"items": texts, "question": question.strip(), "fields": fields, "concurrency": concurrency,
-            "retries": retries, "batch_size": batch_size, "max_seconds": max_seconds}
+    return texts
 
 
 def _bounded_int(value: Any, name: str, low: int, high: int) -> int:
@@ -278,9 +333,11 @@ def _batch_messages(request: Mapping[str, Any], texts: list[str]) -> list[dict[s
     system = (
         "You answer one question about each of several numbered items, each item independently: one item must "
         "not influence another's answer. Reply with only a JSON array, no other text, with exactly one object "
-        'per item in item order. Each object has "n": the item number, and ' + _field_rules(request["fields"]) + "."
+        'per item in item order. Each object has "n": the item\'s number as shown in its [brackets], and '
+        + _field_rules(request["fields"]) + "."
     )
-    body = "\n\n".join(f"[{n}]\n{text}" for n, text in enumerate(texts))
+    # Numbered from 1, the way models number lists unprompted.
+    body = "\n\n".join(f"[{n}]\n{text}" for n, text in enumerate(texts, 1))
     return [{"role": "system", "content": system}, {"role": "user", "content": f"{request['question']}\n\nItems:\n{body}"}]
 
 
@@ -316,27 +373,47 @@ def _batches(items: list[str], size: int) -> list[list[int]]:
     return batches
 
 
+_BATCH_NUMBERING = "the batch answer's item numbers did not match the items"
+
+
 def _parse_batch(text: Any, indexes: list[int], fields: Mapping[str, Any]) -> tuple[dict[int, dict[str, Any]], dict[int, str]]:
-    """Map a batch answer back to items. Anything missing or invalid is an error for that item only."""
+    """Map a batch answer back to items. Anything missing or invalid is an error for that item only.
+
+    Items are numbered 1..len(indexes). A number outside that range, a repeated
+    number or a row without a usable number means the answer may be shifted
+    against the items (e.g. numbered from 0), so no row of that batch is
+    trusted: every item is asked again on its own.
+    """
 
     good: dict[int, dict[str, Any]] = {}
     bad: dict[int, str] = {}
     rows = _json_part(str(text or ""), "[", "]")
     if not isinstance(rows, list):
         return good, {i: "the batch answer was not a JSON array" for i in indexes}
+    expected = range(1, len(indexes) + 1)
     by_number: dict[int, Any] = {}
+    numbering_ok = True
     for row in rows:
-        if isinstance(row, dict):
-            try:
-                n = int(row.get("n"))
-            except (TypeError, ValueError):
-                continue
-            # A number answered twice is ambiguous; neither answer is trusted.
-            by_number[n] = None if n in by_number else row
-    for position, index in enumerate(indexes):
-        row = by_number.get(position)
+        try:
+            n = row.get("n") if isinstance(row, dict) else None
+            if isinstance(n, bool) or isinstance(n, float) and not n.is_integer():
+                raise ValueError
+            n = int(n)
+        except (TypeError, ValueError):
+            numbering_ok = False
+            break
+        if n not in expected or n in by_number:
+            numbering_ok = False
+            break
+        by_number[n] = row
+    if not numbering_ok:
+        returned = [r.get("n") if isinstance(r, dict) else None for r in rows][:20]
+        message = f"{_BATCH_NUMBERING} (expected 1 to {len(indexes)}, got {returned})"
+        return {}, {i: message for i in indexes}
+    for number, index in enumerate(indexes, 1):
+        row = by_number.get(number)
         if row is None:
-            bad[index] = "this item was missing or duplicated in the batch answer"
+            bad[index] = "this item was missing from the batch answer"
             continue
         try:
             good[index] = validate_output(fields, row)
@@ -533,22 +610,34 @@ def run_ask_each(lm: Any, kwargs: Mapping[str, Any], config: AskEach | None = No
 
     results: list[dict[str, Any] | None] = [None] * len(items)
     errors: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=request["concurrency"]) as pool:
+    pool = ThreadPoolExecutor(max_workers=request["concurrency"])
+    try:
         if request["batch_size"] == 1:
-            outcomes = list(pool.map(one, range(len(items))))
+            outcomes = _gather(pool, one, list(range(len(items))), deadline,
+                               lambda i: (i, None, _time_up(request)))
         else:
             outcomes = []
             fallback: list[tuple[int, str]] = []
-            for good, bad in pool.map(batch, _batches(items, request["batch_size"])):
+            batched = _gather(pool, batch, _batches(items, request["batch_size"]), deadline,
+                              lambda idx: ({}, {i: _time_up(request) for i in idx}))
+            for good, bad in batched:
                 outcomes.extend((i, v, None) for i, v in good.items())
                 fallback.extend(bad.items())
             retry = [(i, e) for i, e in fallback if not e.startswith(_NOT_ANSWERED)]
             outcomes.extend((i, None, e) for i, e in fallback if e.startswith(_NOT_ANSWERED))
             counters["batch_fallbacks"] = len(retry)
             if request["retries"]:
-                outcomes.extend(pool.map(lambda pair: one(pair[0], pair[1], request["retries"]), retry))
+                # A batch-level failure says nothing about the item, so it is not shown as feedback.
+                outcomes.extend(_gather(
+                    pool, lambda pair: one(pair[0], None if pair[1].startswith(_BATCH_NUMBERING) else pair[1],
+                                           request["retries"]),
+                    retry, deadline, lambda pair: (pair[0], None, _time_up(request))))
             else:
                 outcomes.extend((i, None, e) for i, e in retry)
+    finally:
+        # Calls still in flight after the time limit are abandoned, not joined:
+        # one stalled request must not hold the map past max_seconds.
+        pool.shutdown(wait=False, cancel_futures=True)
     for index, value, error in outcomes:
         results[index] = value
         if error is not None:
@@ -567,6 +656,36 @@ def run_ask_each(lm: Any, kwargs: Mapping[str, Any], config: AskEach | None = No
 def _time_up(request: Mapping[str, Any]) -> str:
     return (f"{_NOT_ANSWERED}: the ask_each time limit ({request['max_seconds']:g} s) ran out. "
             "Ask about fewer items, raise concurrency, or pass a larger max_seconds.")
+
+
+# Calls that finish within this long after the time limit still count.
+_DEADLINE_GRACE = 0.5
+
+
+def _gather(pool: ThreadPoolExecutor, fn: Callable[[Any], Any], args: list[Any], deadline: float,
+            on_timeout: Callable[[Any], Any]) -> list[Any]:
+    """``fn`` over ``args`` in ``pool``, in order, stopping at ``deadline``.
+
+    Unlike ``pool.map``, a call that has not returned by the deadline does not
+    block: its argument gets ``on_timeout(arg)`` instead. ``_Limiter`` already
+    stops new calls from starting; this bounds the ones already in flight.
+    """
+
+    futures = [pool.submit(fn, arg) for arg in args]
+    pending = set(futures)
+    while pending:
+        remaining = deadline + _DEADLINE_GRACE - time.monotonic()
+        if remaining <= 0:
+            break
+        _, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+    out = []
+    for arg, future in zip(args, futures):
+        if future.done() and not future.cancelled():
+            out.append(future.result())
+        else:
+            future.cancel()
+            out.append(on_timeout(arg))
+    return out
 
 
 def _finish(lm: Any, request: Mapping[str, Any], started: float, results: list[Any], errors: list[dict[str, Any]],
@@ -716,11 +835,15 @@ def _run_decision_map(lm: Any, request: Mapping[str, Any], started: float, deadl
 
     results: list[dict[str, Any] | None] = [None] * len(items)
     errors: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=request["concurrency"]) as pool:
-        for index, value, error in pool.map(one, range(len(items))):
-            results[index] = value
-            if error is not None:
-                errors.append({"index": index, "error": error})
+    pool = ThreadPoolExecutor(max_workers=request["concurrency"])
+    try:
+        outcomes = _gather(pool, one, list(range(len(items))), deadline, lambda i: (i, None, _time_up(request)))
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    for index, value, error in outcomes:
+        results[index] = value
+        if error is not None:
+            errors.append({"index": index, "error": error})
     history = getattr(lm, "history", [])
     usage = _sum_usage(list(history[history_start:])) if history_start is not None else _sum_usage([])
     extra = {"retried": 0, "lm_errors": counters["lm_errors"], "batches": 0, "batch_fallbacks": 0,

@@ -901,10 +901,19 @@ class SemanticModel:
                 "find_measures needs ask_each, which is not turned on in this run. "
                 "Read the measures with model.measures() instead."
             )
-        frame = _plain_frame(self.measures(), _METADATA_COLUMNS["measures"])
+        raw = self.measures()
+        frame = _plain_frame(raw, _METADATA_COLUMNS["measures"])
         if frame is None or len(frame) == 0:
             return pd.DataFrame(columns=["table_name", "measure_name", "fit", "confidence", "measure_description", "measure_expression"])
         cols = [c for c in ("table_name", "measure_name", "measure_description", "measure_expression") if c in frame.columns]
+        if "measure_name" not in cols or not {"measure_expression", "measure_description"} & set(cols):
+            # Screening rows without a name and a definition would send empty
+            # items to the model and return nothing, which reads like "no match".
+            raise ValueError(
+                "find_measures could not read the measure list: model.measures() returned columns "
+                f"{list(getattr(raw, 'columns', []))[:12]}, without a measure name and its expression or description. "
+                "Read model.measures() directly and search it."
+            )
         items = frame[cols].copy()
         if "measure_expression" in items.columns:
             items["measure_expression"] = items["measure_expression"].fillna("").astype(str).str.slice(0, max_expression_chars)
@@ -931,7 +940,8 @@ class SemanticModel:
             row["confidence"] = float(confidence) if confidence is not None else None
             rows.append(row)
         rank = {"exact": 0, "close": 1}
-        rows.sort(key=lambda r: (rank[r["fit"]], -(r["confidence"] if r["confidence"] is not None else 1.0)))
+        # Highest confidence first; an answer without a confidence after those that have one.
+        rows.sort(key=lambda r: (rank[r["fit"]], r["confidence"] is None, -(r["confidence"] or 0.0)))
         keep = ["table_name", "measure_name", "fit", "confidence", "measure_description", "measure_expression"]
         result = pd.DataFrame(rows[:top], columns=[c for c in keep if c in (list(frame.columns) + ["fit", "confidence"])])
         stats = dict(getattr(answers, "stats", {}) or {})

@@ -29,6 +29,7 @@ from typing import Any, Callable
 
 from . import netguard
 from .artifacts import FileDestination, encode_for_worker, publish_file
+from .ask_each import ASK_EACH_TOOL
 from .lakehouse import LakehouseSource, execute_lakehouse_query
 from .security import SecurityPolicy
 from .serializers import DEFAULT_MAX_SUBMIT_BYTES, validate_max_submit_bytes
@@ -113,8 +114,31 @@ def _parse_protocol_line(line: str) -> dict[str, Any] | None:
 
 _LAKEHOUSE_QUERY_TOOL = "__fabric_rlm_lakehouse_query__"
 _FILE_PUBLISH_TOOL = "__fabric_rlm_file_publish__"
-_ASK_EACH_TOOL = "__fabric_rlm_ask_each__"
 _RUN_EACH_TOOL = "__fabric_rlm_run_each__"
+
+
+def _run_recorded(owner: Any, name: str, kwargs: dict[str, Any], sink: list[dict[str, Any]]) -> dict[str, Any]:
+    """Run ask_each or run_each for the worker and add its source-call record to ``sink``.
+
+    Both interpreters use this, so a turn's source calls are the same whichever
+    engine ran it. A refused or failed ask_each is recorded as not executed.
+    """
+    if name == _RUN_EACH_TOOL:
+        result, record = _run_host_run_each(owner, kwargs)
+        sink.append(record)
+        return result
+    started = time.monotonic()
+    try:
+        result, record = _run_host_ask_each(owner, kwargs)
+    except Exception as exc:
+        sink.append({
+            "query_type": "ask_each", "executed": False, "reason": "execution_error",
+            "error": f"{type(exc).__name__}: {exc}"[:300],
+            "execution_seconds": round(time.monotonic() - started, 3),
+        })
+        raise
+    sink.append(record)
+    return result
 
 
 def _run_host_ask_each(owner: Any, kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -569,7 +593,8 @@ class Interpreter:
         self.ask_each_records = records
         self.run_child = run_child
         sub_runs = bool(getattr(config, "sub_runs", False) and run_child is not None)
-        return self._request({"op": "enable_ask_each", "enabled": True, "sub_runs": sub_runs})
+        return self._request({"op": "enable_ask_each", "enabled": True, "sub_runs": sub_runs,
+                              "max_items": getattr(config, "max_items", None)})
 
     def set_inputs(self, inputs: dict[str, Any]) -> dict[str, Any]:
         self._lakehouse_sources = _collect_lakehouse_sources(inputs)
@@ -638,21 +663,8 @@ class Interpreter:
                     self._file_destinations,
                     kwargs,
                 )
-            elif name == _ASK_EACH_TOOL:
-                started = time.monotonic()
-                try:
-                    result, record = _run_host_ask_each(self, kwargs)
-                except Exception as exc:
-                    self._pending_source_calls.append({
-                        "query_type": "ask_each", "executed": False, "reason": "execution_error",
-                        "error": f"{type(exc).__name__}: {exc}"[:300],
-                        "execution_seconds": round(time.monotonic() - started, 3),
-                    })
-                    raise
-                self._pending_source_calls.append(record)
-            elif name == _RUN_EACH_TOOL:
-                result, record = _run_host_run_each(self, kwargs)
-                self._pending_source_calls.append(record)
+            elif name in (ASK_EACH_TOOL, _RUN_EACH_TOOL):
+                result = _run_recorded(self, name, kwargs, self._pending_source_calls)
             else:
                 raise WorkerProtocolError(f"Unknown internal worker tool: {name}")
             response = {
@@ -912,6 +924,8 @@ class SubprocessPythonInterpreter:
         self.ask_each_config: Any = None
         self.ask_each_records: list[dict[str, Any]] = []
         self.run_child: Any = None
+        self._exec_source_calls: list[dict[str, Any]] = []
+        self.source_call_log: list[tuple[str, list[dict[str, Any]]]] = []
 
         # Diagnostics populated by start():
         self._spawn_cmd: list[str] | None = None
@@ -1044,6 +1058,17 @@ class SubprocessPythonInterpreter:
     # ----- execute -----------------------------------------------------------
 
     def execute(self, code: str, variables: dict[str, Any] | None = None) -> Any:
+        # Host-side calls made while this code ran (ask_each, run_each), kept
+        # with the code so the runtime can attach them to the matching turn.
+        self._exec_source_calls = []
+        try:
+            return self._execute(code, variables)
+        finally:
+            if self._exec_source_calls:
+                self.source_call_log.append((code, list(self._exec_source_calls)))
+            self._exec_source_calls = []
+
+    def _execute(self, code: str, variables: dict[str, Any] | None = None) -> Any:
         FinalOutput, CodeInterpreterError = _import_dspy_code_interpreter()
 
         # Parent-side security policy. On v7 we raise CodeInterpreterError
@@ -1179,6 +1204,7 @@ class SubprocessPythonInterpreter:
             params["outputs"] = self.output_fields
         if getattr(self, "ask_each_lm", None) is not None:
             params["ask_each"] = True
+            params["ask_each_max_items"] = getattr(self.ask_each_config, "max_items", None)
             if getattr(self, "run_child", None) is not None and getattr(self.ask_each_config, "sub_runs", False):
                 params["sub_runs"] = True
         if not params:
@@ -1209,10 +1235,8 @@ class SubprocessPythonInterpreter:
                     self._file_destinations,
                     kwargs,
                 )
-            elif name == _ASK_EACH_TOOL:
-                result, _record = _run_host_ask_each(self, kwargs)
-            elif name == _RUN_EACH_TOOL:
-                result, _record = _run_host_run_each(self, kwargs)
+            elif name in (ASK_EACH_TOOL, _RUN_EACH_TOOL):
+                result = _run_recorded(self, name, kwargs, self._exec_source_calls)
             elif name not in self.tools:
                 raise CodeInterpreterError(f"Unknown tool: {name}")
             else:

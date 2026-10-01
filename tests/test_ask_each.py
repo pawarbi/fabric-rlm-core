@@ -123,13 +123,14 @@ def test_an_lm_exception_fails_only_that_item():
         ({"items": "abc"}, "must be a list"),
         ({"question": " "}, "needs a question"),
         ({"output": {}}, "needs output"),
-        ({"output": {"x": "date"}}, "must be str, int, float, bool"),
+        ({"output": {"x": "date"}}, 'must be "str", "int", "float", "bool", or \\{"choices"'),
         ({"output": {"_x": "str"}}, "plain identifiers"),
         ({"output": {"x": {"choices": ["A", "a"]}}}, "duplicate choices"),
         ({"retries": 9}, "retries must be an integer from 0 to 5"),
         ({"batch_size": 0}, "batch_size must be an integer"),
         ({"max_seconds": -1}, "max_seconds must be a positive number"),
         ({"items": ["x" * 50_001]}, "Trim or chunk"),
+        ({"items": ["x" * 40_000] * 2_600}, "add up to more than"),
     ],
 )
 def test_bad_requests_are_refused_with_a_usable_message(kwargs, message):
@@ -156,6 +157,50 @@ def test_items_left_when_the_time_limit_runs_out_are_reported_not_guessed():
     assert stats["unfinished"] > 0 and stats["ok"] + stats["unfinished"] == 30 and stats["failed"] == 0
     unfinished = [e for e in result["errors"] if e["error"].startswith("not answered")]
     assert len(unfinished) == stats["unfinished"] and all(result["results"][e["index"]] is None for e in unfinished)
+
+
+@pytest.mark.parametrize("batch_size", [1, 3])
+def test_a_stalled_call_does_not_hold_the_map_past_its_time_limit(batch_size):
+    release = threading.Event()
+
+    def respond(text, attempt, messages):
+        if "stall" in messages[-1]["content"]:
+            release.wait(30)
+        return classify(text)
+
+    lm = batch_lm(lambda numbered: (release.wait(30) if any("stall" in t for _, t in numbered) else None,
+                                    json.dumps([{"n": n, **classify(t)} for n, t in numbered]))[1])
+    if batch_size == 1:
+        lm = CallableLM(respond)
+    items = ["brake a", "steer b", "brake c", "stall d", "brake e", "steer f"]
+    started = time.monotonic()
+    try:
+        result, _ = run_ask_each(lm, request(items, concurrency=4, max_seconds=0.5, batch_size=batch_size))
+    finally:
+        release.set()
+    assert time.monotonic() - started < 3
+    assert result["results"][3] is None and result["stats"]["unfinished"] >= 1
+    assert any(e["index"] == 3 and e["error"].startswith("not answered") for e in result["errors"])
+
+
+def test_a_stalled_decision_call_does_not_hold_the_map_past_its_time_limit():
+    release = threading.Event()
+
+    class Stalling(FakeDecision):
+        def decide(self, state, questions):
+            if "stall" in state:
+                release.wait(30)
+            return super().decide(state, questions)
+
+    started = time.monotonic()
+    try:
+        result, _ = run_ask_each(Stalling(), request(["brake", "stall"], output={"theme": {"choices": THEMES}},
+                                                     max_seconds=0.5))
+    finally:
+        release.set()
+    assert time.monotonic() - started < 3
+    assert result["results"][0]["theme"] == "Brakes" and result["results"][1] is None
+    assert result["stats"]["unfinished"] == 1
 
 
 def test_throttling_waits_and_slows_down_without_spending_retries(monkeypatch):
@@ -211,31 +256,59 @@ def test_usage_and_cost_come_from_the_lm_history_or_the_responses():
 
 # ----------------------------------------------------------------- batching
 def batch_lm(batch_answer):
+    """A batching LM that reads each item's label from the prompt, so it never assumes the numbering."""
     def respond(text, attempt, messages):
         user = messages[-1]["content"]
         if "Items:\n" in user:
-            texts = [t.strip() for t in re.split(r"(?m)^\[\d+\]\n", user.split("Items:\n", 1)[1])[1:]]
-            return batch_answer(texts)
+            parts = re.split(r"(?m)^\[(\d+)\]\n", user.split("Items:\n", 1)[1])[1:]
+            numbered = [(int(parts[i]), parts[i + 1].strip()) for i in range(0, len(parts), 2)]
+            return batch_answer(numbered)
         return classify(text)
     return CallableLM(respond)
 
 
 def test_batches_answer_several_items_per_call_and_stay_aligned():
-    lm = batch_lm(lambda texts: json.dumps([{"n": n, **classify(t)} for n, t in enumerate(texts)]))
+    lm = batch_lm(lambda numbered: json.dumps([{"n": n, **classify(t)} for n, t in numbered]))
     items = [("brake " if i % 2 else "steer ") + str(i) for i in range(25)]
     result, _ = run_ask_each(lm, request(items, batch_size=10))
     assert [r["theme"] for r in result["results"]] == ["Brakes" if i % 2 else "Steering" for i in range(25)]
     assert result["stats"]["batches"] == 3 and result["stats"]["calls"] == 3
 
 
-@pytest.mark.parametrize("corrupt", ["missing", "duplicate", "invalid"])
+def test_batch_items_are_numbered_from_one():
+    seen = []
+    lm = batch_lm(lambda numbered: (seen.append([n for n, _ in numbered]),
+                                    json.dumps([{"n": n, **classify(t)} for n, t in numbered]))[1])
+    run_ask_each(lm, request(["brake", "steer", "x"], batch_size=3))
+    assert seen == [[1, 2, 3]]
+
+
+@pytest.mark.parametrize("shift", [-1, 1])
+def test_a_batch_numbered_off_by_one_is_never_used_and_each_item_is_asked_alone(shift):
+    # The model numbers its answers from 0 (or 2) while the items are numbered from 1:
+    # trusting the numbers would give every item its neighbour's answer.
+    lm = batch_lm(lambda numbered: json.dumps([{"n": n + shift, **classify(t)} for n, t in numbered]))
+    items = ["brake 0", "steer 1", "brake 2", "steer 3"]
+    result, _ = run_ask_each(lm, request(items, batch_size=4))
+    assert [r["theme"] for r in result["results"]] == ["Brakes", "Steering", "Brakes", "Steering"]
+    assert result["stats"]["batch_fallbacks"] == 4 and result["stats"]["calls"] == 5
+    singles = [m for m in lm.prompts if "Items:\n" not in m[-1]["content"]]
+    assert singles and all("rejected" not in m[-1]["content"] for m in singles)
+
+
+def test_an_off_by_one_batch_with_no_retries_is_reported_not_guessed():
+    lm = batch_lm(lambda numbered: json.dumps([{"n": n - 1, **classify(t)} for n, t in numbered]))
+    result, _ = run_ask_each(lm, request(["brake", "steer"], batch_size=2, retries=0))
+    assert result["results"] == [None, None] and result["stats"]["ok"] == 0
+    assert all("item numbers did not match" in e["error"] for e in result["errors"])
+
+
+@pytest.mark.parametrize("corrupt", ["missing", "invalid"])
 def test_a_bad_batch_row_falls_back_to_a_single_call_for_that_item_only(corrupt):
-    def answer(texts):
-        rows = [{"n": n, **classify(t)} for n, t in enumerate(texts)]
+    def answer(numbered):
+        rows = [{"n": n, **classify(t)} for n, t in numbered]
         if corrupt == "missing":
             rows.pop(1)
-        elif corrupt == "duplicate":
-            rows.append(dict(rows[1]))
         else:
             rows[1]["theme"] = "Wheels"
         return json.dumps(rows)
@@ -245,8 +318,18 @@ def test_a_bad_batch_row_falls_back_to_a_single_call_for_that_item_only(corrupt)
     assert result["stats"]["batch_fallbacks"] == 1 and result["stats"]["calls"] == 2
 
 
+def test_a_repeated_batch_number_distrusts_the_whole_batch():
+    def answer(numbered):
+        rows = [{"n": n, **classify(t)} for n, t in numbered]
+        return json.dumps(rows + [dict(rows[1])])
+
+    result, _ = run_ask_each(batch_lm(answer), request(["brake a", "steer b", "brake c"], batch_size=3))
+    assert [r["theme"] for r in result["results"]] == ["Brakes", "Steering", "Brakes"]
+    assert result["stats"]["batch_fallbacks"] == 3 and result["stats"]["calls"] == 4
+
+
 def test_unparseable_batch_answer_with_no_retries_reports_every_item():
-    result, _ = run_ask_each(batch_lm(lambda texts: "no json here"), request(["brake", "steer"], batch_size=2, retries=0))
+    result, _ = run_ask_each(batch_lm(lambda numbered: "no json here"), request(["brake", "steer"], batch_size=2, retries=0))
     assert result["results"] == [None, None]
     assert all("not a JSON array" in e["error"] for e in result["errors"])
 
@@ -463,6 +546,49 @@ def test_second_engine_interpreter_exposes_ask_each_only_when_turned_on():
     assert "False" in str(out)
 
 
+def test_second_engine_records_ask_each_as_a_source_call_of_the_code_that_made_it():
+    mapper = CallableLM(lambda text, attempt, m: classify(text))
+    code = "r = ask_each(['brake', 'steer'], 'q', {'theme': ['Brakes', 'Steering', 'Other']})\nprint(r.stats['ok'])"
+    with SubprocessPythonInterpreter(timeout=60) as interp:
+        interp.ask_each_lm, interp.ask_each_config, interp.ask_each_records = mapper, AskEach(), []
+        interp.execute("x = 1")
+        interp.execute(code)
+        log = interp.source_call_log
+    assert len(log) == 1 and log[0][0] == code
+    assert [c["query_type"] for c in log[0][1]] == ["ask_each"] and log[0][1][0]["items"] == 2
+
+
+@pytest.mark.parametrize("call, message", [
+    ("ask_each(['x' * 50_001], 'q', {'a': str})", "Trim or chunk"),
+    ("ask_each(['x'] * 6, 'q', {'a': str})", "the limit is 5"),
+])
+def test_oversized_requests_are_refused_in_the_worker_before_reaching_the_host(call, message):
+    mapper = CallableLM(lambda text, attempt, m: {"a": "y"})
+    records: list = []
+    code = f"try:\n    {call}\n    print('SENT')\nexcept ValueError as exc:\n    print('REFUSED', exc)"
+    with SubprocessPythonInterpreter(timeout=60) as interp:
+        interp.ask_each_lm, interp.ask_each_config, interp.ask_each_records = mapper, AskEach(max_items=5), records
+        out = str(interp.execute(code))
+    assert "REFUSED" in out and message in out
+    assert records == [] and interp.source_call_log == [] and mapper.prompts == []
+
+
+def test_missing_values_reach_the_model_as_empty_text():
+    seen = []
+    mapper = CallableLM(lambda text, attempt, m: (seen.append(text), {"a": "y"})[1])
+    code = ("import pandas as pd, numpy as np\n"
+            "df = pd.DataFrame({'s': ['brake', None, 'x'], 'v': [1.0, 2.0, np.nan]})\n"
+            "ask_each(df, 'q', {'a': str})\n"
+            "ask_each(pd.Series(['a', None, np.nan]), 'q', {'a': str})\n"
+            "ask_each([None, {'k': None}], 'q', {'a': str})")
+    with SubprocessPythonInterpreter(timeout=60) as interp:
+        interp.ask_each_lm, interp.ask_each_config, interp.ask_each_records = mapper, AskEach(), []
+        interp.execute(code)
+    assert len(seen) == 8
+    assert not any("null" in t or "NaN" in t for t in seen)
+    assert '{"s": "", "v": 2.0}' in seen and '{"s": "x", "v": ""}' in seen and seen.count("") == 3
+
+
 # ----------------------------------------------------------------- SemanticModel.find_measures
 class _Answers(list):
     stats: dict = {}
@@ -522,6 +648,49 @@ def test_find_measures_orders_by_decision_model_confidence_and_caps_the_list():
 def test_find_measures_without_ask_each_says_what_to_do():
     with pytest.raises(RuntimeError, match="not turned on"):
         _model_with_measures(3).find_measures("q")
+
+
+def test_find_measures_refuses_a_measure_list_it_cannot_read():
+    import pandas as pd
+
+    model = _model_with_measures(3)
+    object.__setattr__(model, "measures", lambda: pd.DataFrame([{"Foo": 1, "Bar": "x"}] * 4))
+    calls = []
+    with pytest.raises(ValueError, match="could not read the measure list"):
+        model.find_measures("q", ask=_fake_ask(calls))
+    assert calls == []
+
+
+def test_find_measures_puts_answers_without_a_confidence_last():
+    def ask(items, question, output, columns=None, **kwargs):
+        confidences = [None, 0.6, None, 0.9]
+        out = _Answers({"fit": "close", **({"fit_confidence": c} if c is not None else {})} for c in confidences)
+        out.stats = {}
+        return out
+
+    result = _model_with_measures(2).find_measures("q", ask=ask)
+    assert list(result["confidence"])[:2] == [0.9, 0.6] and result["confidence"].iloc[2:].isna().all()
+
+
+def test_find_measures_is_mentioned_only_with_a_semantic_model_input():
+    from fabric_rlm import SemanticModel
+    from fabric_rlm.prompts import ask_each_section
+    from fabric_rlm.runtime import _has_semantic_model_input
+
+    assert "find_measures" not in ask_each_section()
+    assert "find_measures" in ask_each_section(semantic_model=True)
+    model = SemanticModel("m", validate=False)
+    assert _has_semantic_model_input({"m": model}) and _has_semantic_model_input({"ms": [model]})
+    assert not _has_semantic_model_input({"x": 1, "f": [File("a.pdf")]})
+
+
+def test_result_and_error_types_are_exported():
+    import fabric_rlm
+
+    assert fabric_rlm.AskEachResult is ask_each_module.AskEachResult
+    assert fabric_rlm.AskEachError is AskEachError
+    r = fabric_rlm.AskEachResult([{"a": 1}, None], errors=[{"index": 1, "error": "x"}], stats={"output_fields": ["a"]})
+    assert r.errors[0]["index"] == 1 and list(r.to_frame()["a"].iloc[:1]) == [1]
 
 
 def test_worker_publishes_ask_each_for_helpers_only_when_turned_on():
