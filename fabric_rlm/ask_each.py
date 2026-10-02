@@ -35,10 +35,11 @@ import os
 import random
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
+# The internal tool name the worker's ask_each calls; the interpreters dispatch on it.
 ASK_EACH_TOOL = "__fabric_rlm_ask_each__"
 # Set inside the worker when the host turns ask_each on, so helpers that run in
 # the worker (SemanticModel.find_measures) can use it. None everywhere else.
@@ -53,6 +54,9 @@ MAX_BATCH_SIZE = 100
 # long items never make one oversized prompt.
 MAX_BATCH_CHARS = 60_000
 MAX_ITEM_CHARS = 50_000
+# All items of one call together, checked in the worker before anything is sent
+# to the host, so a huge request is refused before it crosses the pipe.
+MAX_REQUEST_CHARS = 100_000_000
 _SCALAR_TYPES = ("str", "int", "float", "bool")
 _TRUE = {"true", "yes", "y", "1"}
 _FALSE = {"false", "no", "n", "0"}
@@ -75,8 +79,15 @@ class AskEach:
 
     ``max_seconds`` caps one ``ask_each`` call: items not answered in time come
     back as ``None`` with a time-limit error, and ``stats["unfinished"]`` counts
-    them. ``max_concurrency`` caps the calls in flight (the model may ask for
-    fewer). ``max_items`` caps the items in one call.
+    them. Calls still in flight then are abandoned, not waited for, and counted
+    in ``stats["abandoned_calls"]``; their usage never arrives, so tokens and
+    cost are then a floor (``stats["usage_complete"]`` is False). An abandoned
+    call keeps its thread until the HTTP request ends, which can hold the
+    process open at exit: set an HTTP timeout on the LM itself (e.g.
+    ``dspy.LM(..., timeout=60)`` or ``DecisionLM(..., timeout=60)``), as the
+    ``lm`` row of docs/api-reference.md advises. ``max_concurrency`` caps the
+    calls in flight (the model may ask for fewer). ``max_items`` caps the items
+    in one call.
 
     ``text_lm`` (optional) is a second model the run can pick per call with
     ``ask_each(..., model="text")``, e.g. a cheap text model to pull quotes from
@@ -126,6 +137,38 @@ class AskEachError(ValueError):
     """An ``ask_each`` request the host refuses to run, with a usable message."""
 
 
+class AskEachResult(list):
+    """``ask_each`` (and ``run_each``) output: a list aligned with the input items.
+
+    Each element is a dict of the requested output fields, or ``None`` for an
+    item with no valid answer (it failed after retries, or the time limit ran
+    out). ``errors`` lists those items as ``{"index", "error"}``; ``stats`` has
+    the counts, retries, seconds and usage.
+    """
+
+    errors: list[dict[str, Any]]
+    stats: dict[str, Any]
+
+    def __init__(self, results: Any = (), errors: Any = None, stats: Any = None) -> None:
+        super().__init__(results)
+        self.errors = list(errors or [])
+        self.stats = dict(stats or {})
+
+    def to_frame(self, items: Any = None) -> Any:
+        """The results as a DataFrame; pass the input DataFrame to join them onto it."""
+        import pandas as pd
+
+        fields = list(self.stats.get("output_fields") or [])
+        frame = pd.DataFrame([row if row is not None else {} for row in self])
+        for name in fields:
+            if name not in frame.columns:
+                frame[name] = None
+        if items is not None and isinstance(items, pd.DataFrame):
+            frame.index = items.index
+            return items.join(frame, rsuffix="_answer")
+        return frame
+
+
 # ----------------------------------------------------------------- request validation
 def normalize_request(kwargs: Mapping[str, Any], config: AskEach | None = None) -> dict[str, Any]:
     """Validate the JSON request sent by the worker and return a clean copy."""
@@ -147,8 +190,8 @@ def normalize_request(kwargs: Mapping[str, Any], config: AskEach | None = None) 
     output = kwargs.get("output")
     if not isinstance(output, dict) or not output:
         raise AskEachError(
-            "ask_each needs output: a dict of field name -> type (str, int, float, bool) "
-            "or a list of allowed strings."
+            'ask_each needs output: a dict of field name -> "str", "int", "float", "bool", '
+            'or {"choices": [allowed strings]}.'
         )
     fields: dict[str, dict[str, Any]] = {}
     for name, spec in output.items():
@@ -163,7 +206,8 @@ def normalize_request(kwargs: Mapping[str, Any], config: AskEach | None = None) 
             fields[name] = {"type": "choice", "choices": choices}
         else:
             raise AskEachError(
-                f"ask_each output {name!r} must be str, int, float, bool, or a list of allowed strings; got {spec!r}."
+                f'ask_each output {name!r} must be "str", "int", "float", "bool", or {{"choices": [allowed strings]}}; '
+                f"got {spec!r}."
             )
     concurrency = _bounded_int(kwargs.get("concurrency", DEFAULT_CONCURRENCY), "concurrency", 1, 256)
     concurrency = min(concurrency, config.max_concurrency)
@@ -175,7 +219,20 @@ def normalize_request(kwargs: Mapping[str, Any], config: AskEach | None = None) 
     elif isinstance(max_seconds, bool) or not isinstance(max_seconds, (int, float)) or max_seconds <= 0:
         raise AskEachError(f"ask_each max_seconds must be a positive number, got {max_seconds!r}.")
     max_seconds = min(float(max_seconds), float(config.max_seconds))
+    texts = item_texts(items)
+    return {"items": texts, "question": question.strip(), "fields": fields, "concurrency": concurrency,
+            "retries": retries, "batch_size": batch_size, "max_seconds": max_seconds}
+
+
+def item_texts(items: list[Any]) -> list[str]:
+    """The text each item is sent as, refusing an item or a request that is too long.
+
+    The worker calls this before sending, so the limits hold before anything
+    crosses to the host; the host calls it again on what it receives.
+    """
+
     texts: list[str] = []
+    total = 0
     for index, item in enumerate(items):
         text = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, default=str)
         if len(text) > MAX_ITEM_CHARS:
@@ -183,9 +240,14 @@ def normalize_request(kwargs: Mapping[str, Any], config: AskEach | None = None) 
                 f"ask_each item {index} is {len(text):,} characters; the limit is {MAX_ITEM_CHARS:,}. "
                 "Trim or chunk long items first."
             )
+        total += len(text)
+        if total > MAX_REQUEST_CHARS:
+            raise AskEachError(
+                f"ask_each items add up to more than {MAX_REQUEST_CHARS:,} characters. "
+                "Filter the items, keep only the columns the question needs, or split the call."
+            )
         texts.append(text)
-    return {"items": texts, "question": question.strip(), "fields": fields, "concurrency": concurrency,
-            "retries": retries, "batch_size": batch_size, "max_seconds": max_seconds}
+    return texts
 
 
 def _bounded_int(value: Any, name: str, low: int, high: int) -> int:
@@ -278,9 +340,11 @@ def _batch_messages(request: Mapping[str, Any], texts: list[str]) -> list[dict[s
     system = (
         "You answer one question about each of several numbered items, each item independently: one item must "
         "not influence another's answer. Reply with only a JSON array, no other text, with exactly one object "
-        'per item in item order. Each object has "n": the item number, and ' + _field_rules(request["fields"]) + "."
+        'per item in item order. Each object has "n": the item\'s number as shown in its [brackets], and '
+        + _field_rules(request["fields"]) + "."
     )
-    body = "\n\n".join(f"[{n}]\n{text}" for n, text in enumerate(texts))
+    # Numbered from 1, the way models number lists unprompted.
+    body = "\n\n".join(f"[{n}]\n{text}" for n, text in enumerate(texts, 1))
     return [{"role": "system", "content": system}, {"role": "user", "content": f"{request['question']}\n\nItems:\n{body}"}]
 
 
@@ -316,27 +380,47 @@ def _batches(items: list[str], size: int) -> list[list[int]]:
     return batches
 
 
+_BATCH_NUMBERING = "the batch answer's item numbers did not match the items"
+
+
 def _parse_batch(text: Any, indexes: list[int], fields: Mapping[str, Any]) -> tuple[dict[int, dict[str, Any]], dict[int, str]]:
-    """Map a batch answer back to items. Anything missing or invalid is an error for that item only."""
+    """Map a batch answer back to items. Anything missing or invalid is an error for that item only.
+
+    Items are numbered 1..len(indexes). A number outside that range, a repeated
+    number or a row without a usable number means the answer may be shifted
+    against the items (e.g. numbered from 0), so no row of that batch is
+    trusted: every item is asked again on its own.
+    """
 
     good: dict[int, dict[str, Any]] = {}
     bad: dict[int, str] = {}
     rows = _json_part(str(text or ""), "[", "]")
     if not isinstance(rows, list):
         return good, {i: "the batch answer was not a JSON array" for i in indexes}
+    expected = range(1, len(indexes) + 1)
     by_number: dict[int, Any] = {}
+    numbering_ok = True
     for row in rows:
-        if isinstance(row, dict):
-            try:
-                n = int(row.get("n"))
-            except (TypeError, ValueError):
-                continue
-            # A number answered twice is ambiguous; neither answer is trusted.
-            by_number[n] = None if n in by_number else row
-    for position, index in enumerate(indexes):
-        row = by_number.get(position)
+        try:
+            n = row.get("n") if isinstance(row, dict) else None
+            if isinstance(n, bool) or isinstance(n, float) and not n.is_integer():
+                raise ValueError
+            n = int(n)
+        except (TypeError, ValueError):
+            numbering_ok = False
+            break
+        if n not in expected or n in by_number:
+            numbering_ok = False
+            break
+        by_number[n] = row
+    if not numbering_ok:
+        returned = [r.get("n") if isinstance(r, dict) else None for r in rows][:20]
+        message = f"{_BATCH_NUMBERING} (expected 1 to {len(indexes)}, got {returned})"
+        return {}, {i: message for i in indexes}
+    for number, index in enumerate(indexes, 1):
+        row = by_number.get(number)
         if row is None:
-            bad[index] = "this item was missing or duplicated in the batch answer"
+            bad[index] = "this item was missing from the batch answer"
             continue
         try:
             good[index] = validate_output(fields, row)
@@ -470,7 +554,7 @@ def run_ask_each(lm: Any, kwargs: Mapping[str, Any], config: AskEach | None = No
     items = request["items"]
     limiter = _Limiter(request["concurrency"], deadline)
     lock = threading.Lock()
-    counters = {"calls": 0, "retried": 0, "lm_errors": 0, "batches": 0, "batch_fallbacks": 0}
+    counters = {"calls": 0, "retried": 0, "lm_errors": 0, "batches": 0, "batch_fallbacks": 0, "in_flight": 0}
     responses: list[Any] = []
     history_start = _history_len(lm)
 
@@ -483,7 +567,12 @@ def run_ask_each(lm: Any, kwargs: Mapping[str, Any], config: AskEach | None = No
             try:
                 with lock:
                     counters["calls"] += 1
-                response = _call_lm(lm, messages)
+                    counters["in_flight"] += 1
+                try:
+                    response = _call_lm(lm, messages)
+                finally:
+                    with lock:
+                        counters["in_flight"] -= 1
             except Exception as exc:  # noqa: BLE001 - classified below
                 limiter.release(success=False)
                 if is_throttle_error(exc):
@@ -533,34 +622,48 @@ def run_ask_each(lm: Any, kwargs: Mapping[str, Any], config: AskEach | None = No
 
     results: list[dict[str, Any] | None] = [None] * len(items)
     errors: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=request["concurrency"]) as pool:
+    pool = ThreadPoolExecutor(max_workers=request["concurrency"])
+    try:
         if request["batch_size"] == 1:
-            outcomes = list(pool.map(one, range(len(items))))
+            outcomes = _gather(pool, one, list(range(len(items))), deadline,
+                               lambda i: (i, None, _time_up(request)))
         else:
             outcomes = []
             fallback: list[tuple[int, str]] = []
-            for good, bad in pool.map(batch, _batches(items, request["batch_size"])):
+            batched = _gather(pool, batch, _batches(items, request["batch_size"]), deadline,
+                              lambda idx: ({}, {i: _time_up(request) for i in idx}))
+            for good, bad in batched:
                 outcomes.extend((i, v, None) for i, v in good.items())
                 fallback.extend(bad.items())
             retry = [(i, e) for i, e in fallback if not e.startswith(_NOT_ANSWERED)]
             outcomes.extend((i, None, e) for i, e in fallback if e.startswith(_NOT_ANSWERED))
             counters["batch_fallbacks"] = len(retry)
             if request["retries"]:
-                outcomes.extend(pool.map(lambda pair: one(pair[0], pair[1], request["retries"]), retry))
+                # A batch-level failure says nothing about the item, so it is not shown as feedback.
+                outcomes.extend(_gather(
+                    pool, lambda pair: one(pair[0], None if pair[1].startswith(_BATCH_NUMBERING) else pair[1],
+                                           request["retries"]),
+                    retry, deadline, lambda pair: (pair[0], None, _time_up(request))))
             else:
                 outcomes.extend((i, None, e) for i, e in retry)
+    finally:
+        # Calls still in flight after the time limit are abandoned, not joined:
+        # one stalled request must not hold the map past max_seconds.
+        pool.shutdown(wait=False, cancel_futures=True)
     for index, value, error in outcomes:
         results[index] = value
         if error is not None:
             errors.append({"index": index, "error": error})
     errors.sort(key=lambda e: e["index"])
+    with lock:
+        abandoned = counters["in_flight"]
     if history_start is not None:
         usage = _sum_usage(list(getattr(lm, "history", [])[history_start:]))
     else:
         usage = _sum_usage(responses)
     extra = {"retried": counters["retried"], "lm_errors": counters["lm_errors"], "batches": counters["batches"],
              "batch_fallbacks": counters["batch_fallbacks"], "throttled": limiter.throttles,
-             "lowest_concurrency": limiter.lowest}
+             "lowest_concurrency": limiter.lowest, "abandoned_calls": abandoned}
     return _finish(lm, request, started, results, errors, counters["calls"], usage, extra)
 
 
@@ -569,14 +672,47 @@ def _time_up(request: Mapping[str, Any]) -> str:
             "Ask about fewer items, raise concurrency, or pass a larger max_seconds.")
 
 
+# Calls that finish within this long after the time limit still count.
+_DEADLINE_GRACE = 0.5
+
+
+def _gather(pool: ThreadPoolExecutor, fn: Callable[[Any], Any], args: list[Any], deadline: float,
+            on_timeout: Callable[[Any], Any]) -> list[Any]:
+    """``fn`` over ``args`` in ``pool``, in order, stopping at ``deadline``.
+
+    Unlike ``pool.map``, a call that has not returned by the deadline does not
+    block: its argument gets ``on_timeout(arg)`` instead. ``_Limiter`` already
+    stops new calls from starting; this bounds the ones already in flight.
+    """
+
+    futures = [pool.submit(fn, arg) for arg in args]
+    pending = set(futures)
+    while pending:
+        remaining = deadline + _DEADLINE_GRACE - time.monotonic()
+        if remaining <= 0:
+            break
+        _, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+    out = []
+    for arg, future in zip(args, futures):
+        if future.done() and not future.cancelled():
+            out.append(future.result())
+        else:
+            future.cancel()
+            out.append(on_timeout(arg))
+    return out
+
+
 def _finish(lm: Any, request: Mapping[str, Any], started: float, results: list[Any], errors: list[dict[str, Any]],
             calls: int, usage: Mapping[str, Any], extra: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     seconds = round(time.monotonic() - started, 3)
     unfinished = sum(1 for e in errors if str(e.get("error", "")).startswith(_NOT_ANSWERED))
+    # Calls abandoned at the time limit were sent (and may be billed) but their
+    # usage never arrived, so tokens and cost are then a floor, not a total.
+    usage_complete = not extra.get("abandoned_calls")
     stats = {"items": len(results), "ok": len(results) - len(errors), "failed": len(errors) - unfinished,
              "unfinished": unfinished, "calls": calls, "batch_size": request["batch_size"],
              "concurrency": request["concurrency"], "seconds": seconds, "model": _model_name(lm),
-             **extra, **usage}
+             **extra, **usage, "usage_complete": usage_complete}
     record = {"query_type": "ask_each", "executed": True, "output_fields": list(request["fields"]),
               "retries_allowed": request["retries"], "max_seconds": request["max_seconds"],
               "execution_seconds": seconds, "total_seconds": seconds, "returned_rows": stats["ok"],
@@ -688,7 +824,7 @@ def _run_decision_map(lm: Any, request: Mapping[str, Any], started: float, deadl
     questions = _decision_questions(request)
     threshold = float(getattr(lm, "bool_threshold", 0.5))
     lock = threading.Lock()
-    counters = {"calls": 0, "lm_errors": 0}
+    counters = {"calls": 0, "lm_errors": 0, "in_flight": 0}
     history_start = _history_len(lm)
 
     def one(index: int) -> tuple[int, dict[str, Any] | None, str | None]:
@@ -696,8 +832,14 @@ def _run_decision_map(lm: Any, request: Mapping[str, Any], started: float, deadl
             return index, None, _time_up(request)
         with lock:
             counters["calls"] += 1
+            counters["in_flight"] += 1
         try:
-            answers = (lm.decide(items[index], questions) or {}).get("answers") or {}
+            try:
+                decided = lm.decide(items[index], questions)
+            finally:
+                with lock:
+                    counters["in_flight"] -= 1
+            answers = (decided or {}).get("answers") or {}
             row: dict[str, Any] = {}
             for name, spec in request["fields"].items():
                 answer = answers.get(name) or {}
@@ -716,15 +858,22 @@ def _run_decision_map(lm: Any, request: Mapping[str, Any], started: float, deadl
 
     results: list[dict[str, Any] | None] = [None] * len(items)
     errors: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=request["concurrency"]) as pool:
-        for index, value, error in pool.map(one, range(len(items))):
-            results[index] = value
-            if error is not None:
-                errors.append({"index": index, "error": error})
+    pool = ThreadPoolExecutor(max_workers=request["concurrency"])
+    try:
+        outcomes = _gather(pool, one, list(range(len(items))), deadline, lambda i: (i, None, _time_up(request)))
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    for index, value, error in outcomes:
+        results[index] = value
+        if error is not None:
+            errors.append({"index": index, "error": error})
+    with lock:
+        abandoned = counters["in_flight"]
     history = getattr(lm, "history", [])
     usage = _sum_usage(list(history[history_start:])) if history_start is not None else _sum_usage([])
     extra = {"retried": 0, "lm_errors": counters["lm_errors"], "batches": 0, "batch_fallbacks": 0,
-             "throttled": 0, "lowest_concurrency": request["concurrency"], "decision_model": True}
+             "throttled": 0, "lowest_concurrency": request["concurrency"], "decision_model": True,
+             "abandoned_calls": abandoned}
     return _finish(lm, request, started, results, errors, counters["calls"], usage, extra)
 
 
@@ -736,10 +885,12 @@ def summarize_records(records: list[Mapping[str, Any]]) -> dict[str, Any]:
         return sum(known) if known else None
 
     cost = total("cost")
+    abandoned = total("abandoned_calls") or 0
     return {"calls": len(records), "items": total("items") or 0, "ok": total("ok") or 0,
             "failed": total("failed") or 0, "unfinished": total("unfinished") or 0,
             "lm_calls": total("calls") or 0, "throttled": total("throttled") or 0,
             "prompt_tokens": total("prompt_tokens"), "completion_tokens": total("completion_tokens"),
             "cost": round(cost, 6) if cost is not None else None,
+            "abandoned_calls": abandoned, "usage_complete": not abandoned,
             "seconds": round(total("execution_seconds") or 0.0, 3),
             "models": sorted({str(r.get("model")) for r in records if r.get("model")})}

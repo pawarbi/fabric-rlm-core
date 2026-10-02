@@ -796,6 +796,16 @@ SemPy's bracketed result-column conventions. The raw metadata methods and raw
 groupby=[...], filters={...})` evaluates a model measure without authoring DAX.
 Pass `workspace=` for a model outside the attached workspace.
 
+When a listing in `arr.schema()` is longer than `max_chars` (4,000 by default),
+it is cut at a row boundary and says so ("showing 20 of 4,800 measures; the
+listing is cut here"), with where to look instead. With `ask_each` on,
+`arr.find_measures("<the question>", top=10)` screens every measure's name,
+description and DAX against the question and returns the best candidates as a
+DataFrame, exact matches before close variants, so a model with thousands of
+measures is not narrowed by keyword first. `result.attrs["screened"]` counts the
+measures screened, flagged, failed and unfinished. Outside a run, pass any
+function with the `ask_each` signature as `ask=`.
+
 For measures by dimensions, prefer `arr.aggregate(...)`. It validates measure
 and column names against the model, estimates how many groups the request
 would produce, and refuses to run a query whose estimate exceeds the safe
@@ -1050,13 +1060,23 @@ r = ask_each(complaints, "Classify the complaint.",
 Each answer is checked against the declared output (`str`, `int`, `float`,
 `bool`, or a list of allowed strings). An invalid answer is asked again with
 the reason, and one that never validates comes back as `None` with its error,
-never as a guess. The result is a list aligned with the items, with `.errors`,
-`.stats` and `.to_frame(df)`.
+never as a guess. The result is an `AskEachResult`: a list aligned with the
+items, with `.errors`, `.stats` and `.to_frame(df)`. Missing values (`None`,
+`NaN`) are sent as empty text.
+
+With `batch_size` above 1, items are numbered from 1 in one prompt. A batch
+answer whose numbers do not match the items exactly (out of range, repeated or
+missing a number) is not used: each of its items is asked again on its own.
 
 The calls run in the notebook process, not in the worker, so the host handles
 concurrency, retries and rate limits: a throttled call waits and the map runs
 fewer calls at once until calls succeed again. Items not answered within the
-time limit come back as `None` and are counted in `stats["unfinished"]`.
+time limit come back as `None` and are counted in `stats["unfinished"]`; a call
+still in flight when the limit runs out is abandoned, not waited for, and counted
+in `stats["abandoned_calls"]`. Its usage never arrives, so tokens and cost are
+then a floor (`stats["usage_complete"]` is False). Its thread lives until the
+HTTP request ends, so also set an HTTP timeout on the LM (for example
+`dspy.LM(..., timeout=60)` or `DecisionLM(..., timeout=60)`).
 `AskEach` sets the limits:
 
 ```python

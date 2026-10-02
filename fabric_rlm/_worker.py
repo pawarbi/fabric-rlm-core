@@ -214,10 +214,11 @@ from fabric_rlm.analytical_integrity import (  # noqa: E402
 _ask_each_enabled = False
 
 
-def _set_ask_each(enabled: bool, sub_runs: bool = False) -> None:
-    global _ask_each_enabled, _run_each_enabled
+def _set_ask_each(enabled: bool, sub_runs: bool = False, max_items: Any = None) -> None:
+    global _ask_each_enabled, _run_each_enabled, _ask_each_max_items
     _ask_each_enabled = bool(enabled)
     _run_each_enabled = bool(enabled and sub_runs)
+    _ask_each_max_items = max_items if isinstance(max_items, int) and not isinstance(max_items, bool) else None
     import fabric_rlm.ask_each as ask_each_module
 
     if _ask_each_enabled:
@@ -451,33 +452,6 @@ def predict_sync(
         return pool.submit(asyncio.run, coro).result()
 
 
-class AskEachResult(list):
-    """``ask_each`` output: a list aligned with the input items.
-
-    Each element is a dict of the requested output fields, or ``None`` for an
-    item with no valid answer (it failed after retries, or the time limit ran
-    out). ``errors`` lists those items as ``{"index", "error"}``; ``stats`` has
-    the counts, retries, seconds and usage.
-    """
-
-    errors: list[dict[str, Any]]
-    stats: dict[str, Any]
-
-    def to_frame(self, items: Any = None) -> Any:
-        """The results as a DataFrame; pass the input DataFrame to join them onto it."""
-        import pandas as pd
-
-        fields = list(self.stats.get("output_fields") or [])
-        frame = pd.DataFrame([row if row is not None else {} for row in self])
-        for name in fields:
-            if name not in frame.columns:
-                frame[name] = None
-        if items is not None and isinstance(items, pd.DataFrame):
-            frame.index = items.index
-            return items.join(frame, rsuffix="_answer")
-        return frame
-
-
 _ASK_EACH_TYPE_NAMES = {str: "str", int: "int", float: "float", bool: "bool"}
 
 
@@ -502,6 +476,22 @@ def _ask_each_output_spec(output: Any) -> dict[str, Any]:
     return spec
 
 
+def _ask_each_blank(value: Any) -> Any:
+    """None, NaN and NaT reach the model as empty text, not "null" or "NaN"."""
+    if value is None:
+        return ""
+    if isinstance(value, float) and value != value:
+        return ""
+    try:
+        import pandas as pd
+
+        if pd.api.types.is_scalar(value) and pd.isna(value):
+            return ""
+    except (ImportError, TypeError, ValueError):
+        pass
+    return value
+
+
 def _ask_each_items(items: Any, columns: Any) -> list[Any]:
     try:
         import pandas as pd
@@ -509,12 +499,52 @@ def _ask_each_items(items: Any, columns: Any) -> list[Any]:
         pd = None
     if pd is not None and isinstance(items, pd.DataFrame):
         frame = items[list(columns)] if columns else items
-        return [json.loads(json.dumps(r, default=str)) for r in frame.to_dict(orient="records")]
+        return [json.loads(json.dumps({k: _ask_each_blank(v) for k, v in r.items()}, default=str))
+                for r in frame.to_dict(orient="records")]
     if pd is not None and isinstance(items, pd.Series):
-        return [v if isinstance(v, (str, int, float, bool)) or v is None else str(v) for v in items.tolist()]
+        values = [_ask_each_blank(v) for v in items.tolist()]
+        return [v if isinstance(v, (str, int, float, bool)) else str(v) for v in values]
     if isinstance(items, (list, tuple)):
-        return [json.loads(json.dumps(v, default=str)) if isinstance(v, (dict, list, tuple)) else v for v in items]
+        out = []
+        for v in items:
+            if isinstance(v, dict):
+                v = {k: _ask_each_blank(x) for k, x in v.items()}
+            if isinstance(v, (dict, list, tuple)):
+                out.append(json.loads(json.dumps(v, default=str)))
+            else:
+                out.append(_ask_each_blank(v))
+        return out
     raise TypeError("ask_each items must be a list, a pandas Series, or a pandas DataFrame")
+
+
+# Set by the host with ask_each: the most items one call may send.
+_ask_each_max_items: int | None = None
+
+
+def _ask_each_check_count(items: Any) -> None:
+    """Refuse too many items from ``len()`` alone, before converting them to records."""
+    try:
+        count = len(items)
+    except TypeError:
+        return
+    if count == 0:
+        raise ValueError("ask_each received no items.")
+    if _ask_each_max_items is not None and count > _ask_each_max_items:
+        raise ValueError(
+            f"ask_each received {count:,} items; the limit is {_ask_each_max_items:,} per call. "
+            "Filter or split the items first."
+        )
+
+
+def _ask_each_texts(items: list[Any]) -> list[str]:
+    """Check the item and request sizes here, before the request is serialized for the host."""
+    from fabric_rlm.ask_each import AskEachError, item_texts
+
+    _ask_each_check_count(items)
+    try:
+        return item_texts(items)
+    except AskEachError as exc:
+        raise ValueError(str(exc)) from None
 
 
 def ask_each(
@@ -528,7 +558,7 @@ def ask_each(
     batch_size: int = 1,
     max_seconds: float | None = None,
     model: str = "default",
-) -> AskEachResult:
+) -> list:
     """Ask one question about every item with an LM, in parallel, and validate each answer.
 
     Runs on the host: the host handles concurrency, throttling, retries and
@@ -537,13 +567,18 @@ def ask_each(
     strings. ``batch_size`` > 1 sends that many items per LM call (cheaper for
     short items); an item the batch answer misses or gets wrong is retried
     alone. ``model="text"`` uses the run's second, text model when the host
-    configured one. Returns a list aligned with ``items`` (``None`` where an item
-    failed or the time limit ran out) with ``.errors``, ``.stats`` and
-    ``.to_frame()``.
+    configured one. Returns an ``AskEachResult``: a list aligned with ``items``
+    (``None`` where an item failed or the time limit ran out) with ``.errors``,
+    ``.stats`` and ``.to_frame()``.
     """
 
+    # Imported here, not at module scope, so a reload of fabric_rlm.ask_each
+    # never leaves the worker holding a stale class.
+    from fabric_rlm.ask_each import ASK_EACH_TOOL, AskEachResult
+
+    _ask_each_check_count(items)
     payload = {
-        "items": _ask_each_items(items, columns),
+        "items": _ask_each_texts(_ask_each_items(items, columns)),
         "question": question,
         "output": _ask_each_output_spec(output),
         "concurrency": concurrency,
@@ -552,7 +587,7 @@ def ask_each(
         "max_seconds": max_seconds,
         "model": model,
     }
-    value = _make_tool_stub("__fabric_rlm_ask_each__")(**payload)
+    value = _make_tool_stub(ASK_EACH_TOOL)(**payload)
     data = json.loads(value) if isinstance(value, str) else value
     result = AskEachResult(data.get("results") or [])
     result.errors = list(data.get("errors") or [])
@@ -564,7 +599,7 @@ def ask_each(
 _run_each_enabled = False
 
 
-def run_each(items: Any, task: str, outputs: dict[str, Any], *, context: dict[str, Any] | None = None) -> AskEachResult:
+def run_each(items: Any, task: str, outputs: dict[str, Any], *, context: dict[str, Any] | None = None) -> list:
     """Run one full child run per item (e.g. one document each), in parallel on the host.
 
     Each child gets ``item`` (a ``File`` or a value) plus any shared ``context``
@@ -576,6 +611,7 @@ def run_each(items: Any, task: str, outputs: dict[str, Any], *, context: dict[st
     """
 
     from fabric_rlm.artifacts import encode_for_worker
+    from fabric_rlm.ask_each import AskEachResult
 
     if not isinstance(items, (list, tuple)):
         raise TypeError("run_each items must be a list (e.g. [agreements[k] for k in agreements]).")
@@ -1032,7 +1068,8 @@ def _handle_message(message: dict[str, Any]) -> dict[str, Any] | None:
         _set_lm_spec(message.get("spec"))
         return {"ok": True}
     if op == "enable_ask_each":
-        _set_ask_each(bool(message.get("enabled", True)), bool(message.get("sub_runs", False)))
+        _set_ask_each(bool(message.get("enabled", True)), bool(message.get("sub_runs", False)),
+                      message.get("max_items"))
         return {"ok": True}
     if op == "reset":
         _install_runtime_api()
@@ -1197,7 +1234,8 @@ def _jsonrpc_register(params: dict[str, Any]) -> dict[str, Any]:
     outputs = params.get("outputs") or []
     _registered_output_fields = [o["name"] for o in outputs if "name" in o]
     if "ask_each" in params:
-        _set_ask_each(bool(params["ask_each"]), bool(params.get("sub_runs", False)))
+        _set_ask_each(bool(params["ask_each"]), bool(params.get("sub_runs", False)),
+                      params.get("ask_each_max_items"))
 
     return {
         "ok": True,
