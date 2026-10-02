@@ -132,7 +132,8 @@ PLAN_RULES = """Plan rules:
 - group_by: up to two columns as 'Table'[Column] for a change (the dimension the question asks about); [] for a trend.
 - periods: labels like 2018-Q2, 2018-07 or 2018. For a change, [before, after]. For a trend, every period in order.
   Use complete periods only; check them with {name}.period_coverage("<measure>", grain="month" or "quarter").
-  "Latest" or "last" means the latest complete period, never a partial one.
+  "Latest" or "last" means the latest complete period, never a partial one. A period marked unknown (the first
+  period, with no history to judge it by) counts as complete: keep it unless its row count is clearly short.
 - compare_measures: when the model holds the comparison in two measures (for example [Last Year Sales] and
   [This Year Sales]), give them as [before, after] and leave periods empty. Otherwise [].
 - filters: {{"'Table'[Column]": value or [values]}} only when the question narrows the data; otherwise {{}}.
@@ -363,7 +364,7 @@ def _rounded(x: Any, key: str = "") -> Any:
     if isinstance(x, float):
         if math.isnan(x):
             return None
-        if key.endswith(("_pct", "_points")):
+        if key.endswith(("_pct", "_points", "points")):
             return round(x, 1)
         return round(x, 4) if abs(x) <= 1.5 else round(x, 0 if abs(x) >= 1000 else 2)
     if isinstance(x, Mapping):
@@ -373,9 +374,22 @@ def _rounded(x: Any, key: str = "") -> Any:
     return x
 
 
+def _as_rate(change: Mapping[str, Any]) -> dict[str, Any]:
+    """A rate's change in percent and percentage points; its relative change misleads (26% to 2% is not -92%)."""
+    out = {k: v for k, v in change.items() if k not in ("before", "after", "change", "change_pct")}
+    pct = lambda v: None if v is None else 100 * v  # noqa: E731
+    out.update(before_pct=pct(change.get("before")), after_pct=pct(change.get("after")),
+               change_points=pct(change.get("change")))
+    return out
+
+
 def narrative_view(findings: Mapping[str, Any], per_side: int = 8) -> dict[str, Any]:
-    """The findings the narrative run reads: rounded, display labels, and only the groups worth writing about."""
+    """The findings the narrative run reads: rounded, display labels, and only the groups worth writing about.
+
+    Rates are shown as percentages with changes in percentage points."""
     view = dict(findings)
+    if findings.get("ratio") and findings.get("total"):
+        view["total"] = _as_rate(findings["total"])
     if findings.get("groupings"):
         view["groupings"] = {}
         for key, g in findings["groupings"].items():
@@ -384,10 +398,27 @@ def narrative_view(findings: Mapping[str, Any], per_side: int = 8) -> dict[str, 
             keep.update({id(x): x for x in sorted(groups, key=lambda x: x["change"] or 0)[:per_side]})
             keep.update({id(x): x for x in sorted(groups, key=lambda x: -(x["after"] or 0))[:per_side]})
             shown = sorted(keep.values(), key=lambda x: -(x["change"] or 0))
+            shown = [_as_rate(x) if g.get("ratio") else x for x in shown]
             view["groupings"][key] = {**g, "groups": [{**x, "group": nice_label(x["group"])} for x in shown],
                                       "top_gains": [nice_label(x) for x in g["top_gains"]],
                                       "top_losses": [nice_label(x) for x in g["top_losses"]],
                                       "groups_shown": f"{len(shown)} of {g['group_count']} (largest gains, losses and sizes)"}
+    if findings.get("series"):
+        view["series"] = {}
+        for m, st in findings["series"].items():
+            if not st.get("ratio"):
+                view["series"][m] = st
+                continue
+            pct = lambda v: None if v is None else 100 * v  # noqa: E731
+            view["series"][m] = {
+                "ratio": True, "unit": "percent",
+                "points": [{"period": q["period"], "value_pct": pct(q["value"]), "change_vs_previous_points": pct(q["change_vs_previous"])}
+                           for q in st["points"]],
+                **{f"{k}_pct": pct(st.get(k)) for k in ("first", "last", "minimum", "maximum", "average")},
+                "max_period": st.get("max_period"), "min_period": st.get("min_period"),
+                "last_vs_first_points": pct((st.get("last_vs_first") or {}).get("change")),
+                "range_points": pct((st.get("maximum") or 0) - (st.get("minimum") or 0)) if st.get("maximum") is not None else None,
+            }
     return _rounded(view)
 
 
@@ -458,7 +489,9 @@ NARRATIVE_RULES = """Report rules:
   matters. Between three and six sections, at least two of them with a chart. Pair each finding with the chart
   that shows it best: gains_losses for what rose and fell, before_after for levels in both periods, mix for
   shares, trend for a series, period_changes for the change from each period to the next. Write in the third
-  person (no "I" or "we").
+  person (no "I" or "we"), and do not mention tools, helpers or code.
+- Rates (fields ending _pct with change_points): give the levels as percentages and changes in percentage
+  points (fell from 26.0% to 2.0%, down 24.0 points), never a percent change of a rate.
 - Say what the data shows, not causes it cannot show. If the question assumed something the findings
   contradict (for example growth when nothing grew), say so plainly in the summary.
 - summary: three to five sentences for a business reader. insights: three to five short findings, each with

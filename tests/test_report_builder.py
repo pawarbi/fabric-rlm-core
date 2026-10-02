@@ -333,3 +333,13 @@ def test_period_changes_chart_draws_each_step():
     rep = rb.BuiltReport("q", "Sales Model", plan(kind="trend"), f, {}, NAMES)
     svg = rep._block_html({"block": "period_changes"})
     assert svg.count("<rect") == 2 and "2026-02" in svg
+
+
+def test_rates_reach_the_narrative_as_percent_and_points():
+    model = FakeModel(rows=[("a", 0.26, 0.02), ("b", 0.9, 0.95)], total=(0.7, 0.6))
+    f = compute_findings(plan(measures=["On Time Rate"]), DaxBackend(model, "'Date'[Date]"))
+    view = rb.narrative_view(f)
+    a = next(x for x in view["groupings"]["'Store'[Region]"]["groups"] if x["group"] == "A")
+    assert a["before_pct"] == 26.0 and a["after_pct"] == 2.0 and a["change_points"] == -24.0 and "change_pct" not in a
+    assert view["total"]["after_pct"] == 60.0
+    assert untraceable_numbers("Vendor A fell from 26.0% to 2.0%, down 24.0 points; overall 60.0%.", rb.figures(f)) == []
