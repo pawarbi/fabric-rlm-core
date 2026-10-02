@@ -29,7 +29,8 @@ from typing import Any
 
 from .semantic_checks import period_bounds, period_key
 
-BLOCKS = ("kpis", "gains_losses", "before_after", "mix", "trend", "table", "text")
+BLOCKS = ("kpis", "gains_losses", "before_after", "mix", "trend", "period_changes", "table", "text")
+VISUAL_BLOCKS = ("gains_losses", "before_after", "mix", "trend", "period_changes")
 _GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 _COLUMN = re.compile(r"^\s*'?(?P<table>[^'\[]+?)'?\s*\[(?P<column>[^\]]+)\]\s*$")
 _TOP = 5
@@ -282,7 +283,7 @@ class DaxBackend:
 
 
 def _label(v: Any) -> str:
-    if v is None or (isinstance(v, float) and math.isnan(v)) or str(v).strip() == "":
+    if v is None or (isinstance(v, float) and math.isnan(v)) or str(v).strip() in ("", "<NA>", "nan", "NaT", "None"):
         return "(blank)"
     return str(v)
 
@@ -336,7 +337,9 @@ def compute_findings(plan: ReportPlan, backend: Any) -> dict[str, Any]:
         for m in plan.measures:
             pts = backend.series(plan, m)
             vals = [v for _, v in pts if v is not None]
-            stats: dict[str, Any] = {"points": [{"period": p, "value": v} for p, v in pts], "ratio": _is_ratio(m, vals)}
+            points = [{"period": p, "value": v, "change_vs_previous": (v - pts[i - 1][1]) if i and v is not None and pts[i - 1][1] is not None else None}
+                      for i, (p, v) in enumerate(pts)]
+            stats: dict[str, Any] = {"points": points, "ratio": _is_ratio(m, vals)}
             if vals:
                 stats.update(first=vals[0], last=vals[-1], minimum=min(vals), maximum=max(vals),
                              average=sum(vals) / len(vals),
@@ -352,6 +355,40 @@ def compute_findings(plan: ReportPlan, backend: Any) -> dict[str, Any]:
 def _change(b: float | None, a: float | None) -> dict[str, Any]:
     b0, a0 = b or 0.0, a or 0.0
     return {"before": b, "after": a, "change": a0 - b0, "change_pct": (100 * (a0 - b0) / abs(b0)) if b0 else None}
+
+
+def _rounded(x: Any, key: str = "") -> Any:
+    if isinstance(x, bool) or x is None:
+        return x
+    if isinstance(x, float):
+        if math.isnan(x):
+            return None
+        if key.endswith(("_pct", "_points")):
+            return round(x, 1)
+        return round(x, 4) if abs(x) <= 1.5 else round(x, 0 if abs(x) >= 1000 else 2)
+    if isinstance(x, Mapping):
+        return {k: _rounded(v, str(k)) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_rounded(v, key) for v in x]
+    return x
+
+
+def narrative_view(findings: Mapping[str, Any], per_side: int = 8) -> dict[str, Any]:
+    """The findings the narrative run reads: rounded, display labels, and only the groups worth writing about."""
+    view = dict(findings)
+    if findings.get("groupings"):
+        view["groupings"] = {}
+        for key, g in findings["groupings"].items():
+            groups = g["groups"]
+            keep = {id(x): x for x in sorted(groups, key=lambda x: -(x["change"] or 0))[:per_side]}
+            keep.update({id(x): x for x in sorted(groups, key=lambda x: x["change"] or 0)[:per_side]})
+            keep.update({id(x): x for x in sorted(groups, key=lambda x: -(x["after"] or 0))[:per_side]})
+            shown = sorted(keep.values(), key=lambda x: -(x["change"] or 0))
+            view["groupings"][key] = {**g, "groups": [{**x, "group": nice_label(x["group"])} for x in shown],
+                                      "top_gains": [nice_label(x) for x in g["top_gains"]],
+                                      "top_losses": [nice_label(x) for x in g["top_losses"]],
+                                      "groups_shown": f"{len(shown)} of {g['group_count']} (largest gains, losses and sizes)"}
+    return _rounded(view)
 
 
 def figures(findings: Mapping[str, Any]) -> list[float]:
@@ -409,14 +446,19 @@ def untraceable_numbers(text: str, figs: Sequence[float]) -> list[str]:
 NARRATIVE_OUTPUTS: dict[str, type] = {"title": str, "summary": str, "sections": list, "insights": list}
 
 NARRATIVE_RULES = """Report rules:
-- Use only the figures in `findings`; every number you write must be one of them (rounding is fine, and k/M/B).
-  Do not compute new numbers in your head.
+- Use only the figures in the findings; every number you write must be one of them. Do not compute new numbers.
+  Write amounts with thousands separators (1,830,581) or with k/M/B and three or four significant digits
+  (3.33M, 232.3k), never 0.0M; percentages with one decimal (121.9%). No currency symbols: the model does not
+  name a currency. Write group names as they appear in the findings, and the blank group as "no value".
 - sections: a list of {"title": ..., "block": ..., "grouping": ..., "text": ...}. block is one of
-  kpis, gains_losses, before_after, mix, trend, table, text. grouping is the findings key of the grouping the
-  chart uses ("'Table'[Column]"), or "" for kpis, trend and text. mix is only for groupings with additive true.
+  kpis, gains_losses, before_after, mix, trend, period_changes, table, text. grouping is the findings key of the
+  grouping the chart uses ("'Table'[Column]"), or "" for kpis, trend, period_changes and text. mix is only for
+  groupings with additive true. Each chart appears once: never two sections with the same block and grouping.
 - Every section has text: two to four plain sentences saying what the chart shows, the main number and why it
-  matters. Between three and six sections. Pair each finding with the chart that shows it best: gains_losses
-  for what rose and fell, before_after for levels in both periods, mix for shares, trend for a series.
+  matters. Between three and six sections, at least two of them with a chart. Pair each finding with the chart
+  that shows it best: gains_losses for what rose and fell, before_after for levels in both periods, mix for
+  shares, trend for a series, period_changes for the change from each period to the next. Write in the third
+  person (no "I" or "we").
 - Say what the data shows, not causes it cannot show. If the question assumed something the findings
   contradict (for example growth when nothing grew), say so plainly in the summary.
 - summary: three to five sentences for a business reader. insights: three to five short findings, each with
@@ -441,12 +483,25 @@ def check_narrative(payload: Mapping[str, Any], findings: Mapping[str, Any], req
         if block == "trend":
             assert findings.get("series"), f"Section {i}: there is no series in the findings for a trend chart."
         if block in ("gains_losses", "before_after", "mix", "table", "kpis"):
-            assert findings.get("kind") == "change", f"Section {i}: {block} needs a change; this report is a trend. Use trend or text."
+            assert findings.get("kind") == "change", f"Section {i}: {block} needs a change; this report is a trend. Use trend, period_changes or text."
+        if block == "period_changes":
+            assert findings.get("series"), f"Section {i}: period_changes needs a series; use gains_losses for groups."
+    charts = [(str(s.get("block")), str(s.get("grouping", "")).strip()) for s in sections if s.get("block") in VISUAL_BLOCKS + ("table", "kpis")]
+    repeated = sorted({c for c in charts if charts.count(c) > 1})
+    assert not repeated, f"Each chart appears once; these repeat: {repeated}. Use a different block or a text section."
+    visuals = sum(1 for s in sections if s.get("block") in VISUAL_BLOCKS)
+    assert visuals >= (1 if requested else 2), "Use at least two sections with a chart (gains_losses, before_after, mix, trend, period_changes)."
     if requested:
         titles = [str(s.get("title", "")).lower() for s in sections]
         missing = [r for r in requested if not any(_same_section(r, t) for t in titles)]
         assert not missing, f"These requested sections are missing: {missing}. Use their titles."
     figs = figures(findings)
+    words = " ".join([str(payload.get("title", "")), str(payload.get("summary", ""))] + [str(s.get("text", "")) for s in sections]
+                     + [str(x) for x in payload.get("insights") or []])
+    assert not re.search(r"[$€£¥]", words), "Write amounts without currency symbols; the model does not name a currency."
+    assert not re.search(r"<NA>|\(blank\)|\bnan\b|\bNone\b", words), 'Call the blank group "no value".'
+    long = re.findall(r"\d+\.\d{3,}", words)
+    assert not long, f"Round these numbers for a reader: {long[:6]}."
     texts = [str(payload.get("title", "")), str(payload.get("summary", ""))] + [str(s.get("text", "")) for s in sections] + [str(x) for x in payload.get("insights") or []]
     bad = sorted(set(n for t in texts for n in untraceable_numbers(t, figs)))
     assert not bad, (f"These numbers are not in the findings: {bad[:12]}. Use only figures from `findings` "
@@ -482,11 +537,12 @@ def fmt(v: float | None, ratio: bool = False, full: bool = False) -> str:
     if ratio:
         return f"{100 * v:.1f}%"
     a = abs(v)
-    if full or a < 10_000:
+    if full or a < 1_000:
         return f"{v:,.0f}" if a >= 100 else f"{v:,.2f}".rstrip("0").rstrip(".")
     for div, s in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
         if a >= div:
-            return f"{v / div:,.1f}{s}"
+            x = a / div
+            return f"{v / div:,.{3 if x < 10 else 2 if x < 100 else 1}f}{s}"
     return f"{v:,.0f}"
 
 
@@ -628,7 +684,7 @@ class BuiltReport:
         if block == "kpis":
             t = f.get("total") or {}
             g = self._grouping("")
-            cards = [(f"{nice_label(self.plan.measures[0]) if self.plan else 'Total'}, {names[1]}", fmt(t.get("after"), ratio),
+            cards = [(f"{nice_label(self.plan.measures[0]) if self.plan else 'Total'}, {names[1]}", fmt(t.get("after"), ratio, full=True),
                       _delta(t, ratio) + f" vs {names[0]}")]
             if g.get("groups"):
                 top = g["groups"][0] if (g["groups"][0]["change"] or 0) > 0 else min(g["groups"], key=lambda x: x["change"] or 0)
@@ -656,6 +712,13 @@ class BuiltReport:
                            f'<td class="{"up" if (x["change"] or 0) >= 0 else "down"}">{_signed(x["change"], ratio)}</td><td>{_pct(x["change_pct"])}</td></tr>'
                            for x in (gains + losses))
             return f'<table><tr><th>{_esc(col)}</th><th>{_esc(names[0])}</th><th>{_esc(names[1])}</th><th>Change</th><th>%</th></tr>{rows}</table>'
+        if block == "period_changes":
+            series = f.get("series") or {}
+            m = next(iter(series), None)
+            if m is None:
+                return ""
+            items = [(p["period"], p["change_vs_previous"]) for p in series[m]["points"] if p.get("change_vs_previous") is not None]
+            return svg_bars(items, f"{nice_label(m)}: change from the previous {f.get('grain') or 'period'}", bool(series[m].get("ratio")))
         if block == "trend":
             series = {m: [(p["period"], p["value"]) for p in st["points"]] for m, st in (f.get("series") or {}).items()}
             ratio = any(st.get("ratio") for st in (f.get("series") or {}).values())
@@ -741,7 +804,7 @@ class BuiltReport:
             s = part["section"]
             if s is not None:
                 out += self._block_md(s)
-                if chart_dir and s.get("block") in ("gains_losses", "before_after", "mix", "trend"):
+                if chart_dir and s.get("block") in VISUAL_BLOCKS:
                     svg = self._block_html(s)
                     if svg:
                         path = f"{chart_dir}/chart_{i}.svg"
@@ -769,7 +832,7 @@ class BuiltReport:
             return [f"| {_col_name(g.get('column', ''))} | {names[0]} | {names[1]} | Change | % |", "|---|---:|---:|---:|---:|"] + [
                 f"| {nice_label(x['group'])} | {fmt(x['before'], ratio, True)} | {fmt(x['after'], ratio, True)} | {_signed(x['change'], ratio)} | {_pct(x['change_pct'])} |"
                 for x in gains + losses] + [""]
-        if s.get("block") == "trend":
+        if s.get("block") in ("trend", "period_changes"):
             series = f.get("series") or {}
             ms = list(series)
             pts = list(zip(*[series[m]["points"] for m in ms]))
@@ -899,12 +962,15 @@ def build_report(question: str, *, inputs: Mapping[str, Any], lm: Any, sections:
         check_narrative(payload, report.findings, requested)
 
     narrative_validator.instructions = NARRATIVE_RULES
+    view = narrative_view(report.findings)
     ask = (f"Write a report that answers this question: {question}\n\nHow the question was read: {plan.reading}\n\n"
-           "The figures, computed from the semantic model, are bound as `findings` (print it first). "
+           "The figures, computed from the semantic model, are below (also bound as `findings`). You do not need to "
+           "query anything: write the report from these figures and SUBMIT it.\n\n"
+           f"findings = {json.dumps(view, default=str)}\n\n"
            + (f"Use exactly these sections, in this order: {', '.join(requested)}. " if requested else
               "Choose the sections yourself: the findings worth a business reader's time, each with the chart that shows it best. ")
            + "Return title, summary, sections and insights.")
-    narrative_run = RLM.task(ask, inputs={"findings": json.loads(json.dumps(report.findings, default=str))},
+    narrative_run = RLM.task(ask, inputs={"findings": json.loads(json.dumps(view, default=str))},
                              outputs=NARRATIVE_OUTPUTS, output_validator=narrative_validator, lm=lm,
                              max_turns=max_turns, **rlm_kwargs).run()
     report.narrative_result, report.seconds["narrative"] = narrative_run, round(time.time() - t2, 1)

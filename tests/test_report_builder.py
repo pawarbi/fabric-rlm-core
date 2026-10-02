@@ -239,8 +239,8 @@ def test_bar_labels_leave_room_for_the_values():
     xs = [float(x) for x in re.findall(r'<rect x="([\d.]+)"', svg)]
     label_end = float(re.search(r'<text x="([\d.]+)" y="\d+" text-anchor="end">A very', svg).group(1))
     assert min(xs) > label_end, "bars start after the label column"
-    value_x = [float(x) for x in re.findall(r'<text x="([\d.]+)" y="\d+">1.0M', svg)]
-    assert value_x and value_x[0] + rb._text_width("1.0M") <= 760
+    value_x = [float(x) for x in re.findall(r'<text x="([\d.]+)" y="\d+">1.000M', svg)]
+    assert value_x and value_x[0] + rb._text_width("1.000M") <= 760
 
 
 def test_markdown_has_the_same_sections_and_linked_charts(tmp_path):
@@ -305,3 +305,31 @@ def test_named_summary_insights_and_method_sections_are_not_repeated():
     for title in ("Summary", "Insights", "How this was checked"):
         assert html.count(f"<h2>{title}</h2>") == 1
     assert html.count(layout()["summary"]) == 1 and "North added 40.</li>" in html
+
+
+@pytest.mark.parametrize("change,why", [
+    ({"summary": layout()["summary"] + " Revenue was $150 in total."}, "currency"),
+    ({"summary": layout()["summary"] + " The <NA> group added 20."}, "no value"),
+    ({"summary": layout()["summary"] + " Sales rose 50.000001 percent."}, "Round"),
+    ({"sections": layout()["sections"] + [layout()["sections"][1]]}, "repeat"),
+    ({"sections": [layout()["sections"][0], layout()["sections"][1],
+                   {"title": "Words", "block": "text", "grouping": "", "text": "North added 40 and south lost 10 across the two quarters in question, which is the whole story here."}]}, "two sections with a chart"),
+])
+def test_narrative_style_rules_go_back(change, why):
+    with pytest.raises(AssertionError, match=why):
+        check_narrative(layout(**change), findings(), None)
+
+
+def test_narrative_view_rounds_and_uses_display_labels():
+    view = rb.narrative_view(findings())
+    g = view["groupings"]["'Store'[Region]"]
+    assert {x["group"] for x in g["groups"]} == {"North", "South", "No value"}
+    assert view["total"]["change_pct"] == 50.0 and "groups_shown" in g
+
+
+def test_period_changes_chart_draws_each_step():
+    f = compute_findings(plan(kind="trend", group_by=[], periods=["2026-01", "2026-02", "2026-03"], grain="month"),
+                         DaxBackend(FakeModel(), "'Date'[Date]"))
+    rep = rb.BuiltReport("q", "Sales Model", plan(kind="trend"), f, {}, NAMES)
+    svg = rep._block_html({"block": "period_changes"})
+    assert svg.count("<rect") == 2 and "2026-02" in svg
