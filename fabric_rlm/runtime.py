@@ -1958,6 +1958,27 @@ class RLM:
             **kwargs,
         )
 
+    @classmethod
+    def report(
+        cls,
+        question: str,
+        inputs: dict[str, Any],
+        *,
+        sections: list[str] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """A report that answers ``question`` about one semantic model in ``inputs``.
+
+        The model plans the analysis (measures, grouping, periods; checked against
+        the semantic model) and writes the narrative; fabric-rlm computes every
+        figure with its own DAX and draws the charts. ``sections`` lists the
+        sections to include, in plain words; without it the run picks them.
+        Returns a ``BuiltReport``: ``.save("report.html")`` or ``.save("report.md")``.
+        """
+        from .report_builder import build_report
+
+        return build_report(question, inputs=inputs, sections=sections, **kwargs)
+
     def __call__(self, **inputs: Any) -> RLMResult:
         return self.run(inputs or None)
 
