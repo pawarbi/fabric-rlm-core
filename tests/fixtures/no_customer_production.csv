@@ -1,0 +1,7 @@
+region,line,machine,produced_units
+East,L1,M1,120
+East,L2,M1,100
+East,L1,M2,40
+West,L3,M1,90
+West,L4,M2,60
+West,L3,M3,30
