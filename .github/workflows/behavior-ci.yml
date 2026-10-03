@@ -53,6 +53,12 @@ jobs:
         run: |
           pytest -q tests/behavior/test_behavior_baseline.py -m primary \
             --behavior-results=behavior-primary.json
+      - name: Probe two-CSV fanout task
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BEHAVIOR_CI_REQUIRED: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+        run: |
+          pytest -q -s tests/behavior/test_gap_search_live.py
       - name: Upload primary results
         if: always()
         uses: actions/upload-artifact@v4
