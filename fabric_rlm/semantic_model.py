@@ -775,6 +775,9 @@ class SemanticModel:
     # Set by whoever builds the handle. The LM-visible rejection never
     # mentions raising it, so a wide query gets narrowed rather than waved on.
     max_groups: int | None = field(default=None, repr=False, compare=False)
+    # Column rules (fabric_rlm.semantic_rules.ColumnRules, a saved file, or a dict):
+    # shown to the run and checked against its queries when it submits.
+    rules: Any = field(default=None, repr=False, compare=False)
     _catalog: Any = field(default=None, init=False, repr=False, compare=False)
     _query_telemetry: Any = field(
         default=None,
@@ -796,6 +799,12 @@ class SemanticModel:
             or self.max_groups <= 0
         ):
             raise ValueError("max_groups must be a positive integer or None")
+        if self.rules is not None:
+            from .semantic_rules import ColumnRules
+
+            object.__setattr__(self, "rules", ColumnRules.from_value(self.rules))
+            if not self.rules.model:
+                self.rules.model = str(self.dataset)
         if self.validate is False:
             return
         if self.validate == "auto" and not sempy_available():
@@ -835,6 +844,18 @@ class SemanticModel:
             "validate": self.validate,
             "max_groups": self.max_groups,
         }
+
+    def column_rules(self, text: str, *, lm: Any) -> Any:
+        """Turn plain-words notes on which column or measure stands for what into checkable rules.
+
+        One call to ``lm`` writes the rules; every name is then checked against
+        this model's metadata, and names it could not find are listed under
+        ``unresolved``. Print the result, edit or ``save()`` it, and pass it
+        back as ``SemanticModel(..., rules=...)``.
+        """
+        from .semantic_rules import compile_rules
+
+        return compile_rules(self, text, lm)
 
     def check(self) -> "SemanticModel":
         """Confirm the model is reachable. Raises with a usable message."""
