@@ -155,3 +155,59 @@ def test_without_rules_nothing_changes():
                       lm=lm, max_turns=2, timeout=60).run()
     assert result.submitted and "semantic_model_rules" not in result.trajectory.metadata
     assert "Column rules" not in lm.messages[0][0]["content"]
+
+
+# -- several models in one run --------------------------------------------------------------------------------------
+PLANT_RULES = {"rules": [
+    {"concept": "sales region", "use": ["Customers[Region]"], "never": ["Plants[Region]"],
+     "note": "Plants is not related to Sales"},
+    {"concept": "sales figures", "use": ["Sales[Amount]"], "never": ["SalesSummary"]},
+]}
+
+
+def two_models():
+    return {"shop": SemanticModel("Ecommerce", validate=False, rules=RULES),
+            "plant": SemanticModel("Manufacturing", validate=False, rules=PLANT_RULES)}
+
+
+def test_each_model_is_judged_only_on_its_own_queries():
+    calls = [{**ENGLISH, "input": "shop"},
+             {"columns": ["Plants[Region]", "Sales[Amount]"], "input": "plant"}]
+    (problem,) = check_calls(two_models(), calls)
+    assert problem.startswith("`plant` sales region") and "Customers[Region]" in problem
+
+
+def test_a_name_both_models_share_is_not_charged_to_the_other_model():
+    # The plant model also has a Products table; a query on it is not the shop's category slip.
+    calls = [{**ENGLISH, "input": "shop"}, {"columns": ["Products[Product Category]"], "input": "plant"}]
+    assert check_calls(two_models(), calls) == []
+
+
+def test_a_query_on_a_renamed_handle_is_attributed_only_when_one_model_is_bound():
+    renamed = {**PORTUGUESE, "input": "m"}
+    assert len(check_calls({"shop": SemanticModel("E", validate=False, rules=RULES)}, [renamed])) == 1
+    assert check_calls(two_models(), [renamed]) == []   # cannot tell which model it was; not charged to either
+
+
+def test_models_nested_in_a_dict_are_found():
+    inputs = {"models": two_models()}
+    calls = [{"columns": ["SalesSummary[Amount]"], "input": "models.plant"}]
+    (problem,) = check_calls(inputs, calls)
+    assert problem.startswith("`models.plant` sales figures")
+
+
+def test_a_run_with_two_models_shows_both_rule_sets_and_sends_back_the_one_that_slipped():
+    lm = ScriptedLM([
+        "shop._record_query({'query_type': 'dax', 'columns': ['Products[Product Category English]'], 'measures': []})\n"
+        "plant._record_query({'query_type': 'dax', 'columns': ['Plants[Region]', 'Sales[Amount]'], 'measures': []})\n"
+        "SUBMIT(total=1.0)",
+        "plant._record_query({'query_type': 'dax', 'columns': ['Customers[Region]', 'Sales[Amount]'], 'measures': []})\n"
+        "SUBMIT(total=2.0)",
+    ])
+    result = RLM.task("Fees by category and sales by region.", inputs=two_models(), outputs={"total": float},
+                      lm=lm, max_turns=4, timeout=60).run()
+    system = lm.messages[0][0]["content"]
+    assert "Column rules for `shop`" in system and "Column rules for `plant`" in system
+    repair = lm.messages[1][-1]["content"]
+    assert "`plant` sales region" in repair and "`shop`" not in repair
+    assert result.submitted and result.payload == {"total": 2.0} and result.verified

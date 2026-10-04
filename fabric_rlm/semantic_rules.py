@@ -249,14 +249,13 @@ def compile_rules(model: Any, text: str, lm: Any) -> ColumnRules:
     return ColumnRules(rules, str(getattr(model, "dataset", "") or ""), unresolved)
 
 
-def rules_for_inputs(inputs: Mapping[str, Any] | None) -> list[tuple[str, ColumnRules]]:
-    """(alias, rules) for each bound SemanticModel input that carries rules, up to one level of nesting."""
-    found: list[tuple[str, ColumnRules]] = []
+def _model_inputs(inputs: Mapping[str, Any] | None) -> list[tuple[str, Any]]:
+    """(alias, handle) for every bound SemanticModel-like input, up to one level of nesting."""
+    found: list[tuple[str, Any]] = []
 
     def visit(name: str, value: Any, depth: int) -> None:
-        rules = getattr(value, "rules", None)
-        if isinstance(rules, ColumnRules) and rules.rules and hasattr(value, "dax"):
-            found.append((name, rules))
+        if hasattr(value, "dax") and hasattr(type(value), "query_telemetry"):
+            found.append((name, value))
         elif depth < 1 and isinstance(value, Mapping):
             for k, v in value.items():
                 visit(f"{name}.{k}", v, depth + 1)
@@ -266,14 +265,34 @@ def rules_for_inputs(inputs: Mapping[str, Any] | None) -> list[tuple[str, Column
     return found
 
 
+def rules_for_inputs(inputs: Mapping[str, Any] | None) -> list[tuple[str, ColumnRules]]:
+    """(alias, rules) for each bound SemanticModel input that carries rules."""
+    return [(alias, m.rules) for alias, m in _model_inputs(inputs)
+            if isinstance(getattr(m, "rules", None), ColumnRules) and m.rules.rules]
+
+
+def _owner(call: Mapping[str, Any], aliases: Sequence[str]) -> str | None:
+    """Which bound model a call record belongs to: its ``input`` name, or None when that name is not a bound alias."""
+    name = str(call.get("input") or "")
+    for alias in sorted(aliases, key=len, reverse=True):
+        if name == alias or name.startswith(alias + ".") or name.startswith(alias + "["):
+            return alias
+    return None
+
+
 def check_calls(inputs: Mapping[str, Any] | None, calls: Iterable[Mapping[str, Any]]) -> list[str]:
-    """Rule violations across every bound model, each judged on that model's own calls."""
+    """Rule violations across every bound model, each judged only on its own calls.
+
+    A call is attributed by the input name the worker recorded. A call under a name that is not a bound alias (the
+    run renamed the handle, ``m = model``) is attributed to the one bound model when there is only one; with several
+    models it cannot be attributed and is left out rather than charged to the wrong model.
+    """
     calls = list(calls)
+    models = _model_inputs(inputs)
+    aliases = [a for a, _ in models]
     problems: list[str] = []
-    found = rules_for_inputs(inputs)
-    for alias, rules in found:
-        # With one model carrying rules, every call counts (the run may have renamed the handle).
-        own = calls if len(found) == 1 else [
-            c for c in calls if str(c.get("input", alias)) == alias or str(c.get("input", "")).startswith(alias + ".")]
+    for alias, rules in rules_for_inputs(inputs):
+        own = [c for c in calls if _owner(c, aliases) == alias
+               or (len(models) == 1 and _owner(c, aliases) is None)]
         problems += [f"`{alias}` {p}" for p in rules.violations(own)]
     return problems
