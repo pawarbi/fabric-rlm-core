@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.6.9 - 2026-10-04 - ask_each for item lists and long documents, and column rules for semantic models
 
 ask_each asks one question about every item or page with a fast model, optionally a decision model plus a
