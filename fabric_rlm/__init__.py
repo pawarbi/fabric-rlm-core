@@ -2,6 +2,7 @@
 
 from .artifacts import File, FileDestination, LocalArtifactStore
 from .lakehouse import LakehouseSource
+from .semantic_rules import ColumnRule, ColumnRules
 from .semantic_model import (
     SemanticModel,
     SemanticModelMetadata,
@@ -108,6 +109,8 @@ __all__ = [
     "RLMResult",
     "RunInspector",
     "SemanticModel",
+    "ColumnRule",
+    "ColumnRules",
     "SemanticModelMetadata",
     "SemanticModelChecks",
     "PeriodCoverage",

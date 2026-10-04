@@ -594,6 +594,7 @@ class OutputValidationResult:
 _VALIDATOR_LABELS = {
     "output_validator": "output validator",
     "output_validator_context": "context-aware output validator",
+    "semantic_model_rules": "semantic model column rules",
 }
 # The same user validator failing to run this many times in a row stops the run.
 _VALIDATOR_ERROR_LIMIT = 2
@@ -2528,7 +2529,7 @@ class RLM:
                     router_active=self.enable_router,
                     learned_guidance=learned_guidance,
                     sub_lm_available=self.sub_lm_spec is not None,
-                    validator_rules=self._validator_rules_text(),
+                    validator_rules=self._validator_rules_text(bound_inputs),
                     ask_each=self._ask_each_prompt(bound_inputs),
                 ),
             },
@@ -3011,6 +3012,8 @@ class RLM:
                             },
                         )
                     if output_feedback is None:
+                        output_feedback = self._run_semantic_rules(result.submit_payload, bound_inputs, trajectory)
+                    if output_feedback is None:
                         output_feedback = self._run_analytical_integrity(
                             result.submit_payload,
                             {
@@ -3387,7 +3390,7 @@ class RLM:
                     name,
                 )
 
-    def _validator_rules_text(self) -> str:
+    def _validator_rules_text(self, inputs: Mapping[str, Any] | None = None) -> str:
         """The rules the configured validators state about themselves, for the prompt.
 
         A validator (function or object) can carry the rule it checks as an
@@ -3406,6 +3409,10 @@ class RLM:
             if " ".join(text.split()) in seen or text.strip() in rules:
                 continue
             rules.append(text.strip())
+        from .semantic_rules import rules_for_inputs
+
+        for alias, column_rules in rules_for_inputs(inputs if inputs is not None else self._inline_inputs):
+            rules.append(column_rules.instructions(alias))
         if not rules:
             return ""
         return "The answer is checked after SUBMIT against these rules:\n\n" + "\n\n".join(rules)
@@ -3806,6 +3813,26 @@ class RLM:
         }
         return feedback, history_entry
 
+    def _run_semantic_rules(
+        self, payload: Mapping[str, Any] | None, inputs: Mapping[str, Any] | None, trajectory: Any
+    ) -> tuple[str, dict[str, Any] | None] | None:
+        """Check the run's semantic model queries against the models' column rules.
+
+        Off unless a bound ``SemanticModel`` has ``rules``. Judged on what ran:
+        the call records each turn carries (names only, never values).
+        """
+        from .semantic_rules import check_calls, rules_for_inputs
+
+        if not rules_for_inputs(inputs):
+            return None
+        calls = [c for t in getattr(trajectory, "turns", None) or [] for c in (getattr(t, "source_calls", None) or [])]
+        problems = check_calls(inputs, calls)
+        if trajectory is not None and hasattr(trajectory, "metadata"):
+            trajectory.metadata["semantic_model_rules"] = {"violations": problems, "calls_checked": len(calls)}
+        if not problems:
+            return self._user_validator_feedback("semantic_model_rules", "passed", "", payload)
+        return self._user_validator_feedback("semantic_model_rules", "rejected", "\n".join(problems), payload)
+
     def _run_output_validator_context(
         self, payload: Mapping[str, Any] | None, context: Mapping[str, Any]
     ) -> tuple[str, dict[str, Any] | None] | None:
@@ -4100,6 +4127,8 @@ class RLM:
                         "trajectory": trajectory,
                     },
                 )
+            if verifier_feedback is None:
+                verifier_feedback = self._run_semantic_rules(payload, current_inputs, trajectory)
             if verifier_feedback is None:
                 verifier_feedback = self._run_analytical_integrity(
                     payload,
