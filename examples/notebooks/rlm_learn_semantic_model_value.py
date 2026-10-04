@@ -34,7 +34,7 @@
 
 # CELL ********************
 
-%pip install -q "fabric-rlm==0.6.8"
+%pip install -q "fabric-rlm==0.6.9"
 
 # METADATA ********************
 
