@@ -4,6 +4,17 @@
 
 ### Added
 
+- `SemanticModel(..., rules=...)`: column rules for a semantic model. Each rule names a concept,
+  what to use and what never to use (columns `Table[Column]`, measures `[Measure]` or whole
+  tables). The run sees the rules up front; when it submits, the latest query that touches each
+  concept is checked against the call records of the queries that ran (names only, never
+  values), and a query that used a ruled-out name is sent back with the name to use.
+  `result.verified` is True only when the rules held. With several models in a run, each is
+  judged on its own queries. `model.column_rules(text, lm=...)` turns plain-words notes into
+  rules with one model call and checks every name against the model; print, edit, `save()` and
+  reuse them. Rules are for models that hold two columns for one idea (a translated and an
+  original category, a customer state and a postcode geography table), where naming the right
+  column in the task still left runs that read it and then queried the other.
 - `ask_each(items, question, output)` in the worker, turned on with `RLM(ask_each=...)`:
   asks one question about every item of a list, Series or DataFrame with an LM, and
   checks each answer against a typed output (`str`, `int`, `float`, `bool`, or a list of
